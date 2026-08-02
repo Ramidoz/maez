@@ -953,21 +953,29 @@ gate_fd = int(sys.argv[1])
 exec_fd = int(sys.argv[2])
 pin_fd = int(sys.argv[3])
 pin_kind = sys.argv[4]
-old_mask = {int(value) for value in sys.argv[5].split(",") if value}
+release_directory_fd = int(sys.argv[5])
+old_mask = {int(value) for value in sys.argv[6].split(",") if value}
 token = os.read(gate_fd, 1)
 os.close(gate_fd)
 if token != b"G":
     os.close(exec_fd)
     os.close(pin_fd)
+    if release_directory_fd >= 0:
+        os.close(release_directory_fd)
     raise SystemExit(0)
-target_argv = sys.argv[6:]
+target_argv = sys.argv[7:]
 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 os.set_inheritable(exec_fd, False)
 try:
     if pin_kind == "binary":
         os.set_inheritable(pin_fd, False)
+        if release_directory_fd >= 0:
+            os.set_inheritable(release_directory_fd, False)
+            os.fchdir(release_directory_fd)
         os.execve(pin_fd, target_argv, os.environ)
     elif pin_kind == "python_file":
+        if release_directory_fd != -1:
+            raise OSError("unexpected release directory")
         os.set_inheritable(pin_fd, True)
         target_argv[3] = f"/proc/self/fd/{pin_fd}"
         os.execve(target_argv[0], target_argv, os.environ)
@@ -1442,6 +1450,241 @@ class SpawnPin:
 
 
 @dataclass(frozen=True, slots=True)
+class ReleaseDirectoryProof:
+    manifest_sha256: str
+    directory_dev: int
+    directory_ino: int
+    snapshot_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.manifest_sha256) is not str
+            or _SHA256_RE.fullmatch(self.manifest_sha256) is None
+            or type(self.directory_dev) is not int
+            or self.directory_dev < 0
+            or type(self.directory_ino) is not int
+            or self.directory_ino <= 0
+            or type(self.snapshot_sha256) is not str
+            or _SHA256_RE.fullmatch(self.snapshot_sha256) is None
+        ):
+            raise ValueError("release_directory_proof_invalid")
+
+
+_RELEASE_DIRECTORY_HANDLE_GUARD = object()
+
+
+@dataclass(frozen=True, init=False, slots=True)
+class _LauncherReleaseDirectory:
+    """One launcher-owned directory capability bound to one exact pin/proof."""
+
+    fd: int
+    pin: SpawnPin
+    proof: ReleaseDirectoryProof
+
+    def __init__(
+        self,
+        fd: int,
+        pin: SpawnPin,
+        proof: ReleaseDirectoryProof,
+        *,
+        _guard: object | None = None,
+    ) -> None:
+        if (
+            _guard is not _RELEASE_DIRECTORY_HANDLE_GUARD
+            or type(fd) is not int
+            or fd < 0
+            or type(pin) is not SpawnPin
+            or pin.kind != "binary"
+            or type(proof) is not ReleaseDirectoryProof
+        ):
+            raise TypeError("launcher_owned_release_directory_required")
+        object.__setattr__(self, "fd", fd)
+        object.__setattr__(self, "pin", pin)
+        object.__setattr__(self, "proof", proof)
+
+
+def _release_snapshot_sha256(directory_fd: int) -> str:
+    """Hash every top-level file or literal link through one held directory."""
+
+    try:
+        directory_before = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory_before.st_mode):
+            raise BenchRefusal("spawn_failure")
+        names = sorted(os.listdir(directory_fd), key=os.fsencode)
+        digest = hashlib.sha256()
+        final_records: list[tuple[str, tuple[int, ...], str | None]] = []
+        stable = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        for name in names:
+            name_bytes = os.fsencode(name)
+            named_before = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if stat.S_ISREG(named_before.st_mode):
+                fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    held_before = os.fstat(fd)
+                    if (
+                        not stat.S_ISREG(held_before.st_mode)
+                        or (held_before.st_dev, held_before.st_ino)
+                        != (named_before.st_dev, named_before.st_ino)
+                    ):
+                        raise BenchRefusal("spawn_failure")
+                    digest.update(b"F")
+                    digest.update(len(name_bytes).to_bytes(8, "big"))
+                    digest.update(name_bytes)
+                    digest.update(held_before.st_size.to_bytes(16, "big"))
+                    observed = 0
+                    while True:
+                        chunk = os.read(fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        observed += len(chunk)
+                        digest.update(chunk)
+                    held_after = os.fstat(fd)
+                    named_after = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        observed != held_before.st_size
+                        or stable(held_before) != stable(held_after)
+                        or stable(held_after) != stable(named_after)
+                    ):
+                        raise BenchRefusal("spawn_failure")
+                    final_records.append((name, stable(held_after), None))
+                finally:
+                    os.close(fd)
+            elif stat.S_ISLNK(named_before.st_mode):
+                target = os.readlink(name, dir_fd=directory_fd)
+                named_after = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if stable(named_before) != stable(named_after):
+                    raise BenchRefusal("spawn_failure")
+                target_bytes = os.fsencode(target)
+                digest.update(b"L")
+                digest.update(len(name_bytes).to_bytes(8, "big"))
+                digest.update(name_bytes)
+                digest.update(len(target_bytes).to_bytes(8, "big"))
+                digest.update(target_bytes)
+                final_records.append((name, stable(named_after), target))
+            else:
+                raise BenchRefusal("spawn_failure")
+        directory_after = os.fstat(directory_fd)
+        if (
+            (directory_before.st_dev, directory_before.st_ino)
+            != (directory_after.st_dev, directory_after.st_ino)
+            or sorted(os.listdir(directory_fd), key=os.fsencode) != names
+        ):
+            raise BenchRefusal("spawn_failure")
+        for name, expected_identity, expected_target in final_records:
+            observed = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if stable(observed) != expected_identity:
+                raise BenchRefusal("spawn_failure")
+            if (
+                expected_target is not None
+                and os.readlink(name, dir_fd=directory_fd) != expected_target
+            ):
+                raise BenchRefusal("spawn_failure")
+        return digest.hexdigest()
+    except BenchRefusal:
+        raise
+    except (OSError, OverflowError, TypeError, ValueError):
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _release_directory_proof(
+    directory_fd: int,
+    *,
+    manifest_sha256: str,
+) -> ReleaseDirectoryProof:
+    try:
+        info = os.fstat(directory_fd)
+        snapshot_sha256 = _release_snapshot_sha256(directory_fd)
+        return ReleaseDirectoryProof(
+            manifest_sha256=manifest_sha256,
+            directory_dev=info.st_dev,
+            directory_ino=info.st_ino,
+            snapshot_sha256=snapshot_sha256,
+        )
+    except (TypeError, ValueError):
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _open_release_directory(path: Path) -> int:
+    """Open one absolute directory without following any path component."""
+
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise OSError("release directory path")
+    current: int | None = None
+    try:
+        current = os.open(
+            "/",
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        for component in path.parts[1:]:
+            if component in {"", ".", ".."}:
+                raise OSError("release directory component")
+            opened = os.open(
+                component,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=current,
+            )
+            os.close(current)
+            current = opened
+        info = os.fstat(current)
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError("release directory type")
+        result = current
+        current = None
+        return result
+    finally:
+        _close_fd(current)
+
+
+def _verify_release_directory_fd(
+    directory_fd: int,
+    proof: ReleaseDirectoryProof,
+) -> None:
+    if type(proof) is not ReleaseDirectoryProof:
+        raise BenchRefusal("spawn_failure")
+    try:
+        info = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_dev, info.st_ino)
+            != (proof.directory_dev, proof.directory_ino)
+            or _release_snapshot_sha256(directory_fd)
+            != proof.snapshot_sha256
+        ):
+            raise BenchRefusal("spawn_failure")
+    except BenchRefusal:
+        raise
+    except OSError:
+        raise BenchRefusal("spawn_failure") from None
+
+
+@dataclass(frozen=True, slots=True)
 class RehearsalPortLease:
     generation: int
     port: int
@@ -1873,6 +2116,7 @@ def _guarded_popen(
     capture_stdout: bool,
     pinned_fd: int,
     pin_kind: Literal["binary", "python_file"],
+    release_directory_fd: int | None = None,
 ) -> tuple[
     subprocess.Popen[bytes],
     int,
@@ -1902,6 +2146,8 @@ def _guarded_popen(
             stderr_capture, stderr_write = _start_binary_stderr_capture()
         target_mask = old_mask.difference({signal.SIGINT, signal.SIGTERM})
         encoded_mask = ",".join(str(int(value)) for value in sorted(target_mask))
+        if pin_kind == "python_file" and release_directory_fd is not None:
+            raise BenchRefusal("spawn_failure")
         guard_argv = [
             sys.executable,
             "-B",
@@ -1912,9 +2158,15 @@ def _guarded_popen(
             str(exec_write),
             str(pinned_fd),
             pin_kind,
+            str(-1 if release_directory_fd is None else release_directory_fd),
             encoded_mask,
             *argv,
         ]
+        passed_fds = (
+            (gate_read, exec_write, pinned_fd)
+            if release_directory_fd is None
+            else (gate_read, exec_write, pinned_fd, release_directory_fd)
+        )
         try:
             popen = subprocess.Popen(
                 guard_argv,
@@ -1927,7 +2179,7 @@ def _guarded_popen(
                 ),
                 env=dict(env),
                 start_new_session=True,
-                pass_fds=(gate_read, exec_write, pinned_fd),
+                pass_fds=passed_fds,
                 close_fds=True,
                 bufsize=0,
             )
@@ -2135,6 +2387,7 @@ def spawn_pinned(
     env: dict[str, str],
     admitted_port: int | None = None,
     _post_identity: Callable[[int], RehearsalPortLease] | None = None,
+    _release_directory: _LauncherReleaseDirectory | None = None,
 ) -> OwnedChild:
     _validate_spawn_inputs(argv, pin=pin, env=env)
     if _post_identity is not None and (
@@ -2150,6 +2403,22 @@ def spawn_pinned(
         )
     ):
         raise BenchRefusal("spawn_failure")
+    if _release_directory is not None and (
+        pin.kind != "binary"
+        or type(_release_directory) is not _LauncherReleaseDirectory
+        or _release_directory.pin is not pin
+    ):
+        raise BenchRefusal("spawn_failure")
+    if pin.kind == "binary" and _release_directory is None:
+        raise BenchRefusal("spawn_failure")
+    release_directory_fd = (
+        None if _release_directory is None else _release_directory.fd
+    )
+    if _release_directory is not None:
+        _verify_release_directory_fd(
+            release_directory_fd,
+            _release_directory.proof,
+        )
     snapshot = _sealed_executable_snapshot(pin)
     try:
         (
@@ -2165,6 +2434,7 @@ def spawn_pinned(
             capture_stdout=pin.kind == "python_file",
             pinned_fd=snapshot.fd,
             pin_kind=pin.kind,
+            release_directory_fd=release_directory_fd,
         )
     finally:
         _close_fd(snapshot.fd)
@@ -2265,12 +2535,44 @@ def spawn_pinned(
 @dataclass(frozen=True, slots=True)
 class RealServerLauncher:
     pin: SpawnPin
+    release_proof: ReleaseDirectoryProof
     tier: str = field(default="production", init=False)
 
     def __post_init__(self) -> None:
         pin = self.pin
-        if not isinstance(pin, SpawnPin) or pin.kind != "binary":
+        if (
+            not isinstance(pin, SpawnPin)
+            or pin.kind != "binary"
+            or type(self.release_proof) is not ReleaseDirectoryProof
+        ):
             raise ValueError("spawn_pin_invalid")
+
+    def _open_verified_release_directory(self) -> _LauncherReleaseDirectory:
+        proof = self.release_proof
+        if type(proof) is not ReleaseDirectoryProof:
+            raise BenchRefusal("spawn_failure")
+        directory_fd: int | None = None
+        try:
+            directory_fd = _open_release_directory(self.pin.pinned_path.parent)
+            _verify_release_directory_fd(directory_fd, proof)
+            result = _LauncherReleaseDirectory(
+                directory_fd,
+                self.pin,
+                proof,
+                _guard=_RELEASE_DIRECTORY_HANDLE_GUARD,
+            )
+            directory_fd = None
+            return result
+        except BenchRefusal:
+            raise
+        except OSError:
+            raise BenchRefusal("spawn_failure") from None
+        finally:
+            _close_fd(directory_fd)
+
+    def verify_release_directory(self) -> None:
+        release_directory = self._open_verified_release_directory()
+        os.close(release_directory.fd)
 
     def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
         ports = [
@@ -2280,12 +2582,35 @@ class RealServerLauncher:
         ] if type(argv) is list else []
         if ports != [str(BENCH_PORT)]:
             raise BenchRefusal("spawn_failure")
-        return spawn_pinned(
-            argv,
-            pin=self.pin,
-            env=env,
-            admitted_port=BENCH_PORT,
-        )
+        release_directory = self._open_verified_release_directory()
+        try:
+            try:
+                return spawn_pinned(
+                    argv,
+                    pin=self.pin,
+                    env=env,
+                    admitted_port=BENCH_PORT,
+                    _release_directory=release_directory,
+                )
+            except BaseException as original:
+                try:
+                    _verify_release_directory_fd(
+                        release_directory.fd,
+                        self.release_proof,
+                    )
+                except BenchRefusal:
+                    if isinstance(original, _BinarySpawnFailure):
+                        raise original
+                    if isinstance(original, (KeyboardInterrupt, SystemExit)) or (
+                        isinstance(original, BenchRefusal)
+                        and original.code
+                        in {"cleanup_incomplete", "pid_reuse_detected"}
+                    ):
+                        raise original
+                    raise
+                raise
+        finally:
+            os.close(release_directory.fd)
 
 
 @dataclass(frozen=True, slots=True)
@@ -6875,12 +7200,14 @@ def _effective_args_sha256(argv: list[str]) -> str:
 def _validate_production_execution_contract(
     config: PhaseConfig,
     *,
-    launcher_pin: SpawnPin,
+    launcher: RealServerLauncher,
     static: cm.StaticPreflightDoc,
     runtime_identity: cm.RuntimeIdentity,
 ) -> ProductionExecutionContract:
+    launcher_pin = getattr(launcher, "pin", None)
     if (
         type(config) is not PhaseConfig
+        or type(launcher) is not RealServerLauncher
         or type(launcher_pin) is not SpawnPin
         or launcher_pin.kind != "binary"
         or type(static) is not cm.StaticPreflightDoc
@@ -6888,6 +7215,17 @@ def _validate_production_execution_contract(
         or runtime_identity.mode != "bench"
     ):
         raise BenchRefusal("identity_mismatch")
+    release_proof = launcher.release_proof
+    expected_manifest_sha256 = (
+        static.checks["library_manifest"]
+        if config.phase == "vulkan_baseline"
+        else runtime_identity.runtime_manifest_sha256
+    )
+    if (
+        type(release_proof) is not ReleaseDirectoryProof
+        or release_proof.manifest_sha256 != expected_manifest_sha256
+    ):
+        raise BenchRefusal("spawn_failure")
     expected_path = (
         cm.VULKAN_RELEASE_ROOT / "llama-server"
         if config.phase == "vulkan_baseline"
@@ -8223,6 +8561,18 @@ def _collect_phase_tail(
     except Exception:
         if refusal is None:
             refusal = BenchRefusal("provider_uncertain")
+    if providers.tier == "production":
+        try:
+            launcher = providers.server_launcher
+            if type(launcher) is not RealServerLauncher:
+                raise BenchRefusal("spawn_failure")
+            launcher.verify_release_directory()
+        except BenchRefusal as error:
+            if refusal is None:
+                refusal = error
+        except Exception:
+            if refusal is None:
+                refusal = BenchRefusal("spawn_failure")
     return _PhaseTailEvidence(
         containment_after=containment_after,
         containment_after_file_sha256=containment_after_file_sha,
@@ -9049,7 +9399,7 @@ def _run_phase_with_blocked_entry(
         if providers.tier == "production":
             execution_contract = _validate_production_execution_contract(
                 config,
-                launcher_pin=launcher_pin,
+                launcher=providers.server_launcher,
                 static=static,
                 runtime_identity=bench_identity,
             )

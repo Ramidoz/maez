@@ -140,6 +140,50 @@ def _binary_pin(path: Path) -> object:
     )
 
 
+def _release_proof_for(path: Path) -> driver.ReleaseDirectoryProof:
+    directory_fd = driver._open_release_directory(path.parent)
+    try:
+        return driver._release_directory_proof(
+            directory_fd,
+            manifest_sha256="a" * 64,
+        )
+    finally:
+        os.close(directory_fd)
+
+
+def _spawn_binary_for_test(
+    argv: list[str],
+    *,
+    pin: driver.SpawnPin,
+    env: dict[str, str],
+    admitted_port: int | None = None,
+) -> driver.OwnedChild:
+    """Exercise the binary core with the same guarded capability as its launcher."""
+
+    proof = _release_proof_for(pin.pinned_path)
+    directory_fd = driver._open_release_directory(pin.pinned_path.parent)
+    capability = driver._LauncherReleaseDirectory(
+        directory_fd,
+        pin,
+        proof,
+        _guard=driver._RELEASE_DIRECTORY_HANDLE_GUARD,
+    )
+    try:
+        return driver.spawn_pinned(
+            argv,
+            pin=pin,
+            env=env,
+            admitted_port=admitted_port,
+            _release_directory=capability,
+        )
+    finally:
+        os.close(directory_fd)
+
+
+def _dummy_release_proof() -> driver.ReleaseDirectoryProof:
+    return driver.ReleaseDirectoryProof("a" * 64, 1, 1, "b" * 64)
+
+
 def _python_file_pin(path: Path, digest: str) -> object:
     return driver.SpawnPin(
         kind="python_file",
@@ -1301,7 +1345,8 @@ def _provider_components(tier: str) -> dict[str, object]:
         artifact_policy: object = driver.ProductionArtifactPolicy()
         authorization_gate: object = driver.RealAuthorizationGate(artifact_policy)
         server_launcher: object = driver.RealServerLauncher(
-            _binary_pin(Path(sys.executable))
+            _binary_pin(Path(sys.executable)),
+            _dummy_release_proof(),
         )
         containment: object = driver.RealContainmentProvider(
             clock=clock,
@@ -4530,7 +4575,10 @@ class TestServerLauncherFinalizer:
     def _spawn_stubborn_binary(self, tmp_path: Path) -> object:
         ready = tmp_path / "sigterm-handler-ready"
         executable = Path(sys.executable)
-        child = driver.RealServerLauncher(_binary_pin(executable)).spawn(
+        child = driver.RealServerLauncher(
+            _binary_pin(executable),
+            _release_proof_for(executable),
+        ).spawn(
             [
                 sys.executable,
                 "-B",
@@ -4744,7 +4792,7 @@ class TestServerLauncherFinalizer:
 
     def test_binary_entry_executes_from_sealed_memfd_on_this_host(self) -> None:
         executable = Path(sys.executable).resolve()
-        child = driver.spawn_pinned(
+        child = _spawn_binary_for_test(
             [str(executable), "-B", "-c", "import time; time.sleep(30)"],
             pin=_binary_pin(executable),  # type: ignore[arg-type]
             env=_stub_env(),
@@ -4796,7 +4844,7 @@ class TestServerLauncherFinalizer:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sentinel = tmp_path / "target-executed"
-        shell = Path("/bin/sh")
+        shell = Path("/usr/bin/sh")
         captured: list[subprocess.Popen[bytes]] = []
         real_popen = self._test_popen
 
@@ -4814,7 +4862,11 @@ class TestServerLauncherFinalizer:
 
         argv = [str(shell), "-c", f"touch {sentinel}"]
         with pytest.raises(driver.BenchRefusal) as exc:
-            driver.spawn_pinned(argv, pin=_binary_pin(shell), env=_stub_env())
+            _spawn_binary_for_test(
+                argv,
+                pin=_binary_pin(shell),  # type: ignore[arg-type]
+                env=_stub_env(),
+            )
         _assert_refusal(exc, "spawn_failure")
 
         assert len(captured) == 1
@@ -4827,7 +4879,7 @@ class TestServerLauncherFinalizer:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sentinel = tmp_path / "target-executed"
-        shell = Path("/bin/sh")
+        shell = Path("/usr/bin/sh")
         decoy = self._test_popen(
             [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
             start_new_session=True,
@@ -4849,7 +4901,7 @@ class TestServerLauncherFinalizer:
         )
         try:
             with pytest.raises(driver.BenchRefusal) as exc:
-                driver.spawn_pinned(
+                _spawn_binary_for_test(
                     [str(shell), "-c", f"touch {sentinel}"],
                     pin=_binary_pin(shell),  # type: ignore[arg-type]
                     env=_stub_env(),
@@ -4883,9 +4935,9 @@ class TestServerLauncherFinalizer:
         monkeypatch.setattr(driver.os, "pipe2", fail_second_pipe)
         try:
             with pytest.raises(driver.BenchRefusal) as exc:
-                driver.spawn_pinned(
-                    ["/bin/true"],
-                    pin=_binary_pin(Path("/bin/true")),  # type: ignore[arg-type]
+                _spawn_binary_for_test(
+                    ["/usr/bin/true"],
+                    pin=_binary_pin(Path("/usr/bin/true")),  # type: ignore[arg-type]
                     env=_stub_env(),
                 )
             _assert_refusal(exc, "spawn_failure")
@@ -4908,7 +4960,7 @@ class TestServerLauncherFinalizer:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         sentinel = tmp_path / "target-executed"
-        shell = Path("/bin/sh")
+        shell = Path("/usr/bin/sh")
         captured: list[subprocess.Popen[bytes]] = []
         real_popen = self._test_popen
         real_pidfd_open = os.pidfd_open
@@ -4928,7 +4980,7 @@ class TestServerLauncherFinalizer:
         monkeypatch.setattr(driver.os, "pidfd_open", interrupt_before_pidfd)
         try:
             with pytest.raises(KeyboardInterrupt):
-                driver.spawn_pinned(
+                _spawn_binary_for_test(
                     [str(shell), "-c", f"touch {sentinel}"],
                     pin=_binary_pin(shell),  # type: ignore[arg-type]
                     env=_stub_env(),
@@ -4956,7 +5008,7 @@ class TestServerLauncherFinalizer:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         sentinel = tmp_path / "target-executed"
-        shell = Path("/bin/sh")
+        shell = Path("/usr/bin/sh")
         captured: list[subprocess.Popen[bytes]] = []
         real_popen = self._test_popen
         real_guarded_popen = driver._guarded_popen
@@ -4977,7 +5029,7 @@ class TestServerLauncherFinalizer:
         monkeypatch.setattr(driver, "_guarded_popen", interrupt_after_return)
         try:
             with pytest.raises(KeyboardInterrupt):
-                driver.spawn_pinned(
+                _spawn_binary_for_test(
                     [str(shell), "-c", f"touch {sentinel}"],
                     pin=_binary_pin(shell),  # type: ignore[arg-type]
                     env=_stub_env(),
@@ -5654,7 +5706,10 @@ class TestServerLauncherFinalizer:
     def test_real_launcher_refuses_port_evidence_not_equal_to_18080(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        launcher = driver.RealServerLauncher(_binary_pin(Path(sys.executable)))
+        launcher = driver.RealServerLauncher(
+            _binary_pin(Path(sys.executable)),
+            _dummy_release_proof(),
+        )
         monkeypatch.setattr(
             driver,
             "spawn_pinned",
@@ -5671,7 +5726,10 @@ class TestServerLauncherFinalizer:
 
     def test_real_launcher_binds_post_exec_binary_and_exact_port(self) -> None:
         executable = Path(sys.executable)
-        launcher = driver.RealServerLauncher(_binary_pin(executable))
+        launcher = driver.RealServerLauncher(
+            _binary_pin(executable),
+            _release_proof_for(executable),
+        )
         child = launcher.spawn(
             [
                 sys.executable,
@@ -8836,6 +8894,28 @@ def _b7_production_contract_case(
     return config, pin, static, identity
 
 
+def _b7_contract_launcher(
+    pin: driver.SpawnPin,
+    static: driver.cm.StaticPreflightDoc,
+    identity: driver.cm.RuntimeIdentity,
+    phase: str,
+) -> driver.RealServerLauncher:
+    manifest_sha256 = (
+        static.checks["library_manifest"]
+        if phase == "vulkan_baseline"
+        else identity.runtime_manifest_sha256
+    )
+    return driver.RealServerLauncher(
+        pin,
+        driver.ReleaseDirectoryProof(
+            manifest_sha256=manifest_sha256,
+            directory_dev=1,
+            directory_ino=1,
+            snapshot_sha256="f" * 64,
+        ),
+    )
+
+
 class TestB7SpecGateExecutionAuthority:
     @pytest.mark.parametrize("phase", ["vulkan_baseline", "cuda_candidate"])
     def test_true_stub_hash_and_exact_real_pin_reach_production_contract_without_spawn(
@@ -8848,7 +8928,7 @@ class TestB7SpecGateExecutionAuthority:
 
         admitted = driver._validate_production_execution_contract(
             config,
-            launcher_pin=pin,
+            launcher=_b7_contract_launcher(pin, static, identity, phase),
             static=static,
             runtime_identity=identity,
         )
@@ -8894,7 +8974,9 @@ class TestB7SpecGateExecutionAuthority:
         with pytest.raises(driver.BenchRefusal) as exc:
             driver._validate_production_execution_contract(
                 config,
-                launcher_pin=pin,
+                launcher=_b7_contract_launcher(
+                    pin, static, identity, "vulkan_baseline"
+                ),
                 static=static,
                 runtime_identity=identity,
             )
@@ -12077,17 +12159,22 @@ class TestB7RemainingSpecGate:
                 pass
 
     def test_real_launcher_returns_admitted_child_without_post_admission_work(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        release = tmp_path / "release"
+        release.mkdir()
+        executable = release / "llama-server"
+        executable.write_bytes(b"binary")
         pin = driver.SpawnPin(
             kind="binary",
-            pinned_path=driver.cm.VULKAN_RELEASE_ROOT / "llama-server",
-            pinned_sha256="a" * 64,
-            required_argv_prefix=(
-                str(driver.cm.VULKAN_RELEASE_ROOT / "llama-server"),
-            ),
+            pinned_path=executable,
+            pinned_sha256=hashlib.sha256(b"binary").hexdigest(),
+            required_argv_prefix=(str(executable),),
         )
-        launcher = driver.RealServerLauncher(pin)
+        launcher = driver.RealServerLauncher(
+            pin,
+            _release_proof_for(executable),
+        )
         sentinel = object()
         admitted_ports: list[int | None] = []
 
@@ -12097,8 +12184,12 @@ class TestB7RemainingSpecGate:
             pin: object,
             env: dict[str, str],
             admitted_port: int | None = None,
+            _release_directory: object | None = None,
         ) -> object:
             assert argv[-2:] == ["--port", str(driver.BENCH_PORT)]
+            assert type(_release_directory) is driver._LauncherReleaseDirectory
+            assert _release_directory.pin is pin
+            assert os.fstat(_release_directory.fd).st_ino == release.stat().st_ino
             admitted_ports.append(admitted_port)
             return sentinel
 
@@ -12740,7 +12831,7 @@ class TestB7RemainingSpecGate:
         )
         execution = driver._validate_production_execution_contract(
             config,
-            launcher_pin=pin,
+            launcher=_b7_contract_launcher(pin, static, identity, phase),
             static=static,
             runtime_identity=identity,
         )
@@ -12837,7 +12928,10 @@ class TestB7RemainingSpecGate:
     @pytest.mark.parametrize(
         "launcher",
         [
-            driver.RealServerLauncher(_binary_pin(Path(sys.executable))),
+            driver.RealServerLauncher(
+                _binary_pin(Path(sys.executable)),
+                _dummy_release_proof(),
+            ),
             driver.RehearsalServerLauncher(_stub_pin()),
         ],
     )

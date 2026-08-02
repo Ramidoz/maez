@@ -183,7 +183,7 @@ def _run_task2_real_phase_failure_through_cli(
     root.chmod(0o700)
     harness = _b7_harness(root, nonce="7" * 64)
     authorization = harness.config.authorization
-    launcher = driver.RealServerLauncher(_binary_pin(Path("/usr/bin/bash")))
+    launcher = _real_launcher(Path("/usr/bin/bash"))
     carriers: list[driver._BinarySpawnFailure] = []
     real_raise_failure = driver._raise_binary_spawn_failure
     real_finish = driver._finish_binary_stderr_capture
@@ -351,6 +351,36 @@ def _binary_pin(path: Path) -> driver.SpawnPin:
     )
 
 
+def _spawn_binary_for_test(
+    argv: list[str],
+    *,
+    pin: driver.SpawnPin,
+    env: dict[str, str],
+    admitted_port: int | None = None,
+) -> driver.OwnedChild:
+    directory_fd = driver._open_release_directory(pin.pinned_path.parent)
+    try:
+        proof = driver._release_directory_proof(
+            directory_fd,
+            manifest_sha256="a" * 64,
+        )
+        capability = driver._LauncherReleaseDirectory(
+            directory_fd,
+            pin,
+            proof,
+            _guard=driver._RELEASE_DIRECTORY_HANDLE_GUARD,
+        )
+        return driver.spawn_pinned(
+            argv,
+            pin=pin,
+            env=env,
+            admitted_port=admitted_port,
+            _release_directory=capability,
+        )
+    finally:
+        os.close(directory_fd)
+
+
 def _binary_env() -> dict[str, str]:
     return {
         "HOME": os.environ.get("HOME", "/home/rohit"),
@@ -370,7 +400,7 @@ def _run_task3_admitted_binary_failure(
 
     root.chmod(0o700)
     harness = _b7_harness(root, nonce=hashlib.sha256(literal).hexdigest())
-    launcher = driver.RealServerLauncher(_binary_pin(Path("/usr/bin/bash")))
+    launcher = _real_launcher(Path("/usr/bin/bash"))
     spawned: list[driver.OwnedChild] = []
 
     def spawn_real_binary(
@@ -463,6 +493,25 @@ def _assert_dynamic_elf(path: Path) -> None:
     payload = path.read_bytes()
     assert payload.startswith(b"\x7fELF")
     assert b"ld-linux" in payload or b"ld-musl" in payload
+
+
+_RELEASE_PROOF_CACHE: dict[Path, driver.ReleaseDirectoryProof] = {}
+
+
+def _real_launcher(executable: Path) -> driver.RealServerLauncher:
+    parent = executable.parent
+    proof = _RELEASE_PROOF_CACHE.get(parent)
+    if proof is None:
+        directory_fd = driver._open_release_directory(parent)
+        try:
+            proof = driver._release_directory_proof(
+                directory_fd,
+                manifest_sha256="a" * 64,
+            )
+        finally:
+            os.close(directory_fd)
+        _RELEASE_PROOF_CACHE[parent] = proof
+    return driver.RealServerLauncher(_binary_pin(executable), proof)
 
 
 @contextmanager
@@ -837,7 +886,7 @@ def test_task2_post_popen_identity_failure_carries_fixed_cleanup_and_live_captur
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executable = Path("/usr/bin/bash")
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     journal = _task2_journal(tmp_path)
     monkeypatch.setattr(
         driver,
@@ -900,7 +949,7 @@ def test_task2_retained_descendant_observes_pipe_retirement_only_after_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executable = Path("/usr/bin/bash")
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     observed_path = tmp_path / "epipe-observed"
     descendant_pid_path = tmp_path / "descendant-pid"
     journal = _task2_journal(tmp_path)
@@ -1012,7 +1061,7 @@ def test_task2_capture_retirement_uncertainty_supersedes_original_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executable = Path("/usr/bin/bash")
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     journal = _task2_journal(tmp_path)
     monkeypatch.setattr(
         driver,
@@ -1246,7 +1295,7 @@ def test_task2_failed_journal_still_retires_retained_writer(
     before_threads = _capture_threads()
     before_sockets = _socket_fd_inodes()
     executable = Path("/usr/bin/bash")
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     observed_path = tmp_path / "journal-failure-epipe"
     descendant_pid_path = tmp_path / "journal-failure-descendant"
     journal = _FailingJournal(_task2_journal(tmp_path)._journal)
@@ -1402,7 +1451,7 @@ def test_task3_real_elf_pre_admission_natural_status_is_recorded(
         "/usr/bin/false" if persona.startswith("false") else "/usr/bin/bash"
     )
     _assert_dynamic_elf(executable)
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     escaped_literal = "".join(f"\\{value:03o}" for value in literal)
     argv = (
         [str(executable), "--port", str(driver.BENCH_PORT)]
@@ -1598,7 +1647,7 @@ def test_task3_uncertain_bootstrap_natural_exit_has_no_cleanup_signal(
 
     try:
         with pytest.raises(driver._BinarySpawnFailure) as caught:
-            driver.spawn_pinned(
+            _spawn_binary_for_test(
                 [
                     str(executable),
                     "-c",
@@ -1732,7 +1781,7 @@ def test_task3_gone_proof_without_wait_status_has_false_provenance(
 
     try:
         with pytest.raises(driver._BinarySpawnFailure) as caught:
-            driver.spawn_pinned(
+            _spawn_binary_for_test(
                 [
                     str(executable),
                     "-c",
@@ -1810,7 +1859,7 @@ def test_task3_pre_release_inert_guard_has_no_target_status(
     before_sockets = _socket_fd_inodes()
     executable = Path("/usr/bin/false")
     _assert_dynamic_elf(executable)
-    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    launcher = _real_launcher(executable)
     journal = _task2_journal(tmp_path)
     spawned: list[subprocess.Popen[bytes]] = []
     real_popen = subprocess.Popen
