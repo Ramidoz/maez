@@ -294,6 +294,8 @@ class StaticObservation:
     static_doc: cm.StaticPreflightDoc
     runtime_identity: cm.RuntimeIdentity
     rollback_preimage: bytes
+    vulkan_release_proof: driver.ReleaseDirectoryProof
+    cuda_release_proof: driver.ReleaseDirectoryProof
 
 
 class ReadOnlyRunner(Protocol):
@@ -307,6 +309,7 @@ class _CandidateObservation:
     runtime_sha256: str
     runtime_manifest_sha256: str
     library_hashes: Mapping[str, str]
+    release_proof: driver.ReleaseDirectoryProof
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +334,7 @@ class _AssetObservation:
     flag_source_sha256: str
     vision_unit_sha256: str
     stub_sha256: str
+    vulkan_release_proof: driver.ReleaseDirectoryProof
 
 
 _StaticIdentity = tuple[int, int, int, int, int, int, int, int]
@@ -602,6 +606,65 @@ def _safe_manifest_text(value: str) -> bool:
     )
 
 
+def _revalidate_candidate_after_snapshot(
+    directory_fd: int,
+    *,
+    names: list[str],
+    manifest_name: str,
+    manifest_bytes: bytes,
+    manifest_sha256: str,
+    rows: Mapping[str, tuple[str, ...]],
+) -> None:
+    try:
+        if sorted(os.listdir(directory_fd), key=os.fsencode) != sorted(
+            names, key=os.fsencode
+        ):
+            raise driver.BenchRefusal("identity_mismatch")
+        observed_manifest, observed_manifest_sha256 = _stable_bytes_at(
+            directory_fd,
+            manifest_name,
+            byte_cap=1024 * 1024,
+        )
+        if (
+            observed_manifest != manifest_bytes
+            or observed_manifest_sha256 != manifest_sha256
+        ):
+            raise driver.BenchRefusal("identity_mismatch")
+        for relative, values in rows.items():
+            if values[0] == "F":
+                actual = _stable_regular_record_at(directory_fd, relative)
+                if (actual.sha256, actual.size) != (values[1], int(values[2])):
+                    raise driver.BenchRefusal("identity_mismatch")
+            else:
+                actual_link = _stable_symlink_record_at(directory_fd, relative)
+                if (
+                    actual_link.target != values[3]
+                    or hashlib.sha256(os.fsencode(actual_link.target)).hexdigest()
+                    != values[1]
+                ):
+                    raise driver.BenchRefusal("identity_mismatch")
+        if sorted(os.listdir(directory_fd), key=os.fsencode) != sorted(
+            names, key=os.fsencode
+        ):
+            raise driver.BenchRefusal("identity_mismatch")
+    except driver.BenchRefusal:
+        raise
+    except (OSError, TypeError, ValueError):
+        raise driver.BenchRefusal("identity_mismatch") from None
+
+
+def _revalidate_release_proof_after_manifest(
+    directory_fd: int,
+    proof: driver.ReleaseDirectoryProof,
+) -> None:
+    """Keep the manifest and full release snapshot one bracketed observation."""
+
+    try:
+        driver._verify_release_directory_fd(directory_fd, proof)
+    except driver.BenchRefusal:
+        raise driver.BenchRefusal("identity_mismatch") from None
+
+
 def _verify_candidate_runtime_manifest(root: Path) -> _CandidateObservation:
     directory_fd = _open_static_directory(root)
     try:
@@ -761,10 +824,24 @@ def _verify_candidate_runtime_manifest(root: Path) -> _CandidateObservation:
             names, key=os.fsencode
         ):
             raise driver.BenchRefusal("identity_mismatch")
+        release_proof = driver._release_directory_proof(
+            directory_fd,
+            manifest_sha256=manifest_sha,
+        )
+        _revalidate_candidate_after_snapshot(
+            directory_fd,
+            names=names,
+            manifest_name=manifest_name,
+            manifest_bytes=manifest_bytes,
+            manifest_sha256=manifest_sha,
+            rows=rows,
+        )
+        _revalidate_release_proof_after_manifest(directory_fd, release_proof)
         observation = _CandidateObservation(
             runtime_sha256=server_sha,
             runtime_manifest_sha256=manifest_sha,
             library_hashes=MappingProxyType(libraries),
+            release_proof=release_proof,
         )
         _require_static_directory_bound(directory_fd, root)
         return observation
@@ -774,53 +851,72 @@ def _verify_candidate_runtime_manifest(root: Path) -> _CandidateObservation:
         os.close(directory_fd)
 
 
-def _vulkan_library_manifest(root: Path) -> str:
+def _vulkan_library_manifest_at(directory_fd: int) -> str:
+    rows: list[dict[str, object]] = []
+    names = sorted(
+        (
+            name
+            for name in os.listdir(directory_fd)
+            if name.startswith("lib") and ".so" in name
+        ),
+        key=os.fsencode,
+    )
+    for name in names:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode):
+            rows.append(
+                {
+                    "path": name,
+                    "type": "symlink",
+                    "target": _stable_symlink_at(directory_fd, name),
+                }
+            )
+        elif stat.S_ISREG(info.st_mode):
+            digest, size = _stable_regular_at(directory_fd, name)
+            rows.append(
+                {
+                    "path": name,
+                    "type": "file",
+                    "sha256": digest,
+                    "bytes": size,
+                }
+            )
+        else:
+            raise driver.BenchRefusal("identity_mismatch")
+    encoded = json.dumps(
+        rows,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    if len(rows) != 39 or digest != cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256:
+        raise driver.BenchRefusal("identity_mismatch")
+    return digest
+
+
+def _vulkan_release_observation(
+    root: Path,
+) -> tuple[str, driver.ReleaseDirectoryProof]:
     directory_fd = _open_static_directory(root)
     try:
-        rows: list[dict[str, object]] = []
-        names = sorted(
-            (
-                name
-                for name in os.listdir(directory_fd)
-                if name.startswith("lib") and ".so" in name
-            ),
-            key=os.fsencode,
+        digest = _vulkan_library_manifest_at(directory_fd)
+        proof = driver._release_directory_proof(
+            directory_fd,
+            manifest_sha256=digest,
         )
-        for name in names:
-            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            if stat.S_ISLNK(info.st_mode):
-                rows.append(
-                    {
-                        "path": name,
-                        "type": "symlink",
-                        "target": _stable_symlink_at(directory_fd, name),
-                    }
-                )
-            elif stat.S_ISREG(info.st_mode):
-                digest, size = _stable_regular_at(directory_fd, name)
-                rows.append(
-                    {
-                        "path": name,
-                        "type": "file",
-                        "sha256": digest,
-                        "bytes": size,
-                    }
-                )
-            else:
-                raise driver.BenchRefusal("identity_mismatch")
-        encoded = json.dumps(
-            rows,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode()
-        digest = hashlib.sha256(encoded).hexdigest()
-        if len(rows) != 39 or digest != cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256:
+        if _vulkan_library_manifest_at(directory_fd) != digest:
             raise driver.BenchRefusal("identity_mismatch")
-        return digest
+        _revalidate_release_proof_after_manifest(directory_fd, proof)
+        return digest, proof
     finally:
         os.close(directory_fd)
+
+
+def _vulkan_library_manifest(root: Path) -> str:
+    digest, _proof = _vulkan_release_observation(root)
+    return digest
 
 
 def _run_read_only(
@@ -1026,7 +1122,9 @@ def _collect_static_asset_hashes(paths: StaticAssetPaths) -> _AssetObservation:
     flag_sha, _ = _stable_regular_file(paths.flag_source)
     vision_sha, _ = _stable_regular_file(paths.vision_unit)
     stub_sha, _ = _stable_regular_file(paths.stub)
-    manifest_sha = _vulkan_library_manifest(paths.vulkan_root)
+    manifest_sha, vulkan_release_proof = _vulkan_release_observation(
+        paths.vulkan_root
+    )
     if (
         unit_sha != cm.FROZEN_VULKAN_UNIT_SHA256
         or dropin_sha != cm.FROZEN_VULKAN_DROPIN_SHA256
@@ -1047,6 +1145,7 @@ def _collect_static_asset_hashes(paths: StaticAssetPaths) -> _AssetObservation:
         flag_source_sha256=flag_sha,
         vision_unit_sha256=vision_sha,
         stub_sha256=stub_sha,
+        vulkan_release_proof=vulkan_release_proof,
     )
 
 
@@ -1149,7 +1248,13 @@ def collect_static_observation(
         )
     except (TypeError, ValueError):
         raise driver.BenchRefusal("identity_mismatch") from None
-    return StaticObservation(static_doc, identity, rollback_preimage)
+    return StaticObservation(
+        static_doc,
+        identity,
+        rollback_preimage,
+        assets.vulkan_release_proof,
+        candidate.release_proof,
+    )
 
 
 def _collect_rehearsal_identity(
@@ -3057,10 +3162,12 @@ def _rehearsal_handler(
 def _production_providers(
     phase: Literal["vulkan_baseline", "cuda_candidate"],
     identity: cm.RuntimeIdentity,
+    release_proof: driver.ReleaseDirectoryProof,
 ) -> driver.Providers:
     if (
         phase not in {"vulkan_baseline", "cuda_candidate"}
         or type(identity) is not cm.RuntimeIdentity
+        or type(release_proof) is not driver.ReleaseDirectoryProof
     ):
         raise driver.BenchRefusal("identity_mismatch")
     runtime = (
@@ -3088,7 +3195,8 @@ def _production_providers(
                 pinned_path=runtime,
                 pinned_sha256=runtime_sha256,
                 required_argv_prefix=(str(runtime),),
-            )
+            ),
+            release_proof,
         ),
         server_client=driver.LoopbackServerClient.production(clock),
         authorization_gate=driver.RealAuthorizationGate(policy),
@@ -3435,7 +3543,16 @@ def _phase_handler(
     )
     if config.window_id != authorization.window_id:
         raise driver.BenchRefusal("authorization_window_mismatch")
-    providers = _production_providers(config.phase, observation.runtime_identity)
+    release_proof = (
+        observation.vulkan_release_proof
+        if config.phase == "vulkan_baseline"
+        else observation.cuda_release_proof
+    )
+    providers = _production_providers(
+        config.phase,
+        observation.runtime_identity,
+        release_proof,
+    )
     phase_path = driver.run_phase(
         config,
         providers,

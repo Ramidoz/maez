@@ -224,6 +224,19 @@ class _FixedClock:
         return 0.0
 
 
+def _fake_release_proof(
+    manifest_sha256: str,
+    *,
+    identity: int = 1,
+) -> driver.ReleaseDirectoryProof:
+    return driver.ReleaseDirectoryProof(
+        manifest_sha256,
+        identity,
+        identity,
+        f"{identity:x}" * 64,
+    )
+
+
 def _static_test_observation() -> cli.StaticObservation:
     stub_sha = "a" * 64
     doc = cm.StaticPreflightDoc(
@@ -248,7 +261,14 @@ def _static_test_observation() -> cli.StaticObservation:
         timestamp=FIXED_TIMESTAMP,
     )
     return cli.StaticObservation(
-        doc, object(), cm.frozen_rollback_manifest_preimage()
+        doc,
+        object(),
+        cm.frozen_rollback_manifest_preimage(),
+        _fake_release_proof(cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256),
+        _fake_release_proof(
+            cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+            identity=2,
+        ),
     )
 
 
@@ -395,10 +415,209 @@ class TestTask4StaticPreflight:
         monkeypatch.setattr(
             cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
         )
+        manifest_fds: list[int] = []
+        proof_fds: list[int] = []
+        real_stable_bytes = cli._stable_bytes_at
+        real_release_proof = driver._release_directory_proof
+
+        def record_manifest_fd(
+            directory_fd: int, name: str, *, byte_cap: int
+        ) -> tuple[bytes, str]:
+            manifest_fds.append(directory_fd)
+            return real_stable_bytes(directory_fd, name, byte_cap=byte_cap)
+
+        def record_proof_fd(
+            directory_fd: int, *, manifest_sha256: str
+        ) -> driver.ReleaseDirectoryProof:
+            proof_fds.append(directory_fd)
+            return real_release_proof(
+                directory_fd,
+                manifest_sha256=manifest_sha256,
+            )
+
+        monkeypatch.setattr(cli, "_stable_bytes_at", record_manifest_fd)
+        monkeypatch.setattr(driver, "_release_directory_proof", record_proof_fd)
 
         observed = cli._verify_candidate_runtime_manifest(candidate)
 
         assert observed.library_hashes["libggml-cuda.so"] == cuda_sha
+        assert observed.release_proof is not None
+        assert observed.release_proof.manifest_sha256 == manifest_sha
+        directory_info = candidate.stat()
+        assert (
+            observed.release_proof.directory_dev,
+            observed.release_proof.directory_ino,
+        ) == (directory_info.st_dev, directory_info.st_ino)
+        assert proof_fds == [manifest_fds[0]]
+        assert all(fd == proof_fds[0] for fd in manifest_fds)
+
+    def test_candidate_mutation_during_proof_mint_refuses_detached_pair(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        real_release_proof = driver._release_directory_proof
+
+        def mutate_after_snapshot(
+            directory_fd: int, *, manifest_sha256: str
+        ) -> driver.ReleaseDirectoryProof:
+            proof = real_release_proof(
+                directory_fd,
+                manifest_sha256=manifest_sha256,
+            )
+            (candidate / "libggml-cuda.so").write_bytes(b"changed-after-proof")
+            return proof
+
+        monkeypatch.setattr(
+            driver,
+            "_release_directory_proof",
+            mutate_after_snapshot,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    def test_candidate_mutation_between_manifest_and_snapshot_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        real_release_proof = driver._release_directory_proof
+
+        def mutate_before_snapshot(
+            directory_fd: int, *, manifest_sha256: str
+        ) -> driver.ReleaseDirectoryProof:
+            (candidate / "libggml-cuda.so").write_bytes(
+                b"changed-before-snapshot"
+            )
+            return real_release_proof(
+                directory_fd,
+                manifest_sha256=manifest_sha256,
+            )
+
+        monkeypatch.setattr(
+            driver,
+            "_release_directory_proof",
+            mutate_before_snapshot,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    def test_vulkan_mutation_during_proof_mint_refuses_detached_pair(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "vulkan"
+        root.mkdir()
+        server = root / "llama-server"
+        server.write_bytes(b"server-before-proof")
+        rows: list[dict[str, object]] = []
+        for index in range(39):
+            name = f"lib{index:02d}.so"
+            payload = f"library-{index}".encode()
+            (root / name).write_bytes(payload)
+            rows.append(
+                {
+                    "path": name,
+                    "type": "file",
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                }
+            )
+        encoded = json.dumps(
+            rows,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256",
+            manifest_sha256,
+        )
+        real_release_proof = driver._release_directory_proof
+
+        def mutate_after_snapshot(
+            directory_fd: int, *, manifest_sha256: str
+        ) -> driver.ReleaseDirectoryProof:
+            proof = real_release_proof(
+                directory_fd,
+                manifest_sha256=manifest_sha256,
+            )
+            server.write_bytes(b"server-changed-after-proof")
+            return proof
+
+        monkeypatch.setattr(
+            driver,
+            "_release_directory_proof",
+            mutate_after_snapshot,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._vulkan_release_observation(root)
+
+    def test_vulkan_mutation_between_manifest_and_snapshot_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "vulkan"
+        root.mkdir()
+        rows: list[dict[str, object]] = []
+        for index in range(39):
+            name = f"lib{index:02d}.so"
+            payload = f"library-{index}".encode()
+            (root / name).write_bytes(payload)
+            rows.append(
+                {
+                    "path": name,
+                    "type": "file",
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                }
+            )
+        encoded = json.dumps(
+            rows,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256",
+            manifest_sha256,
+        )
+        real_release_proof = driver._release_directory_proof
+
+        def mutate_before_snapshot(
+            directory_fd: int, *, manifest_sha256: str
+        ) -> driver.ReleaseDirectoryProof:
+            (root / "lib00.so").write_bytes(b"changed-before-snapshot")
+            return real_release_proof(
+                directory_fd,
+                manifest_sha256=manifest_sha256,
+            )
+
+        monkeypatch.setattr(
+            driver,
+            "_release_directory_proof",
+            mutate_before_snapshot,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._vulkan_release_observation(root)
 
     @pytest.mark.parametrize("pin", ("server", "backend", "manifest"))
     def test_runtime_manifest_enforces_each_frozen_candidate_pin_independently(
@@ -1088,6 +1307,9 @@ class TestTask4StaticPreflight:
             flag_source_sha256="b" * 64,
             vision_unit_sha256="c" * 64,
             stub_sha256="d" * 64,
+            vulkan_release_proof=_fake_release_proof(
+                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+            ),
         )
         if field == "alias":
             monkeypatch.setattr(cm, "FROZEN_ALIAS", "different")
@@ -1272,9 +1494,17 @@ class TestTask4StaticPreflight:
         monkeypatch.setattr(cm, "FROZEN_MODEL_BYTES", len(assets[paths.model]))
         monkeypatch.setattr(
             cli,
-            "_vulkan_library_manifest",
+            "_vulkan_release_observation",
             lambda root: (
-                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+                (
+                    cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                    driver.ReleaseDirectoryProof(
+                        cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                        1,
+                        1,
+                        "f" * 64,
+                    ),
+                )
                 if root == vulkan
                 else (_ for _ in ()).throw(AssertionError("wrong root"))
             ),
@@ -1298,6 +1528,12 @@ class TestTask4StaticPreflight:
     def test_static_preflight_collector_builds_one_shared_truthful_observation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        vulkan_proof = driver.ReleaseDirectoryProof(
+            cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256, 1, 1, "1" * 64
+        )
+        cuda_proof = driver.ReleaseDirectoryProof(
+            cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256, 2, 2, "2" * 64
+        )
         assets = cli._AssetObservation(
             unit_sha256=cm.FROZEN_VULKAN_UNIT_SHA256,
             dropin_sha256=cm.FROZEN_VULKAN_DROPIN_SHA256,
@@ -1311,6 +1547,7 @@ class TestTask4StaticPreflight:
             flag_source_sha256="b" * 64,
             vision_unit_sha256="c" * 64,
             stub_sha256="d" * 64,
+            vulkan_release_proof=vulkan_proof,
         )
         candidate = cli._CandidateObservation(
             runtime_sha256=cm.FROZEN_CUDA_SERVER_SHA256,
@@ -1318,6 +1555,7 @@ class TestTask4StaticPreflight:
             library_hashes={
                 "libggml-cuda.so": cm.FROZEN_CUDA_BACKEND_SHA256
             },
+            release_proof=cuda_proof,
         )
         host = cli._HostObservation(
             gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
@@ -1375,6 +1613,8 @@ class TestTask4StaticPreflight:
         assert observed.static_doc.checks["candidate_manifest"] == (
             cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256
         )
+        assert observed.vulkan_release_proof is vulkan_proof
+        assert observed.cuda_release_proof is cuda_proof
 
     def test_static_preflight_dispatches_real_handler_not_placeholder(self) -> None:
         source = inspect.getsource(cli.main)
@@ -1412,7 +1652,16 @@ class TestTask4StaticPreflight:
             },
             timestamp=FIXED_TIMESTAMP,
         )
-        observation = cli.StaticObservation(doc, object(), preimage)
+        observation = cli.StaticObservation(
+            doc,
+            object(),
+            preimage,
+            _fake_release_proof(cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256),
+            _fake_release_proof(
+                cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                identity=2,
+            ),
+        )
         monkeypatch.setattr(
             cli,
             "collect_static_observation",
@@ -1497,7 +1746,18 @@ class TestTask4StaticPreflight:
         monkeypatch.setattr(
             cli,
             "collect_static_observation",
-            lambda **_kwargs: cli.StaticObservation(doc, object(), preimage),
+            lambda **_kwargs: cli.StaticObservation(
+                doc,
+                object(),
+                preimage,
+                _fake_release_proof(
+                    cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+                ),
+                _fake_release_proof(
+                    cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                    identity=2,
+                ),
+            ),
         )
         monkeypatch.setattr(
             driver,
@@ -1575,7 +1835,18 @@ class TestTask4StaticPreflight:
         monkeypatch.setattr(
             cli,
             "collect_static_observation",
-            lambda **_kwargs: cli.StaticObservation(doc, object(), preimage),
+            lambda **_kwargs: cli.StaticObservation(
+                doc,
+                object(),
+                preimage,
+                _fake_release_proof(
+                    cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+                ),
+                _fake_release_proof(
+                    cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                    identity=2,
+                ),
+            ),
         )
         monkeypatch.setattr(
             driver,
@@ -2084,6 +2355,7 @@ class TestTask6RehearseCommand:
                 identity.runtime_sha256,
                 identity.runtime_manifest_sha256,
                 identity.library_hashes,
+                _fake_release_proof(identity.runtime_manifest_sha256),
             )
 
         def package() -> tuple[str, bytes]:
@@ -2177,6 +2449,7 @@ class TestTask6RehearseCommand:
                 identity.runtime_sha256,
                 candidate_manifest,
                 identity.library_hashes,
+                _fake_release_proof(candidate_manifest),
             ),
         )
         monkeypatch.setattr(
@@ -2256,6 +2529,7 @@ class TestTask6RehearseCommand:
                 identity.runtime_sha256,
                 identity.runtime_manifest_sha256,
                 identity.library_hashes,
+                _fake_release_proof(identity.runtime_manifest_sha256),
             )
 
         def package() -> tuple[str, bytes]:
@@ -6520,7 +6794,16 @@ class TestTask7ProductionMeasurementCommands:
     ) -> None:
         identity = cm.RuntimeIdentity(**_task6_identity_fields())
         assert isinstance(identity, cm.RuntimeIdentity)
-        providers = cli._production_providers("vulkan_baseline", identity)
+        providers = cli._production_providers(
+            "vulkan_baseline",
+            identity,
+            driver.ReleaseDirectoryProof(
+                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                1,
+                1,
+                "f" * 64,
+            ),
+        )
         assert type(providers.service_state) is driver.RealServiceStateProvider
         assert type(providers.port_probe) is driver.RealPortProbe
         assert type(providers.gpu) is driver.RealGpuProvider
@@ -7226,7 +7509,9 @@ class TestTask7ProductionMeasurementCommands:
             lambda _args, _observation: config,
         )
         monkeypatch.setattr(
-            cli, "_production_providers", lambda _phase, _identity: object()
+            cli,
+            "_production_providers",
+            lambda _phase, _identity, _release_proof: object(),
         )
 
         def run(

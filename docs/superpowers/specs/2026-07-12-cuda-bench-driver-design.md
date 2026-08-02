@@ -333,6 +333,65 @@ the `/proc/self/fd` name is ephemeral and never persisted. This pin covers
 the entry executable only. Dynamically loaded backend libraries remain
 under the independent runtime-manifest/static-candidate proof.
 
+**Manifest-bound backend working directory (live-seam amendment, ruling
+2026-08-01).** b9596 discovers dynamically loaded GGML backends from the
+executable directory and then the process working directory. A sealed memfd
+has no usable executable directory, so production binary launches derive the
+working directory solely from `SpawnPin.pinned_path.parent` and enter that
+exact release directory after the guard's go byte and before `execve`.
+There is no separately configurable cwd. The parent opens the directory with
+no-follow directory semantics, verifies that it is the release root whose
+library-manifest preimage was accepted by static preflight, then packages the
+held fd, exact `SpawnPin` object, and `ReleaseDirectoryProof` in a private
+launcher-owned guarded capability. `spawn_pinned` refuses every binary launch
+without that capability and refuses a capability bound to any other pin; it
+accepts no raw cwd or release-directory fd from callers. Only the lower inert
+guard receives the capability's directory descriptor. The guard uses `fchdir`; open or
+`fchdir` failure is `spawn_failure` and the target is never executed. Python
+rehearsal launches receive no directory descriptor and retain their prior cwd
+behavior.
+
+The in-memory `ReleaseDirectoryProof` is created from the same held directory
+fd that produced the fresh phase manifest observation. It carries the manifest
+hash, the directory `(st_dev, st_ino)` identity, and a canonical full
+top-level snapshot hash covering every regular file's name/bytes and every
+literal symlink's name/target. It carries no cwd path. `RealServerLauncher`
+reopens the path derived from the pin through a per-component `O_NOFOLLOW`
+walk, then requires the held identity and full snapshot to match the proof.
+The production execution-contract join separately requires the proof's
+manifest hash to equal the selected Vulkan static-preflight manifest or CUDA
+runtime manifest. Thus neither a right-looking directory with different bytes
+nor a detached proof can authorize `fchdir`.
+
+Proof minting is one bracketed observation for both releases: validate the
+manifest and its named files, compute the full top-level snapshot, then
+revalidate the manifest, names, named files, and full snapshot through the
+same held directory fd before returning the pair. Mutation during that bracket
+is `identity_mismatch`; no manifest hash may be paired with a snapshot from a
+different instant. On a pre-admission launch failure, the release recheck may
+not replace an existing `_BinarySpawnFailure` carrier or weaken
+`cleanup_incomplete`, `pid_reuse_detected`, or interruption precedence. The
+normal handoff retires the carrier's private capture before returning the
+typed terminal refusal.
+
+The sealed memfd remains the executable authority: bytes are sealed before
+hashing and the same sealed object is executed. The directory only supplies
+b9596's verified backend-discovery surface; it does not weaken or replace the
+runtime-manifest proof. Production phase verification records a before/after
+release-directory manifest snapshot and refuses any mutation, so relative
+logs, cores, or temporary files cannot silently contaminate the pristine
+asset directory. The after check runs in the common phase-tail path; a
+pre-admission binary failure also rechecks and closes its held directory fd, so
+no crash path can bypass the residue rule. A tail release-drift refusal is used
+only when it is the first failure; it never relabels an already-established
+containment, kernel, or journal refusal. Required REDs use a real dynamically linked ELF that loads a
+sidecar by the same executable-directory/current-directory search shape:
+sealed memfd plus the wrong cwd fails, while sealed memfd plus the
+manifest-bound cwd succeeds. Additional REDs prove cwd is derived from the
+pin, wrong-manifest directories and open/`fchdir` failures refuse before
+target exec, the release tree is byte-identical after the phase, and rehearsal
+cwd, pidfd, diagnostics, residue, and packet behavior remain unchanged.
+
 Check-then-signal is itself a reuse race, so an admitted leader is signalled only
 through a **pidfd retained from spawn** (`os.pidfd_open` immediately after
 fork, signals via `signal.pidfd_send_signal`): a pidfd names the process
