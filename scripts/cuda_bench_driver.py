@@ -3428,7 +3428,11 @@ def stream_completion(
     if type(prompt) is not str:
         raise ValueError("prompt")
     body = json.dumps(
-        {"prompt": prompt, "stream": True},
+        {
+            "prompt": prompt,
+            "stream": True,
+            "n_predict": cm.FROZEN_TURN_N_PREDICT,
+        },
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

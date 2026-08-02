@@ -10080,7 +10080,9 @@ class TestB6StreamingTiming:
         assert connection.host == "127.0.0.1"
         assert connection.port == 43210
         assert connection.request == ("POST", "/completion")
-        assert connection.body == b'{"prompt":"private prompt sentinel","stream":true}'
+        assert connection.body == (
+            b'{"n_predict":512,"prompt":"private prompt sentinel","stream":true}'
+        )
         assert dict(connection.headers) == {
             "Accept": "text/event-stream",
             "Content-Length": str(len(connection.body)),
@@ -10088,6 +10090,41 @@ class TestB6StreamingTiming:
         }
         assert connection.response.closed
         assert connection.closed
+
+    def test_measurement_request_carries_frozen_generation_bound(self) -> None:
+        """An unbounded /completion request cannot leave the driver.
+
+        Window ab-20260802-2149 died at the pinned 30s request timeout while
+        a healthy Vulkan control was still generating past 1,675 tokens at
+        ~70 tok/s: without a generation bound, phase viability depends on the
+        model choosing to stop.  The bound is frozen canon -- identical for
+        warmup and measured turns and for both phases -- so the A/B stays
+        fair and every turn fits the pinned request timeout with margin.
+        """
+        assert driver.cm.FROZEN_TURN_N_PREDICT == 512
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        terminal = (
+            b'data: {"content":"","prompt":"private bound sentinel",'
+            b'"stop":true,"timings":{"draft_n":1,"draft_n_accepted":1}}\n\n'
+        )
+        factory, connections = _scripted_connection_factory(
+            clock,
+            [
+                (0.050, b'data: {"content":"x","stop":false}\n\n'),
+                (0.100, terminal),
+                (0.900, b""),
+            ],
+            endheaders_delay=0.050,
+        )
+        driver.stream_completion(
+            43211,
+            "private bound sentinel",
+            clock=clock,
+            connection_factory=factory,
+        )
+        body = json.loads(connections[0].body)
+        assert body["n_predict"] == driver.cm.FROZEN_TURN_N_PREDICT
+        assert set(body) == {"n_predict", "prompt", "stream"}
 
     def test_json_parsing_delay_does_not_move_stored_content_arrival(
         self,

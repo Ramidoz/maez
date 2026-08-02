@@ -630,6 +630,13 @@ marker creation or spawn).**
   the boundary);
 - `REQUEST_TIMEOUT_MS = 30_000` per turn (hard cap above the 12,000 ms
   quality bound so slow-but-completing turns are measured, not truncated);
+- `FROZEN_TURN_N_PREDICT = 512` generation bound carried in every
+  `/completion` body — warmup and measured turns, both backends — so no turn
+  can generate unboundedly into `REQUEST_TIMEOUT_MS` (witnessed in window
+  ab-20260802-2149: a healthy Vulkan control at ~70 tok/s was cancelled by
+  the request timeout past 1,675 tokens because the payload carried no
+  bound; 512 tok ≈ 7 s at that rate, comfortable margin under the cap;
+  amended 2026-08-02);
 - `SIGTERM_GRACE_S = 10` before SIGKILL;
 - `RESPONSE_BYTE_CAP = 4 MiB` per HTTP response; `TURN_ARTIFACT_BYTE_CAP =
   8 MiB` per private turn artifact; breach = `response_too_large`;

@@ -34,6 +34,14 @@ FROZEN_ORDER_SHA256 = "cc9cd81c3110bc37d6c9bfd30bce0267b6cbfc3ffef7fb9abdc8615e4
 FROZEN_SAMPLE_N = 7
 FROZEN_WARMUP_COUNT = 3
 FROZEN_MEASURED_SAMPLE_COUNT = 21
+# Every /completion turn carries this generation bound.  Without it llama.cpp
+# defaults to unbounded generation and phase viability depends on the model
+# choosing to stop: window ab-20260802-2149 died at the pinned 30s request
+# timeout while the healthy Vulkan control was still generating past 1,675
+# tokens at ~70 tok/s.  One frozen value for warmup and measured turns on
+# both backends keeps the A/B fair (512 tok ~= 7s at Vulkan speed, well
+# inside REQUEST_TIMEOUT_MS).
+FROZEN_TURN_N_PREDICT = 512
 FROZEN_LOAD_CYCLES = 3
 VULKAN_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596/llama-b9596")
 CUDA_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89")
