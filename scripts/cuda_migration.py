@@ -5117,7 +5117,12 @@ def _evaluate_promotion_gate(
         reasons.append("bar1_ceiling")
     if candidate.steady_bar1_percent > control.steady_bar1_percent - 2.0:
         reasons.append("bar1_improvement_insufficient")
-    if not control.kernel_counters.clean or not candidate.kernel_counters.clean:
+    # Control (incumbent Vulkan) may carry recorded mapping-pressure counts --
+    # they are the hazard being escaped, witnessed ab-20260803-0637 -- but a
+    # control Xid/unmatched still unscores.  The CANDIDATE keeps the strict
+    # all-zero bar: frozen v1.1 requires candidate mapping-pressure delta
+    # exactly zero, which IS the promotion case.
+    if not control.kernel_counters.scoreable or not candidate.kernel_counters.clean:
         reasons.append("kernel_counter_delta")
     if candidate.crash_count != 0:
         reasons.append("crash_detected")
