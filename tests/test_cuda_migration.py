@@ -4879,23 +4879,29 @@ def _bundle_cycle_metrics(
     phase: str,
     unload_wait_seconds: float = 3.0,
     unload_residual_mib: int = 0,
+    bar1_unload: tuple[float, float] | None = None,
 ) -> tuple[cm.CycleMetrics, ...]:
     peak = 82.0 if phase == "vulkan_baseline" else 80.0
+    bar1_before, bar1_after = (
+        bar1_unload if bar1_unload is not None else (10.0, 10.0)
+    )
     return tuple(
         cm.CycleMetrics(
             cycle=cycle,
             topology_sha256=SHA_C,
-            bar1_before_percent=10.0,
+            bar1_before_percent=bar1_before,
             bar1_after_load_percent=peak - 6.0 + cycle,
             bar1_after_inference_percent=peak - 3.0 + cycle,
-            bar1_after_unload_percent=10.0,
+            bar1_after_unload_percent=bar1_after,
             vram_before_mib=100,
             vram_after_load_mib=20_000 + cycle,
             vram_after_inference_mib=21_000 + cycle,
             vram_after_unload_mib=100 + unload_residual_mib,
             unload_wait_seconds=unload_wait_seconds,
             unload_residual_mib=unload_residual_mib,
-            unload_residual_bar1_percent=0.0,
+            unload_residual_bar1_percent=cm.residual_bar1_percent(
+                bar1_before, bar1_after
+            ),
             )
         for cycle in (1, 2, 3)
     )
@@ -4915,10 +4921,11 @@ def _bundle_packet(
     kernel_counters: cm.KernelCounters | None = None,
     unload_wait_seconds: float = 3.0,
     unload_residual_mib: int = 0,
+    bar1_unload: tuple[float, float] | None = None,
 ) -> cm.PhasePacket:
     records = _turn_records()
     metrics = _bundle_cycle_metrics(
-        phase, unload_wait_seconds, unload_residual_mib
+        phase, unload_wait_seconds, unload_residual_mib, bar1_unload
     )
     return cm.PhasePacket(
         phase=phase,
@@ -5080,6 +5087,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     candidate_unload_residual_mib = int(
         overrides.pop("candidate_unload_residual_mib", 0)  # type: ignore[arg-type]
     )
+    candidate_bar1_unload = overrides.pop("candidate_bar1_unload", None)
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5233,6 +5241,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         kernel_counters=candidate_kernel_counters,
         unload_wait_seconds=candidate_unload_wait_seconds,
         unload_residual_mib=candidate_unload_residual_mib,
+        bar1_unload=candidate_bar1_unload,
     )
     static_preflight_ref = "receipts/static-preflight-attempt-001.json"
     control_packet_ref = (
@@ -6826,6 +6835,28 @@ class BundleGateTests(unittest.TestCase):
 
     def test_in_tolerance_residual_candidate_can_reach_bench_passed(self) -> None:
         bundle = _make_bundle(candidate_unload_residual_mib=3)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+
+    def test_float_boundary_cycle_is_complete_and_scores(self) -> None:
+        """Review reproduction 0.24 -> 0.34: raw addition breaks, canon holds.
+
+        0.24 + 0.10 is 0.33999999999999997 in binary float, so a raw-addition
+        predicate called this exactly-at-tolerance cycle incomplete and the
+        scorer minted a false keep_vulkan.  unload_complete must derive from
+        the validated canonical residual fields.
+        """
+        base = cycles(peak=80.0)[0]
+        boundary = replace(
+            base,
+            bar1_before_percent=0.24,
+            bar1_after_unload_percent=0.34,
+            unload_residual_bar1_percent=cm.residual_bar1_percent(0.24, 0.34),
+        )
+        self.assertEqual(0.10, boundary.unload_residual_bar1_percent)
+        self.assertTrue(boundary.unload_complete)
+
+        bundle = _make_bundle(candidate_bar1_unload=(0.24, 0.34))
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
 

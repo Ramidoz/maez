@@ -2045,11 +2045,16 @@ class CycleMetrics:
 
     @property
     def unload_complete(self) -> bool:
+        # Derived from the CANONICAL residual fields, never raw float
+        # addition: 0.24 + 0.10 evaluates to 0.33999999999999997 and would
+        # call an exactly-at-tolerance cycle incomplete, recreating the
+        # false-keep_vulkan the residual amendment exists to eliminate.
+        # __post_init__ has already proven both fields recompute from the
+        # before/after measurements.
         return (
-            self.bar1_after_unload_percent
-            <= self.bar1_before_percent + UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
-            and self.vram_after_unload_mib
-            <= self.vram_before_mib + UNLOAD_RESIDUAL_LIMIT_MIB
+            self.unload_residual_bar1_percent
+            <= UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            and self.unload_residual_mib <= UNLOAD_RESIDUAL_LIMIT_MIB
         )
 
 
