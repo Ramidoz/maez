@@ -57,11 +57,12 @@ WINDOW_TTL_S = 14_400
 CONTINUATION_TTL_S = 3_600
 KILL_WAIT_S = 15
 LISTENER_WAIT_S = 10
-# 180 s: window ab-20260803-1635 witnessed cycle-1 reclaim in ~3 s and cycle-2
-# still dirty at the old 60 s bound with eventual reclaim proven by baseline
-# return -- slow reclaim under VA-mapping pressure is EVIDENCE, recorded per
-# cycle as unload_wait_seconds; only exceeding this bound is unload_incomplete.
-UNLOAD_WAIT_S = 180
+# Window ab-20260803-1635 witnessed cycle-1 reclaim ~0.07 s after finalizer
+# completion and cycle-2 still dirty at the old 60 s bound with eventual
+# reclaim proven by baseline return -- slow reclaim under VA-mapping pressure
+# is EVIDENCE, recorded per cycle as unload_wait_seconds; only exceeding the
+# shared canon bound is unload_incomplete.
+UNLOAD_WAIT_S = cm.UNLOAD_WAIT_S
 FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
 _SANITIZED_BENCH_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -777,17 +778,17 @@ KERNEL_SIGNATURES = (
 _VA_SPACE_ASSERTION_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
-        r"nvAssertFailedNoLog: Assertion failed: 0 @ mmu_walk_map\.c:[0-9]+",
+        r"nvAssertFailedNoLog: Assertion failed: 0 @ mmu_walk_map\.c:[0-9]+\s*$",
         r"nvAssertFailedNoLog: Assertion failed: NV_OK == status"
-        r" @ gpu_vaspace\.c:[0-9]+",
+        r" @ gpu_vaspace\.c:[0-9]+\s*$",
         r"nvAssertFailedNoLog: Assertion failed: NV_OK == status"
-        r" @ mmu_walk\.c:[0-9]+",
+        r" @ mmu_walk\.c:[0-9]+\s*$",
         r"nvAssertFailedNoLog: Assertion failed: \(pIter->pPageArray->count"
-        r" == 1\) && \(currIdxMod > 0\) @ virt_mem_allocator_gm107\.c:[0-9]+",
+        r" == 1\) && \(currIdxMod > 0\) @ virt_mem_allocator_gm107\.c:[0-9]+\s*$",
         r"nvAssertFailedNoLog: Assertion failed: progress == entryIndexHi"
-        r" - entryIndexLo \+ 1 @ mmu_walk_map\.c:[0-9]+",
+        r" - entryIndexLo \+ 1 @ mmu_walk_map\.c:[0-9]+\s*$",
         r"nvCheckFailedNoLog: Check failed: NV_OK == status"
-        r" @ virt_mem_allocator_gm107\.c:[0-9]+",
+        r" @ virt_mem_allocator_gm107\.c:[0-9]+\s*$",
     )
 )
 KERNEL_COUNTER_KEYS = (
@@ -8521,19 +8522,21 @@ def _wait_for_unload(
     if listener_free is not True:
         raise BenchRefusal("unload_incomplete")
     started = _monotonic(providers.clock)
-    deadline = started + UNLOAD_WAIT_S
     while True:
         topology, memory = _sample_gpu_stage(
             providers,
             gpu_uuid=gpu_uuid,
             owned_pids=set(),
         )
+        elapsed = _monotonic(providers.clock) - started
         if topology != expected_topology:
             raise BenchRefusal("topology_drift")
-        if memory[0] <= memory_before[0] and memory[1] <= memory_before[1]:
-            return topology, memory, _monotonic(providers.clock) - started
-        if _monotonic(providers.clock) >= deadline:
+        if elapsed > UNLOAD_WAIT_S:
+            # Fail closed BEFORE accepting a clean sample: a reclaim observed
+            # past the canon bound is not admissible evidence.
             raise BenchRefusal("unload_incomplete")
+        if memory[0] <= memory_before[0] and memory[1] <= memory_before[1]:
+            return topology, memory, elapsed
         time.sleep(0.01)
 
 

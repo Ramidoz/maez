@@ -4068,6 +4068,8 @@ def collapse(witness):
                 "kernel: NVRM: Xid 31\n"
                 "kernel: NVRM: dmaAllocMapping_GM107: can't alloc VA space"
                 " for mapping.\n"
+                "kernel: NVRM: dmaAllocMapping_GM107: can't update VA space"
+                " for mapping @vaddr=0x12080000\n"
                 "kernel: NVRM: mystery fault\n"
                 "-- cursor: s=after\n",
             ]
@@ -4085,7 +4087,7 @@ def collapse(witness):
             "pMapCb": 0,
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
-            "dmaAllocMapping_GM107": 1,
+            "dmaAllocMapping_GM107": 2,
             "va_space_assertion_lines": 0,
             "Xid": 1,
             "unmatched_nvrm": 1,
@@ -4097,6 +4099,58 @@ def collapse(witness):
             "--show-cursor",
             "--no-pager",
         ]
+
+    def test_unload_wait_fails_closed_at_exact_boundary(self) -> None:
+        """A clean reclaim observed past the canon bound is inadmissible.
+
+        Review reproduction: the old order accepted a clean sample at 181 s.
+        Elapsed is now checked at the sample, before accepting clean memory:
+        exactly UNLOAD_WAIT_S is admissible, one tick past refuses
+        unload_incomplete.
+        """
+
+        class SteppingClock:
+            def __init__(self, steps: list[float]) -> None:
+                self._steps = iter(steps)
+                self._now = 0.0
+
+            def monotonic(self) -> float:
+                try:
+                    self._now = next(self._steps)
+                except StopIteration:
+                    pass
+                return self._now
+
+            def now_utc(self) -> str:
+                return "2026-08-03T17:00:00Z"
+
+        def providers_with(clock: object) -> object:
+            gpu = SimpleNamespace(
+                inventory=lambda _uuid: [],
+                memory=lambda _uuid: (1.0, 100),
+            )
+            return SimpleNamespace(clock=clock, gpu=gpu)
+
+        boundary = float(driver.UNLOAD_WAIT_S)
+        topology = driver.ambient_topology_hash([], set())
+        result = driver._wait_for_unload(
+            providers_with(SteppingClock([0.0, boundary])),
+            gpu_uuid="GPU-x",
+            memory_before=(1.0, 100),
+            expected_topology=topology,
+            listener_free=True,
+        )
+        assert result[2] == boundary
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._wait_for_unload(
+                providers_with(SteppingClock([0.0, boundary + 0.001])),
+                gpu_uuid="GPU-x",
+                memory_before=(1.0, 100),
+                expected_topology=topology,
+                listener_free=True,
+            )
+        assert exc.value.code == "unload_incomplete"
 
     def test_va_space_assertion_shapes_count_and_novel_stays_unmatched(
         self,
@@ -4127,6 +4181,8 @@ def collapse(witness):
             " NV_OK == status @ virt_mem_allocator_gm107.c:3021\n"
         )
         novel = (
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed: 0"
+            " @ mmu_walk_map.c:75 and then some trailing text\n"
             "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
             " pFoo != NULL @ mmu_walk_map.c:900\n"
             "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
@@ -4150,7 +4206,7 @@ def collapse(witness):
         assert kernel.cursor() == "s=before"
         counts = kernel.count_signatures("s=before", "s=after")
         assert counts["va_space_assertion_lines"] == 6
-        assert counts["unmatched_nvrm"] == 4
+        assert counts["unmatched_nvrm"] == 5
 
     def test_equal_kernel_cursors_return_exact_zeros_without_query(self) -> None:
         kernel = driver.RealKernelLogProvider(

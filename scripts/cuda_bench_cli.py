@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -2357,7 +2358,9 @@ def _valid_assembly_success_fields(
             )
             or type(cycle.get("unload_wait_seconds")) not in {int, float}
             or isinstance(cycle["unload_wait_seconds"], bool)
+            or not math.isfinite(cycle["unload_wait_seconds"])
             or cycle["unload_wait_seconds"] < 0
+            or cycle["unload_wait_seconds"] > cm.UNLOAD_WAIT_S
             for cycle in cycles
         )
     ):

@@ -42,6 +42,12 @@ FROZEN_MEASURED_SAMPLE_COUNT = 21
 # both backends keeps the A/B fair (512 tok ~= 7s at Vulkan speed, well
 # inside REQUEST_TIMEOUT_MS).
 FROZEN_TURN_N_PREDICT = 512
+# Shared unload-latency canon (amended 2026-08-03, corrected after review):
+# a phase observes reclaim for at most UNLOAD_WAIT_S; the scorer refuses any
+# CUDA candidate cycle above CANDIDATE_UNLOAD_LIMIT_S.  One constant pair,
+# consumed by driver, schema, scorer, and CLI validation alike.
+UNLOAD_WAIT_S = 180
+CANDIDATE_UNLOAD_LIMIT_S = 60
 FROZEN_LOAD_CYCLES = 3
 VULKAN_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596/llama-b9596")
 CUDA_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89")
@@ -1984,6 +1990,7 @@ class CycleMetrics:
             or not isinstance(wait, (float, int))
             or not math.isfinite(wait)
             or wait < 0
+            or wait > UNLOAD_WAIT_S
         ):
             raise ValueError("positive_measurement")
 
@@ -5155,7 +5162,8 @@ def _evaluate_promotion_gate(
     if any(not cycle.unload_complete for cycle in candidate.cycles):
         reasons.append("unload_incomplete")
     if any(
-        cycle.unload_wait_seconds > 60.0 for cycle in candidate.cycles
+        cycle.unload_wait_seconds > CANDIDATE_UNLOAD_LIMIT_S
+        for cycle in candidate.cycles
     ):
         reasons.append("unload_latency_limit")
     if candidate.quality_failure_count != 0:

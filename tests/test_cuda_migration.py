@@ -6739,6 +6739,36 @@ class BundleGateTests(unittest.TestCase):
         self.assertEqual("keep_vulkan", verdict.decision)
         self.assertIn("unload_latency_limit", verdict.reasons)
 
+        for impossible in (999.0, float("inf"), float("nan"), -1.0):
+            with self.assertRaisesRegex(ValueError, "positive_measurement"):
+                cm.CycleMetrics(
+                    cycle=1,
+                    topology_sha256="a" * 64,
+                    bar1_before_percent=2.0,
+                    bar1_after_load_percent=40.0,
+                    bar1_after_inference_percent=50.0,
+                    bar1_after_unload_percent=2.0,
+                    vram_before_mib=500,
+                    vram_after_load_mib=22_000,
+                    vram_after_inference_mib=22_500,
+                    vram_after_unload_mib=500,
+                    unload_wait_seconds=impossible,
+                )
+        boundary = cm.CycleMetrics(
+            cycle=1,
+            topology_sha256="a" * 64,
+            bar1_before_percent=2.0,
+            bar1_after_load_percent=40.0,
+            bar1_after_inference_percent=50.0,
+            bar1_after_unload_percent=2.0,
+            vram_before_mib=500,
+            vram_after_load_mib=22_000,
+            vram_after_inference_mib=22_500,
+            vram_after_unload_mib=500,
+            unload_wait_seconds=float(cm.UNLOAD_WAIT_S),
+        )
+        self.assertEqual(boundary.unload_wait_seconds, 180.0)
+
     def test_public_surface_has_no_bundle_free_verdict_or_receipt_path(self) -> None:
         public = {name for name in dir(cm) if not name.startswith("_")}
         self.assertNotIn("evaluate_promotion", public)
