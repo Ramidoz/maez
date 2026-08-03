@@ -282,7 +282,9 @@ turns. Frozen statistics over the 21 measured turns per phase:
 
 Server-reported `timings` are authoritative for prefill/decode tps and token
 counts (streaming chunks are never counted as tokens); driver wall-clock is
-authoritative for TTFT, e2e, and the 12,000 ms bound.
+authoritative for TTFT, e2e, and therefore for the stage-1 relative
+`seven_turn_max_ms` rail (the former absolute 12,000 ms bound, superseded
+2026-08-03 by the candidate-vs-control comparison).
 
 **MTP wire contract (frozen against b9596 source).** The b9596 server emits
 exactly two speculative counters in the terminal SSE `timings` object —
@@ -628,8 +630,11 @@ marker creation or spawn).**
 
 - `READINESS_TIMEOUT_S = 300` (18 GB load headroom; stub personas exercise
   the boundary);
-- `REQUEST_TIMEOUT_MS = 30_000` per turn (hard cap above the 12,000 ms
-  quality bound so slow-but-completing turns are measured, not truncated);
+- `REQUEST_TIMEOUT_MS = 30_000` per turn — the hard completion ceiling
+  (the former absolute 12,000 ms per-turn quality bound became the
+  stage-1 RELATIVE rail `candidate seven_turn_max_ms <= control
+  seven_turn_max_ms` on 2026-08-03; see the runbook's quality-witness
+  section for the window ab-20260803-1837 calibration rationale);
 - `FROZEN_TURN_N_PREDICT = 512` generation bound carried in every
   `/completion` body — warmup and measured turns, both backends — so no turn
   can generate unboundedly into `REQUEST_TIMEOUT_MS` (witnessed in window

@@ -163,7 +163,7 @@ _REASONS = frozenset(
         "seven_turn_sample_count",
         "corpus_hash_mismatch",
         "order_hash_mismatch",
-        "seven_turn_latency_limit",
+        "max_latency_regression",
         "p95_regression",
         "decode_throughput_regression",
         "bar1_ceiling",
@@ -5210,8 +5210,18 @@ def _evaluate_promotion_gate(
         reasons.append("order_hash_mismatch")
     if candidate.topology_sha256 != control.topology_sha256:
         reasons.append("topology_mismatch")
-    if candidate.seven_turn_max_ms >= 12_000:
-        reasons.append("seven_turn_latency_limit")
+    # Defect 10 (ratified 2026-08-03, window ab-20260803-1837): the June
+    # absolute 12 s ceiling was calibrated for the self-limited
+    # natural-answer workload;
+    # FROZEN_TURN_N_PREDICT = 512 tripled forced generation and every
+    # over-12 s turn in window 8 (eight control, one candidate) hit exactly
+    # 512 tokens with stop_type=limit.  Stage 1 is an A/B on identical
+    # model/corpus/order/hardware/bound, so the rail is RELATIVE: a slower
+    # challenger fails; equality passes.  The 30 s request timeout remains
+    # the hard completion ceiling, and the dormant provisional-live gate
+    # (natural turns) is deliberately untouched.
+    if candidate.seven_turn_max_ms > control.seven_turn_max_ms:
+        reasons.append("max_latency_regression")
     if candidate.p95_e2e_ms > control.p95_e2e_ms:
         reasons.append("p95_regression")
     if candidate.median_decode_tps < control.median_decode_tps * 0.97:
