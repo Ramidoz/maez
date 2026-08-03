@@ -1326,6 +1326,7 @@ def _provider_components(tier: str) -> dict[str, object]:
         "mmuWalkMap": 0,
         "NV_ERR_NO_MEMORY": 0,
         "dmaAllocMapping_GM107": 0,
+        "va_space_assertion_lines": 0,
         "Xid": 0,
         "unmatched_nvrm": 0,
     }
@@ -1419,7 +1420,7 @@ class TestFrozenContract:
         assert driver.CONTINUATION_TTL_S == 3_600
         assert driver.KILL_WAIT_S == 15
         assert driver.LISTENER_WAIT_S == 10
-        assert driver.UNLOAD_WAIT_S == 60
+        assert driver.UNLOAD_WAIT_S == 180
         assert driver.FROZEN_BENCH_ARGS_SHA256 == (
             "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
         )
@@ -3778,6 +3779,7 @@ def collapse(witness):
             "mmuWalkMap": 3,
             "NV_ERR_NO_MEMORY": 4,
             "dmaAllocMapping_GM107": 7,
+            "va_space_assertion_lines": 0,
             "Xid": 5,
             "unmatched_nvrm": 6,
         }
@@ -4084,6 +4086,7 @@ def collapse(witness):
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
             "dmaAllocMapping_GM107": 1,
+            "va_space_assertion_lines": 0,
             "Xid": 1,
             "unmatched_nvrm": 1,
         }
@@ -4095,6 +4098,60 @@ def collapse(witness):
             "--no-pager",
         ]
 
+    def test_va_space_assertion_shapes_count_and_novel_stays_unmatched(
+        self,
+    ) -> None:
+        """The six witnessed VA-space shapes aggregate; novelty still refuses.
+
+        Window ab-20260803-1635: one BAR1 VA-mapping failure event emits six
+        companion assertion lines (444 each) beyond the token-counted
+        mmuWalkMap/dmaAllocMapping lines.  Exact message+file shapes count as
+        va_space_assertion_lines; a DIFFERENT assertion in each same file
+        must still increment unmatched_nvrm -- the generic wrapper is never
+        matched.
+        """
+        observed = (
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed: 0"
+            " @ mmu_walk_map.c:75\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " NV_OK == status @ gpu_vaspace.c:1234\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " NV_OK == status @ mmu_walk.c:817\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " (pIter->pPageArray->count == 1) && (currIdxMod > 0)"
+            " @ virt_mem_allocator_gm107.c:2231\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " progress == entryIndexHi - entryIndexLo + 1"
+            " @ mmu_walk_map.c:598\n"
+            "kernel: NVRM: nvCheckFailedNoLog: Check failed:"
+            " NV_OK == status @ virt_mem_allocator_gm107.c:3021\n"
+        )
+        novel = (
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " pFoo != NULL @ mmu_walk_map.c:900\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " pBar != NULL @ gpu_vaspace.c:44\n"
+            "kernel: NVRM: nvAssertFailedNoLog: Assertion failed:"
+            " pBaz != NULL @ mmu_walk.c:44\n"
+            "kernel: NVRM: nvCheckFailedNoLog: Check failed:"
+            " NV_ERR == status @ virt_mem_allocator_gm107.c:44\n"
+        )
+        outputs = iter(
+            [
+                "-- cursor: s=before\n",
+                observed + novel + "-- cursor: s=after\n",
+            ]
+        )
+        kernel = driver.RealKernelLogProvider(
+            runner=lambda _argv: subprocess.CompletedProcess(
+                [], 0, next(outputs), ""
+            )
+        )
+        assert kernel.cursor() == "s=before"
+        counts = kernel.count_signatures("s=before", "s=after")
+        assert counts["va_space_assertion_lines"] == 6
+        assert counts["unmatched_nvrm"] == 4
+
     def test_equal_kernel_cursors_return_exact_zeros_without_query(self) -> None:
         kernel = driver.RealKernelLogProvider(
             runner=lambda _argv: (_ for _ in ()).throw(AssertionError("queried"))
@@ -4105,6 +4162,7 @@ def collapse(witness):
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
             "dmaAllocMapping_GM107": 0,
+            "va_space_assertion_lines": 0,
             "Xid": 0,
             "unmatched_nvrm": 0,
         }
@@ -4124,6 +4182,7 @@ def collapse(witness):
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
             "dmaAllocMapping_GM107": 0,
+            "va_space_assertion_lines": 0,
             "Xid": 2,
             "unmatched_nvrm": 1,
         }
@@ -4153,6 +4212,7 @@ def collapse(witness):
             "mmuWalkMap": 2,
             "NV_ERR_NO_MEMORY": 2,
             "dmaAllocMapping_GM107": 2,
+            "va_space_assertion_lines": 0,
             "Xid": 2,
             "unmatched_nvrm": 6,
         }
@@ -12511,6 +12571,7 @@ class TestB7RemainingSpecGate:
             "mmu_walk_map": 0,
             "nv_err_no_memory": 0,
             "dma_alloc_mapping": 0,
+            "va_space_assertion_lines": 0,
             "xid": 0,
             "unmatched_nvrm": 0,
         }

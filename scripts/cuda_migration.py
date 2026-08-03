@@ -165,6 +165,7 @@ _REASONS = frozenset(
         "backend_witness_mismatch",
         "topology_mismatch",
         "unload_incomplete",
+        "unload_latency_limit",
         "false_absence",
         "wrong_answered_ungrounded",
         "type_regression",
@@ -1486,6 +1487,7 @@ class KernelCounters:
     mmu_walk_map: int
     nv_err_no_memory: int
     dma_alloc_mapping: int
+    va_space_assertion_lines: int
     xid: int
     unmatched_nvrm: int
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
@@ -1499,6 +1501,7 @@ class KernelCounters:
             "mmu_walk_map",
             "nv_err_no_memory",
             "dma_alloc_mapping",
+            "va_space_assertion_lines",
             "xid",
             "unmatched_nvrm",
         ):
@@ -1506,7 +1509,7 @@ class KernelCounters:
 
     @classmethod
     def zero(cls) -> KernelCounters:
-        return cls(0, 0, 0, 0, 0, 0, 0)
+        return cls(0, 0, 0, 0, 0, 0, 0, 0)
 
     @property
     def clean(self) -> bool:
@@ -1518,6 +1521,7 @@ class KernelCounters:
                 self.mmu_walk_map,
                 self.nv_err_no_memory,
                 self.dma_alloc_mapping,
+                self.va_space_assertion_lines,
                 self.xid,
                 self.unmatched_nvrm,
             )
@@ -1542,6 +1546,7 @@ class KernelCounters:
             "mmuWalkMap": self.mmu_walk_map,
             "NV_ERR_NO_MEMORY": self.nv_err_no_memory,
             "dmaAllocMapping_GM107": self.dma_alloc_mapping,
+            "va_space_assertion_lines": self.va_space_assertion_lines,
             "Xid": self.xid,
             "unmatched_nvrm": self.unmatched_nvrm,
         }
@@ -1937,6 +1942,7 @@ class CycleMetrics:
     vram_after_load_mib: int
     vram_after_inference_mib: int
     vram_after_unload_mib: int
+    unload_wait_seconds: float
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
@@ -1972,6 +1978,15 @@ class CycleMetrics:
                 or not _json_number_serializable(value)
             ):
                 raise ValueError("vram_integer_mib")
+        wait = self.unload_wait_seconds
+        if (
+            isinstance(wait, bool)
+            or not isinstance(wait, (float, int))
+            or not math.isfinite(wait)
+            or wait < 0
+        ):
+            raise ValueError("positive_measurement")
+
 
     @property
     def unload_complete(self) -> bool:
@@ -2835,6 +2850,7 @@ _KERNEL_COUNTER_FIELDS = (
     "mmu_walk_map",
     "nv_err_no_memory",
     "dma_alloc_mapping",
+    "va_space_assertion_lines",
     "xid",
     "unmatched_nvrm",
 )
@@ -3063,6 +3079,7 @@ _CYCLE_METRIC_FIELDS = (
     "vram_after_load_mib",
     "vram_after_inference_mib",
     "vram_after_unload_mib",
+    "unload_wait_seconds",
 )
 _PHASE_PACKET_FIELDS = (
     "phase",
@@ -4941,6 +4958,7 @@ def _cycle_packet(cycle: CycleMetrics) -> dict[str, object]:
         "vram_after_load_mib": cycle.vram_after_load_mib,
         "vram_after_inference_mib": cycle.vram_after_inference_mib,
         "vram_after_unload_mib": cycle.vram_after_unload_mib,
+        "unload_wait_seconds": cycle.unload_wait_seconds,
     }
 
 
@@ -5136,6 +5154,10 @@ def _evaluate_promotion_gate(
         reasons.append("unload_leak_detected")
     if any(not cycle.unload_complete for cycle in candidate.cycles):
         reasons.append("unload_incomplete")
+    if any(
+        cycle.unload_wait_seconds > 60.0 for cycle in candidate.cycles
+    ):
+        reasons.append("unload_latency_limit")
     if candidate.quality_failure_count != 0:
         reasons.append("quality_failure")
     if candidate.false_absence_count != 0:

@@ -368,7 +368,12 @@ recorded in the packet as evidence and never unscore the phase by themselves
 — they ARE the A/B's core comparison (amended 2026-08-03 after window
 ab-20260803-0637 witnessed 4,374 `dmaAllocMapping_GM107: can't alloc VA
 space` lines plus the four known signatures during a routine three-cycle
-Vulkan load, `Xid = 0`, all cycles measured). A nonzero `NVRM: Xid` count or
+Vulkan load, `Xid = 0`, all cycles measured). The six exact
+assertion shapes witnessed with that event (from `mmu_walk_map.c`,
+`mmu_walk.c`, `gpu_vaspace.c`, and `virt_mem_allocator_gm107.c`, message and
+file pinned exactly, line numbers free) aggregate as
+`va_space_assertion_lines`; a different assertion in those same files stays
+unmatched. A nonzero `NVRM: Xid` count or
 any new unmatched
 NVRM error signature makes the phase unscored. Do not store kernel lines in a
 content-light receipt; store only hashes, counts, time bounds, and verdicts.

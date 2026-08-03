@@ -643,7 +643,14 @@ marker creation or spawn).**
 - `WINDOW_TTL_S = 14_400` (4 h) for window authorization;
   `CONTINUATION_TTL_S = 3_600` (1 h) for the CUDA continuation;
 - `KILL_WAIT_S = 15` post-SIGKILL group-absence bound;
-  `LISTENER_WAIT_S = 10` listener-absence bound; `UNLOAD_WAIT_S = 60`
+  `LISTENER_WAIT_S = 10` listener-absence bound; `UNLOAD_WAIT_S = 180`
+  (amended 2026-08-03, window ab-20260803-1635: control cycle-1 reclaimed in
+  ~3 s while cycle-2 was still dirty at the old 60 s bound with eventual
+  reclaim proven by baseline return -- slow reclaim under VA-mapping
+  pressure is recorded per cycle as `unload_wait_seconds` evidence; the
+  scorer refuses any CUDA candidate cycle above 60 s with
+  `unload_latency_limit`, so the wider bound never weakens the promotion
+  bar)
   unload-proof bound — exceeding any of these is `cleanup_incomplete`;
 - nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars;
 - `FROZEN_BENCH_ARGS_SHA256 =

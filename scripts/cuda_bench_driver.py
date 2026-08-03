@@ -57,7 +57,11 @@ WINDOW_TTL_S = 14_400
 CONTINUATION_TTL_S = 3_600
 KILL_WAIT_S = 15
 LISTENER_WAIT_S = 10
-UNLOAD_WAIT_S = 60
+# 180 s: window ab-20260803-1635 witnessed cycle-1 reclaim in ~3 s and cycle-2
+# still dirty at the old 60 s bound with eventual reclaim proven by baseline
+# return -- slow reclaim under VA-mapping pressure is EVIDENCE, recorded per
+# cycle as unload_wait_seconds; only exceeding this bound is unload_incomplete.
+UNLOAD_WAIT_S = 180
 FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
 _SANITIZED_BENCH_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -765,7 +769,32 @@ KERNEL_SIGNATURES = (
     "dmaAllocMapping_GM107",
     "Xid",
 )
-KERNEL_COUNTER_KEYS = (*KERNEL_SIGNATURES, "unmatched_nvrm")
+# The six exact assertion shapes witnessed in window ab-20260803-1635, all
+# companions of one BAR1 VA-mapping failure event (444 lines each).  Message
+# and file are pinned exactly; only source line numbers vary.  The generic
+# nvAssertFailedNoLog wrapper is deliberately NOT matched -- a novel
+# assertion, even in these same files, must stay unmatched_nvrm.
+_VA_SPACE_ASSERTION_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"nvAssertFailedNoLog: Assertion failed: 0 @ mmu_walk_map\.c:[0-9]+",
+        r"nvAssertFailedNoLog: Assertion failed: NV_OK == status"
+        r" @ gpu_vaspace\.c:[0-9]+",
+        r"nvAssertFailedNoLog: Assertion failed: NV_OK == status"
+        r" @ mmu_walk\.c:[0-9]+",
+        r"nvAssertFailedNoLog: Assertion failed: \(pIter->pPageArray->count"
+        r" == 1\) && \(currIdxMod > 0\) @ virt_mem_allocator_gm107\.c:[0-9]+",
+        r"nvAssertFailedNoLog: Assertion failed: progress == entryIndexHi"
+        r" - entryIndexLo \+ 1 @ mmu_walk_map\.c:[0-9]+",
+        r"nvCheckFailedNoLog: Check failed: NV_OK == status"
+        r" @ virt_mem_allocator_gm107\.c:[0-9]+",
+    )
+)
+KERNEL_COUNTER_KEYS = (
+    *KERNEL_SIGNATURES,
+    "va_space_assertion_lines",
+    "unmatched_nvrm",
+)
 
 
 def systemctl_command(subcommand: str, unit: str) -> list[str]:
@@ -5082,7 +5111,13 @@ class RealKernelLogProvider(_WitnessedProvider):
                 counts[signature] += occurrences
                 matched_count += occurrences
             if "NVRM" in line and matched_count == 0:
-                counts["unmatched_nvrm"] += 1
+                if any(
+                    pattern.search(line)
+                    for pattern in _VA_SPACE_ASSERTION_PATTERNS
+                ):
+                    counts["va_space_assertion_lines"] += 1
+                else:
+                    counts["unmatched_nvrm"] += 1
         return counts
 
 
@@ -7581,6 +7616,7 @@ def _cycle_metric_fields(
             "vram_after_load_mib",
             "vram_after_inference_mib",
             "vram_after_unload_mib",
+            "unload_wait_seconds",
         )
     }
     if topology_hashes is not None:
@@ -7610,6 +7646,7 @@ def _kernel_counter_fields(counters: cm.KernelCounters) -> dict[str, int]:
         "mmu_walk_map": counters.mmu_walk_map,
         "nv_err_no_memory": counters.nv_err_no_memory,
         "dma_alloc_mapping": counters.dma_alloc_mapping,
+        "va_space_assertion_lines": counters.va_space_assertion_lines,
         "xid": counters.xid,
         "unmatched_nvrm": counters.unmatched_nvrm,
     }
@@ -7722,6 +7759,7 @@ def _kernel_counters(values: dict[str, int]) -> cm.KernelCounters:
             mmu_walk_map=values["mmuWalkMap"],
             nv_err_no_memory=values["NV_ERR_NO_MEMORY"],
             dma_alloc_mapping=values["dmaAllocMapping_GM107"],
+            va_space_assertion_lines=values["va_space_assertion_lines"],
             xid=values["Xid"],
             unmatched_nvrm=values["unmatched_nvrm"],
         )
@@ -8479,10 +8517,11 @@ def _wait_for_unload(
     memory_before: tuple[float, int],
     expected_topology: str,
     listener_free: bool | None,
-) -> tuple[str, tuple[float, int]]:
+) -> tuple[str, tuple[float, int], float]:
     if listener_free is not True:
         raise BenchRefusal("unload_incomplete")
-    deadline = _monotonic(providers.clock) + UNLOAD_WAIT_S
+    started = _monotonic(providers.clock)
+    deadline = started + UNLOAD_WAIT_S
     while True:
         topology, memory = _sample_gpu_stage(
             providers,
@@ -8492,7 +8531,7 @@ def _wait_for_unload(
         if topology != expected_topology:
             raise BenchRefusal("topology_drift")
         if memory[0] <= memory_before[0] and memory[1] <= memory_before[1]:
-            return topology, memory
+            return topology, memory, _monotonic(providers.clock) - started
         if _monotonic(providers.clock) >= deadline:
             raise BenchRefusal("unload_incomplete")
         time.sleep(0.01)
@@ -8776,7 +8815,11 @@ def _run_three_cycles(
 
         unload_refusal: BenchRefusal | None = None
         try:
-            topology_after_unload, memory_after_unload = _wait_for_unload(
+            (
+                topology_after_unload,
+                memory_after_unload,
+                unload_wait_seconds,
+            ) = _wait_for_unload(
                 providers,
                 gpu_uuid=config.gpu_uuid,
                 memory_before=memory_before,
@@ -8787,6 +8830,7 @@ def _run_three_cycles(
             unload_refusal = error
             topology_after_unload = lifecycle.common_topology
             memory_after_unload = memory_before
+            unload_wait_seconds = float(UNLOAD_WAIT_S)
         lifecycle.current_child = None
         try:
             finalize_journal_error = _try_append_phase_transition(
@@ -8861,6 +8905,7 @@ def _run_three_cycles(
                     vram_after_load_mib=memory_after_load[1],
                     vram_after_inference_mib=memory_after_inference[1],
                     vram_after_unload_mib=memory_after_unload[1],
+                    unload_wait_seconds=unload_wait_seconds,
                 )
             )
             witnesses.append(

@@ -154,6 +154,7 @@ _ASSEMBLY_CYCLE_FIELDS = frozenset(
         "vram_after_load_mib",
         "vram_after_inference_mib",
         "vram_after_unload_mib",
+        "unload_wait_seconds",
     }
 )
 _ASSEMBLY_PHASE_EVIDENCE_FIELDS = frozenset(
@@ -2354,6 +2355,9 @@ def _valid_assembly_success_fields(
                 or cycle[field] < 0
                 for field in cycle_vram_fields
             )
+            or type(cycle.get("unload_wait_seconds")) not in {int, float}
+            or isinstance(cycle["unload_wait_seconds"], bool)
+            or cycle["unload_wait_seconds"] < 0
             for cycle in cycles
         )
     ):

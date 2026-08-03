@@ -219,6 +219,7 @@ def cycles(*, peak: float, topology: str = SHA_A) -> tuple[cm.CycleMetrics, ...]
             vram_after_load_mib=22_000 + index,
             vram_after_inference_mib=22_500 + index,
             vram_after_unload_mib=500 + index,
+            unload_wait_seconds=3.0,
         )
         for index in (1, 2, 3)
     )
@@ -609,6 +610,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             vram_after_load_mib=18_000,
             vram_after_inference_mib=18_100,
             vram_after_unload_mib=0,
+            unload_wait_seconds=3.0,
         )
         self.assertTrue(cycle.unload_complete)
 
@@ -625,6 +627,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                 vram_after_load_mib=18_000,
                 vram_after_inference_mib=18_100,
                 vram_after_unload_mib=1_000,
+                unload_wait_seconds=3.0,
             )
 
     def test_cycle_metrics_rejects_negative_and_over_100_bar1(self) -> None:
@@ -642,6 +645,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                         vram_after_load_mib=18_000,
                         vram_after_inference_mib=18_100,
                         vram_after_unload_mib=1_000,
+                        unload_wait_seconds=3.0,
                     )
 
     def test_cycle_metrics_rejects_bool_and_float_cycle_numbers(self) -> None:
@@ -659,6 +663,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                         vram_after_load_mib=18_000,
                         vram_after_inference_mib=18_100,
                         vram_after_unload_mib=1_000,
+                        unload_wait_seconds=3.0,
                     )
 
     def test_cycle_metrics_rejects_huge_integer_bar1_with_typed_error(self) -> None:
@@ -674,6 +679,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                 vram_after_load_mib=18_000,
                 vram_after_inference_mib=18_100,
                 vram_after_unload_mib=1_000,
+                unload_wait_seconds=3.0,
             )
 
     def test_cycles_bind_topology_worst_bar1_and_complete_unload(self) -> None:
@@ -880,6 +886,7 @@ class SecondReviewContractTests(unittest.TestCase):
             mmu_walk_map=0,
             nv_err_no_memory=0,
             dma_alloc_mapping=0,
+            va_space_assertion_lines=0,
             xid=0,
             unmatched_nvrm=0,
         )
@@ -2599,6 +2606,7 @@ class PersistedDocTests(unittest.TestCase):
                 "mmu_walk_map": witness.kernel_counters.mmu_walk_map,
                 "nv_err_no_memory": witness.kernel_counters.nv_err_no_memory,
                 "dma_alloc_mapping": witness.kernel_counters.dma_alloc_mapping,
+                "va_space_assertion_lines": witness.kernel_counters.va_space_assertion_lines,
                 "xid": witness.kernel_counters.xid,
                 "unmatched_nvrm": witness.kernel_counters.unmatched_nvrm,
             },
@@ -3069,6 +3077,7 @@ def _phase_cycle_metrics() -> tuple[cm.CycleMetrics, ...]:
             vram_after_load_mib=20_000 + cycle,
             vram_after_inference_mib=21_000 + cycle,
             vram_after_unload_mib=100,
+            unload_wait_seconds=3.0,
         )
         for cycle in (1, 2, 3)
     )
@@ -3251,6 +3260,7 @@ def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
             "mmu_walk_map": packet.kernel_counters.mmu_walk_map,
             "nv_err_no_memory": packet.kernel_counters.nv_err_no_memory,
             "dma_alloc_mapping": packet.kernel_counters.dma_alloc_mapping,
+            "va_space_assertion_lines": packet.kernel_counters.va_space_assertion_lines,
             "xid": packet.kernel_counters.xid,
             "unmatched_nvrm": packet.kernel_counters.unmatched_nvrm,
         },
@@ -3844,6 +3854,7 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             "mmu_walk_map": counters.mmu_walk_map,
             "nv_err_no_memory": counters.nv_err_no_memory,
             "dma_alloc_mapping": counters.dma_alloc_mapping,
+            "va_space_assertion_lines": counters.va_space_assertion_lines,
             "xid": counters.xid,
             "unmatched_nvrm": counters.unmatched_nvrm,
         }
@@ -4830,7 +4841,9 @@ def _bundle_cycle_witnesses(
     )
 
 
-def _bundle_cycle_metrics(phase: str) -> tuple[cm.CycleMetrics, ...]:
+def _bundle_cycle_metrics(
+    phase: str, unload_wait_seconds: float = 3.0
+) -> tuple[cm.CycleMetrics, ...]:
     peak = 82.0 if phase == "vulkan_baseline" else 80.0
     return tuple(
         cm.CycleMetrics(
@@ -4844,6 +4857,7 @@ def _bundle_cycle_metrics(phase: str) -> tuple[cm.CycleMetrics, ...]:
             vram_after_load_mib=20_000 + cycle,
             vram_after_inference_mib=21_000 + cycle,
             vram_after_unload_mib=100,
+            unload_wait_seconds=unload_wait_seconds,
         )
         for cycle in (1, 2, 3)
     )
@@ -4861,9 +4875,10 @@ def _bundle_packet(
     containment_before_sha256: str,
     containment_after_sha256: str,
     kernel_counters: cm.KernelCounters | None = None,
+    unload_wait_seconds: float = 3.0,
 ) -> cm.PhasePacket:
     records = _turn_records()
-    metrics = _bundle_cycle_metrics(phase)
+    metrics = _bundle_cycle_metrics(phase, unload_wait_seconds)
     return cm.PhasePacket(
         phase=phase,
         outcome="completed",
@@ -5015,6 +5030,12 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     )
     control_kernel_counters = overrides.pop("control_kernel_counters", None)
     candidate_kernel_counters = overrides.pop("candidate_kernel_counters", None)
+    control_unload_wait_seconds = float(
+        overrides.pop("control_unload_wait_seconds", 3.0)  # type: ignore[arg-type]
+    )
+    candidate_unload_wait_seconds = float(
+        overrides.pop("candidate_unload_wait_seconds", 3.0)  # type: ignore[arg-type]
+    )
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5145,6 +5166,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             "vulkan_baseline:after"
         ].file_sha256,
         kernel_counters=control_kernel_counters,
+        unload_wait_seconds=control_unload_wait_seconds,
     )
     continuation = replace(
         continuation_placeholder,
@@ -5165,6 +5187,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             "cuda_candidate:after"
         ].file_sha256,
         kernel_counters=candidate_kernel_counters,
+        unload_wait_seconds=candidate_unload_wait_seconds,
     )
     static_preflight_ref = "receipts/static-preflight-attempt-001.json"
     control_packet_ref = (
@@ -6673,6 +6696,7 @@ class BundleGateTests(unittest.TestCase):
             mmu_walk_map=549,
             nv_err_no_memory=162,
             dma_alloc_mapping=4374,
+            va_space_assertion_lines=0,
             xid=0,
             unmatched_nvrm=0,
         )
@@ -6697,6 +6721,23 @@ class BundleGateTests(unittest.TestCase):
             verdict = cm.evaluate_promotion_bundle(unscoreable)
             self.assertEqual("keep_vulkan", verdict.decision)
             self.assertIn("kernel_counter_delta", verdict.reasons)
+
+    def test_unload_latency_split_control_evidence_candidate_bar(self) -> None:
+        """Slow control reclaim is evidence; slow candidate reclaim refuses.
+
+        Window ab-20260803-1635: control cycle-1 reclaimed in ~3 s, cycle-2
+        exhausted the old 60 s bound.  The control may take up to the phase
+        bound and the wait is recorded; every CUDA cycle must reclaim within
+        60 s or the verdict is keep_vulkan / unload_latency_limit.
+        """
+        slow_control = _make_bundle(control_unload_wait_seconds=75.0)
+        verdict = cm.evaluate_promotion_bundle(slow_control)
+        self.assertEqual("bench_passed", verdict.decision)
+
+        slow_candidate = _make_bundle(candidate_unload_wait_seconds=61.0)
+        verdict = cm.evaluate_promotion_bundle(slow_candidate)
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("unload_latency_limit", verdict.reasons)
 
     def test_public_surface_has_no_bundle_free_verdict_or_receipt_path(self) -> None:
         public = {name for name in dir(cm) if not name.startswith("_")}
