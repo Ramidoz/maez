@@ -1988,7 +1988,7 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
             with self.subTest(digest=digest):
                 self.assertIn(digest, runbook)
         self.assertIn(
-            "rm -- /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf",
+            "rm -- /home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
             runbook,
         )
         for forbidden in (
@@ -2052,14 +2052,42 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
                 self.assertIn(required, runbook)
         self.assertNotIn('NVCC="/usr/local/cuda/bin/nvcc"', runbook)
 
+    def test_drill_candidate_dropin_sorts_after_mtp_and_names_match(self) -> None:
+        """The installed candidate basename must win the drop-in ordering.
+
+        systemd applies drop-ins lexicographically; witnessed 2026-08-03:
+        the previous 99- prefix sorted BEFORE mtp.conf ('9' < 'm'), so
+        mtp.conf's ExecStart silently restored the Vulkan binary while the
+        candidate's cleared GGML_VK selector left it CPU-only -- health and
+        alias still passed.  The installed name must sort after mtp.conf and
+        the install/removal commands must name the identical file.
+        """
+        runbook = self.read_required(self.RUNBOOK)
+        import re
+        installs = re.findall(
+            r"install -m 0600 \S*llama-server-b9596-cuda\.override\.conf"
+            r" (\S*/llama-server\.service\.d/(\S+\.conf))",
+            runbook,
+        )
+        removals = re.findall(
+            r"rm -- (\S*/llama-server\.service\.d/(\S+\.conf))",
+            runbook,
+        )
+        removals = [r for r in removals if r[1] != "mtp.conf"]
+        self.assertEqual(1, len(installs))
+        self.assertEqual(1, len(removals))
+        self.assertEqual(installs[0][0], removals[0][0])
+        basename = installs[0][1]
+        self.assertGreater(basename, "mtp.conf")
+
     def test_runbook_rehearses_installed_pointer_and_preserves_offline_recovery(self) -> None:
         runbook = self.read_required(self.RUNBOOK)
         required = (
             "install -d -m 0700 /home/rohit/maez/local/cuda_migration_bench/recovery/",
             "install -m 0600 /home/rohit/.config/systemd/user/llama-server.service /home/rohit/maez/local/cuda_migration_bench/recovery/llama-server.service",
             "install -m 0600 /home/rohit/.config/systemd/user/llama-server.service.d/mtp.conf /home/rohit/maez/local/cuda_migration_bench/recovery/mtp.conf",
-            "install -m 0600 /home/rohit/maez/config/systemd/llama-server-b9596-cuda.override.conf /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf",
-            "rm -- /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf",
+            "install -m 0600 /home/rohit/maez/config/systemd/llama-server-b9596-cuda.override.conf /home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
+            "rm -- /home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
         )
         for token in required:
             with self.subTest(token=token):
