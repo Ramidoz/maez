@@ -282,7 +282,9 @@ turns. Frozen statistics over the 21 measured turns per phase:
 
 Server-reported `timings` are authoritative for prefill/decode tps and token
 counts (streaming chunks are never counted as tokens); driver wall-clock is
-authoritative for TTFT, e2e, and the 12,000 ms bound.
+authoritative for TTFT, e2e, and therefore for the stage-1 relative
+`seven_turn_max_ms` rail (the former absolute 12,000 ms bound, superseded
+2026-08-03 by the candidate-vs-control comparison).
 
 **MTP wire contract (frozen against b9596 source).** The b9596 server emits
 exactly two speculative counters in the terminal SSE `timings` object —

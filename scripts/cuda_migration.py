@@ -5211,7 +5211,8 @@ def _evaluate_promotion_gate(
     if candidate.topology_sha256 != control.topology_sha256:
         reasons.append("topology_mismatch")
     # Defect 10 (ratified 2026-08-03, window ab-20260803-1837): the June
-    # absolute 12 s ceiling was calibrated for natural ~150-token turns;
+    # absolute 12 s ceiling was calibrated for the self-limited
+    # natural-answer workload;
     # FROZEN_TURN_N_PREDICT = 512 tripled forced generation and every
     # over-12 s turn in window 8 (eight control, one candidate) hit exactly
     # 512 tokens with stop_type=limit.  Stage 1 is an A/B on identical

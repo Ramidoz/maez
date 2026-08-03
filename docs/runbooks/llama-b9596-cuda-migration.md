@@ -442,7 +442,7 @@ live conversation, memory, cognition, or audit stores. It requires:
 - the candidate's worst measured turn no slower than the control's worst
   (`seven_turn_max_ms` relative rail; equality passes — amended 2026-08-03,
   window ab-20260803-1837: the June absolute 12 s ceiling was calibrated
-  for natural ~150-token turns; the frozen `n_predict = 512` workload put
+  for the self-limited natural-answer workload; the frozen `n_predict = 512` workload put
   eight control and one candidate turn over it, every one at exactly 512
   tokens with stop_type=limit, so the ceiling measured the forced-length
   workload, not natural-answer UX. The dormant provisional-live gate keeps

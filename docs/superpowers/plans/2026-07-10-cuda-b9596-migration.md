@@ -147,7 +147,12 @@ def build_receipt(identity: RuntimeIdentity, summary: BenchSummary,
 The promotion evaluator must require:
 
 ```python
-candidate.seven_turn_max_ms < 12_000
+candidate.seven_turn_max_ms < 12_000   # HISTORICAL, superseded 2026-08-03:
+                                       # the stage-1 rail is now RELATIVE
+                                       # (candidate.seven_turn_max_ms <=
+                                       # control.seven_turn_max_ms); see the
+                                       # driver-design spec and runbook
+                                       # quality-witness amendments.
 candidate.p95_e2e_ms <= control.p95_e2e_ms
 candidate.median_decode_tps >= control.median_decode_tps * 0.97
 candidate.steady_bar1_percent < 85.0
