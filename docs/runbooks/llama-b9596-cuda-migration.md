@@ -586,7 +586,10 @@ second explicit authorization, timestamped after and parented to the passing
 cold-boot artifact. Only then may the seven ordered natural-text turns run
 through the real production seam. The witness is content-light, hash-bound to
 the private literal artifact, and must reproduce the quality, MTP, latency,
-kernel, restart, BAR1, backend-map, and containment gates. It never writes
+kernel, restart, BAR1, backend-map, and containment gates (the current
+`ProvisionalLiveWitness` carries no BAR1 field — the future cutover
+implementation must add that gate before activation; no dormant
+provisional-live BAR1 gate exists today). It never writes
 test content into durable Maez memory or audit stores.
 
 ## Keep Vulkan — four distinct paths
