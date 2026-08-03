@@ -864,17 +864,42 @@ class ReceiptTests(unittest.TestCase):
 
 
 class SecondReviewContractTests(unittest.TestCase):
-    def test_kernel_counters_are_exact_and_any_nonzero_fails(self) -> None:
+    def test_kernel_counters_split_recorded_pressure_from_unscorable(self) -> None:
+        """Mapping-pressure counts are evidence; Xid/unmatched unscore.
+
+        Witnessed 2026-08-03 (window ab-20260803-0637): every Vulkan load
+        chatters the known BAR1 mapping-pressure family (54/108/549/162 plus
+        4,374 dmaAllocMapping_GM107 lines, Xid=0, all cycles measured).  A
+        phase must RECORD that pressure in its packet -- it is the A/B's core
+        evidence -- while a fatal-class Xid or an unknown NVRM signature
+        still makes the phase unscored.
+        """
         clean = cm.KernelCounters(
             reusemappingdb_map=0,
             pmap_cb=0,
             mmu_walk_map=0,
             nv_err_no_memory=0,
+            dma_alloc_mapping=0,
             xid=0,
             unmatched_nvrm=0,
         )
         self.assertTrue(clean.clean)
-        self.assertFalse(replace(clean, unmatched_nvrm=1).clean)
+        self.assertTrue(clean.scoreable)
+        pressured = replace(
+            clean,
+            reusemappingdb_map=54,
+            pmap_cb=108,
+            mmu_walk_map=549,
+            nv_err_no_memory=162,
+            dma_alloc_mapping=4374,
+        )
+        self.assertFalse(pressured.clean)
+        self.assertTrue(pressured.scoreable)
+        self.assertFalse(replace(clean, xid=1).scoreable)
+        self.assertFalse(replace(clean, unmatched_nvrm=1).scoreable)
+        self.assertEqual(
+            pressured.packet()["dmaAllocMapping_GM107"], 4374
+        )
 
     def test_boot_and_live_authorizations_are_distinct_parent_bound_artifacts(
         self,
@@ -1956,6 +1981,7 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
             "pMapCb",
             "mmuWalkMap",
             "NV_ERR_NO_MEMORY",
+            "dmaAllocMapping_GM107",
             "NVRM: Xid",
         ):
             with self.subTest(signature=signature):
@@ -2572,6 +2598,7 @@ class PersistedDocTests(unittest.TestCase):
                 "pmap_cb": witness.kernel_counters.pmap_cb,
                 "mmu_walk_map": witness.kernel_counters.mmu_walk_map,
                 "nv_err_no_memory": witness.kernel_counters.nv_err_no_memory,
+                "dma_alloc_mapping": witness.kernel_counters.dma_alloc_mapping,
                 "xid": witness.kernel_counters.xid,
                 "unmatched_nvrm": witness.kernel_counters.unmatched_nvrm,
             },
@@ -3073,6 +3100,7 @@ def _projection_json(
     phase: str,
     records: tuple[cm.TurnRecord, ...],
     metrics: tuple[cm.CycleMetrics, ...],
+    kernel_counters: cm.KernelCounters | None = None,
 ) -> str:
     statistics = cm.recompute_phase_statistics(records)
     unload_leak = sum(
@@ -3095,7 +3123,11 @@ def _projection_json(
         hang_count=statistics["hang_count"],
         timeout_count=statistics["timeout_count"],
         unload_leak_mib=float(unload_leak),
-        kernel_counters=cm.KernelCounters.zero(),
+        kernel_counters=(
+            kernel_counters
+            if kernel_counters is not None
+            else cm.KernelCounters.zero()
+        ),
     )
     return json.dumps(
         cm.phase_summary_projection(summary),
@@ -3218,6 +3250,7 @@ def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
             "pmap_cb": packet.kernel_counters.pmap_cb,
             "mmu_walk_map": packet.kernel_counters.mmu_walk_map,
             "nv_err_no_memory": packet.kernel_counters.nv_err_no_memory,
+            "dma_alloc_mapping": packet.kernel_counters.dma_alloc_mapping,
             "xid": packet.kernel_counters.xid,
             "unmatched_nvrm": packet.kernel_counters.unmatched_nvrm,
         },
@@ -3810,6 +3843,7 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             "pmap_cb": counters.pmap_cb,
             "mmu_walk_map": counters.mmu_walk_map,
             "nv_err_no_memory": counters.nv_err_no_memory,
+            "dma_alloc_mapping": counters.dma_alloc_mapping,
             "xid": counters.xid,
             "unmatched_nvrm": counters.unmatched_nvrm,
         }
@@ -4826,6 +4860,7 @@ def _bundle_packet(
     pinned_sha256: str,
     containment_before_sha256: str,
     containment_after_sha256: str,
+    kernel_counters: cm.KernelCounters | None = None,
 ) -> cm.PhasePacket:
     records = _turn_records()
     metrics = _bundle_cycle_metrics(phase)
@@ -4862,8 +4897,14 @@ def _bundle_packet(
         containment_after_sha256=containment_after_sha256,
         kernel_cursor_before=f"{phase}-cursor-before",
         kernel_cursor_after=f"{phase}-cursor-after",
-        kernel_counters=cm.KernelCounters.zero(),
-        summary_projection_json=_projection_json(phase, records, metrics),
+        kernel_counters=(
+            kernel_counters
+            if kernel_counters is not None
+            else cm.KernelCounters.zero()
+        ),
+        summary_projection_json=_projection_json(
+            phase, records, metrics, kernel_counters
+        ),
         cycle_one_before_snapshot_at=f"2026-07-13T12:{minute:02d}:01Z",
         timestamp=f"2026-07-13T12:{minute:02d}:12Z",
     )
@@ -4972,6 +5013,8 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     continuation_outlives_parent = bool(
         overrides.pop("continuation_outlives_parent", False)
     )
+    control_kernel_counters = overrides.pop("control_kernel_counters", None)
+    candidate_kernel_counters = overrides.pop("candidate_kernel_counters", None)
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5101,6 +5144,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         containment_after_sha256=containment_docs[
             "vulkan_baseline:after"
         ].file_sha256,
+        kernel_counters=control_kernel_counters,
     )
     continuation = replace(
         continuation_placeholder,
@@ -5120,6 +5164,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         containment_after_sha256=containment_docs[
             "cuda_candidate:after"
         ].file_sha256,
+        kernel_counters=candidate_kernel_counters,
     )
     static_preflight_ref = "receipts/static-preflight-attempt-001.json"
     control_packet_ref = (
@@ -6612,6 +6657,46 @@ class BundleGateTests(unittest.TestCase):
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
         self.assertEqual(bundle.bench_binding_sha256, verdict.evidence_sha256)
+
+    def test_pressured_scoreable_control_can_reach_bench_passed(self) -> None:
+        """The scorer must not resurrect the zero-counts gate downstream.
+
+        Witnessed ab-20260803-0637: the incumbent chatters the known BAR1
+        mapping-pressure family on every load.  A pressured-but-scoreable
+        CONTROL with a fully clean CANDIDATE is exactly the migration case
+        and must be able to reach bench_passed; candidate pressure or either
+        side's Xid/unmatched still refuses with kernel_counter_delta.
+        """
+        pressured = cm.KernelCounters(
+            reusemappingdb_map=54,
+            pmap_cb=108,
+            mmu_walk_map=549,
+            nv_err_no_memory=162,
+            dma_alloc_mapping=4374,
+            xid=0,
+            unmatched_nvrm=0,
+        )
+        bundle = _make_bundle(control_kernel_counters=pressured)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+
+        candidate_pressure = _make_bundle(
+            candidate_kernel_counters=replace(
+                cm.KernelCounters.zero(), dma_alloc_mapping=1
+            )
+        )
+        verdict = cm.evaluate_promotion_bundle(candidate_pressure)
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("kernel_counter_delta", verdict.reasons)
+
+        for bad in (
+            replace(pressured, xid=1),
+            replace(pressured, unmatched_nvrm=1),
+        ):
+            unscoreable = _make_bundle(control_kernel_counters=bad)
+            verdict = cm.evaluate_promotion_bundle(unscoreable)
+            self.assertEqual("keep_vulkan", verdict.decision)
+            self.assertIn("kernel_counter_delta", verdict.reasons)
 
     def test_public_surface_has_no_bundle_free_verdict_or_receipt_path(self) -> None:
         public = {name for name in dir(cm) if not name.startswith("_")}

@@ -762,6 +762,7 @@ KERNEL_SIGNATURES = (
     "pMapCb",
     "mmuWalkMap",
     "NV_ERR_NO_MEMORY",
+    "dmaAllocMapping_GM107",
     "Xid",
 )
 KERNEL_COUNTER_KEYS = (*KERNEL_SIGNATURES, "unmatched_nvrm")
@@ -7608,6 +7609,7 @@ def _kernel_counter_fields(counters: cm.KernelCounters) -> dict[str, int]:
         "pmap_cb": counters.pmap_cb,
         "mmu_walk_map": counters.mmu_walk_map,
         "nv_err_no_memory": counters.nv_err_no_memory,
+        "dma_alloc_mapping": counters.dma_alloc_mapping,
         "xid": counters.xid,
         "unmatched_nvrm": counters.unmatched_nvrm,
     }
@@ -7719,6 +7721,7 @@ def _kernel_counters(values: dict[str, int]) -> cm.KernelCounters:
             pmap_cb=values["pMapCb"],
             mmu_walk_map=values["mmuWalkMap"],
             nv_err_no_memory=values["NV_ERR_NO_MEMORY"],
+            dma_alloc_mapping=values["dmaAllocMapping_GM107"],
             xid=values["Xid"],
             unmatched_nvrm=values["unmatched_nvrm"],
         )
@@ -8526,7 +8529,7 @@ def _collect_phase_tail(
                 cursor_after,
             )
         )
-        if not counters.clean:
+        if not counters.scoreable:
             refusal = BenchRefusal("kernel_unmatched")
     except BenchRefusal as error:
         refusal = error
