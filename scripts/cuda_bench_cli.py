@@ -156,6 +156,8 @@ _ASSEMBLY_CYCLE_FIELDS = frozenset(
         "vram_after_inference_mib",
         "vram_after_unload_mib",
         "unload_wait_seconds",
+        "unload_residual_mib",
+        "unload_residual_bar1_percent",
     }
 )
 _ASSEMBLY_PHASE_EVIDENCE_FIELDS = frozenset(
@@ -2361,6 +2363,33 @@ def _valid_assembly_success_fields(
             or not math.isfinite(cycle["unload_wait_seconds"])
             or cycle["unload_wait_seconds"] < 0
             or cycle["unload_wait_seconds"] > cm.UNLOAD_WAIT_S
+            or type(cycle.get("unload_residual_mib")) is not int
+            or isinstance(cycle["unload_residual_mib"], bool)
+            or cycle["unload_residual_mib"]
+            != max(
+                0,
+                cycle["vram_after_unload_mib"] - cycle["vram_before_mib"],
+            )
+            or cycle["unload_residual_mib"] > cm.UNLOAD_RESIDUAL_LIMIT_MIB
+            or type(cycle.get("unload_residual_bar1_percent"))
+            not in {int, float}
+            or isinstance(cycle["unload_residual_bar1_percent"], bool)
+            or not math.isfinite(cycle["unload_residual_bar1_percent"])
+            or cycle["unload_residual_bar1_percent"]
+            != cm.residual_bar1_percent(
+                cycle["bar1_before_percent"],
+                cycle["bar1_after_unload_percent"],
+            )
+            or cycle["unload_residual_bar1_percent"]
+            > cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            or cycle["vram_after_unload_mib"]
+            - cycles[0]["vram_before_mib"]
+            > cm.UNLOAD_RESIDUAL_LIMIT_MIB
+            or cm.residual_bar1_percent(
+                cycles[0]["bar1_before_percent"],
+                cycle["bar1_after_unload_percent"],
+            )
+            > cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
             for cycle in cycles
         )
     ):

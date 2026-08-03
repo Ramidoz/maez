@@ -220,7 +220,9 @@ def cycles(*, peak: float, topology: str = SHA_A) -> tuple[cm.CycleMetrics, ...]
             vram_after_inference_mib=22_500 + index,
             vram_after_unload_mib=500 + index,
             unload_wait_seconds=3.0,
-        )
+            unload_residual_mib=0,
+            unload_residual_bar1_percent=0.0,
+            )
         for index in (1, 2, 3)
     )
 
@@ -611,7 +613,9 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             vram_after_inference_mib=18_100,
             vram_after_unload_mib=0,
             unload_wait_seconds=3.0,
-        )
+            unload_residual_mib=0,
+            unload_residual_bar1_percent=0.0,
+            )
         self.assertTrue(cycle.unload_complete)
 
     def test_cycle_metrics_rejects_float_vram(self) -> None:
@@ -628,7 +632,9 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                 vram_after_inference_mib=18_100,
                 vram_after_unload_mib=1_000,
                 unload_wait_seconds=3.0,
-            )
+                unload_residual_mib=0,
+                unload_residual_bar1_percent=0.0,
+                )
 
     def test_cycle_metrics_rejects_negative_and_over_100_bar1(self) -> None:
         for field_value in (-0.1, 100.1):
@@ -646,7 +652,9 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                         vram_after_inference_mib=18_100,
                         vram_after_unload_mib=1_000,
                         unload_wait_seconds=3.0,
-                    )
+                        unload_residual_mib=0,
+                        unload_residual_bar1_percent=0.0,
+                        )
 
     def test_cycle_metrics_rejects_bool_and_float_cycle_numbers(self) -> None:
         for cycle_number in (True, 1.0):
@@ -664,7 +672,9 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                         vram_after_inference_mib=18_100,
                         vram_after_unload_mib=1_000,
                         unload_wait_seconds=3.0,
-                    )
+                        unload_residual_mib=0,
+                        unload_residual_bar1_percent=0.0,
+                        )
 
     def test_cycle_metrics_rejects_huge_integer_bar1_with_typed_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive_measurement"):
@@ -680,7 +690,9 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                 vram_after_inference_mib=18_100,
                 vram_after_unload_mib=1_000,
                 unload_wait_seconds=3.0,
-            )
+                unload_residual_mib=0,
+                unload_residual_bar1_percent=0.0,
+                )
 
     def test_cycles_bind_topology_worst_bar1_and_complete_unload(self) -> None:
         summary = make_summary()
@@ -692,11 +704,25 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "topology_mismatch"):
             make_summary(cycles=tuple(mixed))
 
+        with self.assertRaisesRegex(ValueError, "unload_residual_drift"):
+            replace(
+                cycles(peak=80.0)[-1],
+                vram_after_unload_mib=999,
+                unload_residual_mib=496,
+            )
+
         leaked = list(cycles(peak=80.0))
-        leaked[-1] = replace(leaked[-1], vram_after_unload_mib=999)
-        verdict = evaluate(make_summary(cycles=tuple(leaked)))
+        for index in (0, 1):
+            leaked[index] = replace(
+                leaked[index],
+                vram_after_unload_mib=leaked[index].vram_before_mib + 32,
+                unload_residual_mib=32,
+            )
+        verdict = evaluate(
+            make_summary(cycles=tuple(leaked), unload_leak_mib=64.0)
+        )
         self.assertEqual("keep_vulkan", verdict.decision)
-        self.assertIn("unload_incomplete", verdict.reasons)
+        self.assertIn("unload_leak_detected", verdict.reasons)
 
     def test_control_and_candidate_must_share_topology(self) -> None:
         verdict = evaluate(make_summary(cycles=cycles(peak=80.0, topology=SHA_B)))
@@ -3078,7 +3104,9 @@ def _phase_cycle_metrics() -> tuple[cm.CycleMetrics, ...]:
             vram_after_inference_mib=21_000 + cycle,
             vram_after_unload_mib=100,
             unload_wait_seconds=3.0,
-        )
+            unload_residual_mib=0,
+            unload_residual_bar1_percent=0.0,
+            )
         for cycle in (1, 2, 3)
     )
 
@@ -3449,8 +3477,8 @@ class PhaseStatisticsTests(unittest.TestCase):
 
 
 class PhasePacketTests(unittest.TestCase):
-    def test_schema_v2_carries_entry_executable_pin_evidence(self) -> None:
-        self.assertEqual("cuda_bench_driver.phase_packet.v2", cm.PHASE_PACKET_SCHEMA)
+    def test_schema_v3_carries_entry_executable_pin_evidence(self) -> None:
+        self.assertEqual("cuda_bench_driver.phase_packet.v3", cm.PHASE_PACKET_SCHEMA)
         self.assertEqual(
             {"pinned_path", "pinned_sha256"},
             {field.name for field in dataclass_fields(cm.PhasePacket)}
@@ -3540,14 +3568,18 @@ class PhasePacketTests(unittest.TestCase):
     def test_inconsistent_cycle_metric_is_rejected(self) -> None:
         packet = _phase_packet()
         metrics = list(packet.cycle_metrics)
-        metrics[0] = replace(metrics[0], vram_after_unload_mib=101)
+        metrics[0] = replace(
+            metrics[0], vram_after_unload_mib=101, unload_residual_mib=1
+        )
         with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
             replace(packet, cycle_metrics=tuple(metrics))
 
     def test_consistently_rebuilt_cycle_metric_changes_binding(self) -> None:
         packet = _phase_packet()
         metrics = list(packet.cycle_metrics)
-        metrics[0] = replace(metrics[0], vram_after_unload_mib=101)
+        metrics[0] = replace(
+            metrics[0], vram_after_unload_mib=101, unload_residual_mib=1
+        )
         metrics_tuple = tuple(metrics)
         rebuilt = replace(
             packet,
@@ -3677,7 +3709,9 @@ class PhasePacketTests(unittest.TestCase):
     def test_nonzero_float_unload_leak_is_recomputable(self) -> None:
         packet = _phase_packet()
         metrics = list(packet.cycle_metrics)
-        metrics[0] = replace(metrics[0], vram_after_unload_mib=105)
+        metrics[0] = replace(
+            metrics[0], vram_after_unload_mib=105, unload_residual_mib=5
+        )
         metrics_tuple = tuple(metrics)
         rebuilt = replace(
             packet,
@@ -3717,7 +3751,7 @@ class PhasePacketTests(unittest.TestCase):
 
     def test_huge_but_json_serializable_vram_refuses_at_projection_boundary(self) -> None:
         packet = _phase_packet()
-        metric = replace(packet.cycle_metrics[0], vram_after_unload_mib=10**400)
+        metric = replace(packet.cycle_metrics[0], vram_after_load_mib=10**400)
         with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
             replace(packet, cycle_metrics=(metric, *packet.cycle_metrics[1:]))
 
@@ -4842,23 +4876,33 @@ def _bundle_cycle_witnesses(
 
 
 def _bundle_cycle_metrics(
-    phase: str, unload_wait_seconds: float = 3.0
+    phase: str,
+    unload_wait_seconds: float = 3.0,
+    unload_residual_mib: int = 0,
+    bar1_unload: tuple[float, float] | None = None,
 ) -> tuple[cm.CycleMetrics, ...]:
     peak = 82.0 if phase == "vulkan_baseline" else 80.0
+    bar1_before, bar1_after = (
+        bar1_unload if bar1_unload is not None else (10.0, 10.0)
+    )
     return tuple(
         cm.CycleMetrics(
             cycle=cycle,
             topology_sha256=SHA_C,
-            bar1_before_percent=10.0,
+            bar1_before_percent=bar1_before,
             bar1_after_load_percent=peak - 6.0 + cycle,
             bar1_after_inference_percent=peak - 3.0 + cycle,
-            bar1_after_unload_percent=10.0,
+            bar1_after_unload_percent=bar1_after,
             vram_before_mib=100,
             vram_after_load_mib=20_000 + cycle,
             vram_after_inference_mib=21_000 + cycle,
-            vram_after_unload_mib=100,
+            vram_after_unload_mib=100 + unload_residual_mib,
             unload_wait_seconds=unload_wait_seconds,
-        )
+            unload_residual_mib=unload_residual_mib,
+            unload_residual_bar1_percent=cm.residual_bar1_percent(
+                bar1_before, bar1_after
+            ),
+            )
         for cycle in (1, 2, 3)
     )
 
@@ -4876,9 +4920,13 @@ def _bundle_packet(
     containment_after_sha256: str,
     kernel_counters: cm.KernelCounters | None = None,
     unload_wait_seconds: float = 3.0,
+    unload_residual_mib: int = 0,
+    bar1_unload: tuple[float, float] | None = None,
 ) -> cm.PhasePacket:
     records = _turn_records()
-    metrics = _bundle_cycle_metrics(phase, unload_wait_seconds)
+    metrics = _bundle_cycle_metrics(
+        phase, unload_wait_seconds, unload_residual_mib, bar1_unload
+    )
     return cm.PhasePacket(
         phase=phase,
         outcome="completed",
@@ -5036,6 +5084,10 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     candidate_unload_wait_seconds = float(
         overrides.pop("candidate_unload_wait_seconds", 3.0)  # type: ignore[arg-type]
     )
+    candidate_unload_residual_mib = int(
+        overrides.pop("candidate_unload_residual_mib", 0)  # type: ignore[arg-type]
+    )
+    candidate_bar1_unload = overrides.pop("candidate_bar1_unload", None)
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5188,6 +5240,8 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         ].file_sha256,
         kernel_counters=candidate_kernel_counters,
         unload_wait_seconds=candidate_unload_wait_seconds,
+        unload_residual_mib=candidate_unload_residual_mib,
+        bar1_unload=candidate_bar1_unload,
     )
     static_preflight_ref = "receipts/static-preflight-attempt-001.json"
     control_packet_ref = (
@@ -6722,6 +6776,90 @@ class BundleGateTests(unittest.TestCase):
             self.assertEqual("keep_vulkan", verdict.decision)
             self.assertIn("kernel_counter_delta", verdict.reasons)
 
+    def test_residual_tolerance_boundaries_and_cumulative_cap(self) -> None:
+        """32 MiB / 0.10 pp pass; 33 / 0.11 refuse; 20+20 cumulative refuses.
+
+        Windows ab-20260803-1635/-1735: both backends leave a few-MiB
+        post-unload residual with the process gone, so exact-equality reclaim
+        was unsatisfiable from cycle two.  Tolerated per-cycle residuals must
+        not accumulate past the same cap from cycle one's baseline.
+        """
+        base = cycles(peak=80.0)[0]
+        ok = replace(
+            base,
+            vram_after_unload_mib=base.vram_before_mib + 32,
+            unload_residual_mib=32,
+        )
+        self.assertEqual(32, ok.unload_residual_mib)
+        self.assertTrue(ok.unload_complete)
+        ok_bar1 = replace(
+            base,
+            bar1_after_unload_percent=base.bar1_before_percent + 0.10,
+            unload_residual_bar1_percent=0.10,
+        )
+        self.assertTrue(ok_bar1.unload_complete)
+        with self.assertRaisesRegex(ValueError, "unload_residual_drift"):
+            replace(
+                base,
+                vram_after_unload_mib=base.vram_before_mib + 33,
+                unload_residual_mib=33,
+            )
+        with self.assertRaisesRegex(ValueError, "unload_residual_drift"):
+            replace(
+                base,
+                bar1_after_unload_percent=base.bar1_before_percent + 0.11,
+                unload_residual_bar1_percent=0.11,
+            )
+        with self.assertRaisesRegex(ValueError, "unload_residual_drift"):
+            replace(base, unload_residual_mib=1)
+
+        packet = _phase_packet()
+        drifted = []
+        for index, metric in enumerate(packet.cycle_metrics):
+            if index == 2:
+                drifted.append(metric)
+                continue
+            drifted.append(
+                replace(
+                    metric,
+                    vram_before_mib=metric.vram_before_mib
+                    + (20 if index == 1 else 0),
+                    vram_after_unload_mib=metric.vram_before_mib
+                    + (20 if index == 1 else 0)
+                    + 20,
+                    unload_residual_mib=20,
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "unload_residual_drift"):
+            replace(packet, cycle_metrics=tuple(drifted))
+
+    def test_in_tolerance_residual_candidate_can_reach_bench_passed(self) -> None:
+        bundle = _make_bundle(candidate_unload_residual_mib=3)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+
+    def test_float_boundary_cycle_is_complete_and_scores(self) -> None:
+        """Review reproduction 0.24 -> 0.34: raw addition breaks, canon holds.
+
+        0.24 + 0.10 is 0.33999999999999997 in binary float, so a raw-addition
+        predicate called this exactly-at-tolerance cycle incomplete and the
+        scorer minted a false keep_vulkan.  unload_complete must derive from
+        the validated canonical residual fields.
+        """
+        base = cycles(peak=80.0)[0]
+        boundary = replace(
+            base,
+            bar1_before_percent=0.24,
+            bar1_after_unload_percent=0.34,
+            unload_residual_bar1_percent=cm.residual_bar1_percent(0.24, 0.34),
+        )
+        self.assertEqual(0.10, boundary.unload_residual_bar1_percent)
+        self.assertTrue(boundary.unload_complete)
+
+        bundle = _make_bundle(candidate_bar1_unload=(0.24, 0.34))
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+
     def test_unload_latency_split_control_evidence_candidate_bar(self) -> None:
         """Slow control reclaim is evidence; slow candidate reclaim refuses.
 
@@ -6753,7 +6891,9 @@ class BundleGateTests(unittest.TestCase):
                     vram_after_inference_mib=22_500,
                     vram_after_unload_mib=500,
                     unload_wait_seconds=impossible,
-                )
+                    unload_residual_mib=0,
+                    unload_residual_bar1_percent=0.0,
+                    )
         boundary = cm.CycleMetrics(
             cycle=1,
             topology_sha256="a" * 64,
@@ -6766,7 +6906,9 @@ class BundleGateTests(unittest.TestCase):
             vram_after_inference_mib=22_500,
             vram_after_unload_mib=500,
             unload_wait_seconds=float(cm.UNLOAD_WAIT_S),
-        )
+            unload_residual_mib=0,
+            unload_residual_bar1_percent=0.0,
+            )
         self.assertEqual(boundary.unload_wait_seconds, 180.0)
 
     def test_public_surface_has_no_bundle_free_verdict_or_receipt_path(self) -> None:

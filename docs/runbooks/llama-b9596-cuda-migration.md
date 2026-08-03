@@ -449,7 +449,12 @@ live conversation, memory, cognition, or audit stores. It requires:
 - the expected recall-triad posture and an explicit private owner voice review;
 - candidate steady BAR1 below 85% and at least 2.0 percentage points below
   Vulkan;
-- zero assertion/Xid/crash/restart/hang/timeout/unload-leak counts.
+- zero candidate assertion/Xid/crash/restart/hang/timeout counts, and a
+  cumulative candidate post-unload residual within the frozen
+  `UNLOAD_RESIDUAL_LIMIT_MIB = 32` / 0.10 pp limits (amended 2026-08-03:
+  both backends leave a measured few-MiB residual with the process gone,
+  so exact-zero was unsatisfiable; residuals are recorded per cycle and
+  bounded per cycle AND cumulatively from cycle one's baseline).
 
 Honest abstention is not a quality failure. A faster candidate with flat or
 worse stability remains `keep_vulkan`; speed never averages away a stability

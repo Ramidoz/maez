@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import decimal as _decimal
 import math
 import os
 import re
@@ -48,6 +49,29 @@ FROZEN_TURN_N_PREDICT = 512
 # consumed by driver, schema, scorer, and CLI validation alike.
 UNLOAD_WAIT_S = 180
 CANDIDATE_UNLOAD_LIMIT_S = 60
+# Post-unload residual tolerance (ratified 2026-08-03): windows ab-20260803-
+# 1635 and -1735 witnessed a few-MiB post-unload residual on BOTH backends
+# with the process gone, making exact-equality reclaim unsatisfiable from
+# cycle two onward.  Limits apply per cycle AND cumulatively from cycle
+# one's initial baseline, so tolerated cycles cannot accumulate.  Residuals
+# are recomputed from before/after measurements; caller-supplied drift
+# refuses.
+UNLOAD_RESIDUAL_LIMIT_MIB = 32
+UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT = 0.10
+
+
+def residual_bar1_percent(before: float, after: float) -> float:
+    """The ONE BAR1 residual arithmetic: Decimal half-even to hundredths.
+
+    Raw float subtraction turns an exactly-at-tolerance 0.10 pp residual
+    into 0.10000000000000009 and refuses it.  Driver, schema, and CLI all
+    compute residuals through this helper so recomputation is bit-exact.
+    """
+    delta = _decimal.Decimal(repr(after)) - _decimal.Decimal(repr(before))
+    quantized = delta.quantize(
+        _decimal.Decimal("0.01"), rounding=_decimal.ROUND_HALF_EVEN
+    )
+    return max(0.0, float(quantized))
 FROZEN_LOAD_CYCLES = 3
 VULKAN_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596/llama-b9596")
 CUDA_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89")
@@ -515,7 +539,7 @@ PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
-PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
+PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v3"
 ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
 BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v1"
 
@@ -1949,6 +1973,8 @@ class CycleMetrics:
     vram_after_inference_mib: int
     vram_after_unload_mib: int
     unload_wait_seconds: float
+    unload_residual_mib: int
+    unload_residual_bar1_percent: float
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
@@ -1993,13 +2019,42 @@ class CycleMetrics:
             or wait > UNLOAD_WAIT_S
         ):
             raise ValueError("positive_measurement")
+        expected_residual_mib = max(
+            0, self.vram_after_unload_mib - self.vram_before_mib
+        )
+        expected_residual_bar1 = residual_bar1_percent(
+            self.bar1_before_percent, self.bar1_after_unload_percent
+        )
+        if (
+            isinstance(self.unload_residual_mib, bool)
+            or type(self.unload_residual_mib) is not int
+            or self.unload_residual_mib != expected_residual_mib
+            or self.unload_residual_mib > UNLOAD_RESIDUAL_LIMIT_MIB
+        ):
+            raise ValueError("unload_residual_drift")
+        residual_bar1 = self.unload_residual_bar1_percent
+        if (
+            isinstance(residual_bar1, bool)
+            or not isinstance(residual_bar1, (float, int))
+            or not math.isfinite(residual_bar1)
+            or residual_bar1 != expected_residual_bar1
+            or residual_bar1 > UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+        ):
+            raise ValueError("unload_residual_drift")
 
 
     @property
     def unload_complete(self) -> bool:
+        # Derived from the CANONICAL residual fields, never raw float
+        # addition: 0.24 + 0.10 evaluates to 0.33999999999999997 and would
+        # call an exactly-at-tolerance cycle incomplete, recreating the
+        # false-keep_vulkan the residual amendment exists to eliminate.
+        # __post_init__ has already proven both fields recompute from the
+        # before/after measurements.
         return (
-            self.bar1_after_unload_percent <= self.bar1_before_percent
-            and self.vram_after_unload_mib <= self.vram_before_mib
+            self.unload_residual_bar1_percent
+            <= UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            and self.unload_residual_mib <= UNLOAD_RESIDUAL_LIMIT_MIB
         )
 
 
@@ -2334,6 +2389,18 @@ class PhasePacket:
             or tuple(metric.cycle for metric in self.cycle_metrics) != (1, 2, 3)
         ):
             raise ValueError("cycle_metrics_shape")
+        baseline = self.cycle_metrics[0]
+        for metric in self.cycle_metrics:
+            cumulative_mib = metric.vram_after_unload_mib - baseline.vram_before_mib
+            cumulative_bar1 = residual_bar1_percent(
+                baseline.bar1_before_percent,
+                metric.bar1_after_unload_percent,
+            )
+            if (
+                cumulative_mib > UNLOAD_RESIDUAL_LIMIT_MIB
+                or cumulative_bar1 > UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            ):
+                raise ValueError("unload_residual_drift")
         if any(metric.topology_sha256 != self.topology_sha256 for metric in self.cycle_metrics):
             raise ValueError("projection_not_recomputable")
         if (
@@ -3087,6 +3154,8 @@ _CYCLE_METRIC_FIELDS = (
     "vram_after_inference_mib",
     "vram_after_unload_mib",
     "unload_wait_seconds",
+    "unload_residual_mib",
+    "unload_residual_bar1_percent",
 )
 _PHASE_PACKET_FIELDS = (
     "phase",
@@ -4966,6 +5035,8 @@ def _cycle_packet(cycle: CycleMetrics) -> dict[str, object]:
         "vram_after_inference_mib": cycle.vram_after_inference_mib,
         "vram_after_unload_mib": cycle.vram_after_unload_mib,
         "unload_wait_seconds": cycle.unload_wait_seconds,
+        "unload_residual_mib": cycle.unload_residual_mib,
+        "unload_residual_bar1_percent": cycle.unload_residual_bar1_percent,
     }
 
 
@@ -5157,7 +5228,7 @@ def _evaluate_promotion_gate(
         reasons.append("hang_detected")
     if candidate.timeout_count != 0:
         reasons.append("timeout_detected")
-    if candidate.unload_leak_mib != 0:
+    if candidate.unload_leak_mib > UNLOAD_RESIDUAL_LIMIT_MIB:
         reasons.append("unload_leak_detected")
     if any(not cycle.unload_complete for cycle in candidate.cycles):
         reasons.append("unload_incomplete")
