@@ -5116,6 +5116,8 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         overrides.pop("candidate_unload_residual_mib", 0)  # type: ignore[arg-type]
     )
     candidate_bar1_unload = overrides.pop("candidate_bar1_unload", None)
+    rollback_bar1_percent = overrides.pop("rollback_bar1_percent", None)
+    rollback_kernel_counters = overrides.pop("rollback_kernel_counters", None)
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5374,15 +5376,18 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         artifact_sha256=SHA_C,
         timestamp="2026-07-13T12:02:07Z",
     )
-    rollback_witness = cm.RollbackWitness(
-        **{
-            **RollbackEvidenceBundleTests.witness_values(make_rollback_witness()),
-            "containment_artifact_sha256": containment.phase_binding(
-                "vulkan_rollback"
-            ),
-            "timestamp": "2026-07-13T12:02:03Z",
-        }
-    )
+    rollback_values = {
+        **RollbackEvidenceBundleTests.witness_values(make_rollback_witness()),
+        "containment_artifact_sha256": containment.phase_binding(
+            "vulkan_rollback"
+        ),
+        "timestamp": "2026-07-13T12:02:03Z",
+    }
+    if rollback_bar1_percent is not None:
+        rollback_values["bar1_percent"] = rollback_bar1_percent
+    if rollback_kernel_counters is not None:
+        rollback_values["kernel_counters"] = rollback_kernel_counters
+    rollback_witness = cm.RollbackWitness(**rollback_values)
     rollback = cm.RollbackEvidenceBundle(
         witness=rollback_witness,
         maps_witness=cm.RuntimeBackendWitness(
@@ -6865,6 +6870,60 @@ class BundleGateTests(unittest.TestCase):
         bundle = _make_bundle(candidate_unload_residual_mib=3)
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
+
+    def test_restored_incumbent_at_real_bar1_reaches_bench_passed(self) -> None:
+        """Defect 9: the incumbent's ~88% BAR1 posture is what a successful
+        drill RESTORES.  Exact identity + known Vulkan pressure counts +
+        zero Xid/unmatched must reach bench_passed through the public
+        bundle route; Xid or an unmatched signature still fails the drill.
+        """
+        pressure = cm.KernelCounters(
+            reusemappingdb_map=63,
+            pmap_cb=126,
+            mmu_walk_map=666,
+            nv_err_no_memory=189,
+            dma_alloc_mapping=1260,
+            va_space_assertion_lines=3996,
+            xid=0,
+            unmatched_nvrm=0,
+        )
+        bundle = _make_bundle(
+            rollback_bar1_percent=88.46,
+            rollback_kernel_counters=pressure,
+        )
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+
+        for bad in (
+            replace(pressure, xid=1),
+            replace(pressure, unmatched_nvrm=1),
+        ):
+            failed = _make_bundle(
+                rollback_bar1_percent=88.46,
+                rollback_kernel_counters=bad,
+            )
+            verdict = cm.evaluate_promotion_bundle(failed)
+            self.assertEqual("keep_vulkan", verdict.decision)
+            self.assertIn("rollback_drill_failed", verdict.reasons)
+
+    def test_candidate_bar1_ceiling_and_witness_bar1_bounds_hold(self) -> None:
+        """Candidate ceilings stay strict while witness BAR1 stays honest.
+
+        Candidate steady BAR1 at 85% still refuses bar1_ceiling; a witness
+        BAR1 above 100 or non-finite refuses construction; changing the
+        witness BAR1 changes its binding (still hash-bound evidence).
+        """
+        verdict = evaluate(make_summary(cycles=cycles(peak=88.0)))
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("bar1_ceiling", verdict.reasons)
+
+        base = make_rollback_witness()
+        for bad in (101.0, float("inf"), float("nan")):
+            with self.assertRaisesRegex(ValueError, "positive_measurement"):
+                replace(base, bar1_percent=bad)
+        high = replace(base, bar1_percent=88.46)
+        self.assertTrue(high.passed)
+        self.assertNotEqual(base.binding_sha256, high.binding_sha256)
 
     def test_float_boundary_cycle_is_complete_and_scores(self) -> None:
         """Review reproduction 0.24 -> 0.34: raw addition breaks, canon holds.

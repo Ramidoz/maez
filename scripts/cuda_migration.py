@@ -1683,13 +1683,20 @@ class RollbackWitness:
 
     @property
     def passed(self) -> bool:
+        # Identity-restoration semantics (defect 9, ratified 2026-08-03):
+        # the witness attests exact return to the INCUMBENT posture.  The
+        # incumbent's steady BAR1 on this machine is ~88% -- the hazard being
+        # escaped -- so an absolute <85 ceiling made every successful drill
+        # unattestable.  bar1_percent stays validated, persisted, and
+        # hash-bound as evidence; known mapping-pressure counts are recorded
+        # evidence (scoreable), while Xid or an unmatched NVRM signature
+        # still fails.  Candidate-side ceilings (cold boot <85) are untouched.
         return (
             self.health_state == "healthy"
             and self.mtp_initialized
             and self.mtp_accepted_tokens > 0
             and self.restart_count == 0
-            and self.kernel_counters.clean
-            and self.bar1_percent < 85.0
+            and self.kernel_counters.scoreable
         )
 
     @property
