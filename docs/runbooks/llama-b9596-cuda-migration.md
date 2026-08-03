@@ -475,7 +475,11 @@ install -m 0600 /home/rohit/.config/systemd/user/llama-server.service /home/rohi
 install -m 0600 /home/rohit/.config/systemd/user/llama-server.service.d/mtp.conf /home/rohit/maez/local/cuda_migration_bench/recovery/mtp.conf
 sha256sum /home/rohit/maez/local/cuda_migration_bench/recovery/llama-server.service
 sha256sum /home/rohit/maez/local/cuda_migration_bench/recovery/mtp.conf
-install -m 0600 /home/rohit/maez/config/systemd/llama-server-b9596-cuda.override.conf /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf
+# zz- prefix is REQUIRED: systemd applies drop-ins in ASCII order and the
+# candidate MUST sort after mtp.conf ('9' < 'm' made the previous 99- name
+# silently lose ExecStart to mtp.conf -- witnessed 2026-08-03: the drill ran
+# the Vulkan binary CPU-only while health and alias still passed).
+install -m 0600 /home/rohit/maez/config/systemd/llama-server-b9596-cuda.override.conf /home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf
 systemctl --user daemon-reload
 systemctl --user restart llama-server.service
 ```
@@ -488,7 +492,7 @@ Then stop and fully unload the candidate and remove only the lexically later
 candidate pointer:
 
 ```bash
-rm -- /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf
+rm -- /home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf
 systemctl --user daemon-reload
 systemctl --user restart llama-server.service
 ```
