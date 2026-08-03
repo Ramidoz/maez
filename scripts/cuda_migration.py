@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import decimal as _decimal
 import math
 import os
 import re
@@ -57,6 +58,20 @@ CANDIDATE_UNLOAD_LIMIT_S = 60
 # refuses.
 UNLOAD_RESIDUAL_LIMIT_MIB = 32
 UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT = 0.10
+
+
+def residual_bar1_percent(before: float, after: float) -> float:
+    """The ONE BAR1 residual arithmetic: Decimal half-even to hundredths.
+
+    Raw float subtraction turns an exactly-at-tolerance 0.10 pp residual
+    into 0.10000000000000009 and refuses it.  Driver, schema, and CLI all
+    compute residuals through this helper so recomputation is bit-exact.
+    """
+    delta = _decimal.Decimal(repr(after)) - _decimal.Decimal(repr(before))
+    quantized = delta.quantize(
+        _decimal.Decimal("0.01"), rounding=_decimal.ROUND_HALF_EVEN
+    )
+    return max(0.0, float(quantized))
 FROZEN_LOAD_CYCLES = 3
 VULKAN_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596/llama-b9596")
 CUDA_RELEASE_ROOT = Path("/home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89")
@@ -2007,9 +2022,8 @@ class CycleMetrics:
         expected_residual_mib = max(
             0, self.vram_after_unload_mib - self.vram_before_mib
         )
-        expected_residual_bar1 = max(
-            0.0,
-            self.bar1_after_unload_percent - self.bar1_before_percent,
+        expected_residual_bar1 = residual_bar1_percent(
+            self.bar1_before_percent, self.bar1_after_unload_percent
         )
         if (
             isinstance(self.unload_residual_mib, bool)
@@ -2023,7 +2037,7 @@ class CycleMetrics:
             isinstance(residual_bar1, bool)
             or not isinstance(residual_bar1, (float, int))
             or not math.isfinite(residual_bar1)
-            or abs(residual_bar1 - expected_residual_bar1) > 1e-9
+            or residual_bar1 != expected_residual_bar1
             or residual_bar1 > UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
         ):
             raise ValueError("unload_residual_drift")
@@ -2373,13 +2387,13 @@ class PhasePacket:
         baseline = self.cycle_metrics[0]
         for metric in self.cycle_metrics:
             cumulative_mib = metric.vram_after_unload_mib - baseline.vram_before_mib
-            cumulative_bar1 = (
-                metric.bar1_after_unload_percent - baseline.bar1_before_percent
+            cumulative_bar1 = residual_bar1_percent(
+                baseline.bar1_before_percent,
+                metric.bar1_after_unload_percent,
             )
             if (
                 cumulative_mib > UNLOAD_RESIDUAL_LIMIT_MIB
-                or cumulative_bar1
-                > UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT + 1e-9
+                or cumulative_bar1 > UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
             ):
                 raise ValueError("unload_residual_drift")
         if any(metric.topology_sha256 != self.topology_sha256 for metric in self.cycle_metrics):

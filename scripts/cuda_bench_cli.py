@@ -2376,6 +2376,19 @@ def _valid_assembly_success_fields(
             or isinstance(cycle["unload_residual_bar1_percent"], bool)
             or not math.isfinite(cycle["unload_residual_bar1_percent"])
             or cycle["unload_residual_bar1_percent"]
+            != cm.residual_bar1_percent(
+                cycle["bar1_before_percent"],
+                cycle["bar1_after_unload_percent"],
+            )
+            or cycle["unload_residual_bar1_percent"]
+            > cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            or cycle["vram_after_unload_mib"]
+            - cycles[0]["vram_before_mib"]
+            > cm.UNLOAD_RESIDUAL_LIMIT_MIB
+            or cm.residual_bar1_percent(
+                cycles[0]["bar1_before_percent"],
+                cycle["bar1_after_unload_percent"],
+            )
             > cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
             for cycle in cycles
         )

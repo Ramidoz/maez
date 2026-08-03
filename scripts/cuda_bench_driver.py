@@ -8525,13 +8525,11 @@ def _wait_for_unload(
     if listener_free is not True:
         raise BenchRefusal("unload_incomplete")
     started = _monotonic(providers.clock)
-    bar1_limit = cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
     mib_limit = cm.UNLOAD_RESIDUAL_LIMIT_MIB
     # Both limits hold per cycle AND cumulatively from cycle one's initial
     # baseline, so individually tolerated cycles cannot accumulate residue.
-    bar1_bound = min(
-        memory_before[0] + bar1_limit, phase_baseline[0] + bar1_limit
-    )
+    # BAR1 acceptance uses the same quantized helper as schema validation so
+    # an exactly-at-tolerance residual is admissible on every layer.
     mib_bound = min(
         memory_before[1] + mib_limit, phase_baseline[1] + mib_limit
     )
@@ -8548,7 +8546,13 @@ def _wait_for_unload(
             # Fail closed BEFORE accepting a clean sample: a reclaim observed
             # past the canon bound is not admissible evidence.
             raise BenchRefusal("unload_incomplete")
-        if memory[0] <= bar1_bound and memory[1] <= mib_bound:
+        bar1_ok = (
+            cm.residual_bar1_percent(memory_before[0], memory[0])
+            <= cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+            and cm.residual_bar1_percent(phase_baseline[0], memory[0])
+            <= cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+        )
+        if bar1_ok and memory[1] <= mib_bound:
             return topology, memory, elapsed
         time.sleep(0.01)
 
@@ -8927,8 +8931,8 @@ def _run_three_cycles(
                     unload_residual_mib=max(
                         0, memory_after_unload[1] - memory_before[1]
                     ),
-                    unload_residual_bar1_percent=max(
-                        0.0, memory_after_unload[0] - memory_before[0]
+                    unload_residual_bar1_percent=cm.residual_bar1_percent(
+                        memory_before[0], memory_after_unload[0]
                     ),
                 )
             )

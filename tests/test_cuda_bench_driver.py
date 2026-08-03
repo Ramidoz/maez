@@ -32,6 +32,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import cuda_bench_driver as driver
+from scripts import cuda_migration as cm
 
 
 EXPECTED_REFUSALS = frozenset(
@@ -12529,6 +12530,82 @@ class TestB7RemainingSpecGate:
 
         assert fields["outcome"] == "unload_incomplete"
         assert calls > 4
+
+    def test_cumulative_residual_stops_run_phase_before_cycle_three(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """20 MiB + 20 MiB residuals refuse at cycle two's unload, at runtime.
+
+        Each cycle's residual is individually tolerable (20 <= 32) but the
+        cumulative drift from cycle one's baseline reaches 40 MiB during
+        cycle two's unload wait, which must refuse unload_incomplete, spawn
+        no third cycle, and mint no completion.
+        """
+        harness = _b7_harness(private_root, nonce="8" * 64)
+        monkeypatch.setattr(driver, "UNLOAD_WAIT_S", 0.15)
+        state = {"unloads_started": 0, "in_unload": False}
+
+        def memory(_uuid: str) -> tuple[float, int]:
+            if state["in_unload"]:
+                return (1.0, 100 + 20 * state["unloads_started"])
+            return (1.0, 100 + 20 * state["unloads_started"])
+
+        original_finalize = driver.finalize
+
+        def finalize_marking(*args: object, **kwargs: object) -> object:
+            result = original_finalize(*args, **kwargs)
+            state["unloads_started"] += 1
+            state["in_unload"] = True
+            return result
+
+        def constant_inventory(_uuid: str) -> list[tuple[int, str]]:
+            return []
+
+        monkeypatch.setattr(harness.gpu, "inventory", constant_inventory)
+        monkeypatch.setattr(harness.gpu, "memory", memory)
+        monkeypatch.setattr(driver, "finalize", finalize_marking)
+        path = driver.run_phase(
+            harness.config, harness.providers, root=private_root
+        )
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "unload_incomplete"
+        journal_lines = "".join(
+            journal.read_text()
+            for journal in private_root.rglob("journals/*.jsonl")
+        )
+        assert "cycle_2_load" in journal_lines
+        assert "cycle_3_load" not in journal_lines
+        assert not list(private_root.rglob("*-completed.json"))
+
+    def test_driver_real_bar1_subtraction_is_admissible_at_tolerance(
+        self,
+    ) -> None:
+        """The REAL subtraction path: 2.10 - 2.00 must be exactly 0.10.
+
+        Raw float arithmetic yields 0.10000000000000009 and would refuse an
+        exactly-at-tolerance residual; the shared quantized helper is the
+        one arithmetic across driver, schema, and CLI.
+        """
+        assert cm.residual_bar1_percent(2.00, 2.10) == 0.10
+        metric = cm.CycleMetrics(
+            cycle=1,
+            topology_sha256="a" * 64,
+            bar1_before_percent=2.00,
+            bar1_after_load_percent=40.0,
+            bar1_after_inference_percent=50.0,
+            bar1_after_unload_percent=2.10,
+            vram_before_mib=500,
+            vram_after_load_mib=22_000,
+            vram_after_inference_mib=22_500,
+            vram_after_unload_mib=500,
+            unload_wait_seconds=3.0,
+            unload_residual_mib=0,
+            unload_residual_bar1_percent=cm.residual_bar1_percent(
+                2.00, 2.10
+            ),
+        )
+        assert metric.unload_residual_bar1_percent == 0.10
 
     def test_late_clean_sample_past_bound_refuses_and_stops_the_phase(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch

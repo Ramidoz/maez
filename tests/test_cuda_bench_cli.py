@@ -5864,6 +5864,79 @@ class TestTask9Stage1AssemblyCommand:
         )
 
     @pytest.mark.parametrize(
+        "mutation",
+        ("bar1_drift", "cumulative_mib", "cumulative_bar1"),
+    )
+    def test_assembly_receipt_rejects_residual_laundering(
+        self,
+        tmp_path: Path,
+        mutation: str,
+    ) -> None:
+        """Review reproductions: BAR1 drift and cumulative 60 MiB laundered.
+
+        The validator must recompute the BAR1 residual through the shared
+        helper and enforce the cumulative limits from cycle one's baseline
+        -- a receipt asserting 0.0 against implied 0.05, or three tolerated
+        20 MiB cycles summing to 60 MiB of drift, refuses.
+        """
+        root = tmp_path / f"bench-launder-{mutation}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        document = json.loads(json.dumps(dict(evaluation.receipt)))
+        document["binding_sha256"] = evaluation.bundle.binding_sha256
+        cycles = document["measurements"]["cycles"]
+        if mutation == "bar1_drift":
+            cycles[0]["bar1_after_unload_percent"] = (
+                cycles[0]["bar1_before_percent"] + 0.05
+            )
+            cycles[0]["unload_residual_bar1_percent"] = 0.0
+        elif mutation == "cumulative_mib":
+            baseline = cycles[0]["vram_before_mib"]
+            running = baseline
+            for cycle in cycles:
+                cycle["vram_before_mib"] = running
+                running += 20
+                cycle["vram_after_unload_mib"] = running
+                cycle["unload_residual_mib"] = 20
+        else:
+            baseline = cycles[0]["bar1_before_percent"]
+            running = baseline
+            for cycle in cycles:
+                cycle["bar1_before_percent"] = running
+                running = round(running + 0.05, 2)
+                cycle["bar1_after_unload_percent"] = running
+                cycle["unload_residual_bar1_percent"] = 0.05
+        attempt = driver._admit_command(
+            command="assemble-stage1",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            document,
+        )
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+        )
+        result = cli.TerminalResult(
+            "ok",
+            evaluation.verdict.decision,
+            None,
+            relative,
+            digest,
+        )
+        assert not cli._valid_assembly_receipt_result(
+            attempt,
+            result,
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
         ("wait", "expected_valid"),
         (
             (180.0, True),
