@@ -464,7 +464,7 @@ three cycle launches, not a configuration assertion: every admitted child
 must report the same `(pinned_path, pinned_sha256)` pair. Any cycle-level
 path or hash drift is `identity_mismatch` and prevents a completed packet;
 the common pair is then copied from the admitted-child evidence into
-`phase_packet.v2`. The driver never re-derives it from `PhaseConfig` or the
+`phase_packet.v3`. The driver never re-derives it from `PhaseConfig` or the
 requested argv. This prevents one correctly pinned cycle from laundering a
 different executable used by either of the other two cycles.
 
@@ -560,7 +560,7 @@ from it.
 
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
 `cuda_migration_runtime.v1` (the live bundle-bound promotion receipt),
-`cuda_bench_driver.phase_packet.v2`, `cuda_bench_driver.refusal.v1`,
+`cuda_bench_driver.phase_packet.v3`, `cuda_bench_driver.refusal.v1`,
 `cuda_bench_driver.command_admission.v1` (content-light first-durable-write
 receipt with exactly command, positive ordinal, bounded window ID or null,
 `status="admitted"`, and timestamp; wrapper binding is null and the persisted
@@ -655,6 +655,20 @@ marker creation or spawn).**
   candidate cycle above `CANDIDATE_UNLOAD_LIMIT_S = 60` with
   `unload_latency_limit`, so the wider bound never weakens the promotion
   bar);
+- `UNLOAD_RESIDUAL_LIMIT_MIB = 32` and
+  `UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT = 0.10` percentage points -- windows
+  ab-20260803-1635 and -1735 measured a few-MiB post-unload residual on
+  BOTH backends with the process gone, so exact-equality reclaim was
+  unsatisfiable from cycle two onward.  The limits apply per cycle AND
+  cumulatively from cycle one's initial baseline (three tolerated cycles
+  cannot accumulate); `unload_residual_mib`/`unload_residual_bar1_percent`
+  are persisted per cycle in `phase_packet.v3` and MUST recompute from the
+  before/after measurements -- caller-supplied drift refuses.  Above either
+  limit: `unload_incomplete`, no next spawn, no completion.  The scorer's
+  leak predicate tolerates a cumulative candidate residual up to the same
+  32 MiB; the packet schema was bumped v2 -> v3 because real v2 packets
+  exist and required fields must never silently alter an existing schema
+  (amended 2026-08-03);
 - nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars;
 - `FROZEN_BENCH_ARGS_SHA256 =
   "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"` —

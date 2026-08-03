@@ -105,7 +105,7 @@ _REQUIRED_MEMFD_SEALS = (
 )
 
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
-PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
+PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v3"
 REFUSAL_SCHEMA = "cuda_bench_driver.refusal.v1"
 COMMAND_ADMISSION_SCHEMA = "cuda_bench_driver.command_admission.v1"
 COMMAND_COMPLETION_SCHEMA = "cuda_bench_driver.command_completion.v1"
@@ -7618,6 +7618,8 @@ def _cycle_metric_fields(
             "vram_after_inference_mib",
             "vram_after_unload_mib",
             "unload_wait_seconds",
+            "unload_residual_mib",
+            "unload_residual_bar1_percent",
         )
     }
     if topology_hashes is not None:
@@ -8518,10 +8520,21 @@ def _wait_for_unload(
     memory_before: tuple[float, int],
     expected_topology: str,
     listener_free: bool | None,
+    phase_baseline: tuple[float, int],
 ) -> tuple[str, tuple[float, int], float]:
     if listener_free is not True:
         raise BenchRefusal("unload_incomplete")
     started = _monotonic(providers.clock)
+    bar1_limit = cm.UNLOAD_RESIDUAL_BAR1_LIMIT_PERCENT
+    mib_limit = cm.UNLOAD_RESIDUAL_LIMIT_MIB
+    # Both limits hold per cycle AND cumulatively from cycle one's initial
+    # baseline, so individually tolerated cycles cannot accumulate residue.
+    bar1_bound = min(
+        memory_before[0] + bar1_limit, phase_baseline[0] + bar1_limit
+    )
+    mib_bound = min(
+        memory_before[1] + mib_limit, phase_baseline[1] + mib_limit
+    )
     while True:
         topology, memory = _sample_gpu_stage(
             providers,
@@ -8535,7 +8548,7 @@ def _wait_for_unload(
             # Fail closed BEFORE accepting a clean sample: a reclaim observed
             # past the canon bound is not admissible evidence.
             raise BenchRefusal("unload_incomplete")
-        if memory[0] <= memory_before[0] and memory[1] <= memory_before[1]:
+        if memory[0] <= bar1_bound and memory[1] <= mib_bound:
             return topology, memory, elapsed
         time.sleep(0.01)
 
@@ -8653,6 +8666,7 @@ def _run_three_cycles(
     topology_groups: list[tuple[str, str, str, str]] = []
     common_pin: tuple[str, str] | None = None
     lifecycle.common_topology = before_topology
+    phase_memory_baseline = before_memory
 
     for cycle in (1, 2, 3):
         lifecycle.active_cycle = cycle
@@ -8828,6 +8842,7 @@ def _run_three_cycles(
                 memory_before=memory_before,
                 expected_topology=lifecycle.common_topology,
                 listener_free=lifecycle.last_finalizer.listener_free,
+                phase_baseline=phase_memory_baseline,
             )
         except BenchRefusal as error:
             unload_refusal = error
@@ -8909,6 +8924,12 @@ def _run_three_cycles(
                     vram_after_inference_mib=memory_after_inference[1],
                     vram_after_unload_mib=memory_after_unload[1],
                     unload_wait_seconds=unload_wait_seconds,
+                    unload_residual_mib=max(
+                        0, memory_after_unload[1] - memory_before[1]
+                    ),
+                    unload_residual_bar1_percent=max(
+                        0.0, memory_after_unload[0] - memory_before[0]
+                    ),
                 )
             )
             witnesses.append(
@@ -9127,6 +9148,7 @@ def _finish_failed_phase(
                         memory_before=lifecycle.active_memory_before,
                         expected_topology=lifecycle.common_topology,
                         listener_free=lifecycle.last_finalizer.listener_free,
+                        phase_baseline=lifecycle.active_memory_before,
                     )
                 except BenchRefusal as error:
                     unload_refusal = error

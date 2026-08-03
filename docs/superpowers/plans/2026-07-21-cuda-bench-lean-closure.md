@@ -148,8 +148,8 @@ matrix is closed:
 | command | artifact_schema | phase | window_id |
 |---|---|---|---|
 | `static-preflight` | `cuda_bench_driver.static_preflight.v1` | null | null |
-| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v2` | `vulkan_baseline` | equals packet |
-| `cuda-candidate` | `cuda_bench_driver.phase_packet.v2` | `cuda_candidate` | equals packet |
+| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v3` | `vulkan_baseline` | equals packet |
+| `cuda-candidate` | `cuda_bench_driver.phase_packet.v3` | `cuda_candidate` | equals packet |
 
 `rehearse` remains incompatibly rehearsal-encoded and never mints a production
 completion. `assemble-stage1` emits its existing scorer-bound receipt, not a

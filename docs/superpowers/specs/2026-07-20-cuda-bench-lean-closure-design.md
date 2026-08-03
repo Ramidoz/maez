@@ -501,8 +501,8 @@ is closed to:
 | command | artifact_schema | decoded phase | window |
 |---|---|---|---|
 | `static-preflight` | `cuda_bench_driver.static_preflight.v1` | null | null |
-| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v2` | `vulkan_baseline` | equals packet |
-| `cuda-candidate` | `cuda_bench_driver.phase_packet.v2` | `cuda_candidate` | equals packet |
+| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v3` | `vulkan_baseline` | equals packet |
+| `cuda-candidate` | `cuda_bench_driver.phase_packet.v3` | `cuda_candidate` | equals packet |
 
 `rehearse` remains incompatible rehearsal evidence and never produces this
 schema. `assemble-stage1` retains its scorer receipt and also never produces

@@ -81,7 +81,7 @@ EXPECTED_REFUSALS = frozenset(
 
 EXPECTED_SCHEMAS = {
     "STATIC_PREFLIGHT_SCHEMA": "cuda_bench_driver.static_preflight.v1",
-    "PHASE_PACKET_SCHEMA": "cuda_bench_driver.phase_packet.v2",
+    "PHASE_PACKET_SCHEMA": "cuda_bench_driver.phase_packet.v3",
     "REFUSAL_SCHEMA": "cuda_bench_driver.refusal.v1",
     "WINDOW_AUTHORIZATION_SCHEMA": "cuda_bench_driver.window_authorization.v1",
     "CONTINUATION_SCHEMA": "cuda_bench_driver.continuation.v1",
@@ -2685,7 +2685,7 @@ class TestProviderSeams:
 
         assert production.encode("packet", document) == (
             b'{"binding_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v2"}\n'
+            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v3"}\n'
         )
         assert rehearsal.encode("packet", document) == (
             b'{"payload":{"binding_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
@@ -4139,6 +4139,7 @@ def collapse(witness):
             memory_before=(1.0, 100),
             expected_topology=topology,
             listener_free=True,
+            phase_baseline=(1.0, 100),
         )
         assert result[2] == boundary
 
@@ -4149,6 +4150,7 @@ def collapse(witness):
                 memory_before=(1.0, 100),
                 expected_topology=topology,
                 listener_free=True,
+                phase_baseline=(1.0, 100),
             )
         assert exc.value.code == "unload_incomplete"
 
@@ -7236,7 +7238,7 @@ class TestTask3CommandAdmissionCanon:
         expected = (
             "cuda_bench_driver.static_preflight.v1",
             "cuda_migration_runtime.v1",
-            "cuda_bench_driver.phase_packet.v2",
+            "cuda_bench_driver.phase_packet.v3",
             "cuda_bench_driver.refusal.v1",
             _COMMAND_SCHEMA,
             "cuda_bench_driver.window_authorization.v1",
