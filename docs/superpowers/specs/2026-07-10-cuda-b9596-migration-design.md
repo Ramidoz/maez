@@ -253,9 +253,14 @@ not pass. Flat stability, both dimensions flat, or either dimension worse
 means Vulkan remains live. The bench is allowed to say no.
 
 Kernel deltas use a frozen closed signature set within phase timestamps:
-`reusemappingdbMap`, `pMapCb`, `mmuWalkMap`, `NV_ERR_NO_MEMORY`, and
-`NVRM: Xid`. New unmatched NVRM error signatures make the phase unscored
-rather than silently clean.
+`reusemappingdbMap`, `pMapCb`, `mmuWalkMap`, `NV_ERR_NO_MEMORY`,
+`dmaAllocMapping_GM107`, and `NVRM: Xid`. Mapping-pressure counts are
+recorded in the packet as evidence and do not by themselves unscore the
+phase — a zero-counts gate would make the chattering incumbent unmeasurable
+and the hazard undocumented (amended 2026-08-03, window ab-20260803-0637:
+4,374 `dmaAllocMapping_GM107` lines during a routine Vulkan load, Xid = 0).
+A nonzero `Xid` or any new unmatched NVRM error signature makes the phase
+unscored rather than silently clean.
 
 ## MTP and quality re-witness
 

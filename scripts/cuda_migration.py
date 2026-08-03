@@ -1485,6 +1485,7 @@ class KernelCounters:
     pmap_cb: int
     mmu_walk_map: int
     nv_err_no_memory: int
+    dma_alloc_mapping: int
     xid: int
     unmatched_nvrm: int
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
@@ -1497,6 +1498,7 @@ class KernelCounters:
             "pmap_cb",
             "mmu_walk_map",
             "nv_err_no_memory",
+            "dma_alloc_mapping",
             "xid",
             "unmatched_nvrm",
         ):
@@ -1504,7 +1506,7 @@ class KernelCounters:
 
     @classmethod
     def zero(cls) -> KernelCounters:
-        return cls(0, 0, 0, 0, 0, 0)
+        return cls(0, 0, 0, 0, 0, 0, 0)
 
     @property
     def clean(self) -> bool:
@@ -1515,10 +1517,23 @@ class KernelCounters:
                 self.pmap_cb,
                 self.mmu_walk_map,
                 self.nv_err_no_memory,
+                self.dma_alloc_mapping,
                 self.xid,
                 self.unmatched_nvrm,
             )
         )
+
+    @property
+    def scoreable(self) -> bool:
+        """Mapping-pressure counts are recorded evidence, never a refusal.
+
+        Only a fatal-class Xid or an NVRM line outside the closed vocabulary
+        makes the phase unscored (runbook: count the closed signatures; any
+        NEW unmatched signature unscoreable).  Witnessed 2026-08-03: every
+        Vulkan load chatters the known BAR1 family, so a zero-counts gate
+        would make the incumbent unmeasurable and the hazard undocumented.
+        """
+        return self.xid == 0 and self.unmatched_nvrm == 0
 
     def packet(self) -> dict[str, int]:
         return {
@@ -1526,6 +1541,7 @@ class KernelCounters:
             "pMapCb": self.pmap_cb,
             "mmuWalkMap": self.mmu_walk_map,
             "NV_ERR_NO_MEMORY": self.nv_err_no_memory,
+            "dmaAllocMapping_GM107": self.dma_alloc_mapping,
             "Xid": self.xid,
             "unmatched_nvrm": self.unmatched_nvrm,
         }
@@ -2818,6 +2834,7 @@ _KERNEL_COUNTER_FIELDS = (
     "pmap_cb",
     "mmu_walk_map",
     "nv_err_no_memory",
+    "dma_alloc_mapping",
     "xid",
     "unmatched_nvrm",
 )

@@ -1325,6 +1325,7 @@ def _provider_components(tier: str) -> dict[str, object]:
         "pMapCb": 0,
         "mmuWalkMap": 0,
         "NV_ERR_NO_MEMORY": 0,
+        "dmaAllocMapping_GM107": 0,
         "Xid": 0,
         "unmatched_nvrm": 0,
     }
@@ -3776,6 +3777,7 @@ def collapse(witness):
             "pMapCb": 2,
             "mmuWalkMap": 3,
             "NV_ERR_NO_MEMORY": 4,
+            "dmaAllocMapping_GM107": 7,
             "Xid": 5,
             "unmatched_nvrm": 6,
         }
@@ -4062,6 +4064,8 @@ def collapse(witness):
                 "-- cursor: s=before\n",
                 "kernel: NVRM: reusemappingdbMap\n"
                 "kernel: NVRM: Xid 31\n"
+                "kernel: NVRM: dmaAllocMapping_GM107: can't alloc VA space"
+                " for mapping.\n"
                 "kernel: NVRM: mystery fault\n"
                 "-- cursor: s=after\n",
             ]
@@ -4079,6 +4083,7 @@ def collapse(witness):
             "pMapCb": 0,
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
+            "dmaAllocMapping_GM107": 1,
             "Xid": 1,
             "unmatched_nvrm": 1,
         }
@@ -4099,6 +4104,7 @@ def collapse(witness):
             "pMapCb": 0,
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
+            "dmaAllocMapping_GM107": 0,
             "Xid": 0,
             "unmatched_nvrm": 0,
         }
@@ -4117,21 +4123,25 @@ def collapse(witness):
             "pMapCb": 0,
             "mmuWalkMap": 0,
             "NV_ERR_NO_MEMORY": 0,
+            "dmaAllocMapping_GM107": 0,
             "Xid": 2,
             "unmatched_nvrm": 1,
         }
 
-    def test_kernel_signature_boundaries_cover_all_five_known_shapes(self) -> None:
+    def test_kernel_signature_boundaries_cover_all_six_known_shapes(self) -> None:
         output = (
             "kernel: NVRM: reusemappingdbMap reusemappingdbMap\n"
             "kernel: NVRM: pMapCb pMapCb\n"
             "kernel: NVRM: mmuWalkMap mmuWalkMap\n"
             "kernel: NVRM: NV_ERR_NO_MEMORY NV_ERR_NO_MEMORY\n"
+            "kernel: NVRM: dmaAllocMapping_GM107: can't alloc VA space"
+            " for mapping. dmaAllocMapping_GM107\n"
             "kernel: NVRM: Xid 1; NVRM: Xid 2\n"
             "kernel: NVRM: reusemappingdbMapExtra\n"
             "kernel: NVRM: prepMapCb\n"
             "kernel: NVRM: mmuWalkMapSuffix\n"
             "kernel: NVRM: NV_ERR_NO_MEMORY_MORE\n"
+            "kernel: NVRM: dmaAllocMapping_GM107Suffix\n"
             "kernel: NVRM: XidExtra 9\n"
             "-- cursor: s=after\n"
         )
@@ -4142,8 +4152,9 @@ def collapse(witness):
             "pMapCb": 2,
             "mmuWalkMap": 2,
             "NV_ERR_NO_MEMORY": 2,
+            "dmaAllocMapping_GM107": 2,
             "Xid": 2,
-            "unmatched_nvrm": 5,
+            "unmatched_nvrm": 6,
         }
 
     @pytest.mark.parametrize(
@@ -12401,6 +12412,27 @@ class TestB7RemainingSpecGate:
         assert fields["outcome"] == "unload_incomplete"
         assert calls > 4
 
+    def test_known_mapping_pressure_is_recorded_not_unscored(
+        self, private_root: Path
+    ) -> None:
+        """Witnessed BAR1 pressure must land in the packet as evidence.
+
+        Window ab-20260803-0637: every Vulkan load chatters the known
+        mapping-pressure family.  A phase that dies of the hazard it exists
+        to document can never produce the A/B comparison, so known-signature
+        counts record and the phase completes; Xid/unmatched still unscore.
+        """
+        harness = _b7_harness(private_root, nonce="6" * 64)
+        harness.providers.kernel_log._counts["mmuWalkMap"] = 549
+        harness.providers.kernel_log._counts["dmaAllocMapping_GM107"] = 4374
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "completed"
+        assert fields["kernel_counters"]["mmu_walk_map"] == 549
+        assert fields["kernel_counters"]["dma_alloc_mapping"] == 4374
+        assert fields["kernel_counters"]["unmatched_nvrm"] == 0
+
     def test_kernel_refusal_still_captures_containment_after(
         self, private_root: Path
     ) -> None:
@@ -12478,6 +12510,7 @@ class TestB7RemainingSpecGate:
             "pmap_cb": 0,
             "mmu_walk_map": 0,
             "nv_err_no_memory": 0,
+            "dma_alloc_mapping": 0,
             "xid": 0,
             "unmatched_nvrm": 0,
         }

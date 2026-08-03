@@ -864,17 +864,42 @@ class ReceiptTests(unittest.TestCase):
 
 
 class SecondReviewContractTests(unittest.TestCase):
-    def test_kernel_counters_are_exact_and_any_nonzero_fails(self) -> None:
+    def test_kernel_counters_split_recorded_pressure_from_unscorable(self) -> None:
+        """Mapping-pressure counts are evidence; Xid/unmatched unscore.
+
+        Witnessed 2026-08-03 (window ab-20260803-0637): every Vulkan load
+        chatters the known BAR1 mapping-pressure family (54/108/549/162 plus
+        4,374 dmaAllocMapping_GM107 lines, Xid=0, all cycles measured).  A
+        phase must RECORD that pressure in its packet -- it is the A/B's core
+        evidence -- while a fatal-class Xid or an unknown NVRM signature
+        still makes the phase unscored.
+        """
         clean = cm.KernelCounters(
             reusemappingdb_map=0,
             pmap_cb=0,
             mmu_walk_map=0,
             nv_err_no_memory=0,
+            dma_alloc_mapping=0,
             xid=0,
             unmatched_nvrm=0,
         )
         self.assertTrue(clean.clean)
-        self.assertFalse(replace(clean, unmatched_nvrm=1).clean)
+        self.assertTrue(clean.scoreable)
+        pressured = replace(
+            clean,
+            reusemappingdb_map=54,
+            pmap_cb=108,
+            mmu_walk_map=549,
+            nv_err_no_memory=162,
+            dma_alloc_mapping=4374,
+        )
+        self.assertFalse(pressured.clean)
+        self.assertTrue(pressured.scoreable)
+        self.assertFalse(replace(clean, xid=1).scoreable)
+        self.assertFalse(replace(clean, unmatched_nvrm=1).scoreable)
+        self.assertEqual(
+            pressured.packet()["dmaAllocMapping_GM107"], 4374
+        )
 
     def test_boot_and_live_authorizations_are_distinct_parent_bound_artifacts(
         self,
@@ -1956,6 +1981,7 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
             "pMapCb",
             "mmuWalkMap",
             "NV_ERR_NO_MEMORY",
+            "dmaAllocMapping_GM107",
             "NVRM: Xid",
         ):
             with self.subTest(signature=signature):
@@ -2572,6 +2598,7 @@ class PersistedDocTests(unittest.TestCase):
                 "pmap_cb": witness.kernel_counters.pmap_cb,
                 "mmu_walk_map": witness.kernel_counters.mmu_walk_map,
                 "nv_err_no_memory": witness.kernel_counters.nv_err_no_memory,
+                "dma_alloc_mapping": witness.kernel_counters.dma_alloc_mapping,
                 "xid": witness.kernel_counters.xid,
                 "unmatched_nvrm": witness.kernel_counters.unmatched_nvrm,
             },
@@ -3218,6 +3245,7 @@ def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
             "pmap_cb": packet.kernel_counters.pmap_cb,
             "mmu_walk_map": packet.kernel_counters.mmu_walk_map,
             "nv_err_no_memory": packet.kernel_counters.nv_err_no_memory,
+            "dma_alloc_mapping": packet.kernel_counters.dma_alloc_mapping,
             "xid": packet.kernel_counters.xid,
             "unmatched_nvrm": packet.kernel_counters.unmatched_nvrm,
         },
@@ -3810,6 +3838,7 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             "pmap_cb": counters.pmap_cb,
             "mmu_walk_map": counters.mmu_walk_map,
             "nv_err_no_memory": counters.nv_err_no_memory,
+            "dma_alloc_mapping": counters.dma_alloc_mapping,
             "xid": counters.xid,
             "unmatched_nvrm": counters.unmatched_nvrm,
         }

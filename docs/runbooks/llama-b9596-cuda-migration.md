@@ -362,7 +362,14 @@ was never mutated during a bench phase, so nothing is restored). Do not load the
 
 The kernel counter is also phase-bounded. Count exact occurrences of the
 closed signatures `reusemappingdbMap`, `pMapCb`, `mmuWalkMap`,
-`NV_ERR_NO_MEMORY`, and `NVRM: Xid` between phase timestamps. Any new unmatched
+`NV_ERR_NO_MEMORY`, `dmaAllocMapping_GM107`, and `NVRM: Xid` between phase
+timestamps. Mapping-pressure counts (all signatures except `NVRM: Xid`) are
+recorded in the packet as evidence and never unscore the phase by themselves
+— they ARE the A/B's core comparison (amended 2026-08-03 after window
+ab-20260803-0637 witnessed 4,374 `dmaAllocMapping_GM107: can't alloc VA
+space` lines plus the four known signatures during a routine three-cycle
+Vulkan load, `Xid = 0`, all cycles measured). A nonzero `NVRM: Xid` count or
+any new unmatched
 NVRM error signature makes the phase unscored. Do not store kernel lines in a
 content-light receipt; store only hashes, counts, time bounds, and verdicts.
 

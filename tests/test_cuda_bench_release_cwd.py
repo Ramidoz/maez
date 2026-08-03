@@ -839,7 +839,7 @@ class TestReleaseDirectoryProofRefusals:
         )
         counters = dict.fromkeys(driver.KERNEL_COUNTER_KEYS, 0)
         if prior_code == "kernel_unmatched":
-            counters[next(iter(driver.KERNEL_COUNTER_KEYS))] = 1
+            counters["Xid"] = 1
         providers = SimpleNamespace(
             tier="production",
             server_launcher=launcher,
