@@ -439,8 +439,14 @@ live conversation, memory, cognition, or audit stores. It requires:
   (`sample_n = 7`) and exactly 21 completed measured turn artifacts per
   phase (7 prompts × 3 cycles, `measured_sample_count = 21`) — quality
   evaluation covers ALL 21 measured turns, not one turn per prompt;
-- every measured turn's latency below 12,000 ms (the `seven_turn_max_ms`
-  bound applies to each of the 21 turns);
+- the candidate's worst measured turn no slower than the control's worst
+  (`seven_turn_max_ms` relative rail; equality passes — amended 2026-08-03,
+  window ab-20260803-1837: the June absolute 12 s ceiling was calibrated
+  for natural ~150-token turns; the frozen `n_predict = 512` workload put
+  eight control and one candidate turn over it, every one at exactly 512
+  tokens with stop_type=limit, so the ceiling measured the forced-length
+  workload, not natural-answer UX. The dormant provisional-live gate keeps
+  its natural-turn semantics);
 - candidate p95 end-to-end latency no worse than fresh Vulkan p95;
 - candidate median server-reported decode throughput at least 97% of Vulkan;
 - separate prefill and MTP counters, MTP initialized, and accepted tokens > 0;

@@ -628,8 +628,11 @@ marker creation or spawn).**
 
 - `READINESS_TIMEOUT_S = 300` (18 GB load headroom; stub personas exercise
   the boundary);
-- `REQUEST_TIMEOUT_MS = 30_000` per turn (hard cap above the 12,000 ms
-  quality bound so slow-but-completing turns are measured, not truncated);
+- `REQUEST_TIMEOUT_MS = 30_000` per turn — the hard completion ceiling
+  (the former absolute 12,000 ms per-turn quality bound became the
+  stage-1 RELATIVE rail `candidate seven_turn_max_ms <= control
+  seven_turn_max_ms` on 2026-08-03; see the runbook's quality-witness
+  section for the window ab-20260803-1837 calibration rationale);
 - `FROZEN_TURN_N_PREDICT = 512` generation bound carried in every
   `/completion` body — warmup and measured turns, both backends — so no turn
   can generate unboundedly into `REQUEST_TIMEOUT_MS` (witnessed in window

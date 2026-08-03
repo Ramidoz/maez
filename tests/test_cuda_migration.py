@@ -813,14 +813,14 @@ class InternalGateTests(unittest.TestCase):
 
     def test_speed_and_stability_boundaries(self) -> None:
         passing = make_summary(
-            seven_turn_max_ms=11_999.999,
+            seven_turn_max_ms=11_000.0,
             p95_e2e_ms=1_000.0,
             median_decode_tps=97.0,
         )
         self.assertEqual("bench_passed", evaluate(passing).decision)
 
         cases = (
-            ("seven_turn_latency_limit", {"seven_turn_max_ms": 12_000.0}),
+            ("max_latency_regression", {"seven_turn_max_ms": 11_000.001}),
             ("p95_regression", {"p95_e2e_ms": 1_000.001}),
             ("decode_throughput_regression", {"median_decode_tps": 96.999}),
             ("bar1_ceiling", {"cycles": cycles(peak=85.0)}),
@@ -3080,7 +3080,9 @@ def _turn_manifest(phase: str = "vulkan_baseline") -> cm.TurnManifest:
     return cm.TurnManifest(phase=phase, entries=tuple(entries))
 
 
-def _turn_records() -> tuple[cm.TurnRecord, ...]:
+def _turn_records(
+    e2e_values: tuple[float, ...] | None = None,
+) -> tuple[cm.TurnRecord, ...]:
     records = []
     for cycle in (1, 2, 3):
         records.append(
@@ -3107,7 +3109,11 @@ def _turn_records() -> tuple[cm.TurnRecord, ...]:
                     warmup=False,
                     artifact_sha256=SHA_B,
                     outcome="completed",
-                    e2e_ms=float(sample),
+                    e2e_ms=(
+                        float(sample)
+                        if e2e_values is None
+                        else e2e_values[sample - 1]
+                    ),
                     ttft_ms=100.0 + sample,
                     prompt_per_second=200.0 + sample,
                     predicted_per_second=100.0 + sample,
@@ -4950,8 +4956,9 @@ def _bundle_packet(
     unload_wait_seconds: float = 3.0,
     unload_residual_mib: int = 0,
     bar1_unload: tuple[float, float] | None = None,
+    e2e_values: tuple[float, ...] | None = None,
 ) -> cm.PhasePacket:
-    records = _turn_records()
+    records = _turn_records(e2e_values)
     metrics = _bundle_cycle_metrics(
         phase, unload_wait_seconds, unload_residual_mib, bar1_unload
     )
@@ -5118,6 +5125,8 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     candidate_bar1_unload = overrides.pop("candidate_bar1_unload", None)
     rollback_bar1_percent = overrides.pop("rollback_bar1_percent", None)
     rollback_kernel_counters = overrides.pop("rollback_kernel_counters", None)
+    control_e2e_values = overrides.pop("control_e2e_values", None)
+    candidate_e2e_values = overrides.pop("candidate_e2e_values", None)
     window = cm.WindowAuthorizationDoc(
         window_id="window-1",
         phases=("vulkan_baseline", "cuda_candidate"),
@@ -5249,6 +5258,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         ].file_sha256,
         kernel_counters=control_kernel_counters,
         unload_wait_seconds=control_unload_wait_seconds,
+        e2e_values=control_e2e_values,
     )
     continuation = replace(
         continuation_placeholder,
@@ -5272,6 +5282,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         unload_wait_seconds=candidate_unload_wait_seconds,
         unload_residual_mib=candidate_unload_residual_mib,
         bar1_unload=candidate_bar1_unload,
+        e2e_values=candidate_e2e_values,
     )
     static_preflight_ref = "receipts/static-preflight-attempt-001.json"
     control_packet_ref = (
@@ -6870,6 +6881,62 @@ class BundleGateTests(unittest.TestCase):
         bundle = _make_bundle(candidate_unload_residual_mib=3)
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
+
+    def test_window8_observed_maxima_reach_bench_passed(self) -> None:
+        """Defect 10 RED with the observed window-8 values.
+
+        Control max 13,603.502 ms vs candidate max 12,052.013 ms: the
+        challenger's worst forced-length turn was FASTER than the
+        incumbent's worst, so with every unchanged gate passing the public
+        bundle route reaches bench_passed.  Equality passes; a candidate
+        0.001 ms over the control refuses max_latency_regression; a
+        regression fails even with both sides below 12 s; p95 stays
+        independently binding when the max improves.
+        """
+        def shaped(maximum: float, p95_pad: float = 0.0) -> tuple[float, ...]:
+            values = [1_000.0 + i + p95_pad for i in range(21)]
+            values[-1] = maximum
+            return tuple(values)
+
+        observed = _make_bundle(
+            control_e2e_values=shaped(13_603.502),
+            candidate_e2e_values=shaped(12_052.013),
+        )
+        verdict = cm.evaluate_promotion_bundle(observed)
+        self.assertEqual("bench_passed", verdict.decision)
+
+        equal = _make_bundle(
+            control_e2e_values=shaped(9_000.0),
+            candidate_e2e_values=shaped(9_000.0),
+        )
+        self.assertEqual(
+            "bench_passed", cm.evaluate_promotion_bundle(equal).decision
+        )
+
+        hair_over = _make_bundle(
+            control_e2e_values=shaped(9_000.0),
+            candidate_e2e_values=shaped(9_000.001),
+        )
+        verdict = cm.evaluate_promotion_bundle(hair_over)
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("max_latency_regression", verdict.reasons)
+
+        both_below_12s = _make_bundle(
+            control_e2e_values=shaped(8_000.0),
+            candidate_e2e_values=shaped(9_000.0),
+        )
+        verdict = cm.evaluate_promotion_bundle(both_below_12s)
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("max_latency_regression", verdict.reasons)
+
+        max_improves_p95_regresses = _make_bundle(
+            control_e2e_values=shaped(13_000.0),
+            candidate_e2e_values=shaped(12_000.0, p95_pad=500.0),
+        )
+        verdict = cm.evaluate_promotion_bundle(max_improves_p95_regresses)
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertIn("p95_regression", verdict.reasons)
+        self.assertNotIn("max_latency_regression", verdict.reasons)
 
     def test_restored_incumbent_at_real_bar1_reaches_bench_passed(self) -> None:
         """Defect 9: the incumbent's ~88% BAR1 posture is what a successful
