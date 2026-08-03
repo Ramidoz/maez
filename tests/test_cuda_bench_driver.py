@@ -12528,6 +12528,52 @@ class TestB7RemainingSpecGate:
         assert fields["outcome"] == "unload_incomplete"
         assert calls > 4
 
+    def test_late_clean_sample_past_bound_refuses_and_stops_the_phase(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A clean reclaim first observed past the bound ends the phase.
+
+        Review reproduction: the pre-c49bb1c order accepted a clean sample
+        at 181 s.  Through the full run_phase: the late-clean cycle is
+        unload_incomplete, cycle two never spawns, and no completed packet
+        is minted.
+        """
+        harness = _b7_harness(private_root, nonce="7" * 64)
+        monkeypatch.setattr(driver, "UNLOAD_WAIT_S", 0.2)
+        unload_phase = {"active": False, "slept": False}
+
+        def memory(_uuid: str) -> tuple[float, int]:
+            if unload_phase["active"] and not unload_phase["slept"]:
+                # The FIRST unload sample arrives clean but only after the
+                # bound has already elapsed -- the exact review reproduction.
+                unload_phase["slept"] = True
+                time.sleep(0.3)
+            return (1.0, 100)
+
+        original_finalize = driver.finalize
+
+        def finalize_then_dirty(*args: object, **kwargs: object) -> object:
+            result = original_finalize(*args, **kwargs)
+            unload_phase["active"] = True
+            return result
+
+        monkeypatch.setattr(harness.gpu, "memory", memory)
+        monkeypatch.setattr(driver, "finalize", finalize_then_dirty)
+        path = driver.run_phase(
+            harness.config, harness.providers, root=private_root
+        )
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "unload_incomplete"
+        assert "unload_incomplete" in path.name
+        journal_lines = "".join(
+            journal.read_text()
+            for journal in private_root.rglob("journals/*.jsonl")
+        )
+        assert "cycle_1_load" in journal_lines
+        assert "cycle_2_load" not in journal_lines
+        assert not list(private_root.rglob("*-completed.json"))
+
     def test_known_mapping_pressure_is_recorded_not_unscored(
         self, private_root: Path
     ) -> None:

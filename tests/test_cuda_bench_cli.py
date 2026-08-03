@@ -5864,6 +5864,74 @@ class TestTask9Stage1AssemblyCommand:
         )
 
     @pytest.mark.parametrize(
+        ("wait", "expected_valid"),
+        (
+            (180.0, True),
+            (180.001, False),
+            (float("inf"), False),
+            (float("nan"), False),
+        ),
+    )
+    def test_assembly_receipt_unload_wait_bound_is_exact(
+        self,
+        tmp_path: Path,
+        wait: float,
+        expected_valid: bool,
+    ) -> None:
+        """Receipt-bound canon: 180 s admissible, past/non-finite refuses.
+
+        Review reproduction closed by c49bb1c: an impossible 999 s control
+        wait previously survived the receipt route.  The exact boundary is
+        pinned here through the published wrapper, not just the schema.
+        """
+        root = tmp_path / "bench-wait"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        document = json.loads(json.dumps(dict(evaluation.receipt)))
+        document["binding_sha256"] = evaluation.bundle.binding_sha256
+        for cycle in document["measurements"]["cycles"]:
+            cycle["unload_wait_seconds"] = wait
+        attempt = driver._admit_command(
+            command="assemble-stage1",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        try:
+            encoded = driver.ProductionArtifactPolicy().encode(
+                "receipt",
+                document,
+            )
+        except Exception:
+            # Non-finite values must not even encode into a canonical
+            # artifact; refusal at the encoder is the same fail-closed
+            # outcome as refusal at the validator.
+            assert not expected_valid
+            return
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+        )
+        result = cli.TerminalResult(
+            "ok",
+            evaluation.verdict.decision,
+            None,
+            relative,
+            digest,
+        )
+        assert (
+            cli._valid_assembly_receipt_result(
+                attempt,
+                result,
+                root=root,
+            )
+            is expected_valid
+        )
+
+    @pytest.mark.parametrize(
         "mutation",
         (
             "extra",
