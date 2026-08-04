@@ -1252,6 +1252,7 @@ class SecondReviewContractTests(unittest.TestCase):
             ).configuration_sha256,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         candidate = replace(
             candidate,
@@ -1324,6 +1325,7 @@ class ThirdReviewContractTests(unittest.TestCase):
             configuration_sha256=SHA_A,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         self.assertTrue(witness.passed)
         with self.assertRaisesRegex(ValueError, "live_turn_order"):
@@ -1450,6 +1452,7 @@ class FourthReviewContractTests(unittest.TestCase):
             configuration_sha256=SHA_A,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         self.assertTrue(witness.passed)
         with self.assertRaisesRegex(ValueError, "live_corpus_identity"):
@@ -1570,6 +1573,7 @@ class CodeQualityInvariantTests(unittest.TestCase):
             configuration_sha256=SHA_A,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         cases = (
             (cold, {"load_intervals": list(cold.load_intervals)}),
@@ -2692,6 +2696,7 @@ class PersistedDocTests(unittest.TestCase):
             "configuration_sha256": witness.configuration_sha256,
             "corpus_sha256": witness.corpus_sha256,
             "order_sha256": witness.order_sha256,
+            "steady_bar1_percent": witness.steady_bar1_percent,
         }
 
     def test_quality_evidence_persisted_round_trip(self) -> None:
@@ -2850,6 +2855,7 @@ class PersistedDocTests(unittest.TestCase):
             configuration_sha256=SHA_A,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         static_fields = {
             "gpu_uuid": static.gpu_uuid,
@@ -2946,6 +2952,7 @@ class PersistedDocTests(unittest.TestCase):
             configuration_sha256=SHA_A,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
         for ordinal in (True, 1.0):
             fields = self.live_fields(live)
@@ -5571,6 +5578,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             configuration_sha256=runtime_identity.configuration_sha256,
             corpus_sha256=CORPUS_SHA,
             order_sha256=ORDER_SHA,
+            steady_bar1_percent=62.1,
         )
     control_summary = _summary_for_bundle_packet(
         control_packet,
@@ -6881,6 +6889,25 @@ class BundleGateTests(unittest.TestCase):
         bundle = _make_bundle(candidate_unload_residual_mib=3)
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
+
+    def test_provisional_live_bar1_gate_added_by_cutover_contract(self) -> None:
+        """The live witness's BAR1 gate exists and binds (2026-08-03 ruling).
+
+        The defect-9 ruling recorded that ProvisionalLiveWitness carried no
+        BAR1 field and forbade claiming a dormant gate; the cutover contract
+        adds it: steady < 85 passes, 85.0 refuses, the value is hash-bound,
+        and out-of-range/non-finite values refuse construction.
+        """
+        base = _make_bundle(5).candidate_summary.provisional_live_witness
+        self.assertTrue(base.passed)
+        at_ceiling = replace(base, steady_bar1_percent=85.0)
+        self.assertFalse(at_ceiling.passed)
+        under = replace(base, steady_bar1_percent=84.99)
+        self.assertTrue(under.passed)
+        self.assertNotEqual(base.binding_sha256, under.binding_sha256)
+        for bad in (-0.1, 100.1, float("inf"), float("nan")):
+            with self.assertRaisesRegex(ValueError, "positive_measurement"):
+                replace(base, steady_bar1_percent=bad)
 
     def test_window8_observed_maxima_reach_bench_passed(self) -> None:
         """Defect 10 RED with the observed window-8 values.

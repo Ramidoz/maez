@@ -1922,11 +1922,21 @@ class ProvisionalLiveWitness:
     configuration_sha256: str
     corpus_sha256: str
     order_sha256: str
+    steady_bar1_percent: float
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.turns, tuple):
             raise ValueError("immutable_sequence_required")
+        bar1 = self.steady_bar1_percent
+        if (
+            isinstance(bar1, bool)
+            or not isinstance(bar1, (float, int))
+            or not math.isfinite(bar1)
+            or bar1 < 0
+            or bar1 > 100
+        ):
+            raise ValueError("positive_measurement")
         for digest in (
             self.parent_sha256,
             self.artifact_sha256,
@@ -1946,7 +1956,15 @@ class ProvisionalLiveWitness:
 
     @property
     def passed(self) -> bool:
-        return self.backend == "cuda" and all(turn.passed for turn in self.turns)
+        # steady BAR1 < 85 is the candidate-side promotion ceiling, added
+        # per the 2026-08-03 ruling (the gate did not previously exist on
+        # the live witness).  The incumbent-side identity semantics of the
+        # rollback witness are unrelated and unchanged.
+        return (
+            self.backend == "cuda"
+            and self.steady_bar1_percent < 85.0
+            and all(turn.passed for turn in self.turns)
+        )
 
     @property
     def binding_sha256(self) -> str:
@@ -1963,6 +1981,7 @@ class ProvisionalLiveWitness:
                 "configuration_sha256": self.configuration_sha256,
                 "corpus_sha256": self.corpus_sha256,
                 "order_sha256": self.order_sha256,
+                "steady_bar1_percent": self.steady_bar1_percent,
             }
         )
 
@@ -3065,6 +3084,7 @@ def _decode_provisional_live_witness(fields: object) -> ProvisionalLiveWitness:
             "configuration_sha256",
             "corpus_sha256",
             "order_sha256",
+            "steady_bar1_percent",
         ),
     )
     turns = values["turns"]
