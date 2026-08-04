@@ -535,8 +535,22 @@ COMMAND_COMPLETION_SCHEMA = "cuda_bench_driver.command_completion.v1"
 CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v2"
 RUNTIME_IDENTITY_SCHEMA = "cuda_bench_driver.runtime_identity.v1"
 COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
-PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
+# v2 (2026-08-03 cutover ratification): steady_bar1_percent joined the
+# shape; schema identity describes the shape, so v1 no longer decodes.
+PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v2"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
+CUTOVER_AUTHORIZATION_SCHEMA = "cuda_migration.cutover_authorization.v1"
+CUTOVER_TTL_S = 14_400
+# The one closed action set a cutover authorization can permit.  The
+# ceremony may not improvise actions the owner did not sign.
+CUTOVER_ACTION_SET = (
+    "stage_recovery_copies",
+    "install_cuda_override",
+    "daemon_reload",
+    "restart_llama_server",
+    "restart_llama_judge",
+    "host_reboot",
+)
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v3"
@@ -994,6 +1008,93 @@ class WindowAuthorizationDoc:
                 "owner": self.owner,
             }
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CutoverAuthorizationDoc:
+    """Owner-signed, single-use, named-window authority for the cutover.
+
+    Unlike AuthorizationWitness (a descriptive scorer-side witness), this
+    document is ENFORCEABLE: nonce + TTL + boot binding + a closed action
+    set + the staged recovery identity + the bench parent.  It is consumed
+    atomically at the execution edge, immediately before the first
+    mutation; the derived AuthorizationWitness the bundle carries cites
+    this artifact's hash.
+    """
+
+    window_id: str
+    actions: tuple[str, ...]
+    boot_id: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    owner: str
+    parent_bench_evidence_sha256: str
+    recovery_unit_sha256: str
+    recovery_dropin_sha256: str
+    schema_version: str = field(default=CUTOVER_AUTHORIZATION_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.schema_version) is not str
+            or self.schema_version != CUTOVER_AUTHORIZATION_SCHEMA
+        ):
+            raise ValueError("cutover_authorization_type")
+        if (
+            type(self.window_id) is not str
+            or _WINDOW_ID_RE.fullmatch(self.window_id) is None
+        ):
+            raise ValueError("window_id_syntax")
+        if (
+            type(self.actions) is not tuple
+            or self.actions != CUTOVER_ACTION_SET
+        ):
+            raise ValueError("cutover_action_set")
+        if type(self.boot_id) is not str or not self.boot_id:
+            raise ValueError("boot_id_required")
+        if type(self.nonce) is not str or _NONCE_RE.fullmatch(self.nonce) is None:
+            raise ValueError("authorization_nonce")
+        _validate_utc_z_timestamp(self.issued_at)
+        _validate_utc_z_timestamp(self.expires_at)
+        if not _authorization_ttl_matches(
+            self.issued_at, self.expires_at, CUTOVER_TTL_S
+        ):
+            raise ValueError("authorization_ttl")
+        if type(self.owner) is not str or not self.owner:
+            raise ValueError("authorization_owner")
+        for digest in (
+            self.parent_bench_evidence_sha256,
+            self.recovery_unit_sha256,
+            self.recovery_dropin_sha256,
+        ):
+            _validate_sha256(digest)
+        if (
+            self.recovery_unit_sha256 != FROZEN_VULKAN_UNIT_SHA256
+            or self.recovery_dropin_sha256 != FROZEN_VULKAN_DROPIN_SHA256
+        ):
+            raise ValueError("recovery_identity_mismatch")
+
+    @property
+    def preimage_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "window_id": self.window_id,
+                "actions": list(self.actions),
+                "boot_id": self.boot_id,
+                "nonce": self.nonce,
+                "issued_at": self.issued_at,
+                "expires_at": self.expires_at,
+                "owner": self.owner,
+                "parent_bench_evidence_sha256": self.parent_bench_evidence_sha256,
+                "recovery_unit_sha256": self.recovery_unit_sha256,
+                "recovery_dropin_sha256": self.recovery_dropin_sha256,
+            }
+        )
+
+    @property
+    def binding_sha256(self) -> str:
+        return self.preimage_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -3096,6 +3197,29 @@ def _decode_provisional_live_witness(fields: object) -> ProvisionalLiveWitness:
     return ProvisionalLiveWitness(**values)
 
 
+def _decode_cutover_authorization(fields: object) -> CutoverAuthorizationDoc:
+    values = _persisted_fields(
+        fields,
+        (
+            "window_id",
+            "actions",
+            "boot_id",
+            "nonce",
+            "issued_at",
+            "expires_at",
+            "owner",
+            "parent_bench_evidence_sha256",
+            "recovery_unit_sha256",
+            "recovery_dropin_sha256",
+        ),
+    )
+    actions = values["actions"]
+    if type(actions) is not list or any(type(a) is not str for a in actions):
+        raise ValueError("cutover_action_set")
+    values["actions"] = tuple(actions)
+    return CutoverAuthorizationDoc(**values)
+
+
 def _decode_authorization_witness(fields: object) -> AuthorizationWitness:
     return AuthorizationWitness(
         **_persisted_fields(
@@ -3296,6 +3420,7 @@ _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
         COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
+        CUTOVER_AUTHORIZATION_SCHEMA: _decode_cutover_authorization,
         CONSUMPTION_RECEIPT_SCHEMA: _decode_consumption_receipt,
         BACKEND_MAP_WITNESS_SCHEMA: _decode_backend_map_witness,
         ROLLBACK_EVIDENCE_BUNDLE_SCHEMA: _decode_rollback_evidence_bundle,
