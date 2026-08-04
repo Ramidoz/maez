@@ -102,12 +102,21 @@ def mint_cutover_authorization(
     """Act 1: mint the enforceable cutover authorization (owner-run)."""
 
     bench_evidence, _artifact = _verified_bench_parent(root)
+    # Precondition: the staged recovery copies must match the frozen
+    # incumbent identity before the authorization binds the complete
+    # rollback manifest (unit + dropin + runtime + library manifest +
+    # model sha/bytes + alias + effective args).
     recovery_unit = hashlib.sha256(
         (root / "recovery" / "llama-server.service").read_bytes()
     ).hexdigest()
     recovery_dropin = hashlib.sha256(
         (root / "recovery" / "mtp.conf").read_bytes()
     ).hexdigest()
+    if (
+        recovery_unit != cm.FROZEN_VULKAN_UNIT_SHA256
+        or recovery_dropin != cm.FROZEN_VULKAN_DROPIN_SHA256
+    ):
+        raise CutoverRefusal("recovery_copies_mismatch")
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     doc = cm.CutoverAuthorizationDoc(
         window_id=now.strftime("cutover-%Y%m%d-%H%M"),
@@ -120,8 +129,7 @@ def mint_cutover_authorization(
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
         owner=owner,
         parent_bench_evidence_sha256=bench_evidence,
-        recovery_unit_sha256=recovery_unit,
-        recovery_dropin_sha256=recovery_dropin,
+        rollback_manifest_sha256=cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
     )
     wrapper = {
         "schema": cm.CUTOVER_AUTHORIZATION_SCHEMA,
@@ -135,8 +143,7 @@ def mint_cutover_authorization(
             "expires_at": doc.expires_at,
             "owner": doc.owner,
             "parent_bench_evidence_sha256": doc.parent_bench_evidence_sha256,
-            "recovery_unit_sha256": doc.recovery_unit_sha256,
-            "recovery_dropin_sha256": doc.recovery_dropin_sha256,
+            "rollback_manifest_sha256": doc.rollback_manifest_sha256,
         },
     }
     payload = cm._canonical_wrapper_bytes(wrapper)

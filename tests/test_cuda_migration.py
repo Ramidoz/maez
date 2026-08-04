@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields as dataclass_fields, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from scripts import cuda_migration as cm
 
@@ -781,19 +782,20 @@ class InternalGateTests(unittest.TestCase):
         self.assertEqual("provisional_cuda_boot", verdict.decision)
         self.assertEqual(("cold_boot_witness_pending",), verdict.reasons)
 
-    def test_failed_authorization_or_phase_evidence_keeps_vulkan(self) -> None:
+    def test_declined_authorization_leaves_stage_one_terminal(self) -> None:
+        """SUPERSEDED 2026-08-04 (cutover step 1, ratified decline rule).
+
+        Previously a "fail" boot authorization reached stage 2 and minted
+        keep_vulkan / owner_authorization_failed.  An enforceable cutover
+        authorization IS authority to act, so a decline cannot accompany
+        one, and without one stage 2 is unreachable: the durable stage-1
+        bench_passed result simply stands.  owner_authorization_failed is
+        retained as a reserved historical reason.
+        """
         bench = evaluate()
-        failed_auth = evaluate(
-            authorization=cm.AuthorizationWitness(
-                "boot_authorization",
-                "fail",
-                SHA_A,
-                bench.evidence_sha256,
-                "2026-07-10T12:01:00Z",
-            )
-        )
-        self.assertEqual("keep_vulkan", failed_auth.decision)
-        self.assertIn("owner_authorization_failed", failed_auth.reasons)
+        self.assertEqual("bench_passed", bench.decision)
+        self.assertEqual((), bench.reasons)
+        self.assertIn("owner_authorization_failed", cm._REASONS)
 
     def test_promotion_requires_cold_boot_and_provisional_live_artifacts(self) -> None:
         bench = evaluate()
@@ -4540,6 +4542,99 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             cm.PersistedDoc(encoded)
 
 
+CUTOVER_WINDOW_ID = "cutover-20260713-1202"
+CUTOVER_ISSUED_AT = "2026-07-13T12:02:30Z"
+CUTOVER_EXPIRES_AT = "2026-07-13T16:02:30Z"   # issued + CUTOVER_TTL_S
+CUTOVER_RECEIPT_AT = "2026-07-13T12:03:10Z"
+CUTOVER_CONSUMED_AT = "2026-07-13T12:03:20Z"
+
+
+def _cutover_authorization_doc(bench_anchor: str) -> cm.PersistedDoc:
+    auth = cm.CutoverAuthorizationDoc(
+        window_id=CUTOVER_WINDOW_ID,
+        actions=cm.CUTOVER_ACTION_SET,
+        boot_id="boot-1",
+        nonce="c" * 64,
+        issued_at=CUTOVER_ISSUED_AT,
+        expires_at=CUTOVER_EXPIRES_AT,
+        owner="rohit",
+        parent_bench_evidence_sha256=bench_anchor,
+        rollback_manifest_sha256=cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
+    )
+    return _persisted_doc(
+        cm.CUTOVER_AUTHORIZATION_SCHEMA,
+        auth,
+        {
+            "window_id": auth.window_id,
+            "actions": list(auth.actions),
+            "boot_id": auth.boot_id,
+            "nonce": auth.nonce,
+            "issued_at": auth.issued_at,
+            "expires_at": auth.expires_at,
+            "owner": auth.owner,
+            "parent_bench_evidence_sha256": auth.parent_bench_evidence_sha256,
+            "rollback_manifest_sha256": auth.rollback_manifest_sha256,
+        },
+    )
+
+
+def _stage_two_receipt_doc(bench_anchor: str) -> cm.PersistedDoc:
+    """The stage-2 permit as a DOCUMENT.
+
+    bundle_binding_sha256 records the stage-2 bundle's binding; a stage-3
+    bundle cannot recompute it (it does not carry the stage-2 bundle), so
+    that join is verified by the stage-3 assembly entrypoint in step 5,
+    not by this constructor.  Everything the constructor CAN check --
+    decision, reasons, bench anchor, window -- is bound here.
+    """
+
+    fields = {
+        "artifact_role": "producer_evidence_not_verdict",
+        "backend_witnesses": {},
+        "bench_binding_sha256": bench_anchor,
+        "bundle_binding_sha256": SHA_B,
+        "containment": {},
+        "decision": "provisional_cuda_boot",
+        "evaluator_versions": {},
+        "gate_bindings": {},
+        "measurements": {},
+        "phase": "cuda_candidate",
+        "phase_evidence": {},
+        "reasons": ["cold_boot_witness_pending"],
+        "runtime": {},
+        "timestamp": CUTOVER_RECEIPT_AT,
+        "cutover_window_id": CUTOVER_WINDOW_ID,
+    }
+    receipt = cm.AssembleReceiptDoc(fields=MappingProxyType(dict(fields)))
+    return _persisted_doc(cm.ASSEMBLE_RECEIPT_SCHEMA, receipt, fields)
+
+
+def _cutover_consumption_doc(
+    auth_doc: cm.PersistedDoc, receipt_doc: cm.PersistedDoc
+) -> cm.PersistedDoc:
+    auth = auth_doc.obj
+    receipt = receipt_doc.obj
+    burn = cm.CutoverConsumptionReceipt(
+        authorization_file_sha256=auth_doc.file_sha256,
+        authorization_binding_sha256=auth.binding_sha256,
+        nonce=auth.nonce,
+        window_id=auth.window_id,
+        boot_id=auth.boot_id,
+        stage_two_receipt_file_sha256=receipt_doc.file_sha256,
+        stage_two_receipt_binding_sha256=receipt.binding_sha256,
+        consumed_at=CUTOVER_CONSUMED_AT,
+    )
+    return _persisted_doc(
+        cm.CUTOVER_CONSUMPTION_SCHEMA,
+        burn,
+        {
+            name: getattr(burn, name)
+            for name in burn.__dataclass_fields__
+            if name != "schema_version"
+        },
+    )
+
+
 def _persisted_doc(schema: str, obj: object, fields: dict[str, object]) -> cm.PersistedDoc:
     return cm.PersistedDoc(PersistedDocTests.wrapper(schema, obj, fields))
 
@@ -5434,6 +5529,9 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         "live_witness_authorization", "not_attempted", None, None, None
     )
     runtime_identity = bench_identity
+    cutover_authorization = None
+    stage_two_receipt = None
+    cutover_consumption = None
     cold_maps = None
     provisional_maps = None
     cold = None
@@ -5454,6 +5552,9 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             rollback_witness=rollback_witness,
         )
         seed = cm.BenchEvidenceBundle(
+            cutover_authorization=None,
+            stage_two_receipt=None,
+            cutover_consumption=None,
             window_id="window-1",
             boot_id="boot-1",
             gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
@@ -5494,13 +5595,23 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             timestamp="2026-07-13T12:02:10Z",
         )
         boot_status = "fail" if overrides.pop("terminal_boot_failure", False) else "pass"
+        cutover_authorization = _cutover_authorization_doc(
+            seed.bench_binding_sha256
+        )
         boot = cm.AuthorizationWitness(
             "boot_authorization",
             boot_status,
-            SHA_A,
+            cutover_authorization.file_sha256,
             seed.bench_binding_sha256,
             "2026-07-13T12:03:00Z",
         )
+        if stage >= 3:
+            stage_two_receipt = _stage_two_receipt_doc(
+                seed.bench_binding_sha256
+            )
+            cutover_consumption = _cutover_consumption_doc(
+                cutover_authorization, stage_two_receipt
+            )
         runtime_identity = make_identity(mode="production", effective_args=argv("8080"))
     if stage >= 3:
         cold_maps = cm.RuntimeBackendWitness(
@@ -5600,6 +5711,9 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         PersistedDocTests.identity_fields(runtime_identity),
     )
     values: dict[str, object] = {
+        "cutover_authorization": cutover_authorization,
+        "stage_two_receipt": stage_two_receipt,
+        "cutover_consumption": cutover_consumption,
         "window_id": "window-1",
         "boot_id": "boot-1",
         "gpu_uuid": "GPU-12345678-1234-1234-1234-123456789abc",
@@ -6299,8 +6413,11 @@ class BenchEvidenceBundleTests(unittest.TestCase):
             len({bundle.bench_binding_sha256 for bundle in stages}),
         )
         self.assertEqual(5, len({bundle.binding_sha256 for bundle in stages}))
+        # A stage-2 decline is no longer representable (ratified rule):
+        # it is asserted as a refusal instead, below.
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(2, terminal_boot_failure=True)
         for stage, terminal in (
-            (2, {"terminal_boot_failure": True}),
             (3, {"terminal_cold_failure": True}),
             (4, {"terminal_live_failure": True}),
             (5, {"terminal_provisional_failure": True}),
@@ -6890,6 +7007,37 @@ class BundleGateTests(unittest.TestCase):
         verdict = cm.evaluate_promotion_bundle(bundle)
         self.assertEqual("bench_passed", verdict.decision)
 
+    def test_arbitrary_authorization_hash_cannot_reach_provisional_boot(
+        self,
+    ) -> None:
+        """THE live bypass: a descriptive witness that names nothing.
+
+        AuthorizationWitness is descriptive by design, and the bundle
+        joins only parent_sha256 and chronology -- never the witness's own
+        artifact_sha256.  So any well-formed 64-hex value authorizes a
+        real pointer mutation.  The stage-2 fixture itself demonstrates
+        it: its boot witness cites SHA_A, a test constant naming no
+        document, and reaches provisional_cuda_boot.
+
+        Step 1 requires the enforceable CutoverAuthorizationDoc to travel
+        in the bundle and the witness to name it by file hash.
+        """
+        bundle = _make_bundle(2)
+        forged = cm.AuthorizationWitness(
+            "boot_authorization",
+            "pass",
+            "f" * 64,
+            bundle.bench_binding_sha256,
+            bundle.boot_authorization.timestamp,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            replace(bundle, boot_authorization=forged)
+
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(
+                **{**_bundle_values(bundle), "boot_authorization": forged}
+            )
+
     def test_provisional_live_bar1_gate_added_by_cutover_contract(self) -> None:
         """The live witness's BAR1 gate exists and binds (2026-08-03 ruling).
 
@@ -7155,8 +7303,11 @@ class BundleGateTests(unittest.TestCase):
         self.assertEqual(82.0, bundles[0].control_summary.steady_bar1_percent)
         self.assertEqual(80.0, bundles[0].candidate_summary.steady_bar1_percent)
 
+        # owner_authorization_failed is reserved-historical and unreachable
+        # by every valid public bundle; the decline refuses construction.
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(2, terminal_boot_failure=True)
         terminal = (
-            (2, "terminal_boot_failure", "owner_authorization_failed"),
             (3, "terminal_cold_failure", "cold_boot_witness_failed"),
             (4, "terminal_live_failure", "live_authorization_failed"),
             (5, "terminal_provisional_failure", "provisional_live_witness_failed"),

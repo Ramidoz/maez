@@ -15,7 +15,7 @@ import math
 import os
 import re
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dataclass_replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -540,6 +540,8 @@ COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
 PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v2"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 CUTOVER_AUTHORIZATION_SCHEMA = "cuda_migration.cutover_authorization.v1"
+CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v1"
+ASSEMBLE_RECEIPT_SCHEMA = "cuda_bench_assemble.receipt.v1"
 CUTOVER_TTL_S = 14_400
 # The one closed action set a cutover authorization can permit.  The
 # ceremony may not improvise actions the owner did not sign.
@@ -555,7 +557,13 @@ BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v3"
 ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
-BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v1"
+# The bench anchor's hash domain is FROZEN at the historical v1 string and
+# is deliberately independent of the outer bundle schema: bumping the
+# bundle must never move an already-minted bench_binding_sha256 (the
+# durable attempt-026 receipt carries 40a7e770... and authorizations are
+# parented to it).  Guarded by the literal-anchor test.
+BENCH_EVIDENCE_HASH_DOMAIN = "cuda_migration.bench_evidence_bundle.v1"
+BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v2"
 
 ACTIVE_SCHEMA_FAMILIES = (
     STATIC_PREFLIGHT_SCHEMA,
@@ -570,7 +578,7 @@ ACTIVE_SCHEMA_FAMILIES = (
     "cuda_bench_driver.turn_artifact.v1",
     CONTAINMENT_SNAPSHOT_SCHEMA,
     RUNTIME_IDENTITY_SCHEMA,
-    "cuda_bench_assemble.receipt.v1",
+    ASSEMBLE_RECEIPT_SCHEMA,
     "cuda_bench_rehearsal.packet.v1",
     BENCH_EVIDENCE_BUNDLE_SCHEMA,
     CYCLE_BACKEND_WITNESS_SCHEMA,
@@ -582,6 +590,8 @@ ACTIVE_SCHEMA_FAMILIES = (
     AUTHORIZATION_WITNESS_SCHEMA,
     BACKEND_MAP_WITNESS_SCHEMA,
     COMMAND_COMPLETION_SCHEMA,
+    CUTOVER_AUTHORIZATION_SCHEMA,
+    CUTOVER_CONSUMPTION_SCHEMA,
 )
 
 _NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1030,8 +1040,7 @@ class CutoverAuthorizationDoc:
     expires_at: str
     owner: str
     parent_bench_evidence_sha256: str
-    recovery_unit_sha256: str
-    recovery_dropin_sha256: str
+    rollback_manifest_sha256: str
     schema_version: str = field(default=CUTOVER_AUTHORIZATION_SCHEMA, init=False)
 
     def __post_init__(self) -> None:
@@ -1064,14 +1073,13 @@ class CutoverAuthorizationDoc:
             raise ValueError("authorization_owner")
         for digest in (
             self.parent_bench_evidence_sha256,
-            self.recovery_unit_sha256,
-            self.recovery_dropin_sha256,
+            self.rollback_manifest_sha256,
         ):
             _validate_sha256(digest)
-        if (
-            self.recovery_unit_sha256 != FROZEN_VULKAN_UNIT_SHA256
-            or self.recovery_dropin_sha256 != FROZEN_VULKAN_DROPIN_SHA256
-        ):
+        # The COMPLETE frozen recovery identity (unit + dropin + runtime +
+        # library manifest + model sha/bytes + alias + effective args),
+        # never a two-hash subset.  Preimage durable under preimages/.
+        if self.rollback_manifest_sha256 != FROZEN_ROLLBACK_MANIFEST_SHA256:
             raise ValueError("recovery_identity_mismatch")
 
     @property
@@ -1087,14 +1095,152 @@ class CutoverAuthorizationDoc:
                 "expires_at": self.expires_at,
                 "owner": self.owner,
                 "parent_bench_evidence_sha256": self.parent_bench_evidence_sha256,
-                "recovery_unit_sha256": self.recovery_unit_sha256,
-                "recovery_dropin_sha256": self.recovery_dropin_sha256,
+                "rollback_manifest_sha256": self.rollback_manifest_sha256,
             }
         )
 
     @property
     def binding_sha256(self) -> str:
         return self.preimage_sha256
+
+
+@dataclass(frozen=True, slots=True)
+class CutoverConsumptionReceipt:
+    """The burn: proof the authorization was spent, once, after stage 2.
+
+    Every field is inside the binding, so consumed_at is genuinely
+    hash-bound (the retired marker copied the authorization's binding and
+    left its timestamp unbound).  Both stage-2 receipt planes are named
+    explicitly rather than one ambiguous digest.
+    """
+
+    authorization_file_sha256: str
+    authorization_binding_sha256: str
+    nonce: str
+    window_id: str
+    boot_id: str
+    stage_two_receipt_file_sha256: str
+    stage_two_receipt_binding_sha256: str
+    consumed_at: str
+    schema_version: str = field(default=CUTOVER_CONSUMPTION_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.schema_version) is not str
+            or self.schema_version != CUTOVER_CONSUMPTION_SCHEMA
+        ):
+            raise ValueError("cutover_consumption_type")
+        for digest in (
+            self.authorization_file_sha256,
+            self.authorization_binding_sha256,
+            self.stage_two_receipt_file_sha256,
+            self.stage_two_receipt_binding_sha256,
+        ):
+            _validate_sha256(digest)
+        if type(self.nonce) is not str or _NONCE_RE.fullmatch(self.nonce) is None:
+            raise ValueError("authorization_nonce")
+        if (
+            type(self.window_id) is not str
+            or _WINDOW_ID_RE.fullmatch(self.window_id) is None
+        ):
+            raise ValueError("window_id_syntax")
+        if type(self.boot_id) is not str or not self.boot_id:
+            raise ValueError("boot_id_required")
+        _validate_utc_z_timestamp(self.consumed_at)
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "authorization_file_sha256": self.authorization_file_sha256,
+                "authorization_binding_sha256": self.authorization_binding_sha256,
+                "nonce": self.nonce,
+                "window_id": self.window_id,
+                "boot_id": self.boot_id,
+                "stage_two_receipt_file_sha256": self.stage_two_receipt_file_sha256,
+                "stage_two_receipt_binding_sha256": self.stage_two_receipt_binding_sha256,
+                "consumed_at": self.consumed_at,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AssembleReceiptDoc:
+    """Typed view of cuda_bench_assemble.receipt.v1 -- a CLOSED SUM.
+
+    Stage-1 success carries exactly the historical 14 fields; stage-2+
+    success carries those plus cutover_window_id.  Refusal/failure
+    wrappers (whose field set is {outcome, timestamp}) decode as neither
+    and can never satisfy the stage_two_receipt role.
+    """
+
+    fields: Mapping[str, object]
+    schema_version: str = field(default=ASSEMBLE_RECEIPT_SCHEMA, init=False)
+
+    _SUCCESS_FIELDS = frozenset(
+        {
+            "artifact_role",
+            "backend_witnesses",
+            "bench_binding_sha256",
+            "bundle_binding_sha256",
+            "containment",
+            "decision",
+            "evaluator_versions",
+            "gate_bindings",
+            "measurements",
+            "phase",
+            "phase_evidence",
+            "reasons",
+            "runtime",
+            "timestamp",
+        }
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fields, Mapping):
+            raise ValueError("assemble_receipt_type")
+        present = set(self.fields)
+        if present != self._SUCCESS_FIELDS and present != (
+            self._SUCCESS_FIELDS | {"cutover_window_id"}
+        ):
+            raise ValueError("assemble_receipt_shape")
+        if self.fields.get("decision") not in _DECISIONS:
+            raise ValueError("assemble_receipt_shape")
+        for name in ("bench_binding_sha256", "bundle_binding_sha256"):
+            _validate_sha256(self.fields.get(name))
+        _validate_utc_z_timestamp(self.fields.get("timestamp"))
+
+    @property
+    def decision(self) -> str:
+        return str(self.fields["decision"])
+
+    @property
+    def reasons(self) -> tuple[str, ...]:
+        return tuple(self.fields.get("reasons") or ())
+
+    @property
+    def bench_binding_sha256(self) -> str:
+        return str(self.fields["bench_binding_sha256"])
+
+    @property
+    def bundle_binding_sha256(self) -> str:
+        return str(self.fields["bundle_binding_sha256"])
+
+    @property
+    def timestamp(self) -> str:
+        return str(self.fields["timestamp"])
+
+    @property
+    def cutover_window_id(self) -> str | None:
+        value = self.fields.get("cutover_window_id")
+        return None if value is None else str(value)
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {"schema": self.schema_version, "fields": dict(self.fields)}
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3197,6 +3343,29 @@ def _decode_provisional_live_witness(fields: object) -> ProvisionalLiveWitness:
     return ProvisionalLiveWitness(**values)
 
 
+def _decode_cutover_consumption(fields: object) -> CutoverConsumptionReceipt:
+    values = _persisted_fields(
+        fields,
+        (
+            "authorization_file_sha256",
+            "authorization_binding_sha256",
+            "nonce",
+            "window_id",
+            "boot_id",
+            "stage_two_receipt_file_sha256",
+            "stage_two_receipt_binding_sha256",
+            "consumed_at",
+        ),
+    )
+    return CutoverConsumptionReceipt(**values)
+
+
+def _decode_assemble_receipt(fields: object) -> AssembleReceiptDoc:
+    if not isinstance(fields, Mapping):
+        raise ValueError("assemble_receipt_type")
+    return AssembleReceiptDoc(fields=MappingProxyType(dict(fields)))
+
+
 def _decode_cutover_authorization(fields: object) -> CutoverAuthorizationDoc:
     values = _persisted_fields(
         fields,
@@ -3209,8 +3378,7 @@ def _decode_cutover_authorization(fields: object) -> CutoverAuthorizationDoc:
             "expires_at",
             "owner",
             "parent_bench_evidence_sha256",
-            "recovery_unit_sha256",
-            "recovery_dropin_sha256",
+            "rollback_manifest_sha256",
         ),
     )
     actions = values["actions"]
@@ -3421,6 +3589,8 @@ _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
         CUTOVER_AUTHORIZATION_SCHEMA: _decode_cutover_authorization,
+        CUTOVER_CONSUMPTION_SCHEMA: _decode_cutover_consumption,
+        ASSEMBLE_RECEIPT_SCHEMA: _decode_assemble_receipt,
         CONSUMPTION_RECEIPT_SCHEMA: _decode_consumption_receipt,
         BACKEND_MAP_WITNESS_SCHEMA: _decode_backend_map_witness,
         ROLLBACK_EVIDENCE_BUNDLE_SCHEMA: _decode_rollback_evidence_bundle,
@@ -3608,6 +3778,9 @@ class BenchEvidenceBundle:
     candidate_packet_doc: PersistedDoc
     candidate_packet_ref: str
     rollback: RollbackEvidenceBundle
+    cutover_authorization: PersistedDoc | None
+    stage_two_receipt: PersistedDoc | None
+    cutover_consumption: PersistedDoc | None
     cold_boot_maps: RuntimeBackendWitness | None
     provisional_live_maps: RuntimeBackendWitness | None
     timestamp: str
@@ -4859,6 +5032,31 @@ class BenchEvidenceBundle:
         if snapshots != expected_snapshots:
             raise ValueError("bundle_binding")
 
+        # The frozen three-role matrix.  Stage 1: none.  Stage 2:
+        # authorization only (assembly precedes the mutation, so neither
+        # the burn nor the stage-2 receipt can exist yet).  Stages 3-5: all.
+        if stage == 1:
+            if (
+                self.cutover_authorization is not None
+                or self.stage_two_receipt is not None
+                or self.cutover_consumption is not None
+            ):
+                raise ValueError("bundle_binding")
+        elif stage == 2:
+            if (
+                self.cutover_authorization is None
+                or self.stage_two_receipt is not None
+                or self.cutover_consumption is not None
+            ):
+                raise ValueError("bundle_binding")
+        else:
+            if (
+                self.cutover_authorization is None
+                or self.stage_two_receipt is None
+                or self.cutover_consumption is None
+            ):
+                raise ValueError("bundle_binding")
+
         if stage == 1:
             if (
                 self.runtime_identity.mode != "bench"
@@ -4915,6 +5113,66 @@ class BenchEvidenceBundle:
 
     def _validate_boot_authorization(self) -> None:
         if self.boot_authorization.parent_sha256 != self.bench_binding_sha256:
+            raise ValueError("bundle_binding")
+        # A decline never enters stage 2: the enforceable document IS
+        # authority to act, so a "fail" witness cannot accompany one, and
+        # without one stage 2 is unreachable.  The stage-1 bench_passed
+        # receipt stays terminal.
+        if self.boot_authorization.status != "pass":
+            raise ValueError("bundle_binding")
+        auth_doc = _canonical_persisted_role(
+            self.cutover_authorization, CutoverAuthorizationDoc
+        )
+        auth = auth_doc.obj
+        # THE join the bypass exploited: the descriptive witness must name
+        # the enforceable document by file hash.
+        if self.boot_authorization.artifact_sha256 != auth_doc.file_sha256:
+            raise ValueError("bundle_binding")
+        if (
+            auth.parent_bench_evidence_sha256 != self.bench_binding_sha256
+            or auth.actions != CUTOVER_ACTION_SET
+            or auth.rollback_manifest_sha256 != FROZEN_ROLLBACK_MANIFEST_SHA256
+        ):
+            raise ValueError("bundle_binding")
+        witness_at = self.boot_authorization.timestamp
+        if (
+            _compare_utc_z(auth.issued_at, witness_at) > 0
+            or _compare_utc_z(witness_at, auth.expires_at) >= 0
+        ):
+            raise ValueError("bundle_binding")
+        if self.cutover_consumption is None:
+            return
+        burn = _canonical_persisted_role(
+            self.cutover_consumption, CutoverConsumptionReceipt
+        ).obj
+        receipt_doc = _canonical_persisted_role(
+            self.stage_two_receipt, AssembleReceiptDoc
+        )
+        receipt = receipt_doc.obj
+        if (
+            burn.authorization_file_sha256 != auth_doc.file_sha256
+            or burn.authorization_binding_sha256 != auth.binding_sha256
+            or burn.nonce != auth.nonce
+            or burn.window_id != auth.window_id
+            or burn.boot_id != auth.boot_id
+        ):
+            raise ValueError("bundle_binding")
+        if (
+            _compare_utc_z(auth.issued_at, burn.consumed_at) > 0
+            or _compare_utc_z(burn.consumed_at, auth.expires_at) >= 0
+        ):
+            raise ValueError("bundle_binding")
+        # The stage-2 permit travels as a DOCUMENT, not two hashes.
+        if (
+            burn.stage_two_receipt_file_sha256 != receipt_doc.file_sha256
+            or burn.stage_two_receipt_binding_sha256 != receipt.binding_sha256
+            or receipt.decision != "provisional_cuda_boot"
+            or receipt.reasons != ("cold_boot_witness_pending",)
+            or receipt.bench_binding_sha256 != self.bench_binding_sha256
+            or receipt.cutover_window_id != auth.window_id
+        ):
+            raise ValueError("bundle_binding")
+        if _compare_utc_z(receipt.timestamp, burn.consumed_at) > 0:
             raise ValueError("bundle_binding")
         static_doc = _canonical_persisted_role(
             self.static_preflight, StaticPreflightDoc
@@ -5007,7 +5265,7 @@ class BenchEvidenceBundle:
         }
         return _packet_hash(
             {
-                "schema": self.schema_version,
+                "schema": BENCH_EVIDENCE_HASH_DOMAIN,
                 "window_id": self.window_id,
                 "boot_id": self.boot_id,
                 "gpu_uuid": self.gpu_uuid,
@@ -5126,6 +5384,7 @@ class PromotionVerdict:
     runtime_identity_sha256: str
     cold_boot_maps_sha256: str
     provisional_live_maps_sha256: str
+    cutover_window_id: str | None = None
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
@@ -5170,6 +5429,7 @@ class PromotionVerdict:
                 "runtime_identity_sha256": self.runtime_identity_sha256,
                 "cold_boot_maps_sha256": self.cold_boot_maps_sha256,
                 "provisional_live_maps_sha256": self.provisional_live_maps_sha256,
+                "cutover_window_id": self.cutover_window_id,
             }
         )
 
@@ -5461,7 +5721,11 @@ def _evaluate_promotion_gate(
             cold_boot_maps,
             provisional_live_maps,
         )
-    if boot_authorization.status == "fail":
+    # owner_authorization_failed is a RESERVED HISTORICAL reason: a decline
+    # can no longer construct stage 2, so no valid public bundle reaches
+    # this decision.  The reason stays in the vocabulary (canon count
+    # unchanged) with no implied obligation to build a refusal document.
+    if False:  # unreachable by every valid public bundle
         return _make_verdict(
             expected_bench_evidence_sha256,
             "keep_vulkan",
@@ -5805,7 +6069,7 @@ def evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict:
         control_maps, candidate_maps = selected
     except Exception as exc:
         raise ValueError("bundle_binding") from exc
-    return _evaluate_promotion_gate(
+    verdict = _evaluate_promotion_gate(
         bundle.control_summary,
         bundle.candidate_summary,
         control_maps,
@@ -5817,6 +6081,14 @@ def evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict:
         expected_bench_evidence_sha256=bundle.bench_binding_sha256,
         cold_boot_maps=bundle.cold_boot_maps,
         provisional_live_maps=bundle.provisional_live_maps,
+    )
+    # The named cutover window is verdict-visible and inside the binding.
+    # Stage 1 carries None; stage 2+ carries exactly the authorization's.
+    if bundle.cutover_authorization is None:
+        return verdict
+    return _dataclass_replace(
+        verdict,
+        cutover_window_id=bundle.cutover_authorization.obj.window_id,
     )
 
 

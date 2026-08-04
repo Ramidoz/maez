@@ -273,6 +273,12 @@ def build_stage1_bundle(
         )
 
         return cm.BenchEvidenceBundle(
+            # Stage-1 assembly carries none of the cutover roles: the
+            # frozen matrix forbids all three before an authorization
+            # exists.  Stage-2+ entrypoints (step 5) supply them.
+            cutover_authorization=None,
+            stage_two_receipt=None,
+            cutover_consumption=None,
             window_id=control_packet.window_id,
             boot_id=control_packet.boot_id,
             gpu_uuid=control_packet.gpu_uuid,

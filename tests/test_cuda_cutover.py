@@ -124,7 +124,7 @@ def test_document_bindings_are_closed(root: Path) -> None:
     with pytest.raises(ValueError, match="cutover_action_set"):
         replace(doc, actions=doc.actions[:-1])
     with pytest.raises(ValueError, match="recovery_identity_mismatch"):
-        replace(doc, recovery_unit_sha256="a" * 64)
+        replace(doc, rollback_manifest_sha256="a" * 64)
     with pytest.raises(ValueError, match="authorization_ttl"):
         replace(doc, expires_at="2026-08-03T23:59:59Z")
     with pytest.raises(ValueError, match="authorization_nonce"):

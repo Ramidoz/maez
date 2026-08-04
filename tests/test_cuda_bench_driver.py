@@ -7209,7 +7209,7 @@ def _command_admission_fields(
 
 
 class TestTask3CommandAdmissionCanon:
-    def test_command_admission_exact_schema_23_canon(self) -> None:
+    def test_command_admission_exact_schema_25_canon(self) -> None:
         command_schema = _task3_api("COMMAND_ADMISSION_SCHEMA")
         actual = (
             driver.STATIC_PREFLIGHT_SCHEMA,
@@ -7235,6 +7235,8 @@ class TestTask3CommandAdmissionCanon:
             driver.cm.PROVISIONAL_LIVE_WITNESS_SCHEMA,
             driver.cm.AUTHORIZATION_WITNESS_SCHEMA,
             driver.cm.BACKEND_MAP_WITNESS_SCHEMA,
+            driver.cm.CUTOVER_AUTHORIZATION_SCHEMA,
+            driver.cm.CUTOVER_CONSUMPTION_SCHEMA,
         )
         expected = (
             "cuda_bench_driver.static_preflight.v1",
@@ -7251,18 +7253,20 @@ class TestTask3CommandAdmissionCanon:
             "cuda_bench_driver.runtime_identity.v1",
             "cuda_bench_assemble.receipt.v1",
             "cuda_bench_rehearsal.packet.v1",
-            "cuda_migration.bench_evidence_bundle.v1",
+            "cuda_migration.bench_evidence_bundle.v2",
             "cuda_migration.cycle_backend_witness.v1",
             "cuda_migration.quality_evidence.v1",
             "cuda_migration.owner_voice_review.v1",
             "cuda_migration.rollback_evidence_bundle.v1",
             "cuda_migration.cold_boot_witness.v1",
-            "cuda_migration.provisional_live_witness.v1",
+            "cuda_migration.provisional_live_witness.v2",
             "cuda_migration.authorization_witness.v1",
             "cuda_migration.backend_map_witness.v1",
+            "cuda_migration.cutover_authorization.v1",
+            "cuda_migration.cutover_consumption.v1",
         )
         assert actual == expected
-        assert len(actual) == len(set(actual)) == 23
+        assert len(actual) == len(set(actual)) == 25
         assert actual.count(_COMMAND_SCHEMA) == 1
         assert "cuda_bench_assemble.selection.v1" not in actual
 
@@ -13462,11 +13466,15 @@ class TestB7AttemptAllocation:
 
 
 class TestCompletionArtifactPolicy:
-    def test_command_completion_schema_is_the_twenty_fourth_closed_family(
+    def test_command_completion_schema_is_a_closed_family_of_twenty_six(
         self,
     ) -> None:
-        assert len(driver.cm.ACTIVE_SCHEMA_FAMILIES) == 24
-        assert len(set(driver.cm.ACTIVE_SCHEMA_FAMILIES)) == 24
+        # 24 -> 26 (cutover step 1, 2026-08-04): two ADDITIONS (cutover
+        # authorization, cutover consumption).  The bundle v2 and
+        # provisional-live v2 bumps are replacements and do not change
+        # the count.
+        assert len(driver.cm.ACTIVE_SCHEMA_FAMILIES) == 26
+        assert len(set(driver.cm.ACTIVE_SCHEMA_FAMILIES)) == 26
         assert (
             "cuda_bench_driver.command_completion.v1"
             in driver.cm.ACTIVE_SCHEMA_FAMILIES
