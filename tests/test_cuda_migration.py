@@ -5236,6 +5236,9 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
     cutover_expires_at = str(
         overrides.pop("cutover_expires_at", CUTOVER_EXPIRES_AT)
     )
+    live_authorization_at = str(
+        overrides.pop("live_authorization_at", "2026-07-13T12:03:13Z")
+    )
     parent_expires_before_continuation = bool(
         overrides.pop("parent_expires_before_continuation", False)
     )
@@ -5693,7 +5696,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             live_status,
             SHA_B,
             cold.binding_sha256,
-            "2026-07-13T12:03:13Z",
+            live_authorization_at,
         )
     if stage >= 5:
         provisional_maps = cm.RuntimeBackendWitness(

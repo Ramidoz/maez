@@ -5127,9 +5127,14 @@ class BenchEvidenceBundle:
             return
         if not cold.passed or live_status not in {"pass", "fail"}:
             raise ValueError("bundle_binding")
+        # cold < live_authorization <= assembly.  Only the lower bound was
+        # proven, so stage 4 accepted a live authorization dated AFTER the
+        # bundle carrying it.  Stage 5 refused that shape indirectly via
+        # its provisional witness; the rule holds uniformly here.
         if (
             self.live_authorization.parent_sha256 != cold.binding_sha256
             or _compare_utc_z(cold.timestamp, self.live_authorization.timestamp) >= 0
+            or _compare_utc_z(self.live_authorization.timestamp, self.timestamp) > 0
         ):
             raise ValueError("bundle_binding")
         if stage == 4:
@@ -5592,6 +5597,18 @@ class PromotionVerdict:
             self.provisional_live_maps_sha256,
         ):
             _validate_sha256(digest)
+        # Every sibling field is typed; this one was not.  build_receipt
+        # compares with ordinary equality before substituting the
+        # recomputed verdict, so an exact-text str SUBCLASS or an
+        # always-equal object slipped past mismatch refusal.  No false
+        # authority was emitted -- the producer substitutes the real
+        # verdict -- but that is precisely the silent normalization this
+        # work exists to remove.
+        if self.cutover_window_id is not None and (
+            type(self.cutover_window_id) is not str
+            or _WINDOW_ID_RE.fullmatch(self.cutover_window_id) is None
+        ):
+            raise ValueError("verdict_binding")
 
     @property
     def evidence_sha256(self) -> str:

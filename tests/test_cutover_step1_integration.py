@@ -458,3 +458,86 @@ class TestProducerBindsTheWindow:
                 replace(verdict, cutover_window_id="cutover-forged"),
                 timestamp=bundle.timestamp,
             )
+
+
+class TestStageFourLiveWitnessIsBracketed:
+    """cold < live_authorization <= assembly -- the upper bound was missing.
+
+    Stage 4 returned after proving only the lower bound, so a live
+    authorization dated AFTER the bundle that carries it minted a receipt.
+    Stage 5 refused the same shape indirectly via its provisional witness;
+    the rule should hold uniformly and explicitly.
+    """
+
+    def test_stage_four_refuses_a_live_witness_after_assembly(self) -> None:
+        from tests.test_cuda_migration import _make_bundle
+
+        with pytest.raises(ValueError, match="bundle_binding"):
+            _make_bundle(4, live_authorization_at="2026-07-13T12:03:19Z")
+
+    def test_public_route_never_mints_from_a_future_live_witness(self) -> None:
+        from tests.test_cuda_migration import _make_bundle
+
+        with pytest.raises(ValueError, match="bundle_binding"):
+            bundle = _make_bundle(4, live_authorization_at="2026-07-13T12:03:19Z")
+            verdict = cm.evaluate_promotion_bundle(bundle)
+            cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
+
+    def test_stage_four_still_accepts_a_witness_at_assembly_time(self) -> None:
+        from tests.test_cuda_migration import _make_bundle
+
+        bundle = _make_bundle(4, live_authorization_at="2026-07-13T12:03:14Z")
+        assert bundle.live_authorization.timestamp == bundle.timestamp
+
+
+class TestVerdictWindowIsTyped:
+    """The verdict's window must be exactly None or an exact str."""
+
+    @pytest.mark.parametrize("value", [123, True, 1.5, ["c"], {"a": 1}, ""])
+    def test_verdict_refuses_a_non_conforming_window(self, value) -> None:
+        from dataclasses import replace
+
+        from tests.test_cuda_migration import _make_bundle
+
+        verdict = cm.evaluate_promotion_bundle(_make_bundle(2))
+        with pytest.raises(ValueError, match="verdict_binding"):
+            replace(verdict, cutover_window_id=value)
+
+    def test_producer_refuses_a_str_subclass_window(self) -> None:
+        """Exact-text str subclass: equal, but not the same type.
+
+        build_receipt compares with ordinary equality and then substitutes
+        the recomputed verdict, so this emits no false authority -- but it
+        is exactly the silent normalization this correction exists to
+        remove.
+        """
+        from dataclasses import replace
+
+        from tests.test_cuda_migration import _make_bundle
+
+        class WindowText(str):
+            pass
+
+        bundle = _make_bundle(2)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        with pytest.raises(ValueError, match="verdict_binding"):
+            replace(
+                verdict,
+                cutover_window_id=WindowText(verdict.cutover_window_id),
+            )
+
+    def test_producer_refuses_an_always_equal_window(self) -> None:
+        from dataclasses import replace
+
+        from tests.test_cuda_migration import _make_bundle
+
+        class AlwaysEqual:
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __hash__(self) -> int:
+                return 0
+
+        verdict = cm.evaluate_promotion_bundle(_make_bundle(2))
+        with pytest.raises(ValueError, match="verdict_binding"):
+            replace(verdict, cutover_window_id=AlwaysEqual())
