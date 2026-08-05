@@ -475,12 +475,45 @@ class TestStageFourLiveWitnessIsBracketed:
         with pytest.raises(ValueError, match="bundle_binding"):
             _make_bundle(4, live_authorization_at="2026-07-13T12:03:19Z")
 
-    def test_public_route_never_mints_from_a_future_live_witness(self) -> None:
+    def test_construction_refuses_a_future_live_witness(self) -> None:
+        """Named for what it actually proves: the CONSTRUCTOR refuses.
+
+        The previous name claimed the public route never mints, but the
+        bundle never survived construction, so the evaluator and receipt
+        builder were never reached.  Cross-lane review caught the
+        overclaim.  The real evaluator-boundary proof is the forged-frozen
+        -bundle test below.
+        """
         from tests.test_cuda_migration import _make_bundle
 
         with pytest.raises(ValueError, match="bundle_binding"):
-            bundle = _make_bundle(4, live_authorization_at="2026-07-13T12:03:19Z")
-            verdict = cm.evaluate_promotion_bundle(bundle)
+            _make_bundle(4, live_authorization_at="2026-07-13T12:03:19Z")
+
+    def test_forged_frozen_bundle_is_refused_at_the_evaluator_boundary(
+        self,
+    ) -> None:
+        """Reach the evaluator with a bundle that already exists.
+
+        A frozen dataclass mutated after construction is the only way to
+        present the scorer with state the constructor would have refused.
+        Both the evaluator and the receipt builder must revalidate rather
+        than trust that construction already did.
+        """
+        from dataclasses import replace
+
+        from tests.test_cuda_migration import _make_bundle
+
+        bundle = _make_bundle(4)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        forged = replace(
+            bundle.live_authorization, timestamp="2026-07-13T12:03:19Z"
+        )
+        object.__setattr__(bundle, "live_authorization", forged)
+        assert bundle.live_authorization.timestamp > bundle.timestamp
+
+        with pytest.raises(ValueError, match="bundle_binding"):
+            cm.evaluate_promotion_bundle(bundle)
+        with pytest.raises(ValueError):
             cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
 
     def test_stage_four_still_accepts_a_witness_at_assembly_time(self) -> None:
