@@ -1215,6 +1215,17 @@ class AssembleReceiptDoc:
             raise ValueError("assemble_receipt_shape")
         if self.fields.get("decision") not in _DECISIONS:
             raise ValueError("assemble_receipt_shape")
+        # The window is an IDENTIFIER, not "whatever str() makes of it".
+        # Coercing here let JSON number 123 satisfy an authorization
+        # holding the string "123" -- the decoder laundered the type.
+        # Same rule as the authorization document itself.
+        if "cutover_window_id" in self.fields:
+            window_id = self.fields["cutover_window_id"]
+            if (
+                type(window_id) is not str
+                or _WINDOW_ID_RE.fullmatch(window_id) is None
+            ):
+                raise ValueError("assemble_receipt_window")
         for name in ("bench_binding_sha256", "bundle_binding_sha256"):
             _validate_sha256(self.fields.get(name))
         _validate_utc_z_timestamp(self.fields.get("timestamp"))
@@ -1241,8 +1252,9 @@ class AssembleReceiptDoc:
 
     @property
     def cutover_window_id(self) -> str | None:
-        value = self.fields.get("cutover_window_id")
-        return None if value is None else str(value)
+        # No coercion: __post_init__ has already proven this is a str
+        # matching _WINDOW_ID_RE, or that the key is absent.
+        return self.fields.get("cutover_window_id")
 
     @property
     def binding_sha256(self) -> str:
@@ -5253,9 +5265,25 @@ class BenchEvidenceBundle:
         ):
             raise ValueError("bundle_binding")
         witness_at = self.boot_authorization.timestamp
+        # Stage 2 IS the pre-mutation permit.  This half of the chain must
+        # bind BEFORE the no-consumption early return -- refusing
+        # impossible timing only at stage 3 is after the mutation the
+        # permit authorizes.
+        #
+        #   latest evidence < issued <= witness <= assembly < expiry
         if (
             _compare_utc_z(auth.issued_at, witness_at) > 0
             or _compare_utc_z(witness_at, auth.expires_at) >= 0
+        ):
+            raise ValueError("bundle_binding")
+        if any(
+            _compare_utc_z(evidence_at, auth.issued_at) >= 0
+            for evidence_at in self._stage_one_evidence_timestamps()
+        ):
+            raise ValueError("bundle_binding")
+        if (
+            _compare_utc_z(witness_at, self.timestamp) > 0
+            or _compare_utc_z(self.timestamp, auth.expires_at) >= 0
         ):
             raise ValueError("bundle_binding")
         if self.cutover_consumption is None:
@@ -5305,11 +5333,6 @@ class BenchEvidenceBundle:
         #     <= boot witness <= stage-2 bundle/receipt
         #     <= burn <= every cold/mutation-result witness
         #     <= current bundle timestamp < auth.expires_at
-        if any(
-            _compare_utc_z(evidence_at, auth.issued_at) >= 0
-            for evidence_at in self._stage_one_evidence_timestamps()
-        ):
-            raise ValueError("bundle_binding")
         mutation_results = [
             witness.timestamp
             for witness in (
@@ -5336,8 +5359,6 @@ class BenchEvidenceBundle:
         ):
             raise ValueError("bundle_binding")
         if _compare_utc_z(burn.consumed_at, self.timestamp) > 0:
-            raise ValueError("bundle_binding")
-        if _compare_utc_z(self.timestamp, auth.expires_at) >= 0:
             raise ValueError("bundle_binding")
         latest = self._stage_one_evidence_timestamps()
         if any(
@@ -6304,6 +6325,10 @@ def _promotion_verdict_packet(verdict: PromotionVerdict) -> dict[str, object]:
         "runtime_identity_sha256": verdict.runtime_identity_sha256,
         "cold_boot_maps_sha256": verdict.cold_boot_maps_sha256,
         "provisional_live_maps_sha256": verdict.provisional_live_maps_sha256,
+        # Omitting this let build_receipt silently swap a forged, missing,
+        # or stage-1-non-null window for the recomputed one instead of
+        # raising verdict_binding_mismatch.
+        "cutover_window_id": verdict.cutover_window_id,
     }
 
 

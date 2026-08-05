@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -334,3 +335,126 @@ class TestChronologyChain:
     def test_assembly_before_the_mutation_results_is_refused(self) -> None:
         with pytest.raises(ValueError, match="bundle_binding"):
             _rebuild(3, timestamp="2026-07-13T12:03:05Z")
+
+
+class TestStageTwoChronologyIsNotDeferrable:
+    """Stage 2 IS the pre-mutation permit -- refusing at stage 3 is too late.
+
+    _validate_boot_authorization returned early when there was no
+    consumption document, so the complete chain never ran for the one
+    bundle that actually authorizes the mutation.
+    """
+
+    def _stage_two(self, **overrides):
+        from tests.test_cuda_migration import _make_bundle
+
+        return _make_bundle(2, **overrides)
+
+    def test_stage_two_rejects_authorization_predating_its_evidence(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="bundle_binding"):
+            self._stage_two(
+                cutover_issued_at="2026-07-13T08:04:00Z",
+                cutover_expires_at="2026-07-13T12:04:00Z",
+            )
+
+    def test_stage_two_rejects_assembly_before_the_witness(self) -> None:
+        with pytest.raises(ValueError, match="bundle_binding"):
+            self._stage_two(timestamp="2026-07-13T12:02:59Z")
+
+    def test_stage_two_rejects_assembly_after_expiry(self) -> None:
+        # CUTOVER_TTL_S is exact, so the window cannot be shortened; the
+        # reachable case is assembly drifting past a valid window.
+        with pytest.raises(ValueError, match="bundle_binding"):
+            self._stage_two(timestamp="2026-07-13T16:02:31Z")
+
+    def test_the_public_evaluator_never_mints_from_impossible_timing(
+        self,
+    ) -> None:
+        """The route that matters: scorer + real receipt builder."""
+        for overrides in (
+            {
+                "cutover_issued_at": "2026-07-13T08:04:00Z",
+                "cutover_expires_at": "2026-07-13T12:04:00Z",
+            },
+            {"timestamp": "2026-07-13T12:02:59Z"},
+            {"timestamp": "2026-07-13T16:02:31Z"},
+        ):
+            with pytest.raises(ValueError, match="bundle_binding"):
+                bundle = self._stage_two(**overrides)
+                verdict = cm.evaluate_promotion_bundle(bundle)
+                cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
+
+
+class TestWindowIdentityIsTypedNotCoerced:
+    """A JSON number is not a window id."""
+
+    @pytest.mark.parametrize("value", [123, True, 1.5, ["c"], {"a": 1}])
+    def test_typed_receipt_refuses_a_non_string_window(self, value) -> None:
+        from tests.test_cuda_migration import _make_bundle
+
+        fields = dict(
+            json.loads(_make_bundle(3).stage_two_receipt.wrapper_bytes)["fields"]
+        )
+        fields["cutover_window_id"] = value
+        with pytest.raises(ValueError, match="assemble_receipt"):
+            cm.AssembleReceiptDoc(fields=MappingProxyType(fields))
+
+    def test_full_bundle_refuses_a_numeric_window_matching_a_string(
+        self,
+    ) -> None:
+        """JSON 123 must not satisfy an authorization holding "123"."""
+        from tests.test_cuda_migration import _bundle_values, _make_bundle
+
+        bundle = _make_bundle(3)
+        wrapper = json.loads(bundle.stage_two_receipt.wrapper_bytes)
+        wrapper["fields"]["cutover_window_id"] = 123
+        # It must not even decode: the type is refused at the document
+        # boundary, before any bundle can be built around it.
+        with pytest.raises(ValueError, match="persisted_roundtrip"):
+            cm.PersistedDoc(cm._canonical_wrapper_bytes(wrapper))
+        assert _bundle_values(bundle)["stage_two_receipt"] is not None
+
+
+class TestProducerBindsTheWindow:
+    """_promotion_verdict_packet drives build_receipt's mismatch check."""
+
+    def _bundle_and_verdict(self, stage: int):
+        from tests.test_cuda_migration import _make_bundle
+
+        bundle = _make_bundle(stage)
+        return bundle, cm.evaluate_promotion_bundle(bundle)
+
+    def test_forged_stage_two_window_is_refused(self) -> None:
+        from dataclasses import replace
+
+        bundle, verdict = self._bundle_and_verdict(2)
+        with pytest.raises(ValueError, match="verdict_binding_mismatch"):
+            cm.build_receipt(
+                bundle,
+                replace(verdict, cutover_window_id="cutover-forged"),
+                timestamp=bundle.timestamp,
+            )
+
+    def test_missing_stage_two_window_is_refused(self) -> None:
+        from dataclasses import replace
+
+        bundle, verdict = self._bundle_and_verdict(2)
+        with pytest.raises(ValueError, match="verdict_binding_mismatch"):
+            cm.build_receipt(
+                bundle,
+                replace(verdict, cutover_window_id=None),
+                timestamp=bundle.timestamp,
+            )
+
+    def test_non_null_stage_one_window_is_refused(self) -> None:
+        from dataclasses import replace
+
+        bundle, verdict = self._bundle_and_verdict(1)
+        with pytest.raises(ValueError, match="verdict_binding_mismatch"):
+            cm.build_receipt(
+                bundle,
+                replace(verdict, cutover_window_id="cutover-forged"),
+                timestamp=bundle.timestamp,
+            )
