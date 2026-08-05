@@ -1,9 +1,13 @@
-# Cutover slice step 2 — the consumer primitive, design v1
+# Cutover slice step 2 — the consumer primitive, design v2
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
 Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 (step 1, merged at `348332b`).
+
+v1 → v2: cross-lane review found v1 overclaiming five security properties
+and under-specifying a sixth. Every one is conceded below. The three v1
+"open questions" are now answered — two against my stated position.
 
 ---
 
@@ -14,281 +18,265 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 > the nonce at the last no-mutation point, durably records consumption,
 > then hands control directly to the closed mutation executor.
 
-Everything below exists to make that claim testable and to make each of
-its clauses individually falsifiable. If a clause cannot be killed by a
-mutation, it is not yet proven and must be reported as such — step 1
-ended with exactly one such line (`containment_docs`), reported rather
-than claimed.
+Unchanged. What changed is the set of things v1 claimed to have proven.
 
-## What step 1 did and did not establish
+## What v1 got wrong
 
-Step 1 constrains **assembled evidence**. It refuses any bundle whose
-timestamps contradict burn-immediately-before-mutation:
-
-```
-latest stage-1 evidence < issued <= witness <= stage-2 bundle/receipt
-  <= burn <= every mutation-result witness <= bundle timestamp < expires
-```
-
-That is a refusal to be *contradicted*. It is not a proof of live
-ordering. A caller could still, today, burn a nonce and then do arbitrary
-work before mutating, and step 1 would never see it — the evidence it
-assembles afterwards would be perfectly consistent.
-
-Step 2 closes the gap between "the evidence is not contradictory" and
-"the ordering actually happened."
-
-## Scope boundary — stated plainly, per the ratification conditions
-
-**Step 2 does not contain the real mutation executor.** The executor
-performs owner-typed systemd actions against production; it is a separate
-act with its own gate, and this slice must not be able to run it.
-
-Therefore step 2 proves:
-
-* the **consumer primitive** — validation, burn, durable record; and
-* the **final interface** — the exact call shape the executor will be
-  reached through, with a test double standing in for it.
-
-Step 2 does **not** prove live ordering. Live ordering becomes provable
-only when the later act wires the real executor through this interface
-*structurally* — i.e. when the executor has no other caller and the
-consumer has no other continuation. Until then the claim above is proven
-for every clause except the final handoff, whose target is a double.
-
-This boundary is stated in the design so it cannot later be misread as
-having been demonstrated. Step 1's lesson applies: a test named for more
-than it proves is a defect even when the code is correct.
-
----
-
-## S1. Anchored private-root acquisition
-
-**Seam: one root, acquired once, never re-resolved. No alternate evidence
-root.**
-
-The consumer opens the bench root exactly once:
-
-```
-O_RDONLY | O_DIRECTORY | O_NOFOLLOW
-```
-
-and holds that descriptor for the whole ceremony. Every subsequent read
-and write is `dir_fd`-relative with `O_NOFOLLOW`. No path is re-resolved
-after acquisition, so no component can be swapped between validation and
-burn.
-
-Refusals at acquisition:
-
-| condition | refusal |
+| v1 claim | reality |
 |---|---|
-| root is a symlink, or any open resolves one | `root_not_anchored` |
-| root is not a directory | `root_not_anchored` |
-| root not owned by the invoking uid | `root_ownership` |
-| root mode is not `0700` | `root_mode` |
-| `st_dev`/`st_ino` differ from the same values re-stat'd via the held fd at burn time | `root_moved` |
-
-The root is a **parameter with no default that reaches production**.
-Tests pass a private `tmp_path`; the production caller passes the real
-bench root explicitly. There is no fallback and no environment override —
-an alternate evidence root is the whole attack, and the absence of a
-default is what makes it unreachable rather than merely discouraged.
-
-`_anchored_exclusive_write` already implements the write half of this
-(`scripts/cuda_cutover.py:73`). Step 2 generalizes it to take the held
-root fd rather than re-opening the parent each call.
-
-## S2. File-hash and binding-hash joins
-
-**Seam: two hashes per document, both computed from bytes the consumer
-itself read.**
-
-For the authorization and for the stage-2 receipt:
-
-* `file_sha256` — over the exact bytes read through the anchored fd;
-* `binding_sha256` — from the typed object after canonical decode.
-
-Both are recomputed by the consumer. Neither is accepted as an argument.
-This is the step-1 lesson carried forward: a hash supplied by the caller
-is a claim, not evidence.
-
-Canonical decode uses the same `PersistedDoc` / `_canonical_persisted_role`
-path the scorer uses, so a document that would not survive step 1's
-constructor cannot enter here either. In particular the receipt's
-`cutover_window_id` must be an exact `_WINDOW_ID_RE` string — the type is
-already enforced at that boundary and is not re-implemented.
-
-## S3. The exact join set
-
-**Seam: every join is equality against a value the consumer derived
-independently. No subset, no substring, no coercion.**
-
-| join | left | right |
-|---|---|---|
-| window | `receipt.cutover_window_id` | `auth.window_id` |
-| boot | live `/proc/sys/kernel/random/boot_id` | `auth.boot_id` |
-| action set | `auth.actions` | `CUTOVER_ACTION_SET` (exact tuple) |
-| bench anchor | `receipt.bench_binding_sha256` | `auth.parent_bench_evidence_sha256` |
-| recovery manifest | `auth.rollback_manifest_sha256` | `FROZEN_ROLLBACK_MANIFEST_SHA256` |
-| decision | `receipt.decision` | `"provisional_cuda_boot"` exactly |
-| reasons | `receipt.reasons` | `("cold_boot_witness_pending",)` exactly |
-
-Chronology at the consumer, evaluated against the burn moment `now`:
-
-```
-auth.issued_at <= receipt.timestamp <= now < auth.expires_at
-```
-
-`now` is supplied by an injected clock so it is testable, and is the same
-value written into the durable record — one moment, not two readings.
-
-**Open question for ratification (Q1):** whether the consumer must also
-verify that the stage-2 receipt's `bundle_binding_sha256` is recomputable,
-which would require it to hold the stage-2 bundle. My position is **no** —
-that join is step 1's and is already enforced wherever the bundle exists.
-Duplicating it here would require the consumer to reconstruct evidence it
-has no business holding at the execution edge. I want this ruled on
-explicitly rather than assumed.
-
-## S4. The burn is the durable record
-
-**Seam: burning the nonce and recording consumption are ONE act, not
-two.**
-
-The `O_EXCL` marker creation *is* the burn *and* the durable record: the
-file's content is the complete `CutoverConsumptionReceipt` (all eight
-fields, canonically encoded). There is no window in which the nonce is
-spent but unrecorded, or recorded but not spent, because there is no
-second write.
-
-Sequence at the edge:
-
-```
-... all validation, all fallible preparation ...        <- may refuse freely
-compose the complete consumption receipt bytes          <- last fallible step
---------------------------------- last no-mutation point
-O_EXCL create + write + fsync(file) + fsync(dir)        <- the burn
---------------------------------- nonce is spent
-executor(validated_doc)                                 <- exactly one call
-```
-
-The receipt bytes are composed **before** the burn precisely so that
-encoding cannot fail after it.
-
-## S5. Failure semantics, both sides of the burn
-
-**Pre-burn failure** — any refusal in S1–S3, or while composing the
-receipt bytes:
-
-* no mutation;
-* no consumption receipt on disk;
-* **the nonce remains reusable.** The authorization is still valid until
-  its TTL expires, and a corrected invocation may consume it.
-
-**Post-burn failure** — `O_EXCL` succeeded and anything afterwards fails,
-including `fsync`, including the executor:
-
-* the nonce is **spent**;
-* the outcome is a **terminal refusal**;
-* the nonce is **never retryable**, by any path, for any reason.
-
-A crash between `O_EXCL` and `fsync` leaves a marker whose content may be
-truncated. That marker still blocks reuse. This is deliberate and
-fail-closed: an unreadable burn record means we cannot prove the mutation
-did not begin, so the authorization is dead. Recovery is a new
-owner-typed authorization with a new nonce, never a repair of the old
-one.
-
-`FileExistsError` on the marker is `authorization_consumed` and is
-terminal — it is not retried, not backed off, and not distinguished from
-a deliberate replay, because from the consumer's position those are the
-same event.
-
-## S6. Nothing between the burn and the first mutation
-
-**Seam: no fallible preparation, no unrelated branching, no logging, no
-I/O between the burn and the executor call.**
-
-Structural rules, each of which is separately checkable:
-
-1. The burn and the executor call are adjacent statements in one
-   function. Nothing is interposed.
-2. Everything fallible is hoisted above the last-no-mutation point — this
-   is why receipt bytes are composed pre-burn.
-3. The executor takes the **validated typed document**, not paths, not
-   raw bytes, and not the root fd. It cannot re-read or re-resolve
-   anything, so it cannot fail in a way that belongs to validation.
-4. There is exactly **one** call site for the executor in the module, and
-   it is that adjacency.
-5. No `try`/`except` wraps the region between burn and call. A handler
-   there would be a branch, and a branch is a place for work to hide.
-
-Rules 1, 4 and 5 are statically checkable against the module's own AST,
-and I intend to assert them that way rather than by reading the code —
-step 1 established that reading logic is not evidence that a path is
-taken. **Open question for ratification (Q2):** whether an AST-level
-structural assertion is acceptable as the proof for rules 1/4/5, or
-whether cross-lane review wants a stronger runtime proof (e.g. an
-executor double that asserts no intervening call was observed). My
-position is that the AST assertion is the honest instrument here, because
-the property being asserted is genuinely syntactic — but I would rather
-have that ruled on than assume it.
-
-## S7. The executor interface, frozen now
-
-The interface is frozen in step 2 even though its implementation is not:
-
-```
-CutoverExecutor = Callable[[CutoverAuthorizationDoc], CutoverOutcome]
-```
-
-* takes exactly the validated authorization document;
-* returns a closed outcome type;
-* raises nothing the consumer catches — a raise is a post-burn terminal
-  refusal by construction.
-
-The test double records that it was called exactly once, with exactly the
-validated document, after the marker existed on disk. That last assertion
-— marker-then-call, verified by observation rather than by argument — is
-the strongest form of the ordering claim available before the real
-executor exists.
+| the receipt's own hashes authenticate it | they do not — see A1 |
+| a required `root` parameter is anchoring | it is an override — see A2 |
+| burn and record are one act | `O_EXCL`→write→fsync publishes a name before content — see A3 |
+| `Callable[[Doc], Outcome]` is a closed executor | it forces post-burn preparation — see A4 |
+| AST assertion suffices for adjacency | syntax cannot prove the marker was published — see A5 |
+| the refusal list was closed | it classified maybe half the failures — see A6 |
 
 ---
 
-## Refusal vocabulary (closed)
+## A1. The stage-2 bundle must be reverified (Q1 — ruled AGAINST my position)
 
-`root_not_anchored`, `root_ownership`, `root_mode`, `root_moved`,
-`authorization_missing`, `authorization_wrong_type`,
-`authorization_noncanonical`, `receipt_missing`, `receipt_wrong_type`,
-`receipt_noncanonical`, `join_mismatch`, `chronology_violation`,
-`authorization_expired`, `authorization_boot_mismatch`,
-`authorization_consumed`, `burn_unrecorded`, `executor_failed`.
+I argued the consumer should not hold the bundle. That was wrong, and the
+reason is a comment I wrote myself at
+[cuda_migration.py:1260](/home/rohit/maez/scripts/cuda_migration.py#L1260):
+the receipt's `binding_sha256` **is** its claimed `bundle_binding_sha256`.
+It does not authenticate the receipt's contents.
 
-Closed set, exhaustively tested, no `_uncertain` catch-all — an
-unclassified failure at this edge would be the one place a fallback could
-hide.
+So the two hashes v1 leaned on prove nothing about provenance:
+
+* `file_sha256` identifies the bytes the consumer read — bytes the caller
+  supplied. It answers "which bytes", never "whose".
+* `binding_sha256` is a field the forger chooses, and canonical decode
+  only checks it equals the field it was copied from. Self-consistent by
+  construction.
+
+A canonically-encoded forged receipt, paired with a **genuine**
+authorization, therefore impersonates a scorer-issued permit. Under the
+current evidence model the only trusted expected value is the one
+recomputed from the real stage-2 bundle. The consumer must carry or
+reconstruct it.
+
+I am recording this as a design error of the same family as the step-1
+`bundle_binding` gap: I treated a hash as evidence because it was
+expensive to compute, without asking who chose it.
+
+**Binding RED:** a canonical forged receipt plus a genuine authorization
+refuses; only the real bundle/receipt pair passes.
+
+**Consequence for scope:** the consumer's inputs now include the stage-2
+bundle, so S3's join set gains the step-1 projection join. This makes the
+consumer heavier than v1 imagined. That is the cost of the permit not
+being independently verifiable, and it is the honest cost. An
+independently verifiable permit — a signed or MAC'd receipt — would remove
+it, and is noted as future work rather than smuggled in here.
+
+## A2. Anchoring, properly (concedes the override)
+
+A required parameter is still an override: it makes arbitrary roots
+reachable by construction.
+
+**Production entrypoint hard-binds** the canonical bench root, the live
+clock, the boot-id source, and the executor. No parameter reaches it.
+Injection exists only behind a seam that is structurally test-only —
+a private constructor the production path does not call, asserted by the
+same AST instrument as A5.
+
+The filesystem discipline v1 got wrong:
+
+* **`O_NOFOLLOW` protects only the final component.** Every component of
+  every path — absolute and relative — is walked with held directory
+  descriptors. The driver already implements this:
+  `_relative_parts` and `_check_directory_fd`
+  ([cuda_bench_driver.py:237](/home/rohit/maez/scripts/cuda_bench_driver.py#L237)).
+  Step 2 reuses it. v1 cited `_anchored_exclusive_write`, which is the
+  weaker helper; that citation is withdrawn.
+* **A second `fstat` on a held fd cannot detect rename or replacement** —
+  it re-reads the same inode and always agrees. Identity verification
+  requires reopening the *named chain* and comparing it against the held
+  capability. Agreement means the name still refers to what we hold;
+  disagreement is `root_moved`.
+* **Read predicates**, all required: regular file, owner-owned, mode
+  `0600`, `st_nlink == 1`, size within a fixed bound, and stable across
+  the read (size and inode identical before and after).
+* **`auth.owner`** joins to the frozen expected owner identity. v1 omitted
+  this entirely — an authorization naming any owner was accepted.
+* **Marker names derive only from the already-validated nonce**, after
+  validation, never from any other caller-influenced value.
+
+## A3. The burn sequence (Q3 — ruled, and v1's "one act" retracted)
+
+v1 claimed `O_EXCL` create → write → fsync was a single act with no
+unrecorded window. It is not: `O_EXCL` publishes the final name *before*
+the contents exist. v1 then admitted a truncated marker could survive,
+which contradicts its own claim. Conceded.
+
+Frozen sequence — the repository already implements this pattern at
+[`_open_anonymous_file`](/home/rohit/maez/scripts/cuda_bench_driver.py#L347)
+and
+[`_publish_anonymous_file`](/home/rohit/maez/scripts/cuda_bench_driver.py#L375):
+
+```
+O_TMPFILE                       # no name exists yet
+write_all + validate            # short writes handled, content verified
+fsync(file)                     # STILL PRE-BURN: failure leaves nonce reusable
+------------------------------- last no-mutation point
+exclusive atomic link           # THE burn — the linearization point
+fsync(marker directory)         # durability of the publication
+revalidate published identity   # nlink, size, inode match what we linked
+------------------------------- authorization is spent
+prepared.begin()                # exactly one call
+```
+
+The linearization point is the `link`, not the create. Before it, no name
+exists and every failure is reusable. After it, the nonce is spent.
+
+**Replay vs evidence are separated.** *Any* object at the final nonce name
+blocks replay — that is the single-use guarantee and it must be
+maximally permissive about what it will treat as blocking. But only the
+**exact canonical completed receipt** is admissible as downstream
+evidence. Garbage, a truncated file, or an abnormal object means
+"**spent, receipt unavailable**" — never evidence, and never a reason to
+permit reuse. v1 conflated these into one artifact serving both roles.
+
+**Q3 ruled: fail closed after publication.** A directory-fsync failure
+*after* the exclusive link spends the authorization, calls no executor,
+and requires owner-audited recovery plus a fresh authorization. A
+file-fsync failure occurs *before* publication and leaves the nonce
+reusable. The boundary is the link, and that is what makes the fail-closed
+cost bounded rather than arbitrary — a transient disk error during the
+tmpfile phase costs nothing.
+
+## A4. The executor is a two-phase capability, not a callable
+
+`Callable[[CutoverAuthorizationDoc], CutoverOutcome]` carries no pinned
+payloads, no exact argv, no recovery capabilities, no prevalidated
+resources. The real executor would therefore have to resolve all of that
+*after* the burn — or hide it in a closure, which is the same thing with
+better manners. v1's rule 6 ("nothing fallible after the burn") was
+unachievable against v1's own interface.
+
+Frozen:
+
+```
+prepare(validated authority, validated evidence) -> PreparedCutover
+publish burn
+prepared.begin()
+```
+
+`PreparedCutover` holds **only already-pinned resources**: exact argv
+vectors, opened descriptors for recovery artifacts, resolved and verified
+unit identities, and the precomputed operation sequence. `begin()`
+performs no resolution, no lookup, no allocation that can fail for
+preparation reasons. Everything fallible lives in `prepare()`, which runs
+pre-burn and may refuse freely.
+
+### The covenant reconciliation this forces
+
+The standing covenant is that **the owner types every mutating command**.
+A closed executor that performs the mutation appears to contradict it,
+and v1 dodged this by leaving the mutation an unrelated manual
+continuation — which would make burn-immediately-before-mutation
+unprovable, exactly as review says.
+
+The reconciliation I propose, and which needs **explicit ratification
+because it is a covenant-level amendment, not a design detail**:
+
+> The owner-typed act is the invocation of the cutover ceremony itself.
+> The owner types one command; that command validates, burns, and mutates
+> as one indivisible act it cannot decompose.
+
+This preserves what the covenant protects — no agent, no daemon, and no
+background process initiates a mutation; a human decides, at a named
+window, with a nonce they authorized. It changes what the covenant
+*counts* as the typed command: the ceremony, rather than each systemd
+verb inside it.
+
+I am not treating this as settled. If it is refused, then step 2 must
+stop at `prepare()` and the burn moves into the later act with the
+executor — which is coherent, but means the burn/mutation adjacency is
+never proven here and the claim must be narrowed accordingly. **That
+choice is the owner's, not mine.**
+
+## A5. AST *plus* runtime (Q2 — ruled AGAINST my position)
+
+I argued the adjacency property is syntactic. It is — but the property
+that matters is not adjacency, it is *the marker was published before the
+executor ran*, and syntax cannot see that.
+
+**AST proves:** adjacent top-level burn and `prepared.begin()`; exactly
+one syntactic executor call; no intervening branch or handler; the exact
+prebound argument, with no call, property access, or subscript evaluated
+after the burn.
+
+**Runtime REDs prove:** a complete, published, fsync-confirmed marker
+exists when the double runs; exactly one call; and **no call at all** on
+every pre-publication and post-publication failure path.
+
+**Neither certifies live ordering.** The later real-executor slice must
+separately prove the production caller graph and first-mutation ordering.
+Step 2 cannot certify those while its target is a double, and will not
+claim to.
+
+## A6. Total failure table
+
+v1's list classified roughly half the real failure modes and contradicted
+itself on executor exceptions. Total table, every row assigned a side of
+the linearization point:
+
+| # | failure | side | nonce | executor | refusal |
+|---|---|---|---|---|---|
+| 1 | root walk / identity / predicates | pre | reusable | no | `root_*` |
+| 2 | authorization read / decode / type | pre | reusable | no | `authorization_*` |
+| 3 | stage-2 receipt read / decode / type | pre | reusable | no | `receipt_*` |
+| 4 | bundle reconstruction or projection join | pre | reusable | no | `permit_unverified` |
+| 5 | any join in S3 | pre | reusable | no | `join_mismatch` |
+| 6 | chronology | pre | reusable | no | `chronology_violation` |
+| 7 | clock or boot-id read | pre | reusable | no | `edge_state_unreadable` |
+| 8 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
+| 9 | O_TMPFILE creation | pre | reusable | no | `burn_unstaged` |
+| 10 | short write / content validation | pre | reusable | no | `burn_unstaged` |
+| 11 | file fsync | pre | reusable | no | `burn_unstaged` |
+| 12 | exclusive link collision | **at** | already spent | no | `authorization_consumed` |
+| 13 | exclusive link other error | pre | reusable | no | `burn_unstaged` |
+| 14 | directory fsync | post | **spent** | no | `burn_unrecorded` |
+| 15 | published-identity revalidation | post | **spent** | no | `burn_unrecorded` |
+| 16 | executor raises | post | **spent** | called | `executor_failed` |
+| 17 | executor returns invalid type | post | **spent** | called | `executor_contract` |
+| 18 | unexpected internal, pre-link | pre | reusable | no | `consumer_internal_pre` |
+| 19 | unexpected internal, post-link | post | **spent** | unknown | `consumer_internal_post` |
+
+Rows 18–19 replace v1's "no catch-all". A catch-all that *degrades* is a
+fallback and remains forbidden; a catch-all that classifies which side of
+the boundary it occurred on and refuses terminally is the opposite — it
+ensures an unanticipated failure cannot be mistaken for a pre-burn one.
+Row 16 also fixes v1's contradiction: executor exceptions **are** caught,
+solely to classify them as post-burn terminal, and are never suppressed.
+
+All refusals are content-light: no paths, no prompt or response text, no
+environment values, no tracebacks.
 
 ## What step 2 does NOT change
 
-* No mutating `systemctl`. The driver still holds none.
+* No mutating `systemctl` in the driver.
 * No production unit, override, model pointer, or venv file.
-* `model_state.json` remains an owner-typed command after a durable
+* `model_state.json` stays an owner-typed command after a durable
   promotion receipt.
-* Cutover remains **forbidden** at `bench_passed`. This slice builds the
-  consumer that a future authorized cutover would pass through; it does
-  not authorize one.
+* Cutover remains **forbidden** at `bench_passed`. This builds the
+  consumer a future authorized cutover would pass through; it authorizes
+  nothing.
 
-## Open questions for ratification
+## Scope, restated
 
-* **Q1** — must the consumer re-verify the stage-2 receipt's
-  `bundle_binding_sha256` against a recomputed stage-2 bundle? My
-  position: no; that is step 1's join and requires evidence the consumer
-  should not hold.
-* **Q2** — is an AST-level structural assertion the accepted proof for
-  the burn/executor adjacency rules, or is a stronger runtime instrument
-  required?
-* **Q3** — on post-burn `fsync` failure, is terminal-refusal-with-spent-
-  nonce the ratified behaviour? It is the fail-closed choice and it
-  permanently destroys a valid authorization on a transient disk error.
-  I believe that is correct at this edge and want it ratified rather than
-  discovered later.
+Step 2 proves the **consumer primitive** and the **final interface**
+against a double. It does **not** prove live ordering. That waits for the
+act that wires the real executor through structurally, with no other
+caller and no other continuation.
+
+## Carried for ratification
+
+* **R1** — the covenant reconciliation in A4. Does the owner-typed
+  ceremony satisfy "the owner types every mutating command", or must step
+  2 stop at `prepare()` and surrender the adjacency proof to the later
+  act?
+* **R2** — A1 makes the consumer carry the stage-2 bundle. Accepted as
+  the cost of a permit that is not independently verifiable, or is a
+  signed/MAC'd permit worth designing first?
