@@ -37,6 +37,35 @@ MINTED_BENCH_ANCHOR = (
 )
 
 
+def stage1_paths() -> "assemble.Stage1ArtifactPaths":
+    """The REAL window-8 artifact set, shared with the integration suite."""
+
+    return assemble.Stage1ArtifactPaths(
+        control_packet=f"{WINDOW}/vulkan_baseline/attempt-000/packets/vulkan_baseline-completed.json",
+        candidate_packet=f"{WINDOW}/cuda_candidate/attempt-000/packets/cuda_candidate-completed.json",
+        static_admission="command-static-preflight-attempt-022-admission.json",
+        static_completion="command-static-preflight-attempt-022-terminal.json",
+        control_admission="command-vulkan-baseline-attempt-023-admission.json",
+        control_completion="command-vulkan-baseline-attempt-023-terminal.json",
+        candidate_admission="command-cuda-candidate-attempt-024-admission.json",
+        candidate_completion="command-cuda-candidate-attempt-024-terminal.json",
+        window_authorization="window-authorization.json",
+        continuation="continuation.json",
+        window_consumption=f"{WINDOW}/vulkan_baseline/attempt-000/receipts/consumption-89c56a00f3af2ee223b0fec36f76ba1fd3f9f8c25793db2e3b9c56ad89c1c0bd.json",
+        continuation_consumption=f"{WINDOW}/cuda_candidate/attempt-000/receipts/consumption-f102a166198a20262662144281bc6d2ef704984dfdabdbcc0d6958e56b10f737.json",
+        control_containment_before=f"{WINDOW}/vulkan_baseline/attempt-000/containment/containment-before.json",
+        control_containment_after=f"{WINDOW}/vulkan_baseline/attempt-000/containment/containment-after.json",
+        candidate_containment_before=f"{WINDOW}/cuda_candidate/attempt-000/containment/containment-before.json",
+        candidate_containment_after=f"{WINDOW}/cuda_candidate/attempt-000/containment/containment-after.json",
+        bench_identity=f"{WINDOW}/cuda_candidate/attempt-000/identity/bench_runtime_identity.json",
+        runtime_identity=f"{WINDOW}/cuda_candidate/attempt-000/identity/runtime_identity.json",
+        static_preflight="receipts/static-preflight-attempt-022.json",
+        quality="receipts/quality-evidence.json",
+        owner_voice="receipts/owner-voice-review.json",
+        rollback="receipts/rollback-evidence.json",
+    )
+
+
 class TestBypassInvariant:
     """A descriptive witness must name the enforceable document."""
 
@@ -190,32 +219,8 @@ class TestLiteralAnchorGuard:
     def test_durable_window8_evidence_still_hashes_to_the_minted_anchor(
         self,
     ) -> None:
-        paths = assemble.Stage1ArtifactPaths(
-            control_packet=f"{WINDOW}/vulkan_baseline/attempt-000/packets/vulkan_baseline-completed.json",
-            candidate_packet=f"{WINDOW}/cuda_candidate/attempt-000/packets/cuda_candidate-completed.json",
-            static_admission="command-static-preflight-attempt-022-admission.json",
-            static_completion="command-static-preflight-attempt-022-terminal.json",
-            control_admission="command-vulkan-baseline-attempt-023-admission.json",
-            control_completion="command-vulkan-baseline-attempt-023-terminal.json",
-            candidate_admission="command-cuda-candidate-attempt-024-admission.json",
-            candidate_completion="command-cuda-candidate-attempt-024-terminal.json",
-            window_authorization="window-authorization.json",
-            continuation="continuation.json",
-            window_consumption=f"{WINDOW}/vulkan_baseline/attempt-000/receipts/consumption-89c56a00f3af2ee223b0fec36f76ba1fd3f9f8c25793db2e3b9c56ad89c1c0bd.json",
-            continuation_consumption=f"{WINDOW}/cuda_candidate/attempt-000/receipts/consumption-f102a166198a20262662144281bc6d2ef704984dfdabdbcc0d6958e56b10f737.json",
-            control_containment_before=f"{WINDOW}/vulkan_baseline/attempt-000/containment/containment-before.json",
-            control_containment_after=f"{WINDOW}/vulkan_baseline/attempt-000/containment/containment-after.json",
-            candidate_containment_before=f"{WINDOW}/cuda_candidate/attempt-000/containment/containment-before.json",
-            candidate_containment_after=f"{WINDOW}/cuda_candidate/attempt-000/containment/containment-after.json",
-            bench_identity=f"{WINDOW}/cuda_candidate/attempt-000/identity/bench_runtime_identity.json",
-            runtime_identity=f"{WINDOW}/cuda_candidate/attempt-000/identity/runtime_identity.json",
-            static_preflight="receipts/static-preflight-attempt-022.json",
-            quality="receipts/quality-evidence.json",
-            owner_voice="receipts/owner-voice-review.json",
-            rollback="receipts/rollback-evidence.json",
-        )
         bundle = assemble.build_stage1_bundle(
-            paths,
+            stage1_paths(),
             root=BENCH_ROOT,
             timestamp=datetime.datetime.now(datetime.timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"

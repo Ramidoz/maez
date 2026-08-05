@@ -233,7 +233,7 @@ def _valid_canonical_mutation(name: str, payload: bytes) -> bytes:
 
 def _materialize_stage_one(root: Path) -> tuple[object, object]:
     os.chmod(root, 0o700)
-    bundle = migration_tests._make_bundle(1)
+    bundle = migration_tests._make_bundle(1, timestamp=TIMESTAMP)
     refs = {
         "control_packet": bundle.control_packet_ref,
         "candidate_packet": bundle.candidate_packet_ref,
@@ -306,7 +306,7 @@ def _build(root: Path, paths: object) -> cm.BenchEvidenceBundle:
 
 
 def _keep_vulkan_bundle() -> cm.BenchEvidenceBundle:
-    bundle = migration_tests._make_bundle(1)
+    bundle = migration_tests._make_bundle(1, timestamp=TIMESTAMP)
     quality = replace(bundle.quality, false_absence_count=1)
     control_summary = migration_tests._summary_for_bundle_packet(
         bundle.control_packet,
@@ -610,7 +610,7 @@ def test_wrong_owner_refuses_before_decode(
 def test_direct_bundle_construction_cannot_bypass_completion_roles(
     completion_overrides: dict[str, object],
 ) -> None:
-    bundle = migration_tests._make_bundle(1)
+    bundle = migration_tests._make_bundle(1, timestamp=TIMESTAMP)
     values = migration_tests._bundle_values(bundle)
     for target, source in completion_overrides.items():
         if source == "forged":
@@ -686,7 +686,7 @@ def test_stage1_evaluation_is_a_frozen_slotted_result() -> None:
         "verdict",
         "receipt",
     )
-    bundle = migration_tests._make_bundle(1)
+    bundle = migration_tests._make_bundle(1, timestamp=TIMESTAMP)
     verdict = cm.evaluate_promotion_bundle(bundle)
     result = assemble.Stage1Evaluation(
         bundle=bundle,

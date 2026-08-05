@@ -563,6 +563,14 @@ ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
 # durable attempt-026 receipt carries 40a7e770... and authorizations are
 # parented to it).  Guarded by the literal-anchor test.
 BENCH_EVIDENCE_HASH_DOMAIN = "cuda_migration.bench_evidence_bundle.v1"
+# The FULL bundle binding needs the same freeze for the same reason, and
+# for a while it did not have it: the v1->v2 bump moved the stage-1 bundle
+# binding from fa790eb8... to 0ed9f1f7..., orphaning the bundle_binding_sha256
+# the durable attempt-026 receipt carries.  Freezing only the bench anchor
+# protected one of the two frozen literals and silently broke the other.
+# Both domains are now literals, both are guarded by tests, and neither
+# may follow a schema bump again.
+BENCH_EVIDENCE_FULL_HASH_DOMAIN = "cuda_migration.bench_evidence_bundle.v1"
 BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v2"
 
 ACTIVE_SCHEMA_FAMILIES = (
@@ -1238,9 +1246,22 @@ class AssembleReceiptDoc:
 
     @property
     def binding_sha256(self) -> str:
-        return _packet_hash(
-            {"schema": self.schema_version, "fields": dict(self.fields)}
-        )
+        """The WRITER's convention: the wrapper binding IS the bundle binding.
+
+        scripts/cuda_bench_cli.py sets
+        ``receipt["binding_sha256"] = evaluation.bundle.binding_sha256``
+        before encoding, and the durable attempt-026 artifact on disk was
+        written that way.  Computing a fresh content hash here made this
+        typed view unable to decode real evidence at all
+        (ValueError("persisted_roundtrip")).
+
+        Because this binding therefore does NOT authenticate the receipt's
+        own contents, tamper-detection for those contents lives in the
+        bundle preimage, which carries the receipt's FILE hash.  The two
+        are load-bearing only together.
+        """
+
+        return self.bundle_binding_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -5111,6 +5132,103 @@ class BenchEvidenceBundle:
             raise ValueError("bundle_binding")
         self._validate_provisional_stage(provisional)
 
+    def _stage_one_evidence_timestamps(self) -> list[str]:
+        """Every stage-1 evidence timestamp the chronology floors against."""
+
+        static_doc = _canonical_persisted_role(
+            self.static_preflight, StaticPreflightDoc
+        ).obj
+        latest = [
+            self.control_packet.timestamp,
+            self.candidate_packet.timestamp,
+            self.quality.timestamp,
+            self.owner_voice.timestamp,
+            self.rollback.timestamp,
+            self.rollback.witness.timestamp,
+            self.rollback.maps_witness.timestamp,
+            static_doc.timestamp,
+            _canonical_persisted_role(
+                self.static_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
+            _canonical_persisted_role(
+                self.control_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
+            _canonical_persisted_role(
+                self.candidate_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
+            *(snapshot.timestamp for snapshot in self.containment.snapshots if f"{snapshot.phase}:{snapshot.boundary}" in _BASE_CONTAINMENT_KEYS),
+        ]
+        return latest
+
+    def _stage_two_projection(self, timestamp: str) -> "BenchEvidenceBundle":
+        """Rebuild the stage-2 bundle this stage-3+ bundle grew out of.
+
+        The stage-2 receipt names a bundle binding.  A claimed hash proves
+        nothing -- it must be RECOMPUTABLE from evidence already in hand,
+        or any receipt naming any bundle could be smuggled in.
+
+        Every field a later stage adds is normalized back out.  The
+        timestamp comes from the receipt, because the bundle binding is
+        timestamp-sensitive; build_receipt enforces that the producer
+        stamped bundle and receipt identically, which is what makes this
+        reconstruction well-defined.
+
+        The falsifiable rule this must satisfy:
+
+            _stage_two_projection(stage3, receipt.timestamp).binding_sha256
+            == independently constructed stage2.binding_sha256
+            == receipt.bundle_binding_sha256
+
+        Omitting any single normalization must break that equality.
+        containment and containment_docs are SEPARATE bundle inputs and
+        are normalized separately.
+        """
+
+        base_keys = frozenset(_BASE_CONTAINMENT_KEYS)
+        return _dataclass_replace(
+            self,
+            timestamp=timestamp,
+            candidate_summary=_dataclass_replace(
+                self.candidate_summary,
+                cold_boot_witness=None,
+                provisional_live_witness=None,
+            ),
+            containment=ContainmentWitness(
+                snapshots=tuple(
+                    snapshot
+                    for snapshot in self.containment.snapshots
+                    if f"{snapshot.phase}:{snapshot.boundary}" in base_keys
+                )
+            ),
+            # containment_docs is currently stage-INVARIANT by contract:
+            # _validate_persisted_documents requires exactly
+            # _AB_CONTAINMENT_DOC_KEYS at every stage, and those keys are a
+            # subset of the base containment keys.  This filter is
+            # therefore a proven no-op today -- mutation-removing it does
+            # NOT break the equality rule, and that is honestly reported
+            # rather than claimed as verified.  It is retained so the
+            # projection stays correct if that key set ever widens to
+            # include cold_boot; test_containment_doc_keys_are_stage_
+            # invariant pins the reason.
+            containment_docs=MappingProxyType(
+                {
+                    key: value
+                    for key, value in self.containment_docs.items()
+                    if key in base_keys
+                }
+            ),
+            live_authorization=AuthorizationWitness(
+                "live_witness_authorization", "not_attempted", None, None, None
+            ),
+            cold_boot_maps=None,
+            provisional_live_maps=None,
+            stage_two_receipt=None,
+            cutover_consumption=None,
+        )
+
     def _validate_boot_authorization(self) -> None:
         if self.boot_authorization.parent_sha256 != self.bench_binding_sha256:
             raise ValueError("bundle_binding")
@@ -5172,34 +5290,56 @@ class BenchEvidenceBundle:
             or receipt.cutover_window_id != auth.window_id
         ):
             raise ValueError("bundle_binding")
-        if _compare_utc_z(receipt.timestamp, burn.consumed_at) > 0:
+        # D4: the claimed stage-2 binding must be RECOMPUTABLE, not asserted.
+        if (
+            receipt.bundle_binding_sha256
+            != self._stage_two_projection(receipt.timestamp).binding_sha256
+        ):
             raise ValueError("bundle_binding")
-        static_doc = _canonical_persisted_role(
-            self.static_preflight, StaticPreflightDoc
-        ).obj
-        latest = [
-            self.control_packet.timestamp,
-            self.candidate_packet.timestamp,
-            self.quality.timestamp,
-            self.owner_voice.timestamp,
-            self.rollback.timestamp,
-            self.rollback.witness.timestamp,
-            self.rollback.maps_witness.timestamp,
-            static_doc.timestamp,
-            _canonical_persisted_role(
-                self.static_completion,
-                CommandCompletionDoc,
-            ).obj.timestamp,
-            _canonical_persisted_role(
-                self.control_completion,
-                CommandCompletionDoc,
-            ).obj.timestamp,
-            _canonical_persisted_role(
-                self.candidate_completion,
-                CommandCompletionDoc,
-            ).obj.timestamp,
-            *(snapshot.timestamp for snapshot in self.containment.snapshots if f"{snapshot.phase}:{snapshot.boundary}" in _BASE_CONTAINMENT_KEYS),
+        # D5: the complete available chain.  Step 2 proves the burn sits
+        # immediately before the mutation at the execution edge; step 1's
+        # job is to refuse any assembled evidence whose timestamps
+        # contradict that claim.
+        #
+        #   latest stage-1 evidence < auth.issued_at
+        #     <= boot witness <= stage-2 bundle/receipt
+        #     <= burn <= every cold/mutation-result witness
+        #     <= current bundle timestamp < auth.expires_at
+        if any(
+            _compare_utc_z(evidence_at, auth.issued_at) >= 0
+            for evidence_at in self._stage_one_evidence_timestamps()
+        ):
+            raise ValueError("bundle_binding")
+        mutation_results = [
+            witness.timestamp
+            for witness in (
+                self.candidate_summary.cold_boot_witness,
+                self.candidate_summary.provisional_live_witness,
+                self.cold_boot_maps,
+                self.provisional_live_maps,
+            )
+            if witness is not None
         ]
+        # The linear spine.  Mutation results are a SET, not a sequence --
+        # they are unordered among themselves, so each is bracketed
+        # individually rather than chained.
+        ordered = [witness_at, receipt.timestamp, burn.consumed_at]
+        if any(
+            _compare_utc_z(earlier, later) > 0
+            for earlier, later in zip(ordered, ordered[1:], strict=False)
+        ):
+            raise ValueError("bundle_binding")
+        if any(
+            _compare_utc_z(burn.consumed_at, result_at) > 0
+            or _compare_utc_z(result_at, self.timestamp) > 0
+            for result_at in mutation_results
+        ):
+            raise ValueError("bundle_binding")
+        if _compare_utc_z(burn.consumed_at, self.timestamp) > 0:
+            raise ValueError("bundle_binding")
+        if _compare_utc_z(self.timestamp, auth.expires_at) >= 0:
+            raise ValueError("bundle_binding")
+        latest = self._stage_one_evidence_timestamps()
         if any(
             _compare_utc_z(timestamp, self.boot_authorization.timestamp) >= 0
             for timestamp in latest
@@ -5305,7 +5445,7 @@ class BenchEvidenceBundle:
     def binding_sha256(self) -> str:
         return _packet_hash(
             {
-                "schema": self.schema_version,
+                "schema": BENCH_EVIDENCE_FULL_HASH_DOMAIN,
                 "bench_binding_sha256": self.bench_binding_sha256,
                 "window_id": self.window_id,
                 "boot_id": self.boot_id,
@@ -5336,6 +5476,25 @@ class BenchEvidenceBundle:
                     key: value.file_sha256
                     for key, value in sorted(self.containment_docs.items())
                 },
+                # The three cutover roles bind by FILE hash, and are
+                # OMITTED when absent so the frozen stage-1 bundle binding
+                # (fa790eb8..., carried by the durable attempt-026 receipt)
+                # does not move.  Stage 1 forbids all three, so "absent"
+                # and "stage 1" are the same condition.
+                **(
+                    {
+                        "cutover_role_file_sha256s": {
+                            role: None if doc is None else doc.file_sha256
+                            for role, doc in (
+                                ("cutover_authorization", self.cutover_authorization),
+                                ("stage_two_receipt", self.stage_two_receipt),
+                                ("cutover_consumption", self.cutover_consumption),
+                            )
+                        }
+                    }
+                    if self.cutover_authorization is not None
+                    else {}
+                ),
                 "bench_identity_file_sha256": self.bench_identity_doc.file_sha256,
                 "runtime_identity_file_sha256": self.runtime_identity_doc.file_sha256,
                 "static_preflight_file_sha256": self.static_preflight.file_sha256,
@@ -6187,6 +6346,12 @@ def build_receipt(
         raise ValueError("receipt_identity_mismatch")
     if not receipt_mode_allows(identity, decision=verdict.decision):
         raise ValueError("receipt_mode_mismatch")
+    # D4 precision: the bundle binding is timestamp-sensitive, so the
+    # producer must not be free to stamp the receipt independently of the
+    # bundle it describes.  One timestamp, or the receipt is refused --
+    # this is what makes the stage-2 projection reconstructible.
+    if timestamp != bundle.timestamp:
+        raise ValueError("receipt_timestamp_mismatch")
     receipt: dict[str, object] = {
         "schema": SCHEMA_VERSION,
         "timestamp": timestamp,
@@ -6289,4 +6454,8 @@ def build_receipt(
         },
     }
     _assert_content_light(receipt)
+    # Stage-2+ only: stage 1 must keep exactly the historical 14 fields
+    # so the durable attempt-026 receipt's shape is unchanged.
+    if verdict.cutover_window_id is not None:
+        receipt["cutover_window_id"] = verdict.cutover_window_id
     return receipt

@@ -11,8 +11,8 @@ import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields as dataclass_fields, replace
 from pathlib import Path
-from types import MappingProxyType
 
+from scripts import cuda_bench_driver as _driver
 from scripts import cuda_migration as cm
 
 
@@ -844,7 +844,11 @@ class ReceiptTests(unittest.TestCase):
         bundle: cm.BenchEvidenceBundle,
         verdict: cm.PromotionVerdict,
     ) -> dict[str, object]:
-        return cm.build_receipt(bundle, verdict, timestamp=TS)
+        # build_receipt now requires ONE timestamp for the bundle and its
+        # receipt -- the bundle binding is timestamp-sensitive, so a
+        # freely-stamped receipt would leave the stage-2 projection
+        # unreconstructible.
+        return cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
 
     def test_receipt_reruns_gate_and_rejects_mismatched_verdict(self) -> None:
         bundle = _make_bundle()
@@ -4542,21 +4546,35 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             cm.PersistedDoc(encoded)
 
 
+# One coherent ceremony clock.  The previous fixture dated the burn AFTER
+# the cold witness, i.e. the authorization was consumed after the mutation
+# it authorizes -- and nothing objected, because the chronology chain did
+# not exist.  These values satisfy the full chain:
+#
+#   latest stage-1 evidence (12:02:07) < issued (12:02:30)
+#     <= boot witness (12:03:00) <= stage-2 bundle/receipt (12:03:02)
+#     <= burn (12:03:04) <= cold maps (12:03:09) / cold witness (12:03:10)
+#     <= stage-3 bundle (12:03:14) < expires (16:02:30)
 CUTOVER_WINDOW_ID = "cutover-20260713-1202"
 CUTOVER_ISSUED_AT = "2026-07-13T12:02:30Z"
 CUTOVER_EXPIRES_AT = "2026-07-13T16:02:30Z"   # issued + CUTOVER_TTL_S
-CUTOVER_RECEIPT_AT = "2026-07-13T12:03:10Z"
-CUTOVER_CONSUMED_AT = "2026-07-13T12:03:20Z"
+CUTOVER_STAGE2_AT = "2026-07-13T12:03:02Z"    # stage-2 bundle AND its receipt
+CUTOVER_CONSUMED_AT = "2026-07-13T12:03:04Z"  # burn, immediately pre-mutation
 
 
-def _cutover_authorization_doc(bench_anchor: str) -> cm.PersistedDoc:
+def _cutover_authorization_doc(
+    bench_anchor: str,
+    *,
+    issued_at: str = CUTOVER_ISSUED_AT,
+    expires_at: str = CUTOVER_EXPIRES_AT,
+) -> cm.PersistedDoc:
     auth = cm.CutoverAuthorizationDoc(
         window_id=CUTOVER_WINDOW_ID,
         actions=cm.CUTOVER_ACTION_SET,
         boot_id="boot-1",
         nonce="c" * 64,
-        issued_at=CUTOVER_ISSUED_AT,
-        expires_at=CUTOVER_EXPIRES_AT,
+        issued_at=issued_at,
+        expires_at=expires_at,
         owner="rohit",
         parent_bench_evidence_sha256=bench_anchor,
         rollback_manifest_sha256=cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
@@ -4578,35 +4596,44 @@ def _cutover_authorization_doc(bench_anchor: str) -> cm.PersistedDoc:
     )
 
 
-def _stage_two_receipt_doc(bench_anchor: str) -> cm.PersistedDoc:
-    """The stage-2 permit as a DOCUMENT.
+def _stage_two_values(values: dict[str, object]) -> dict[str, object]:
+    """Normalize stage-3+ fixture values back to the stage-2 bundle.
 
-    bundle_binding_sha256 records the stage-2 bundle's binding; a stage-3
-    bundle cannot recompute it (it does not carry the stage-2 bundle), so
-    that join is verified by the stage-3 assembly entrypoint in step 5,
-    not by this constructor.  Everything the constructor CAN check --
-    decision, reasons, bench anchor, window -- is bound here.
+    Mirrors BenchEvidenceBundle._stage_two_projection.  The falsifiable
+    rule -- projection binding == this bundle's binding == the binding the
+    produced receipt names -- is what proves the two agree.
     """
 
-    fields = {
-        "artifact_role": "producer_evidence_not_verdict",
-        "backend_witnesses": {},
-        "bench_binding_sha256": bench_anchor,
-        "bundle_binding_sha256": SHA_B,
-        "containment": {},
-        "decision": "provisional_cuda_boot",
-        "evaluator_versions": {},
-        "gate_bindings": {},
-        "measurements": {},
-        "phase": "cuda_candidate",
-        "phase_evidence": {},
-        "reasons": ["cold_boot_witness_pending"],
-        "runtime": {},
-        "timestamp": CUTOVER_RECEIPT_AT,
-        "cutover_window_id": CUTOVER_WINDOW_ID,
+    base = frozenset(cm._BASE_CONTAINMENT_KEYS)
+    containment = values["containment"]
+    return {
+        **values,
+        "timestamp": CUTOVER_STAGE2_AT,
+        "candidate_summary": replace(
+            values["candidate_summary"],
+            cold_boot_witness=None,
+            provisional_live_witness=None,
+        ),
+        "containment": cm.ContainmentWitness(
+            tuple(
+                snapshot
+                for snapshot in containment.snapshots
+                if f"{snapshot.phase}:{snapshot.boundary}" in base
+            )
+        ),
+        "containment_docs": {
+            key: doc
+            for key, doc in values["containment_docs"].items()
+            if key in base
+        },
+        "live_authorization": cm.AuthorizationWitness(
+            "live_witness_authorization", "not_attempted", None, None, None
+        ),
+        "cold_boot_maps": None,
+        "provisional_live_maps": None,
+        "stage_two_receipt": None,
+        "cutover_consumption": None,
     }
-    receipt = cm.AssembleReceiptDoc(fields=MappingProxyType(dict(fields)))
-    return _persisted_doc(cm.ASSEMBLE_RECEIPT_SCHEMA, receipt, fields)
 
 
 def _cutover_consumption_doc(
@@ -5201,6 +5228,14 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         overrides.pop("fractional_control_chronology", False)
     )
     shared_nonce = bool(overrides.pop("shared_nonce", False))
+    # The ceremony clock is a first-class fixture knob.  Patching the
+    # authorization from OUTSIDE silently orphans the cold witness, which
+    # is parented to the boot witness -- a chronology test perturbed that
+    # way refuses for the wrong reason and proves nothing.
+    cutover_issued_at = str(overrides.pop("cutover_issued_at", CUTOVER_ISSUED_AT))
+    cutover_expires_at = str(
+        overrides.pop("cutover_expires_at", CUTOVER_EXPIRES_AT)
+    )
     parent_expires_before_continuation = bool(
         overrides.pop("parent_expires_before_continuation", False)
     )
@@ -5596,7 +5631,9 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         )
         boot_status = "fail" if overrides.pop("terminal_boot_failure", False) else "pass"
         cutover_authorization = _cutover_authorization_doc(
-            seed.bench_binding_sha256
+            seed.bench_binding_sha256,
+            issued_at=cutover_issued_at,
+            expires_at=cutover_expires_at,
         )
         boot = cm.AuthorizationWitness(
             "boot_authorization",
@@ -5605,13 +5642,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             seed.bench_binding_sha256,
             "2026-07-13T12:03:00Z",
         )
-        if stage >= 3:
-            stage_two_receipt = _stage_two_receipt_doc(
-                seed.bench_binding_sha256
-            )
-            cutover_consumption = _cutover_consumption_doc(
-                cutover_authorization, stage_two_receipt
-            )
+
         runtime_identity = make_identity(mode="production", effective_args=argv("8080"))
     if stage >= 3:
         cold_maps = cm.RuntimeBackendWitness(
@@ -5752,10 +5783,39 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         "cold_boot_maps": cold_maps,
         "provisional_live_maps": provisional_maps,
         "timestamp": (
-            "2026-07-13T12:03:20Z" if stage >= 5 else "2026-07-13T12:03:14Z"
+            "2026-07-13T12:03:20Z"
+            if stage >= 5
+            # Stage-2 assembly happens BEFORE the mutation, so the stage-2
+            # bundle carries the pre-mutation stamp its receipt is built
+            # with.  This is what makes an independently constructed
+            # stage-2 bundle comparable to the stage-3 projection.
+            else CUTOVER_STAGE2_AT
+            if stage == 2
+            else "2026-07-13T12:03:14Z"
         ),
     }
     values.update(overrides)
+    if stage >= 3 and values.get("stage_two_receipt") is None:
+        # The stage-2 receipt comes from the REAL producer -- build_receipt
+        # plus the driver's production encoder -- never hand-authored.
+        # A fixture that can assert a shape the producer cannot emit is
+        # how five production-path defects survived a green suite.
+        stage_two = cm.BenchEvidenceBundle(**_stage_two_values(values))
+        produced = cm.build_receipt(
+            stage_two,
+            cm.evaluate_promotion_bundle(stage_two),
+            timestamp=CUTOVER_STAGE2_AT,
+        )
+        receipt_doc = cm.PersistedDoc(
+            _driver.ProductionArtifactPolicy().encode(
+                "receipt",
+                {**produced, "binding_sha256": stage_two.binding_sha256},
+            )
+        )
+        values["stage_two_receipt"] = receipt_doc
+        values["cutover_consumption"] = _cutover_consumption_doc(
+            values["cutover_authorization"], receipt_doc
+        )
     return cm.BenchEvidenceBundle(**values)
 
 
@@ -7519,26 +7579,38 @@ class BundleReceiptTests(unittest.TestCase):
     def test_receipt_is_bundle_only_preserves_fields_and_binds_both_identities(self) -> None:
         bundle = _make_bundle(5)
         verdict = cm.evaluate_promotion_bundle(bundle)
-        receipt = cm.build_receipt(bundle, verdict, timestamp=TS)
+        receipt = cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
+        historical = {
+            "schema",
+            "timestamp",
+            "phase",
+            "artifact_role",
+            "decision",
+            "reasons",
+            "runtime",
+            "backend_witnesses",
+            "measurements",
+            "phase_evidence",
+            "containment",
+            "gate_bindings",
+            "bench_binding_sha256",
+            "bundle_binding_sha256",
+            "evaluator_versions",
+        }
+        # The CLOSED SUM: stage 1 carries exactly the historical shape, so
+        # the durable attempt-026 receipt is untouched; stage 2+ carries
+        # that plus the cutover window and nothing else.
+        self.assertEqual(historical | {"cutover_window_id"}, set(receipt))
+        stage_one = _make_bundle(1)
         self.assertEqual(
-            {
-                "schema",
-                "timestamp",
-                "phase",
-                "artifact_role",
-                "decision",
-                "reasons",
-                "runtime",
-                "backend_witnesses",
-                "measurements",
-                "phase_evidence",
-                "containment",
-                "gate_bindings",
-                "bench_binding_sha256",
-                "bundle_binding_sha256",
-                "evaluator_versions",
-            },
-            set(receipt),
+            historical,
+            set(
+                cm.build_receipt(
+                    stage_one,
+                    cm.evaluate_promotion_bundle(stage_one),
+                    timestamp=stage_one.timestamp,
+                )
+            ),
         )
         self.assertEqual(bundle.bench_binding_sha256, receipt["bench_binding_sha256"])
         self.assertEqual(bundle.binding_sha256, receipt["bundle_binding_sha256"])

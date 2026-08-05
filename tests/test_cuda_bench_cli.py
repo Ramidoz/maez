@@ -5352,7 +5352,9 @@ def _task9_evaluation(
 ) -> assemble.Stage1Evaluation:
     from tests import test_cuda_migration as migration_tests
 
-    bundle = migration_tests._make_bundle(1)
+    # One timestamp for the bundle and its receipt -- the harness must not
+    # hold a freedom the production path does not have.
+    bundle = migration_tests._make_bundle(1, timestamp=FIXED_TIMESTAMP)
     verdict = cm.evaluate_promotion_bundle(bundle)
     if decision == "keep_vulkan":
         verdict = replace(
