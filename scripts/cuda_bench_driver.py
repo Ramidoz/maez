@@ -5821,6 +5821,7 @@ _COMMAND_NAMES = (
     "vulkan-baseline",
     "cuda-candidate",
     "assemble-stage1",
+    "assemble-stage2",
 )
 _COMMAND_ARTIFACT_NAME_RE = re.compile(
     r"(?:(?P<quarantine>\.command-cleanup-))?"
@@ -7787,6 +7788,19 @@ def _stage_identities_match(
     return True
 
 
+# Generalized from a two-way conditional: an ASSEMBLY RECEIPT is now an
+# admissible cited artifact, which stage 2's historical chain requires.
+# A type absent from this mapping yields None and therefore refuses --
+# unknown types fail closed rather than defaulting to a phase packet.
+_COMPLETION_ARTIFACT_SCHEMAS = MappingProxyType(
+    {
+        cm.StaticPreflightDoc: cm.STATIC_PREFLIGHT_SCHEMA,
+        cm.PhasePacket: cm.PHASE_PACKET_SCHEMA,
+        cm.AssembleReceiptDoc: cm.ASSEMBLE_RECEIPT_SCHEMA,
+    }
+)
+
+
 def _load_verified_completion_pair(
     *,
     admission_ref: str | None,
@@ -7829,11 +7843,7 @@ def _load_verified_completion_pair(
         or completion.artifact_ref != artifact_ref
         or completion.artifact_sha256 != artifact_doc.file_sha256
         or completion.artifact_schema
-        != (
-            cm.STATIC_PREFLIGHT_SCHEMA
-            if expected_type is cm.StaticPreflightDoc
-            else cm.PHASE_PACKET_SCHEMA
-        )
+        != _COMPLETION_ARTIFACT_SCHEMAS.get(expected_type)
         or cm._compare_utc_z(
             admission.timestamp,
             completion.timestamp,

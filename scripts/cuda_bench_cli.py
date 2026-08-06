@@ -31,6 +31,7 @@ PUBLIC_COMMANDS = (
     "vulkan-baseline",
     "cuda-candidate",
     "assemble-stage1",
+    "assemble-stage2",
 )
 _TERMINAL_SCHEMA_MATRIX = MappingProxyType(
     {
@@ -39,6 +40,10 @@ _TERMINAL_SCHEMA_MATRIX = MappingProxyType(
         "vulkan-baseline": cm.COMMAND_COMPLETION_SCHEMA,
         "cuda-candidate": cm.COMMAND_COMPLETION_SCHEMA,
         "assemble-stage1": driver.ASSEMBLE_RECEIPT_SCHEMA,
+        # Stage 2 publishes a COMPLETION document citing its receipt --
+        # the historical chain step 2B verifies. Stage 1 keeps its direct
+        # receipt terminal, deliberately.
+        "assemble-stage2": cm.COMMAND_COMPLETION_SCHEMA,
     }
 )
 _ASSEMBLY_RECEIPT_FIELDS = frozenset(
@@ -1679,6 +1684,11 @@ def build_parser() -> NonEchoingParser:
                 command_parser.add_argument(
                     f"--{name}", type=_relative_ref, required=True
                 )
+        elif command == "assemble-stage2":
+            # Only the window id. The 23 inputs are constants of the
+            # authority (assemble.STAGE2_INPUTS), so no caller can point
+            # the assembly at different evidence.
+            command_parser.add_argument("--window-id", required=True)
         elif command == "assemble-stage1":
             for field in fields(assemble.Stage1ArtifactPaths):
                 command_parser.add_argument(
@@ -2935,6 +2945,54 @@ def _publish_assembly_receipt(
     return committed
 
 
+def _stage2_assembly_handler(
+    attempt: driver.CommandAttempt,
+    *,
+    root: Path,
+    clock: driver.Clock,
+    args: argparse.Namespace,
+) -> TerminalResult:
+    """Assemble stage 2 and publish receipt then completion, durably.
+
+    The receipt goes through driver.write_private_file -- the anchored
+    tmpfile/fsync/link/parent-fsync primitive -- so the artifact the
+    completion cites is durable before the completion names it.
+    """
+
+    timestamp = clock.now_utc()
+    bundle = assemble.build_stage2_bundle(
+        assemble.STAGE2_INPUTS, root=root, timestamp=timestamp
+    )
+    verdict = cm.evaluate_promotion_bundle(bundle)
+    if verdict.cutover_window_id != args.window_id:
+        raise driver.BenchRefusal("assembly_refused")
+    receipt = cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
+    receipt_bytes = driver.ProductionArtifactPolicy().encode(
+        "receipt", {**receipt, "binding_sha256": bundle.binding_sha256}
+    )
+    receipt_ref = f"receipts/stage2-{args.window_id}.json"
+    driver.write_private_file(receipt_ref, receipt_bytes, root=root)
+    completion = cm.CommandCompletionDoc(
+        command=attempt.command,
+        ordinal=attempt.ordinal,
+        window_id=args.window_id,
+        admission_ref=attempt.admission_ref,
+        admission_sha256=attempt.admission_sha256,
+        artifact_ref=receipt_ref,
+        artifact_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        artifact_schema=cm.ASSEMBLE_RECEIPT_SCHEMA,
+        status="completed",
+        timestamp=clock.now_utc(),
+    )
+    encoded = driver.ProductionArtifactPolicy().encode(
+        "command_completion", _completion_fields(completion)
+    )
+    relative, digest = driver.publish_command_artifact(
+        attempt, "terminal", encoded, root=root
+    )
+    return TerminalResult("ok", "completed", args.window_id, relative, digest)
+
+
 def _assembly_handler(
     attempt: driver.CommandAttempt,
     *,
@@ -3755,6 +3813,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args=parsed,
                 _guard=_PRODUCTION_PHASE_HANDLER_GUARD,
             )
+        elif command == "assemble-stage2":
+            def stage2_handler(
+                attempt: driver.CommandAttempt, *, root: Path
+            ) -> TerminalResult:
+                return _stage2_assembly_handler(
+                    attempt, root=root, clock=clock, args=parsed
+                )
+
+            handler = stage2_handler
         elif command == "assemble-stage1":
             def assembly_handler(
                 attempt: driver.CommandAttempt, *, root: Path

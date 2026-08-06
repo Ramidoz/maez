@@ -1378,6 +1378,12 @@ _COMPLETION_MATRIX = MappingProxyType(
         "static-preflight": (STATIC_PREFLIGHT_SCHEMA, None),
         "vulkan-baseline": (PHASE_PACKET_SCHEMA, "vulkan_baseline"),
         "cuda-candidate": (PHASE_PACKET_SCHEMA, "cuda_candidate"),
+        # The first entry that is neither a phase nor phase-free-by-being
+        # -preflight: an assembly receipt cited by a completion document.
+        # Stage 1 is deliberately absent -- it publishes its receipt
+        # directly as the terminal artifact, and attempt-026 is frozen
+        # evidence that must not be restructured.
+        "assemble-stage2": (ASSEMBLE_RECEIPT_SCHEMA, None),
     }
 )
 

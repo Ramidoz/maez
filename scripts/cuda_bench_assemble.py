@@ -174,6 +174,36 @@ class Stage2InputPaths:
     authorization: str
 
 
+# The stage-2 locating authority as CONSTANTS. Every member is fixed:
+# there is no caller-supplied path, no latest-file discovery, and no
+# alternate evidence root. The command takes only a window id.
+STAGE2_INPUTS = Stage2InputPaths(
+    control_packet="windows/ab-20260803-1837/vulkan_baseline/attempt-000/packets/vulkan_baseline-completed.json",
+    candidate_packet="windows/ab-20260803-1837/cuda_candidate/attempt-000/packets/cuda_candidate-completed.json",
+    static_admission="command-static-preflight-attempt-022-admission.json",
+    static_completion="command-static-preflight-attempt-022-terminal.json",
+    control_admission="command-vulkan-baseline-attempt-023-admission.json",
+    control_completion="command-vulkan-baseline-attempt-023-terminal.json",
+    candidate_admission="command-cuda-candidate-attempt-024-admission.json",
+    candidate_completion="command-cuda-candidate-attempt-024-terminal.json",
+    window_authorization="window-authorization.json",
+    continuation="continuation.json",
+    window_consumption="windows/ab-20260803-1837/vulkan_baseline/attempt-000/receipts/consumption-89c56a00f3af2ee223b0fec36f76ba1fd3f9f8c25793db2e3b9c56ad89c1c0bd.json",
+    continuation_consumption="windows/ab-20260803-1837/cuda_candidate/attempt-000/receipts/consumption-f102a166198a20262662144281bc6d2ef704984dfdabdbcc0d6958e56b10f737.json",
+    control_containment_before="windows/ab-20260803-1837/vulkan_baseline/attempt-000/containment/containment-before.json",
+    control_containment_after="windows/ab-20260803-1837/vulkan_baseline/attempt-000/containment/containment-after.json",
+    candidate_containment_before="windows/ab-20260803-1837/cuda_candidate/attempt-000/containment/containment-before.json",
+    candidate_containment_after="windows/ab-20260803-1837/cuda_candidate/attempt-000/containment/containment-after.json",
+    bench_identity="windows/ab-20260803-1837/cuda_candidate/attempt-000/identity/bench_runtime_identity.json",
+    runtime_identity="windows/ab-20260803-1837/cuda_candidate/attempt-000/identity/runtime_identity.json",
+    static_preflight="receipts/static-preflight-attempt-022.json",
+    quality="receipts/quality-evidence.json",
+    owner_voice="receipts/owner-voice-review.json",
+    rollback="receipts/rollback-evidence.json",
+    authorization="receipts/cutover-authorization.json",
+)
+
+
 def build_stage2_bundle(
     paths: Stage2InputPaths,
     *,
@@ -225,11 +255,12 @@ def build_stage2_bundle(
         # persisted bench document, never probed -- a live probe before
         # cutover would observe the incumbent Vulkan process.
         # bench_runtime_identity and its document stay byte-identical.
+        # Projected from the ALREADY-ANCHORED selected document. Reopening
+        # paths.runtime_identity would be a second filesystem read between
+        # stage-1 reconstruction and projection -- a window in which the
+        # bytes could differ from the ones stage 1 validated.
         production_identity = cm.project_production_runtime_identity(
-            _persisted(
-                open_bench_file(paths.runtime_identity, root=root),
-                cm.RuntimeIdentity,
-            )
+            stage_one.runtime_identity_doc
         )
         values["runtime_identity"] = production_identity.obj
         values["runtime_identity_doc"] = production_identity

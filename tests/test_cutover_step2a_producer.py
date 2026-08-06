@@ -97,13 +97,26 @@ def seed_private_root(tmp_path: Path) -> Path:
 
 
 class FixedClock:
-    """Deterministic clock: main() must not run on the wall clock."""
+    """Deterministic clock that ADVANCES one second per read.
+
+    A constant clock would make admission and completion equal, and the
+    live pair validator requires admission STRICTLY before completion --
+    so a frozen clock would have made correct code unverifiable.
+    """
 
     def __init__(self, moment: str = RUN_CLOCK) -> None:
-        self._moment = moment
+        import datetime
+
+        self._next = datetime.datetime.strptime(
+            moment, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=datetime.timezone.utc)
 
     def now_utc(self) -> str:
-        return self._moment
+        import datetime
+
+        value = self._next
+        self._next = value + datetime.timedelta(seconds=1)
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def stage2_input_paths() -> "assemble.Stage2InputPaths":
@@ -826,8 +839,11 @@ class TestOneBuilderTopology:
         ("scripts/cuda_migration.py", "build_receipt", "arg.annotation"): 1,
         ("scripts/cuda_bench_assemble.py", "build_stage1_bundle", "FunctionDef.returns"): 1,
         ("scripts/cuda_bench_assemble.py", "Stage1Evaluation", "AnnAssign.annotation"): 1,
-        # 2A adds exactly one more:
+        # 2A adds exactly two more, both pinned by exact role:
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle", "FunctionDef.returns"): 1,
+        # fields(cm.BenchEvidenceBundle) -- reading the field list to carry
+        # stage-1 values forward, NOT constructing and NOT aliasing.
+        ("scripts/cuda_bench_assemble.py", "build_stage2_bundle", "Call.args"): 1,
     }
     # Any role NOT in the pinned multiset is an alias or an evasion.
     BINDING_ROLES = frozenset(
