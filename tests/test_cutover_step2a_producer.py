@@ -512,14 +512,28 @@ class TestPublicChainPublishesRealArtifacts:
 
         monkeypatch.setattr(assemble, "build_stage2_bundle", spy)
 
-        # Event trace + durability counters, recorded around the one run.
+        # Event trace + receipt-scoped durability, around the one run.
+        #
+        # Two seams were wrong before: admission never passes through
+        # publish_command_artifact (it is created inside _admit_command),
+        # so the required order could never be observed; and
+        # publish_command_artifact links with os.link directly, not
+        # _publish_anonymous_file, so the link spy watched a primitive
+        # this path does not use. Worse, aggregate counters let admission
+        # and terminal PAY the receipt's durability while the receipt used
+        # Path.write_bytes().
         publications: list[tuple[str, str]] = []
-        durability = {"anonymous_opens": 0, "links": 0, "fsyncs": 0}
+        private_writes: list[tuple[str, bytes]] = []
 
+        real_admit = driver._admit_command
         real_publish = driver.publish_command_artifact
-        real_anon = driver._open_anonymous_file
-        real_link = driver._publish_anonymous_file
-        real_fsync = os.fsync
+        real_private = driver.write_private_file
+
+        def admit_spy(*args, **kwargs):
+            attempt = real_admit(*args, **kwargs)
+            # recorded AFTER the durable return
+            publications.append(("admission", attempt.admission_ref))
+            return attempt
 
         def publish_spy(attempt, role, encoded, *, root, on_committed=None):
             out = real_publish(
@@ -528,22 +542,15 @@ class TestPublicChainPublishesRealArtifacts:
             publications.append((role, out[0]))
             return out
 
-        def anon_spy(parent_fd, *, append):
-            durability["anonymous_opens"] += 1
-            return real_anon(parent_fd, append=append)
+        def private_spy(relative, data, *, root=driver.BENCH_ROOT, on_link=None):
+            out = real_private(relative, data, root=root, on_link=on_link)
+            private_writes.append((relative, data))
+            publications.append(("receipt", relative))
+            return out
 
-        def link_spy(fd, parent_fd, name, *, expected_size):
-            durability["links"] += 1
-            return real_link(fd, parent_fd, name, expected_size=expected_size)
-
-        def fsync_spy(fd):
-            durability["fsyncs"] += 1
-            return real_fsync(fd)
-
+        monkeypatch.setattr(driver, "_admit_command", admit_spy)
         monkeypatch.setattr(driver, "publish_command_artifact", publish_spy)
-        monkeypatch.setattr(driver, "_open_anonymous_file", anon_spy)
-        monkeypatch.setattr(driver, "_publish_anonymous_file", link_spy)
-        monkeypatch.setattr(os, "fsync", fsync_spy)
+        monkeypatch.setattr(driver, "write_private_file", private_spy)
 
         # Live-root integrity is measured around the SAME successful run.
         # A separate guard that tolerates an early refusal cannot see a
@@ -647,18 +654,17 @@ class TestPublicChainPublishesRealArtifacts:
         # PUBLICATION ORDER by EVENT TRACE, not mtime. mtime would let a
         # producer precompute the receipt hash, publish the completion,
         # then publish the receipt, and still pass.
-        assert [kind for kind, _ in publications] == [
-            "admission",
-            "receipt",
-            "terminal",
-        ], publications
+        kinds = [kind for kind, _ in publications]
+        assert kinds.index("admission") < kinds.index("receipt"), publications
+        assert kinds.index("receipt") < kinds.index("terminal"), publications
 
-        # DURABILITY: the receipt must travel the anchored
-        # tmpfile -> fsync -> link -> parent-fsync path. Plain
-        # Path.write_bytes() would satisfy every byte assertion above.
-        assert durability["anonymous_opens"] >= 1, durability
-        assert durability["links"] >= 1, durability
-        assert durability["fsyncs"] >= 2, durability  # file + parent dir
+        # DURABILITY, SCOPED TO THIS RECEIPT. write_private_file is the
+        # anchored tmpfile -> fsync -> link -> parent-fsync primitive, so
+        # binding the exact ref AND bytes to it proves the receipt itself
+        # was durably published -- not that some other artifact was.
+        assert (completion.artifact_ref, receipt_bytes) in private_writes, [
+            ref for ref, _ in private_writes
+        ]
 
 
 SYMBOL = "BenchEvidenceBundle"
@@ -917,6 +923,36 @@ class TestOneBuilderTopology:
             "def f():\n    return cm.BenchEvidenceBundle()\n", "scripts/x.py"
         )
         assert calls == [("scripts/x.py", 2, "f")]
+
+    def test_write_private_file_is_the_anchored_primitive(self) -> None:
+        """Pin the seam the durability proof relies on.
+
+        If write_private_file ever stops going through the anonymous-file
+        / fsync / link chain, the receipt durability assertion silently
+        becomes vacuous. Checked structurally -- my first check was a
+        substring search over a function that DELEGATES, and reported
+        False for a primitive that plainly qualifies.
+        """
+        import inspect
+
+        tree = ast.parse(inspect.getsource(driver.write_private_file))
+        called = {
+            n.func.id
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        } | {
+            n.func.attr
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        }
+        for required in (
+            "_open_anonymous_file",
+            "_write_all",
+            "fsync",
+            "_publish_anonymous_file",
+            "_verify_path_binding",
+        ):
+            assert required in called, required
 
     def test_scanner_spawns_no_process(self) -> None:
         tree = ast.parse(Path(__file__).read_text())
