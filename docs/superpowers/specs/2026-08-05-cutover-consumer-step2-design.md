@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v19
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v20
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -26,7 +26,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v16 | R5 ruled: follow the S7 action grammar; guarded mint seam specified |
 | v17 | Maez's consultation is MANDATORY — the key is necessary but not sufficient |
 | v18 | the consultation producer given a callable contract; retry identity; `affected_refs` derived |
-| **v19** | **items 4 and 5 concrete: the durable grant projection and the no-initialization store opener** |
+| v19 | items 4 and 5 concrete: the durable grant projection and the store opener |
+| **v20** | **receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding (v19's descriptor claim was unimplementable)** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1193,7 +1194,71 @@ row. The projection therefore proves *which* authorization was consumed,
 and the row proves *a human touched the key*. Two reads, not one, and the
 design would have silently checked neither had this not been enumerated.
 
-#### ITEM 5 — the no-initialization store opener, concrete (v19)
+#### Evidence bytes, exactly (v20)
+
+**Encoder:** `_canonical_wrapper_bytes`
+([cuda_migration.py:3131](/home/rohit/maez/scripts/cuda_migration.py#L3131)) —
+`sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`,
+`allow_nan=False`, UTF-8, **plus a terminating `b"\n"` which PARTICIPATES
+in the hash.** Verified in source. "The same encoder the rest of this
+design uses" was not precise enough to reproduce a hash.
+
+#### The post-commit row proof (v20)
+
+The projection proves *which* authorization was consumed. The row proves
+*a human touched the key*. Frozen post-commit read, **never** a
+pre-consumption snapshot:
+
+| check | requirement |
+|---|---|
+| cardinality | exactly **one** row for `artifact_id` |
+| grant fields | exact type and value equality across all fifteen |
+| presence | `user_presence == 1` **as an integer**, not truthy |
+| verification | `user_verification == 1` **as an integer** |
+| binding | `consumed_by_request_id == request_id` |
+| class | `derived_work_class == "self_modification"` |
+| ceremony | `ceremony_kind == "founder_local_webauthn"` |
+| chronology | `created_at <= consumed_at < expires_at` |
+
+**The chronology row is new and closes a live gap:** consumption does not
+currently reject a **future-dated `created_at`**, so an artifact could be
+stamped ahead of its own consumption and still consume cleanly.
+
+#### The durable-row read seam (v20)
+
+`S7AuthorizationStore` has **no getter**, and `consume_for_execution`
+opens its own connection **by pathname**
+([:2589](/home/rohit/maez/core/governance/operator_user_boundary.py#L2589)) —
+so it would discard any anchored connection, re-resolve the path, and
+collapse failures. Frozen:
+
+* a typed `CommittedGrantRow` result carrying all fifteen fields plus
+  `user_presence`, `user_verification`, `created_at`, `expires_at`,
+  `consumed_by_request_id`;
+* a **post-commit reader** on the anchored connection;
+* consumption routed through a **connection-taking primitive** so it uses
+  the verified connection rather than re-opening by name.
+
+#### ITEM 5 — the no-initialization store opener, concrete (v19, corrected v20)
+
+**v19's descriptor-binding claim was unimplementable.** I froze "both
+connections proven to address the same file by comparing `st_dev`/`st_ino`
+of the opened descriptors". Verified: `sqlite3.Connection` exposes **no
+database descriptor at all** — there is nothing to compare. I asserted a
+mechanism without checking it existed.
+
+**The actual bridge**, verified working on this Linux-only path — I opened
+the live store this way and read both credentials through it:
+
+```
+fd = anchored_open(db_path)                      # component walk, predicates
+sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=ro", uri=True)   # inspection
+sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True)   # consumption
+```
+
+Both connections address the **descriptor we verified**, not a pathname
+re-resolved later. `mode=rw`, never `rwc`. The opener is a **context
+manager** with exception-safe teardown of both connections and the fd.
 
 `S7AuthorizationStore.__init__` calls `mkdir(parents=True)`,
 `executescript(_AUTH_SCHEMA)`, an `ALTER TABLE` migration and `commit()`
@@ -1223,9 +1288,41 @@ open_existing_authorization_store(
 * both connections are proven to address the **same verified file** by
   comparing `st_dev`/`st_ino` of the opened descriptors, not by
   comparing path strings;
-* the schema is **verified, never migrated**: the expected columns must
-  already be present, and a mismatch refuses `presence_store_schema_drift`
-  rather than being repaired.
+* the schema is **verified, never migrated** — see below.
+
+#### Schema, integrity and journal posture (v20)
+
+"Expected columns present" proves nothing about primary keys, uniqueness,
+types, nullability or defaults. Frozen contract, checked via
+`PRAGMA table_info` and `PRAGMA index_list`:
+
+* `artifact_id` is the **primary key**;
+* `nonce` carries a **UNIQUE** constraint;
+* every column's declared **type** and **NOT NULL** posture matches;
+* `ceremony_kind` retains its default;
+* `PRAGMA integrity_check` returns `ok`.
+
+**Journal posture is verified, not inherited.** `mode=ro` is **not**
+universally side-effect-free — under WAL it can still touch sidecars. The
+live store today is `journal_mode=delete`, `0600`, single-linked, with no
+sidecars present (verified). The opener must **require** that posture
+rather than happen to encounter it: a store in WAL refuses rather than
+being opened read-only on an assumption that no longer holds.
+
+**Distinct failure classes**, none collapsed into one another:
+
+| condition | code |
+|---|---|
+| file absent / unreadable | `presence_store_unavailable` |
+| file predicate failure (mode, uid, nlink) | `presence_store_predicate` |
+| table missing | `presence_store_table_missing` |
+| schema drift (pk, unique, type, nullability, default) | `presence_store_schema_drift` |
+| `integrity_check` not ok | `presence_store_corrupt` |
+| journal posture not `delete` | `presence_store_journal_posture` |
+| fd/connection identity disagreement | `presence_store_identity_mismatch` |
+
+v19 folded several of these together; recovery differs for each, and
+"corrupt" and "someone swapped the file" are not the same event.
 
 **Binding REDs:** opening a non-existent path refuses and **creates
 nothing** on disk; a `mode=rw` open of a missing file raises rather than
@@ -1413,8 +1510,8 @@ Two new fields, both inside the binding:
 
 | field | rule |
 |---|---|
-| `presence_mode` | exact closed value: `procedural` \| `founder_webauthn` |
-| `presence_evidence_sha256` | `None` **iff** `procedural`; the canonical S7 authorization-artifact hash when WebAuthn-attested |
+| `presence_mode` | **cutover: `founder_webauthn` ONLY.** `procedural` remains a receipt-type value for other callers and is unreachable from any cutover path (Part 3 ruling) |
+| `presence_evidence_sha256` | **mandatory** — the canonical **grant-projection** hash (item 4). ~~the authorization-artifact hash~~ is superseded: that artifact has no canonical binding and its row mutates at consumption |
 
 The second field is the point. A bare `founder_webauthn` string is
 **descriptive, not proof** — the same error as A2, where a self-chosen
@@ -1442,7 +1539,7 @@ migration, no write of any kind).
 
 | condition | verdict |
 |---|---|
-| query succeeds, zero enabled rows | `procedural` |
+| query succeeds, zero enabled rows | **refuse `presence_no_usable_credential`** — ~~`procedural`~~ is unreachable for cutover (Part 3) |
 | query succeeds, ≥1 enabled row, valid assertion | `founder_webauthn` |
 | query succeeds, ≥1 enabled row, no valid assertion | refuse `owner_presence_unattested` |
 | database missing or unreadable | refuse `presence_store_unavailable` |
