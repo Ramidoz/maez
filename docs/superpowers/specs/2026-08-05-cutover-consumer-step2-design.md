@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v14
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v15
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -21,7 +21,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v11 | R1 ruled: the tap is REQUIRED; S7 path bound. Arming authority recorded on my INFERENCE, not the owner's words |
 | v12 | arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one |
 | v13 | no-fallback ruled; work class ruled `self_modification`; predicate, preimage, projection and consumption seam frozen |
-| **v14** | **S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck** |
+| v14 | S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck |
+| **v15** | **the action contract MEASURED against `derive_work_class`, not assumed; item 1 sequence reconciliation** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -444,9 +445,16 @@ Frozen, per `_open_anonymous_file`
 `_publish_anonymous_file`
 ([driver:375](/home/rohit/maez/scripts/cuda_bench_driver.py#L375)):
 
+**SUPERSEDED BY v15 — the single authoritative sequence is in A5's
+"frozen sequence (v14/v15)".** This block is retained only because the
+paragraphs beneath it explain *why* each element exists. It builds the
+receipt before the grant and calls the clock recheck the last pre-burn
+act; both are wrong now that the grant hash is inside the receipt and the
+action-edge consumption is last. Do not implement from this block.
+
 ```
 decided_at = clock()                       # the burn-decision moment
-receipt = CutoverConsumptionReceipt(...)   # complete, consumed_at = decided_at
+receipt = CutoverConsumptionReceipt(...)   # SUPERSEDED: needs the grant hash
 payload = canonical_encode(receipt)        # canonical bytes
 typed_roundtrip(payload)                   # decode back and compare — pre-burn
 begin = prepared.begin                     # METHOD PRE-BOUND, pre-burn
@@ -455,7 +463,7 @@ write_all + validate                       # short writes handled, content verif
 fsync(file)                                # STILL PRE-BURN: failure leaves nonce reusable
 
     publish_and_validate_burn():           # ONE closed helper
-        recheck expiry at clock()          #   LAST pre-burn act
+        recheck expiry at clock()          #   SUPERSEDED: not the last act
         ------------------------------------ last no-mutation point
         exclusive atomic link              #   THE burn; SPENT here
         fsync(marker directory)            #   durability of the publication
@@ -837,7 +845,7 @@ v13 stopped after (1). **Hashing a grant does not authorize an action** —
 that is the A2 error in yet another costume: possession of a proof
 mistaken for application of it.
 
-#### The frozen sequence (v14)
+#### The frozen sequence (v14/v15) — THE authoritative one
 
 ```
 consume_for_execution()          # existing-store opener; NO initialization
@@ -847,6 +855,8 @@ build + round-trip the cutover receipt (carries the grant hash)
 O_TMPFILE, write_all, fsync(file)
 recheck clock, expiry, regression, identity, eligibility
 consume_execution_grant_for_action(grant, ACTION, PARAMS)   # LAST pre-burn act
+  # ACTION = "cuda.cutover.execute"; PARAMS["target"] = "model_routing"
+  # -- measured to derive self_modification, not assumed
 --------------------------------------------------------- last no-mutation point
 publish_and_validate_burn()
 begin()
@@ -857,19 +867,55 @@ reusable" — everything from receipt encoding to the eligibility recheck
 now sits inside it. R4 already accepted that cost, and it remains the
 right side to fail on.
 
-#### The action edge, exact
+#### The action edge, exact — and MEASURED (v15)
 
 Freeze **one** action literal and **one** canonical `params` mapping, used
 **identically** in three places — guarded minting, store consumption, and
 action-edge consumption. Any divergence between them means the tap
 authorized something other than what runs.
 
-`params` is a canonical mapping, not the v13 conceptual table. Every
-member is a concrete reproducible value: the cutover authorization's file
-and binding hashes; the stage-2 receipt's file and binding hashes;
-`FROZEN_ROLLBACK_MANIFEST_SHA256`; the **target** override and runtime
-identity hashes; and the window id. v13's "override / runtime identity"
-row was descriptive prose, not a preimage.
+**The v14 params could not have produced `self_modification`.**
+`derive_work_class` classifies from *action material* — specifically
+`params["path"]`, `params["file"]`, `params["target"]`, `params["cmd"]`
+and the action string
+([operator_user_boundary.py:859](/home/rohit/maez/core/governance/operator_user_boundary.py#L859),
+`_path_material` at
+[:788](/home/rohit/maez/core/governance/operator_user_boundary.py#L788)) —
+and it explicitly ignores any claimed class. v14's params were all
+*hashes*. Measured:
+
+| action | params | derived class |
+|---|---|---|
+| `cuda.cutover.execute` | `{}` | `undeterminable_work_class` |
+| `cuda.cutover.execute` | `{"target": "/home/rohit/maez/models/llama-server"}` | `undeterminable_work_class` |
+| `cuda.cutover.execute` | `{"target": "model_routing"}` | **`self_modification`** |
+
+So the owner's ruling — work class `self_modification` — would **not have
+held** under v14's mapping. The class is derived, not declared, and I had
+written params that derive `undeterminable_work_class`.
+
+**Frozen action contract:**
+
+* action literal: `cuda.cutover.execute`
+* `params["target"]`: `model_routing` — the material that *earns*
+  `self_modification` rather than asserting it
+* the remaining members carry identity and are **not** classification
+  material: authorization file and binding hashes; stage-2 receipt file
+  and binding hashes; `FROZEN_ROLLBACK_MANIFEST_SHA256`; the target
+  override and runtime identity hashes; the window id.
+
+**Binding RED:** `derive_work_class(action=ACTION, params=PARAMS) ==
+"self_modification"`, asserted directly. Not inferred from the ruling —
+the ruling is what must be *satisfied*, and only this call can say
+whether it is.
+
+**Open for review (R5):** `target = "model_routing"` is chosen because it
+is the substring the classifier matches. That is honest but slightly
+uncomfortable — the value is doing double duty as semantic description
+and classifier trigger. The alternative is extending
+`_touches_self_mod_substrate` to recognise the runtime path, which is an
+S7 change with wider blast radius. I lean to the former for step 2 and
+flag the latter as the cleaner long-term shape.
 
 #### The guarded mint path, named
 
