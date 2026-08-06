@@ -7,5 +7,3 @@ timestamp,label,url,model,n,agreement_pct,errors,latency_p50,latency_p95,latency
 1776963681,qwen2.5-3b-cpu,http://127.0.0.1:8082,qwen2.5-3b,21,57.1,0,1.38,1.86,1.44
 1776964001,llama-3.2-3b-cpu,http://127.0.0.1:8082,llama-3.2-3b,21,76.2,0,1.29,1.72,1.35
 1776964057,gemma-3-4b-cpu,http://127.0.0.1:8082,gemma-3-4b,21,81.0,0,1.2,1.82,1.3
-1780789537,current-judge-live-20260606,http://127.0.0.1:8081,maez-judge,21,90.5,0,3.47,4.03,3.41
-1780789633,primary-27b-live-as-judge-20260606,http://127.0.0.1:8080,qwen36-27b,21,76.2,0,1.06,1.26,1.05
