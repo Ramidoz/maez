@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v6
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v7
 
 Status: **DRAFT — R1 quarantined, awaiting Rohit. No REDs, no code.**
 
@@ -12,11 +12,12 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v3 | R2 ruled (reconstruct, don't sign); four precision blockers |
 | v4 | R3 ruled (absorb stage 2 narrowly); producer proof added; four precision corrections |
 | v5 | `assemble-stage2` matrices frozen; locator resolved; claim narrowed; producer chronology; one-builder REDs; post-burn evaluation gaps |
-| **v6** | **five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary** |
+| v6 | five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary |
+| **v7** | **three superseded rules swept from the text; clock-regression invariant enforced rather than assumed** |
 
 **R1 remains OPEN and is Rohit's covenant decision.** Until ruled: no
 production consumer entrypoint, no burn REDs. Steps 2A and 2B below may
-be finalized as design; implementation waits for this v6 gate to clear.
+be finalized as design; implementation waits for this v7 gate to clear.
 
 ---
 
@@ -212,9 +213,10 @@ smoothed over.
 ### The completion locator (v5)
 
 Command records carry **runtime-allocated ordinals**, so their filenames
-cannot be constants known before the producer runs. `Stage2ArtifactPaths`
-therefore cannot name them as literals, and v4 was wrong to imply it
-could.
+cannot be constants known before the producer runs. The v4 authority
+(then called `Stage2ArtifactPaths`, superseded by `Stage2InputPaths`
+above) therefore could not name them as literals, and v4 was wrong to
+imply it could.
 
 Resolution: the consumer accepts **exactly one owner-supplied relative
 completion locator** under the canonical root.
@@ -437,9 +439,29 @@ executor calls.
 
 The receipt's `consumed_at` stays `decided_at` — the moment the burn was
 decided, which is what the receipt is a record of, and which must be
-composed pre-burn per the closure below. Since `decided_at <= recheck <
-expires_at`, step 1's chronology is satisfied by construction rather than
-by luck.
+composed pre-burn per the closure below.
+
+**Clock regression is enforced, not assumed.** v6 claimed
+`decided_at <= recheck` held "by construction". It does not: a wall clock
+can step backward — NTP correction, manual adjustment, VM restore — and
+then the recheck precedes the decision, `consumed_at` post-dates the
+burn, and step 1's chronology receives evidence that is internally
+impossible. The consumer therefore validates, as one condition:
+
+```
+decided_at <= pre_link_recheck < expires_at
+```
+
+A regression refuses **before** linking: nonce reusable, **zero** executor
+calls. Only after this holds is step 1's chronology satisfied — by
+enforcement, which is what "by construction" should have meant.
+
+**Binding REDs, two of them side by side:**
+
+* the clock crosses **expiry** during preparation or staging → no link,
+  nonce reusable, zero executor calls;
+* the clock steps **backward** during preparation or staging → no link,
+  nonce reusable, zero executor calls.
 
 **Binding RED:** the clock crosses expiry during preparation or staging →
 no link, nonce reusable, zero executor calls.
@@ -475,9 +497,20 @@ burn.**
 **The receipt is fully realized before `O_TMPFILE`.** v4 composed bytes
 before the burn but left construction, canonical encoding and typed
 round-trip unspecified as to *when*. All three now happen before the
-staging file exists, using the **single already-read clock value** — not a
-second read. A failure there is the pre-burn refusal
+staging file exists. A failure there is the pre-burn refusal
 `burn_receipt_unencodable`: nonce reusable, executor calls zero.
+
+**Which clock value does what** — v6 said "the single already-read clock
+value, not a second read", which is now false, since the pre-link recheck
+*is* a second read. Precisely:
+
+| read | used for | may it change the staged bytes? |
+|---|---|---|
+| `decided_at` (first) | the receipt's `consumed_at`, and nothing else | it **is** the bytes |
+| `pre_link_recheck` (second) | expiry and clock-regression checks **only** | **never** — the staged bytes are already fsynced |
+
+The staged payload is complete and durable before the second read
+happens, so no clock value read at the edge can alter what was written.
 
 That ordering also removes the last reason the staged content could fail
 validation for a reason discovered late.
@@ -588,9 +621,12 @@ returns**, no attribute access, subscript, or call of any kind is
 evaluated other than that one local call. The boundary is the helper's
 return, not the link — the post-link durability and revalidation steps
 live inside the helper by design. Also: the production
-entrypoint takes no injection parameters, and no production
-`BenchEvidenceBundle(...)` construction exists outside the canonical
-seam.
+entrypoint takes no injection parameters, and production
+`BenchEvidenceBundle(...)` construction occurs at **exactly the two
+allowlisted sites and no third** — the frozen stage-1 constructor and the
+sole stage-2 seam (A1). v6 replaced the global ban in A1 but left it
+standing here; the two statements contradicted each other and this is the
+surviving one.
 
 **Runtime proves:** a complete, published, fsync-confirmed marker exists
 when the double runs, and exactly one call.
@@ -634,8 +670,8 @@ side of the linearization point:
 | 16 | receipt candidate predicates | pre | reusable | no | `receipt_predicate` |
 | 17 | receipt candidate not canonical | pre | reusable | no | `receipt_noncanonical` |
 | 18 | receipt candidate wrong type | pre | reusable | no | `receipt_wrong_type` |
-| 19 | a `Stage2ArtifactPaths` member unreadable | pre | reusable | no | `stage2_input_missing` |
-| 20 | a `Stage2ArtifactPaths` member predicates | pre | reusable | no | `stage2_input_predicate` |
+| 19 | a `Stage2InputPaths` member unreadable | pre | reusable | no | `stage2_input_missing` |
+| 20 | a `Stage2InputPaths` member predicates | pre | reusable | no | `stage2_input_predicate` |
 | 21 | stage-2 reconstruction failed | pre | reusable | no | `permit_unreconstructible` |
 | 22 | regenerated bytes ≠ disk bytes | pre | reusable | no | `permit_unverified` |
 | 23 | command admission unreadable/invalid | pre | reusable | no | `command_admission_invalid` |
@@ -648,6 +684,7 @@ side of the linearization point:
 | 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
 | 34b | expiry recheck immediately before link | pre | reusable | **zero** | `authorization_expired_pre_link` |
+| 34c | clock regressed (`recheck` < `decided_at`) | pre | reusable | **zero** | `clock_regression` |
 | 31 | O_TMPFILE creation | pre | reusable | no | `burn_unstaged` |
 | 32 | short write | pre | reusable | no | `burn_write_incomplete` |
 | 33 | staged content validation | pre | reusable | no | `burn_content_invalid` |
