@@ -477,7 +477,21 @@ class TestPublicChainPublishesRealArtifacts:
             st = path.lstat()
             # mode, uid, gid and inode identity, not merely type+content.
             # A stray chmod or chown is a write on the live tree.
-            authority = (st.st_mode, st.st_uid, st.st_gid, st.st_dev, st.st_ino)
+            # nlink/size/mtime_ns/ctime_ns included: without them a
+            # same-BYTE rewrite leaves the snapshot equal, so a live file
+            # could be rewritten identically and go unnoticed. ctime_ns in
+            # particular moves on any metadata write.
+            authority = (
+                st.st_mode,
+                st.st_uid,
+                st.st_gid,
+                st.st_dev,
+                st.st_ino,
+                st.st_nlink,
+                st.st_size,
+                st.st_mtime_ns,
+                st.st_ctime_ns,
+            )
             if path.is_symlink():
                 snapshot[rel] = ("symlink", os.readlink(path), authority)
             elif path.is_dir():
@@ -522,8 +536,8 @@ class TestPublicChainPublishesRealArtifacts:
         # this path does not use. Worse, aggregate counters let admission
         # and terminal PAY the receipt's durability while the receipt used
         # Path.write_bytes().
-        publications: list[tuple[str, str]] = []
-        private_writes: list[tuple[str, bytes]] = []
+        publications: list[tuple[str, str, str]] = []
+        private_writes: list[tuple[str, bytes, Path]] = []
 
         real_admit = driver._admit_command
         real_publish = driver.publish_command_artifact
@@ -532,20 +546,26 @@ class TestPublicChainPublishesRealArtifacts:
         def admit_spy(*args, **kwargs):
             attempt = real_admit(*args, **kwargs)
             # recorded AFTER the durable return
-            publications.append(("admission", attempt.admission_ref))
+            publications.append(("admission", attempt.admission_ref, ""))
             return attempt
 
         def publish_spy(attempt, role, encoded, *, root, on_committed=None):
             out = real_publish(
                 attempt, role, encoded, root=root, on_committed=on_committed
             )
-            publications.append((role, out[0]))
+            publications.append((role, out[0], out[1]))
             return out
 
-        def private_spy(relative, data, *, root=driver.BENCH_ROOT, on_link=None):
+        def private_spy(relative, data, *, root, on_link=None):
+            # root is MANDATORY here on purpose. Mirroring the production
+            # default (root=BENCH_ROOT) would capture the ALREADY-PATCHED
+            # private root, so a handler that omits root=root would pass
+            # this test while writing to the live bench root in production.
             out = real_private(relative, data, root=root, on_link=on_link)
-            private_writes.append((relative, data))
-            publications.append(("receipt", relative))
+            private_writes.append((relative, data, Path(root)))
+            publications.append(
+                ("receipt", relative, hashlib.sha256(data).hexdigest())
+            )
             return out
 
         monkeypatch.setattr(driver, "_admit_command", admit_spy)
@@ -654,17 +674,37 @@ class TestPublicChainPublishesRealArtifacts:
         # PUBLICATION ORDER by EVENT TRACE, not mtime. mtime would let a
         # producer precompute the receipt hash, publish the completion,
         # then publish the receipt, and still pass.
-        kinds = [kind for kind, _ in publications]
-        assert kinds.index("admission") < kinds.index("receipt"), publications
-        assert kinds.index("receipt") < kinds.index("terminal"), publications
+        # Ordering is IDENTITY-BOUND. Selecting the first generic
+        # "receipt" event would accept:
+        #   admission -> unrelated receipt -> terminal -> actual receipt
+        # so each position names the exact artifact.
+        admission_event = ("admission", completion.admission_ref, "")
+        receipt_event = (
+            "receipt",
+            completion.artifact_ref,
+            hashlib.sha256(receipt_bytes).hexdigest(),
+        )
+        terminal_event = next(
+            e for e in publications if e[0] == "terminal" and e[1] == terminals[0].name
+        )
+        for event in (admission_event, receipt_event, terminal_event):
+            assert event in publications, (event, publications)
+        assert publications.index(admission_event) < publications.index(
+            receipt_event
+        ), publications
+        assert publications.index(receipt_event) < publications.index(
+            terminal_event
+        ), publications
 
-        # DURABILITY, SCOPED TO THIS RECEIPT. write_private_file is the
-        # anchored tmpfile -> fsync -> link -> parent-fsync primitive, so
-        # binding the exact ref AND bytes to it proves the receipt itself
-        # was durably published -- not that some other artifact was.
-        assert (completion.artifact_ref, receipt_bytes) in private_writes, [
-            ref for ref, _ in private_writes
-        ]
+        # DURABILITY, SCOPED TO THIS RECEIPT, UNDER THE INJECTED ROOT.
+        # write_private_file is the anchored tmpfile -> fsync -> link ->
+        # parent-fsync primitive; binding ref, bytes AND root proves the
+        # receipt itself was durably published where it belongs.
+        assert (
+            completion.artifact_ref,
+            receipt_bytes,
+            root,
+        ) in private_writes, [(r, p) for r, _, p in private_writes]
 
 
 SYMBOL = "BenchEvidenceBundle"
