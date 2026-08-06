@@ -1,6 +1,6 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v8
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v9
 
-Status: **DRAFT — R1 quarantined, awaiting Rohit. No REDs, no code.**
+Status: **R1 RULED 2026-08-06. Design gate PASSED at v8. REDs may begin.**
 
 Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 (step 1, merged at `348332b`).
@@ -14,11 +14,13 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v5 | `assemble-stage2` matrices frozen; locator resolved; claim narrowed; producer chronology; one-builder REDs; post-burn evaluation gaps |
 | v6 | five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary |
 | v7 | three superseded rules swept; clock-regression invariant enforced rather than assumed |
-| **v8** | **eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation** |
+| v8 | eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation |
+| **v9** | **R1 RULED by the owner: build now with procedural presence; the tap is a specified, currently-unarmed pre-burn refusal point** |
 
-**R1 remains OPEN and is Rohit's covenant decision.** Until ruled: no
-production consumer entrypoint, no burn REDs. Steps 2A and 2B below may
-be finalized as design; implementation waits for this v8 gate to clear.
+**R1 is RULED** — see A5. Rohit ratified the owner-typed ceremony with
+**procedural presence**, and the hardware tap is specified here as a
+named pre-burn refusal point that a later slice arms. Steps 2A and 2B may
+now be implemented.
 
 ---
 
@@ -616,7 +618,66 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
-### R1 — UNRESOLVED. Rohit's decision, not mine and not review's.
+### R1 — RULED 2026-08-06 by the owner
+
+**Ratified:** the owner-typed ceremony is a single authorization-bound
+invocation, built now, with **procedural** owner presence. The hardware
+tap is specified below and armed by a later slice.
+
+#### What "procedural" means, stated without softening
+
+Any process running as the owner's uid can invoke the ceremony while an
+authorization is valid. The nonce, the named window, and the chronology
+bound the blast radius; **they do not authenticate a human.** No sentence
+in this design, in any commit message, or in any receipt may describe
+this state as authenticated presence.
+
+#### The tap slot — specified now, unarmed now
+
+The owner's June authority model
+([2026-06-28-authority-model-provenance-firewall-design.md](2026-06-28-authority-model-provenance-firewall-design.md))
+places body/code/**model** changes behind a **YubiKey tap**, and names
+model swaps the spiciest case in that tier. A CUDA cutover changes the
+brain's runtime, so it plausibly sits there. That model is **design-only**
+— verified: the `s7_founder_webauthn_credentials` table has never been
+provisioned in any database, and S7 slice 1 (enrollment + UX) is unbuilt.
+There is currently nothing to tap into.
+
+So the consumer carries the refusal point now and the gate arrives later:
+
+| code | when it fires |
+|---|---|
+| `owner_presence_unattested` | a founder credential exists and no valid assertion accompanies the invocation |
+
+**Arming is a state, not a flag.** The presence check is required **if and
+only if at least one founder credential is enrolled**. There is no
+enable/disable switch, deliberately:
+
+* you cannot enrol a key and forget to turn the gate on;
+* you cannot turn the gate off without destroying credentials, which is
+  itself an owner-visible act;
+* the unarmed state is not a configuration choice anyone made — it is
+  simply the absence of any key to check against.
+
+Placement: with the other pre-burn checks. A failure is **pre-burn** —
+nonce reusable, **zero** executor calls — because a mutation nobody
+attested must not consume the authorization.
+
+**REDs:** with a credential present and no valid assertion → refuse,
+nonce reusable, zero executor calls. With none present → proceed, and the
+outcome records `presence: procedural`.
+
+#### One question for the review lane
+
+Recording presence mode inside `CutoverConsumptionReceipt` would make the
+durable evidence self-describing, but that receipt is **step-1 frozen
+canon** and adding a ninth field moves it. My position: record presence
+mode on the **step-2 outcome surface**, not in the step-1 receipt, and
+leave step-1 canon untouched. Flagged rather than decided unilaterally,
+because "the evidence should say which mode produced it" is a fair
+counter-argument.
+
+### Historical: the reasoning before the ruling
 
 Review agrees the single-command topology is technically stronger, because
 it makes validation → burn → first mutation structurally contiguous. It
@@ -727,6 +788,7 @@ side of the linearization point:
 | 28 | chronology | pre | reusable | no | `chronology_violation` |
 | 29 | clock or boot read | pre | reusable | no | `edge_state_unreadable` |
 | 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
+| 29b | founder credential enrolled, no valid assertion | pre | reusable | **zero** | `owner_presence_unattested` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
 | 34b | expiry recheck immediately before link | pre | reusable | **zero** | `authorization_expired_pre_link` |
 | 34c | clock regressed (`recheck` < `decided_at`) | pre | reusable | **zero** | `clock_regression` |
