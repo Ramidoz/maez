@@ -469,20 +469,27 @@ class TestPublicChainPublishesRealArtifacts:
         """Complete tree: relative path -> (type, content hash)."""
         import hashlib
 
-        snapshot: dict[str, tuple[str, str]] = {}
-        for path in sorted(root.rglob("*")):
-            rel = str(path.relative_to(root))
+        snapshot: dict[str, tuple] = {}
+        # The ROOT ITSELF is included: a chmod on the bench root is a live
+        # mutation, and iterating only its children could never see it.
+        for path in [root, *sorted(root.rglob("*"))]:
+            rel = "." if path == root else str(path.relative_to(root))
+            st = path.lstat()
+            # mode, uid, gid and inode identity, not merely type+content.
+            # A stray chmod or chown is a write on the live tree.
+            authority = (st.st_mode, st.st_uid, st.st_gid, st.st_dev, st.st_ino)
             if path.is_symlink():
-                snapshot[rel] = ("symlink", os.readlink(path))
+                snapshot[rel] = ("symlink", os.readlink(path), authority)
             elif path.is_dir():
-                snapshot[rel] = ("dir", "")
+                snapshot[rel] = ("dir", "", authority)
             elif path.is_file():
                 snapshot[rel] = (
                     "file",
                     hashlib.sha256(path.read_bytes()).hexdigest(),
+                    authority,
                 )
             else:
-                snapshot[rel] = ("other", "")
+                snapshot[rel] = ("other", "", authority)
         return snapshot
 
     def test_one_invocation_publishes_the_chain_and_touches_nothing_live(
@@ -504,6 +511,39 @@ class TestPublicChainPublishesRealArtifacts:
             return real_builder(paths, root=root, timestamp=timestamp)
 
         monkeypatch.setattr(assemble, "build_stage2_bundle", spy)
+
+        # Event trace + durability counters, recorded around the one run.
+        publications: list[tuple[str, str]] = []
+        durability = {"anonymous_opens": 0, "links": 0, "fsyncs": 0}
+
+        real_publish = driver.publish_command_artifact
+        real_anon = driver._open_anonymous_file
+        real_link = driver._publish_anonymous_file
+        real_fsync = os.fsync
+
+        def publish_spy(attempt, role, encoded, *, root, on_committed=None):
+            out = real_publish(
+                attempt, role, encoded, root=root, on_committed=on_committed
+            )
+            publications.append((role, out[0]))
+            return out
+
+        def anon_spy(parent_fd, *, append):
+            durability["anonymous_opens"] += 1
+            return real_anon(parent_fd, append=append)
+
+        def link_spy(fd, parent_fd, name, *, expected_size):
+            durability["links"] += 1
+            return real_link(fd, parent_fd, name, expected_size=expected_size)
+
+        def fsync_spy(fd):
+            durability["fsyncs"] += 1
+            return real_fsync(fd)
+
+        monkeypatch.setattr(driver, "publish_command_artifact", publish_spy)
+        monkeypatch.setattr(driver, "_open_anonymous_file", anon_spy)
+        monkeypatch.setattr(driver, "_publish_anonymous_file", link_spy)
+        monkeypatch.setattr(os, "fsync", fsync_spy)
 
         # Live-root integrity is measured around the SAME successful run.
         # A separate guard that tolerates an early refusal cannot see a
@@ -604,9 +644,21 @@ class TestPublicChainPublishesRealArtifacts:
             assert cm._compare_utc_z(earlier, later) <= 0, (earlier, later)
         assert cm._compare_utc_z(completion.timestamp, auth.expires_at) < 0
 
-        # equal timestamps are legal; PUBLICATION ORDER carries the order
-        assert admission.ordinal == completion.ordinal
-        assert admissions[0].stat().st_mtime_ns <= terminals[0].stat().st_mtime_ns
+        # PUBLICATION ORDER by EVENT TRACE, not mtime. mtime would let a
+        # producer precompute the receipt hash, publish the completion,
+        # then publish the receipt, and still pass.
+        assert [kind for kind, _ in publications] == [
+            "admission",
+            "receipt",
+            "terminal",
+        ], publications
+
+        # DURABILITY: the receipt must travel the anchored
+        # tmpfile -> fsync -> link -> parent-fsync path. Plain
+        # Path.write_bytes() would satisfy every byte assertion above.
+        assert durability["anonymous_opens"] >= 1, durability
+        assert durability["links"] >= 1, durability
+        assert durability["fsyncs"] >= 2, durability  # file + parent dir
 
 
 SYMBOL = "BenchEvidenceBundle"
@@ -622,6 +674,18 @@ def scan_source(source: str, rel: str) -> tuple[
     an unparsed file is an unscanned file, never a silent skip.
     """
     tree = ast.parse(source, filename=rel)
+    # Parent/field links give each reference its SYNTACTIC ROLE. Kind plus
+    # enclosing function was substitutable: an alias inside
+    # build_stage2_bundle classified identically to that function's return
+    # annotation, so dropping the annotation and adding the alias kept the
+    # count intact. A role distinguishes them -- an alias sits in
+    # Assign.value, an annotation in FunctionDef.returns.
+    parent: dict[int, tuple[ast.AST, str]] = {}
+    for node in ast.walk(tree):
+        for field, value in ast.iter_fields(node):
+            for child in value if isinstance(value, list) else [value]:
+                if isinstance(child, ast.AST):
+                    parent[id(child)] = (node, field)
     context: dict[int, str] = {}
     for node in ast.walk(tree):
         if isinstance(
@@ -665,11 +729,15 @@ def scan_source(source: str, rel: str) -> tuple[
             label = node.name
         if label != SYMBOL or id(node) in called:
             continue
+        owner = parent.get(id(node))
+        role = (
+            f"{type(owner[0]).__name__}.{owner[1]}" if owner else "<root>"
+        )
         refs.append(
             (
                 rel,
                 getattr(node, "lineno", 0),
-                type(node).__name__,
+                role,
                 context.get(id(node), "<module>"),
             )
         )
@@ -700,18 +768,34 @@ class TestOneBuilderTopology:
         ("scripts/cuda_bench_assemble.py", "build_stage1_bundle"),
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle"),
     }
-    # Every legitimate reference, by exact semantic site. Adding a builder
-    # adds its annotation here -- a DELIBERATE edit, which is the point.
-    REFERENCE_ALLOWLIST = {
-        ("scripts/cuda_migration.py", "ClassDef", "BenchEvidenceBundle"),
-        ("scripts/cuda_migration.py", "Constant", "BenchEvidenceBundle"),
-        ("scripts/cuda_migration.py", "Name", "evaluate_promotion_bundle"),
-        ("scripts/cuda_migration.py", "Name", "build_receipt"),
-        ("scripts/cuda_bench_assemble.py", "Attribute", "build_stage1_bundle"),
-        ("scripts/cuda_bench_assemble.py", "Attribute", "Stage1Evaluation"),
-        ("scripts/cuda_bench_assemble.py", "Attribute", "build_stage2_bundle"),
+    # EXACT MULTISET of (file, context, syntactic role). Multiplicity is
+    # part of the pin, so an alias cannot be traded for a deleted
+    # annotation. Adding a builder adds its own entry -- a deliberate edit.
+    REFERENCE_MULTISET = {
+        ("scripts/cuda_migration.py", "BenchEvidenceBundle", "Module.body"): 1,
+        ("scripts/cuda_migration.py", "BenchEvidenceBundle", "FunctionDef.returns"): 1,
+        ("scripts/cuda_migration.py", "evaluate_promotion_bundle", "arg.annotation"): 1,
+        ("scripts/cuda_migration.py", "evaluate_promotion_bundle", "Compare.comparators"): 1,
+        ("scripts/cuda_migration.py", "evaluate_promotion_bundle", "Attribute.value"): 1,
+        ("scripts/cuda_migration.py", "build_receipt", "arg.annotation"): 1,
+        ("scripts/cuda_bench_assemble.py", "build_stage1_bundle", "FunctionDef.returns"): 1,
+        ("scripts/cuda_bench_assemble.py", "Stage1Evaluation", "AnnAssign.annotation"): 1,
+        # 2A adds exactly one more:
+        ("scripts/cuda_bench_assemble.py", "build_stage2_bundle", "FunctionDef.returns"): 1,
     }
-    REFERENCE_COUNT = 9  # 8 today + build_stage2_bundle's annotation
+    # Any role NOT in the pinned multiset is an alias or an evasion.
+    BINDING_ROLES = frozenset(
+        {
+            "Assign.value",
+            "AnnAssign.value",
+            "NamedExpr.value",
+            "Tuple.elts",
+            "List.elts",
+            "Subscript.value",
+            "ImportFrom.names",
+            "Import.names",
+        }
+    )
 
     @classmethod
     def _production_files(cls) -> list[Path]:
@@ -753,16 +837,21 @@ class TestOneBuilderTopology:
         calls, _ = self._scan_production()
         assert not [c for c in calls if c[2] in ("<module>", "<lambda>")], calls
 
-    def test_every_reference_is_an_allowlisted_semantic_site(self) -> None:
-        _, refs = self._scan_production()
-        sites = {(f, kind, ctx) for f, _, kind, ctx in refs}
-        assert sites <= self.REFERENCE_ALLOWLIST, sites - self.REFERENCE_ALLOWLIST
+    def test_references_match_the_pinned_multiset_exactly(self) -> None:
+        from collections import Counter
 
-    def test_reference_count_is_pinned(self) -> None:
-        """Count closes the allowlist: a new alias of an allowed KIND in an
-        allowed CONTEXT would otherwise pass unnoticed."""
         _, refs = self._scan_production()
-        assert len(refs) == self.REFERENCE_COUNT, refs
+        observed = Counter((f, ctx, role) for f, _, role, ctx in refs)
+        assert dict(observed) == self.REFERENCE_MULTISET, {
+            "unexpected": dict(observed.items() - self.REFERENCE_MULTISET.items()),
+            "missing": dict(self.REFERENCE_MULTISET.items() - observed.items()),
+        }
+
+    def test_no_reference_occupies_a_binding_role(self) -> None:
+        """A binding role IS an alias, wherever it appears."""
+        _, refs = self._scan_production()
+        bound = [r for r in refs if r[2] in self.BINDING_ROLES]
+        assert bound == [], bound
 
     # --- self-tests: run the REAL scanner, assert the REAL allowlist ---
 
@@ -783,8 +872,33 @@ class TestOneBuilderTopology:
         scanner or the allowlist, so they proved nothing about the guard."""
         _, refs = scan_source(snippet, "scripts/evasion.py")
         assert refs, snippet
-        sites = {(f, kind, ctx) for f, _, kind, ctx in refs}
-        assert not (sites <= self.REFERENCE_ALLOWLIST), snippet
+        # The real guarantee the production test enforces: every site an
+        # evasion produces is OUTSIDE the pinned multiset. Asserting a
+        # BINDING_ROLES membership instead was too narrow -- an ast.alias
+        # sits in ImportFrom.names, and getattr puts a STRING in Call.args,
+        # so two shapes escaped a check that claimed to cover them all.
+        sites = {(f, ctx, role) for f, _, role, ctx in refs}
+        assert sites - set(self.REFERENCE_MULTISET), (snippet, refs)
+
+    def test_alias_inside_an_allowed_context_is_still_rejected(self) -> None:
+        """The exact substitution review reproduced.
+
+        An alias placed inside build_stage2_bundle used to classify the
+        same as that function's return annotation, so deleting the
+        annotation and adding the alias preserved the pinned count. Roles
+        separate them.
+        """
+        from collections import Counter
+
+        _, refs = scan_source(
+            "def build_stage2_bundle():\n"
+            "    B = cm.BenchEvidenceBundle\n"
+            "    return B\n",
+            "scripts/cuda_bench_assemble.py",
+        )
+        observed = Counter((f, ctx, role) for f, _, role, ctx in refs)
+        assert dict(observed) != self.REFERENCE_MULTISET
+        assert any(r[2] in self.BINDING_ROLES for r in refs), refs
 
     def test_the_real_scanner_counts_duplicate_calls_in_one_function(
         self,
