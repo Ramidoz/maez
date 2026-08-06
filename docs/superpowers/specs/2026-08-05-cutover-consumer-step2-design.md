@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v5
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v6
 
 Status: **DRAFT — R1 quarantined, awaiting Rohit. No REDs, no code.**
 
@@ -11,11 +11,12 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v2 | five overclaimed security properties conceded, one under-specified |
 | v3 | R2 ruled (reconstruct, don't sign); four precision blockers |
 | v4 | R3 ruled (absorb stage 2 narrowly); producer proof added; four precision corrections |
-| **v5** | **`assemble-stage2` matrices frozen; locator resolved; claim narrowed to what the evidence proves; producer chronology; one-builder REDs; post-burn evaluation gaps closed** |
+| v5 | `assemble-stage2` matrices frozen; locator resolved; claim narrowed; producer chronology; one-builder REDs; post-burn evaluation gaps |
+| **v6** | **five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary** |
 
 **R1 remains OPEN and is Rohit's covenant decision.** Until ruled: no
 production consumer entrypoint, no burn REDs. Steps 2A and 2B below may
-be finalized as design; implementation waits for this v5 gate to clear.
+be finalized as design; implementation waits for this v6 gate to clear.
 
 ---
 
@@ -112,23 +113,38 @@ used.
 | — | burn and `begin()` remain unreachable until R1 is decided |
 | — | **step 5 is amended to own stages 3–5 only** |
 
-### `Stage2ArtifactPaths` — an explicit authority
+### `Stage2InputPaths` — ONE locating authority
 
-v3 said "frozen artifact selection", which is an unnamed thing and
-therefore not reviewable. Replaced by an explicit typed authority,
-mirroring `Stage1ArtifactPaths`:
+v5 contradicted itself: it named admission and completion references as
+constants of the authority, then — correctly — observed that runtime
+ordinals make that impossible and introduced a locator. Two mechanisms
+for locating the same records is one too many, and the contradiction is
+resolved in favour of the locator.
 
-* every fixed **stage-1 reference** named individually;
-* the **authorization reference** named;
-* the **command record** references named (admission and completion).
+**`Stage2InputPaths` carries exactly two things:**
 
-Hard rules:
+* the fixed **22 stage-1 inputs**;
+* the **authorization reference**.
 
-* **no latest-file discovery** — no globbing, no sorting by mtime, no
-  "highest attempt wins";
-* **no caller-supplied bundle** — there is no parameter of type
-  `BenchEvidenceBundle` anywhere on the consumer;
-* every name is a constant of the authority, not an argument.
+Nothing else. It does **not** name any command record.
+
+**Everything command-bound derives, never named:**
+
+| record | how it is located |
+|---|---|
+| completion | the single owner-supplied relative locator |
+| admission | **exclusively** from the verified completion's `admission_ref` |
+| receipt | **exclusively** from the verified completion's `artifact_ref` |
+
+There is no parameter for an admission path and none for a receipt path.
+A caller therefore cannot aim the three at unrelated objects — the only
+degree of freedom is which completion to read, and the joins decide
+whether it is admissible.
+
+Hard rules, unchanged: no latest-file discovery (no globbing, no mtime
+sort, no "highest attempt wins"); **no caller-supplied bundle** — no
+parameter of type `BenchEvidenceBundle` exists anywhere on the consumer;
+every `Stage2InputPaths` member is a constant, not an argument.
 
 ### The `assemble-stage2` command, frozen
 
@@ -158,10 +174,33 @@ This requires **generalizing completion-pair validation** so an assembly
 receipt is an admissible cited artifact. Today the matrix pairs
 `(artifact_schema, phase)` and every entry has a phase or is
 `static-preflight`; `assemble-stage2` is the first entry that is neither a
-phase nor phase-free-by-being-preflight. That generalization is part of
-2A's scope and is a **canon change** — `ACTIVE_SCHEMA_FAMILIES` and the
-admission/completion canon tests move with it, exactly as step 1's 24→26
-did.
+phase nor phase-free-by-being-preflight.
+
+### Exact canon result (v6)
+
+v5 said this moves `ACTIVE_SCHEMA_FAMILIES` "exactly as step 1's 24→26
+did". That is not implementable as written, and it is wrong: step 1 added
+two **schema families**; `assemble-stage2` adds **none**. Verified —
+`ASSEMBLE_RECEIPT_SCHEMA`, `COMMAND_COMPLETION_SCHEMA` and
+`COMMAND_ADMISSION_SCHEMA` are all already active members.
+
+Frozen result:
+
+| property | result |
+|---|---|
+| command admission schema | **stays v1** |
+| command completion schema | **stays v1** |
+| `ACTIVE_SCHEMA_FAMILIES` count | **stays 26** |
+| what expands | the **closed command vocabulary** only — `_COMMAND_NAMES` and `_COMPLETION_MATRIX` |
+| historical v1 artifacts | **remain decodable, unchanged** |
+
+This is the lean compatible choice: the vocabulary widens, schema
+identity does not. The alternative — versioning the admission/completion
+schemas for semantic widening — would require **both versions to
+coexist**, because replacing v1 would orphan every durable phase-evidence
+document already on disk. That path is available if review later requires
+versioned widening, but it is not taken here and the design must not be
+read as leaving it ambiguous.
 
 Note the asymmetry this creates and does not hide: `assemble-stage1`
 still publishes its receipt directly. Step 2 does **not** retrofit stage 1
@@ -224,9 +263,20 @@ REDs:
 
 1. the producer calls the canonical `build_stage2_bundle` **exactly once**;
 2. the consumer calls **that same symbol** exactly once;
-3. **no production `BenchEvidenceBundle(...)` construction exists outside
-   it** — test modules excluded, and that exclusion is itself asserted so
-   it cannot silently widen;
+3. **the production `BenchEvidenceBundle(...)` construction sites are
+   exactly two, by frozen allowlist** — v5 said "none outside the stage-2
+   seam", which would reject the frozen stage-1 builder that constructs
+   one directly at
+   [cuda_bench_assemble.py:275](/home/rohit/maez/scripts/cuda_bench_assemble.py#L275)
+   and that step 2 deliberately does not touch. The allowlist is:
+
+   | # | site | role |
+   |---|---|---|
+   | 1 | the historical stage-1 constructor | frozen, untouched |
+   | 2 | the sole stage-2 constructor | the canonical seam |
+
+   **No third site may exist.** Test modules are excluded, and that
+   exclusion is itself asserted so it cannot silently widen;
 4. step 5 **imports** this seam for any stage-2 prefix and owns only
    stages 3–5.
 
@@ -351,23 +401,68 @@ Frozen, per `_open_anonymous_file`
 ([driver:375](/home/rohit/maez/scripts/cuda_bench_driver.py#L375)):
 
 ```
-receipt = CutoverConsumptionReceipt(...)   # complete, from the ONE clock read
+decided_at = clock()                       # the burn-decision moment
+receipt = CutoverConsumptionReceipt(...)   # complete, consumed_at = decided_at
 payload = canonical_encode(receipt)        # canonical bytes
 typed_roundtrip(payload)                   # decode back and compare — pre-burn
 begin = prepared.begin                     # METHOD PRE-BOUND, pre-burn
 O_TMPFILE                                  # no name exists yet
 write_all + validate                       # short writes handled, content verified
 fsync(file)                                # STILL PRE-BURN: failure leaves nonce reusable
------------------------------------------- last no-mutation point
-exclusive atomic link                      # THE burn — linearization point; SPENT here
-fsync(marker directory)                    # durability of the publication
-revalidate published identity              # nlink, size, inode match what we linked
-recheck the named chain                    # A3, second comparison
------------------------------------------- publication durable; ELIGIBLE TO EXECUTE
+
+    publish_and_validate_burn():           # ONE closed helper
+        recheck expiry at clock()          #   LAST pre-burn act
+        ------------------------------------ last no-mutation point
+        exclusive atomic link              #   THE burn; SPENT here
+        fsync(marker directory)            #   durability of the publication
+        revalidate published identity      #   nlink, size, inode
+        recheck the named chain            #   A3, second comparison
+        ------------------------------------ returns only when ELIGIBLE
+
 begin()                                    # local call, exactly once
 ```
 
-Two v5 closures visible above:
+### The pre-link expiry recheck (v6)
+
+**A valid permit could be burned after it expired.** The clock was read
+once, before `prepare()`; encoding, staging and two fsyncs follow. A slow
+preparation therefore validates before expiry and links *after* it. The
+authorization's whole purpose is to bound the window in which a mutation
+may begin, and that bound leaked.
+
+Expiry is now rechecked at a **fresh clock read, immediately before the
+link**, as the last pre-burn act. Failure is
+`authorization_expired_pre_link`: no link, nonce reusable, **zero**
+executor calls.
+
+The receipt's `consumed_at` stays `decided_at` — the moment the burn was
+decided, which is what the receipt is a record of, and which must be
+composed pre-burn per the closure below. Since `decided_at <= recheck <
+expires_at`, step 1's chronology is satisfied by construction rather than
+by luck.
+
+**Binding RED:** the clock crosses expiry during preparation or staging →
+no link, nonce reusable, zero executor calls.
+
+### The AST boundary (v6)
+
+v5's AST claim — "no call of any kind evaluated after the burn" —
+**contradicted its own sequence**, which deliberately performs a directory
+fsync, an identity revalidation and a chain recheck after the link. Both
+cannot be true.
+
+Resolved by naming the boundary rather than pretending it is the link:
+those post-link steps live **inside one closed helper**,
+`publish_and_validate_burn()`, which returns only when the nonce is
+published *and* eligible. The AST claim applies **after that helper
+returns**, where exactly one thing may happen: the pre-bound local
+`begin()`.
+
+Runtime REDs still carry what syntax cannot: every internal post-link
+failure inside the helper spends the nonce and calls the executor **zero**
+times.
+
+### Two v5 closures also visible above:
 
 **The method is pre-bound.** `prepared.begin()` performs an attribute
 lookup *after* the burn — a descriptor, a `__getattr__`, or a property
@@ -486,10 +581,13 @@ The property that matters is not adjacency but *the marker was published
 before the executor ran*, and syntax cannot see that.
 
 **AST proves:** the executor method is **pre-bound to a local name before
-the burn**; the burn and `begin()` are adjacent top-level statements;
-exactly one syntactic executor call; no intervening branch or handler;
-and **no attribute access, subscript, or call of any kind is evaluated
-after the burn** other than that one local call. Also: the production
+the burn**; the `publish_and_validate_burn()` call and `begin()` are
+adjacent top-level statements; exactly one syntactic executor call; no
+intervening branch or handler; and **after `publish_and_validate_burn()`
+returns**, no attribute access, subscript, or call of any kind is
+evaluated other than that one local call. The boundary is the helper's
+return, not the link — the post-link durability and revalidation steps
+live inside the helper by design. Also: the production
 entrypoint takes no injection parameters, and no production
 `BenchEvidenceBundle(...)` construction exists outside the canonical
 seam.
@@ -549,6 +647,7 @@ side of the linearization point:
 | 29 | clock or boot read | pre | reusable | no | `edge_state_unreadable` |
 | 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
+| 34b | expiry recheck immediately before link | pre | reusable | **zero** | `authorization_expired_pre_link` |
 | 31 | O_TMPFILE creation | pre | reusable | no | `burn_unstaged` |
 | 32 | short write | pre | reusable | no | `burn_write_incomplete` |
 | 33 | staged content validation | pre | reusable | no | `burn_content_invalid` |
