@@ -1006,3 +1006,121 @@ class TestOneBuilderTopology:
 
     def test_exclusions_are_explicit(self) -> None:
         assert "tests" in self.EXCLUDED_ROOTS
+
+
+class TestProductionIdentityProjection:
+    """The production identity is PROJECTED, never probed.
+
+    A live probe before cutover could only observe the INCUMBENT Vulkan
+    process -- it would attest the thing being replaced. RuntimeIdentity
+    is pinned configuration by its own docstring, not observation.
+    """
+
+    @staticmethod
+    def _bench_doc(root: Path):
+        from tests.test_cutover_step1_invariants import stage1_paths
+
+        return cm.PersistedDoc(
+            driver.open_bench_file(stage1_paths().runtime_identity, root=root)
+        )
+
+    def test_projection_changes_only_mode_and_effective_args(
+        self, tmp_path: Path
+    ) -> None:
+        root = seed_private_root(tmp_path)
+        bench = self._bench_doc(root)
+        projected = cm.project_production_runtime_identity(bench)
+
+        assert bench.obj.mode == "bench"
+        assert projected.obj.mode == "production"
+        assert projected.obj.effective_args == cm._MODE_ARGS["production"]
+
+        for name in cm._BENCH_IDENTITY_STABLE_FIELDS:
+            assert getattr(projected.obj, name) == getattr(bench.obj, name), name
+
+    def test_projection_takes_no_caller_controlled_input(self) -> None:
+        """No parameter for mode, args, hashes or overrides exists to misuse."""
+        import inspect
+
+        params = inspect.signature(
+            cm.project_production_runtime_identity
+        ).parameters
+        assert list(params) == ["bench_doc"]
+
+    def test_projected_wrapper_round_trips_canonically(
+        self, tmp_path: Path
+    ) -> None:
+        root = seed_private_root(tmp_path)
+        projected = cm.project_production_runtime_identity(self._bench_doc(root))
+        assert cm.PersistedDoc(projected.wrapper_bytes).obj == projected.obj
+
+    def test_non_bench_source_refuses(self, tmp_path: Path) -> None:
+        root = seed_private_root(tmp_path)
+        projected = cm.project_production_runtime_identity(self._bench_doc(root))
+        with pytest.raises(ValueError):
+            cm.project_production_runtime_identity(projected)
+
+    def test_tampered_wrapper_refuses(self, tmp_path: Path) -> None:
+        root = seed_private_root(tmp_path)
+        bench = self._bench_doc(root)
+        wrapper = json.loads(bench.wrapper_bytes)
+        wrapper["fields"]["alias"] = "forged-alias"
+        with pytest.raises(ValueError):
+            cm.project_production_runtime_identity(
+                cm.PersistedDoc(cm._canonical_wrapper_bytes(wrapper))
+            )
+
+    def test_bench_identity_and_its_document_stay_byte_identical(
+        self, tmp_path: Path
+    ) -> None:
+        root = seed_private_root(tmp_path)
+        before = driver.open_bench_file(
+            "windows/ab-20260803-1837/cuda_candidate/attempt-000/identity/"
+            "bench_runtime_identity.json",
+            root=root,
+        )
+        bundle = assemble.build_stage2_bundle(
+            stage2_input_paths(), root=root, timestamp=STAGE2_TS
+        )
+        after = driver.open_bench_file(
+            "windows/ab-20260803-1837/cuda_candidate/attempt-000/identity/"
+            "bench_runtime_identity.json",
+            root=root,
+        )
+        assert before == after
+        assert bundle.bench_runtime_identity.mode == "bench"
+
+    def test_stage_two_bench_binding_invariant_while_full_binding_moves(
+        self, tmp_path: Path
+    ) -> None:
+        """The projection must not disturb the frozen bench anchor."""
+        from tests.test_cutover_step1_invariants import (
+            MINTED_BENCH_ANCHOR,
+            stage1_paths,
+        )
+
+        root = seed_private_root(tmp_path)
+        stage_one = assemble.build_stage1_bundle(
+            stage1_paths(), root=root, timestamp=STAGE2_TS
+        )
+        stage_two = assemble.build_stage2_bundle(
+            stage2_input_paths(), root=root, timestamp=STAGE2_TS
+        )
+        assert stage_one.bench_binding_sha256 == MINTED_BENCH_ANCHOR
+        assert stage_two.bench_binding_sha256 == MINTED_BENCH_ANCHOR
+        assert stage_two.binding_sha256 != stage_one.binding_sha256
+
+    def test_the_assembler_performs_no_live_collection(self) -> None:
+        """No systemd, process, GPU or other live read inside the assembler."""
+        import inspect
+
+        source = inspect.getsource(assemble)
+        for banned in (
+            "systemctl",
+            "nvidia-smi",
+            "/proc/",
+            "subprocess",
+            "Popen",
+            "socket",
+        ):
+            assert banned not in source, banned

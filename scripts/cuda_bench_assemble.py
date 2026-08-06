@@ -220,6 +220,19 @@ def build_stage2_bundle(
             for field in fields(cm.BenchEvidenceBundle)
             if field.init
         }
+        # Stage 2 requires a PRODUCTION runtime identity; the stage-1
+        # bundle carries bench mode in both slots. Projected from the
+        # persisted bench document, never probed -- a live probe before
+        # cutover would observe the incumbent Vulkan process.
+        # bench_runtime_identity and its document stay byte-identical.
+        production_identity = cm.project_production_runtime_identity(
+            _persisted(
+                open_bench_file(paths.runtime_identity, root=root),
+                cm.RuntimeIdentity,
+            )
+        )
+        values["runtime_identity"] = production_identity.obj
+        values["runtime_identity_doc"] = production_identity
         values["cutover_authorization"] = authorization
         values["boot_authorization"] = boot
         return cm.BenchEvidenceBundle(**values)

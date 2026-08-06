@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v23
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v24
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -31,7 +31,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v20 | receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding |
 | v21 | the impossible descriptor rule removed everywhere; post-commit connection named; founder authority proven exactly |
 | v22 | journal posture: the header proves NOT-WAL, not `delete` — two-stage check |
-| **v23** | **the identity recheck must be anchored and NO-FOLLOW; `os.stat(path)` was symlink-bypassable** |
+| v23 | the identity recheck must be anchored and NO-FOLLOW |
+| **v24** | **the production identity is PROJECTED from the persisted bench identity — no live probe, no new locator** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -145,6 +146,72 @@ preserves *no receipt, no Act 2*. It is **not** protected execution
 attestation, and the design must never be read as providing one. Real
 attestation would require an authority boundary this privilege level does
 not have — the same reason R2 ruled against signing.
+
+---
+
+## A0b. The production runtime identity is PROJECTED (v24)
+
+Implementation surfaced what twenty-three design revisions did not: stage
+1 requires `runtime_identity.mode == "bench"`
+([cuda_migration.py:5095](/home/rohit/maez/scripts/cuda_migration.py#L5095))
+while stage 2 requires `"production"`
+([:5104](/home/rohit/maez/scripts/cuda_migration.py#L5104), with
+[:5798](/home/rohit/maez/scripts/cuda_migration.py#L5798) making the rule
+explicit). No production-mode artifact exists under the bench root and
+nothing produces one.
+
+I offered two resolutions — a new locator plus a capture step, or a live
+probe inside the assembler. **Both were wrong.** The ruled path is a third:
+**deterministically project** the production identity from the persisted
+bench identity, inside the canonical seam.
+
+Why this is right and a live probe is not:
+
+* `RuntimeIdentity` is, by its own docstring, *"Pinned static bundle
+  identity; it does not claim the backend was loaded."* It describes
+  pinned configuration, not observation.
+* **Before cutover a live probe could only observe the incumbent Vulkan
+  process** — so it would attest the thing we are replacing, not the
+  thing we are moving to. A probe would have felt more rigorous while
+  proving strictly less.
+* The two-identity contract already anticipates this transition:
+  `bench_runtime_identity` stays frozen while the stage's
+  `runtime_identity` differs only in `mode` and `effective_args`.
+* `Stage2InputPaths` already carries both identity roles, so it stays
+  **exactly 23 fields** — no new locator, no new command.
+* A separate collector would add ceremony without proving observation
+  unless its admission and completion also entered the bundle, and its
+  output would carry the same deterministic fields regardless.
+
+**Frozen helper:**
+
+```python
+project_production_runtime_identity(bench_doc: PersistedDoc) -> PersistedDoc
+```
+
+* accepts **only** a canonical `RuntimeIdentity` document in **bench**
+  mode;
+* takes **no** caller-supplied mode, arguments, hashes or overrides —
+  there is no parameter to misuse;
+* preserves **every** `_BENCH_IDENTITY_STABLE_FIELDS` value exactly;
+* replaces **only** `mode="production"` and
+  `effective_args=_MODE_ARGS["production"]` (verified: these differ from
+  bench solely in the port, 8080 vs 18080);
+* emits and **re-decodes** the exact canonical wrapper.
+
+`build_stage2_bundle` uses the selected stage-1 `runtime_identity`
+document as the projection's durable source, then replaces both
+`runtime_identity` and `runtime_identity_doc` before adding the
+authorization. `bench_runtime_identity` and its persisted document stay
+**byte-identical**.
+
+**What this is and is not.** It is a reproducible carried preimage. It is
+**not** a claim that CUDA is already running. The stage-2 receipt binds
+its semantic and file hashes; the S7 action preimage binds the exact
+target before mutation; and **step 2B revalidates the actual runtime,
+library manifest, override and model identity against this projection
+immediately before the burn** — drift refuses pre-burn with zero executor
+calls.
 
 ---
 

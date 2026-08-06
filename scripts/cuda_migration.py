@@ -1538,6 +1538,61 @@ class CommandCompletionDoc:
         )
 
 
+def project_production_runtime_identity(bench_doc: "PersistedDoc") -> "PersistedDoc":
+    """Project the production identity from a persisted BENCH identity.
+
+    Stage 1 requires mode "bench"; stage 2 requires "production". No
+    production-mode artifact exists under the bench root and nothing
+    produces one, so stage 2 needs this projection.
+
+    It is deliberately NOT a live probe. RuntimeIdentity is pinned static
+    configuration -- it does not claim the backend was loaded -- and
+    before cutover a probe could only observe the INCUMBENT Vulkan
+    process, attesting the thing being replaced rather than the target.
+
+    Only `mode` and `effective_args` change. Every
+    _BENCH_IDENTITY_STABLE_FIELDS value is preserved exactly, and there
+    is no parameter for a caller to supply a mode, argument vector, hash
+    or override.
+    """
+
+    if type(bench_doc) is not PersistedDoc:
+        raise ValueError("runtime_identity_projection")
+    source = bench_doc.obj
+    if type(source) is not RuntimeIdentity or source.mode != "bench":
+        raise ValueError("runtime_identity_projection")
+
+    wrapper = json.loads(bench_doc.wrapper_bytes)
+    fields_map = dict(wrapper["fields"])
+    fields_map["mode"] = "production"
+    fields_map["effective_args"] = list(_MODE_ARGS["production"])
+    # The binding must be RECOMPUTED from the projected object: it is a
+    # hash over the fields, so carrying the bench binding forward fails
+    # the roundtrip guard -- correctly, since the two documents are not
+    # the same document.
+    candidate = _dataclass_replace(
+        source,
+        mode="production",
+        effective_args=_MODE_ARGS["production"],
+    )
+    projected = PersistedDoc(
+        _canonical_wrapper_bytes(
+            {
+                "schema": wrapper["schema"],
+                "binding_sha256": candidate.binding_sha256,
+                "fields": fields_map,
+            }
+        )
+    )
+    result = projected.obj
+    if type(result) is not RuntimeIdentity or result.mode != "production":
+        raise ValueError("runtime_identity_projection")
+    for name in _BENCH_IDENTITY_STABLE_FIELDS:
+        if getattr(result, name) != getattr(source, name):
+            raise ValueError("runtime_identity_projection")
+    return projected
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeIdentity:
     """Pinned static bundle identity; it does not claim the backend was loaded."""
