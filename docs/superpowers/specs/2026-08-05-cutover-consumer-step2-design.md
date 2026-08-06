@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v11
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v12
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -18,7 +18,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v8 | eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation |
 | v9 | R1 ruled by the owner on a **false premise I supplied** — WITHDRAWN |
 | v10 | R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector |
-| **v11** | **R1 RULED on true state: the tap is REQUIRED. The S7 WebAuthn authorization path is bound into the pre-burn edge.** |
+| v11 | R1 ruled: the tap is REQUIRED; S7 path bound. Arming authority recorded on my INFERENCE, not the owner's words |
+| **v12** | **arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -654,11 +655,44 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
-### R1 — RULED 2026-08-06 on true state: the tap is REQUIRED
+### R1 — RULED IN TWO PARTS
 
-Owner's ruling: *"Yes it is Maez's brain we are changing."*
+**Part 1 — is a tap required?** Owner, 2026-08-06: *"Yes it is Maez's
+brain we are changing."* The cutover is a tier-2 body/code/**model**
+change and requires a founder key tap.
 
-The state-based arming rule is **honored, not amended**. The cutover is a
+**Part 2 — which authority arms it?** Owner, 2026-08-06, asked
+explicitly: **the existing founder credentials arm cutover.** Any enrolled
+founder credential authorizes a cutover, including the backup and any
+enrolled later.
+
+#### A recording error this section exists to correct
+
+v11 asserted Part 2 as though the owner had ruled it. He had not. He
+answered Part 1; I inferred Part 2 from the state-based rule **in my own
+draft** and wrote it down as his ruling. The two are different questions
+— "a tap is required" does not decide *whose* tap, nor whether future
+enrolments silently widen the set.
+
+This is the same shape as the credential error two revisions earlier:
+taking something I produced and presenting it as established fact. It was
+caught by review, not by me. Part 2 is now recorded from an explicit
+question and an explicit answer.
+
+#### What the owner accepted, stated plainly
+
+The arming set is **not fixed at two**. It is *"any enabled founder
+credential"*, so:
+
+* the backup key can authorize a brain change on its own;
+* enrolling a future founder credential widens what can authorize a
+  cutover, **without a further decision**.
+
+Both consequences were put to the owner before the ruling and accepted.
+They are recorded here so that a later reader does not mistake the broad
+rule for an oversight.
+
+The state-based arming rule is therefore **honored, not amended**. The cutover is a
 tier-2 change under the June authority model, the tap is armed today
 because two founder credentials are enrolled, and **every cutover burn
 requires one**. `procedural` remains a defined mode in the receipt
