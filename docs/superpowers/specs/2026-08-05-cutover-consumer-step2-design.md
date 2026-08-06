@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v18
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v19
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -25,7 +25,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v15 | the action contract MEASURED against `derive_work_class`; item 1 sequence reconciliation |
 | v16 | R5 ruled: follow the S7 action grammar; guarded mint seam specified |
 | v17 | Maez's consultation is MANDATORY — the key is necessary but not sufficient |
-| **v18** | **the consultation producer given a callable contract; retry identity; `affected_refs` derived, not asserted** |
+| v18 | the consultation producer given a callable contract; retry identity; `affected_refs` derived |
+| **v19** | **items 4 and 5 concrete: the durable grant projection and the no-initialization store opener** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1146,6 +1147,90 @@ contains none of the four discarding keys; and the tuple survives
 
 **Item 3 is specified; the consultation adapter is now its open work.**
 2B remains blocked on that, plus items 4 and 5.
+
+#### ITEM 4 — the durable grant projection, concrete (v19)
+
+**Schema literal:** `cuda_migration.s7_execution_grant_projection.v1`.
+
+**Exact projected fields** — all fifteen `S7ExecutionGrant` members, in
+this canonical order:
+
+```
+artifact_id, request_id, request_envelope_hash, rendered_text_hash,
+action_params_hash, precondition_hash, authority_context_hash,
+derived_work_class, derived_aggregation_group, nonce, credential_ref,
+auth_method, grant_source, consumed_at, ceremony_kind
+```
+
+The private `_mint_token` is an `InitVar` and is **not** a dataclass field,
+so it cannot leak into the projection by construction — the exclusion is
+structural rather than a rule someone must remember.
+
+**Encoding:** canonical JSON, sorted keys, the same encoder the rest of
+this design uses, wrapped as
+`{"schema": <literal>, "fields": {...}}`. `presence_evidence_sha256` is
+the SHA-256 of those bytes.
+
+**Reconstruction from the committed row.** Verified: every one of the
+fifteen fields has a matching column in `s7_authorization_artifacts`
+([operator_user_boundary.py:2302](/home/rohit/maez/core/governance/operator_user_boundary.py#L2302)).
+So the projection is rebuildable from durable state alone, by
+`artifact_id`, long after the in-memory grant is gone. That is precisely
+what v13's "recomputable by anyone holding the grant" was not.
+
+**Exact joins**, all four required:
+
+1. returned grant ≡ committed row, field by field, for all fifteen;
+2. projection hash ≡ `presence_evidence_sha256` in the receipt;
+3. `grant.nonce` ≡ the artifact's nonce ≡ the value bound in `params`;
+4. `grant.action_params_hash` ≡ the hash of the frozen action/params.
+
+**A gap this exposes, stated rather than glossed:** `user_presence` and
+`user_verification` are **not** `S7ExecutionGrant` fields — they exist
+only on the artifact and its row. So v13's requirement that both be true
+**cannot be checked from the grant**; it must be read from the committed
+row. The projection therefore proves *which* authorization was consumed,
+and the row proves *a human touched the key*. Two reads, not one, and the
+design would have silently checked neither had this not been enumerated.
+
+#### ITEM 5 — the no-initialization store opener, concrete (v19)
+
+`S7AuthorizationStore.__init__` calls `mkdir(parents=True)`,
+`executescript(_AUTH_SCHEMA)`, an `ALTER TABLE` migration and `commit()`
+([:2413](/home/rohit/maez/core/governance/operator_user_boundary.py#L2413)).
+Constructing it **writes and migrates**, so it can never be used at this
+seam.
+
+**API:**
+
+```
+open_existing_authorization_store(
+    *, db_path: Path, expected_uid: int
+) -> ExistingAuthorizationStore
+```
+
+**Binding rules:**
+
+* the path is reached by **anchored component walk** (A3), never by
+  re-resolution;
+* **absence refuses** — `presence_store_unavailable`. The opener never
+  creates, and there is no `create=` parameter to get wrong;
+* file predicates: regular, expected uid, mode `0600`, `st_nlink == 1`;
+* **inspection** uses a `mode=ro` connection;
+* **consumption** uses a `mode=rw` connection — **never `rwc`**, which
+  would create the file and reintroduce exactly the hazard this opener
+  exists to remove;
+* both connections are proven to address the **same verified file** by
+  comparing `st_dev`/`st_ino` of the opened descriptors, not by
+  comparing path strings;
+* the schema is **verified, never migrated**: the expected columns must
+  already be present, and a mismatch refuses `presence_store_schema_drift`
+  rather than being repaired.
+
+**Binding REDs:** opening a non-existent path refuses and **creates
+nothing** on disk; a `mode=rw` open of a missing file raises rather than
+creating; the two connections agree on `st_dev`/`st_ino`; and a store
+with a drifted schema refuses instead of being altered.
 
 #### Grant evidence must be durable canon
 
