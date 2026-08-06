@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v7
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v8
 
 Status: **DRAFT — R1 quarantined, awaiting Rohit. No REDs, no code.**
 
@@ -13,11 +13,12 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v4 | R3 ruled (absorb stage 2 narrowly); producer proof added; four precision corrections |
 | v5 | `assemble-stage2` matrices frozen; locator resolved; claim narrowed; producer chronology; one-builder REDs; post-burn evaluation gaps |
 | v6 | five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary |
-| **v7** | **three superseded rules swept from the text; clock-regression invariant enforced rather than assumed** |
+| v7 | three superseded rules swept; clock-regression invariant enforced rather than assumed |
+| **v8** | **eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation** |
 
 **R1 remains OPEN and is Rohit's covenant decision.** Until ruled: no
 production consumer entrypoint, no burn REDs. Steps 2A and 2B below may
-be finalized as design; implementation waits for this v7 gate to clear.
+be finalized as design; implementation waits for this v8 gate to clear.
 
 ---
 
@@ -419,6 +420,7 @@ fsync(file)                                # STILL PRE-BURN: failure leaves nonc
         fsync(marker directory)            #   durability of the publication
         revalidate published identity      #   nlink, size, inode
         recheck the named chain            #   A3, second comparison
+        recheck eligibility at clock()     #   LAST act before returning
         ------------------------------------ returns only when ELIGIBLE
 
 begin()                                    # local call, exactly once
@@ -463,8 +465,47 @@ enforcement, which is what "by construction" should have meant.
 * the clock steps **backward** during preparation or staging → no link,
   nonce reusable, zero executor calls.
 
-**Binding RED:** the clock crosses expiry during preparation or staging →
-no link, nonce reusable, zero executor calls.
+### The pre-`begin()` eligibility recheck (v8)
+
+The pre-link check proves the nonce was **burned** before expiry. It does
+**not** prove the mutation **begins** before expiry — and that is the
+property the authorization actually exists to provide.
+
+After the link, `publish_and_validate_burn()` still performs a directory
+fsync, an identity revalidation and a named-chain recheck. Any of those
+can stall — a slow or degraded disk is the ordinary case, not an exotic
+one — and past `expires_at` the helper would still return eligible and
+`begin()` would still run. The window bound leaked at the far end, in
+exactly the way v6's leaked at the near end.
+
+So a **final eligibility check runs inside the helper, after all
+post-link validation and immediately before it returns**:
+
+```
+decided_at <= pre_link_recheck <= pre_begin_recheck < expires_at
+```
+
+One chain, checked twice, at both ends of the publication.
+
+**These failures are post-publication and take their own exact codes.**
+They cannot reuse the pre-link codes, because recovery differs
+completely: the authorization is **already spent**. A caller told
+`authorization_expired_pre_link` may retry with the same nonce; a caller
+told `authorization_expired_pre_begin` must not, and never can.
+
+| condition | nonce | executor | code |
+|---|---|---|---|
+| expiry crossed during post-link validation | **spent** | zero | `authorization_expired_pre_begin` |
+| clock regressed during post-link validation | **spent** | zero | `clock_regression_pre_begin` |
+
+**Required REDs:**
+
+* expiry during post-link fsync/revalidation → nonce spent, **zero**
+  executor calls, terminal refusal;
+* clock regression during that interval → nonce spent, **zero** executor
+  calls;
+* valid final check → helper returns and the adjacent pre-bound `begin()`
+  runs **exactly once**.
 
 ### The AST boundary (v6)
 
@@ -508,6 +549,10 @@ value, not a second read", which is now false, since the pre-link recheck
 |---|---|---|
 | `decided_at` (first) | the receipt's `consumed_at`, and nothing else | it **is** the bytes |
 | `pre_link_recheck` (second) | expiry and clock-regression checks **only** | **never** — the staged bytes are already fsynced |
+| `pre_begin_recheck` (third) | eligibility immediately before `begin()` | **never** — the marker is already published |
+
+Only the first read is ever recorded. The second and third exist solely
+to refuse, and neither can alter any durable artifact.
 
 The staged payload is complete and durable before the second read
 happens, so no clock value read at the edge can alter what was written.
@@ -634,7 +679,7 @@ when the double runs, and exactly one call.
 | failure class | executor calls | outcome |
 |---|---|---|
 | any pre-publication failure | **zero** | reusable |
-| post-publication, pre-`begin()` (dir fsync, identity, chain recheck, `uncertain`) | **zero** | spent, not eligible |
+| post-publication, pre-`begin()` (dir fsync, identity, chain recheck, **eligibility recheck**, `uncertain`) | **zero** | spent, not eligible |
 | executor raises | **exactly one** | spent, terminal |
 | executor returns invalid type | **exactly one** | spent, terminal |
 
@@ -695,6 +740,8 @@ side of the linearization point:
 | 38 | marker directory fsync | post | spent | no | `burn_unrecorded_fsync` |
 | 39 | published identity revalidation | post | spent | no | `burn_unrecorded_identity` |
 | 40 | post-publication chain recheck | post | spent | no | `root_moved_post_publication` |
+| 40b | expiry crossed before `begin()` | post | **spent** | **zero** | `authorization_expired_pre_begin` |
+| 40c | clock regressed before `begin()` | post | **spent** | **zero** | `clock_regression_pre_begin` |
 | 41 | executor raises | post | spent | **one** | `executor_failed` |
 | 42 | executor returns invalid type | post | spent | **one** | `executor_contract` |
 | 43 | unexpected internal, pre-link | pre | reusable | **zero** | `consumer_internal_pre` |
