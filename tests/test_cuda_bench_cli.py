@@ -35,6 +35,7 @@ PUBLIC_COMMANDS = (
     "vulkan-baseline",
     "cuda-candidate",
     "assemble-stage1",
+    "assemble-stage2",
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_TIMESTAMP = "2026-07-21T12:00:00Z"
@@ -2705,7 +2706,7 @@ def _terminal_artifact_handler(status: str) -> Callable[..., object]:
 
 
 class TestSealedParser:
-    def test_parser_has_exactly_five_public_choices(self) -> None:
+    def test_parser_has_exactly_six_public_choices(self) -> None:
         parser = cli.build_parser()
         subparsers = parser._subparsers
         assert subparsers is not None
@@ -2751,6 +2752,10 @@ class TestSealedParser:
                 f"--{field.name.replace('_', '-')}"
                 for field in fields(assemble.Stage1ArtifactPaths)
             },
+            # Stage 2 exposes ONLY the window id: its 23 inputs are
+            # constants of the authority, so no caller can point the
+            # assembly at different evidence.
+            "assemble-stage2": {"--window-id"},
         }
         assembly_parser = parser._subparsers._group_actions[0].choices[
             "assemble-stage1"
@@ -5410,6 +5415,9 @@ class TestTask9Stage1AssemblyCommand:
             "vulkan-baseline": cm.COMMAND_COMPLETION_SCHEMA,
             "cuda-candidate": cm.COMMAND_COMPLETION_SCHEMA,
             "assemble-stage1": driver.ASSEMBLE_RECEIPT_SCHEMA,
+            # Stage 2 publishes a COMPLETION citing its receipt; stage 1
+            # keeps its direct receipt terminal, deliberately.
+            "assemble-stage2": cm.COMMAND_COMPLETION_SCHEMA,
         }
 
     def test_assembly_clock_failure_persists_failed_assembly_receipt(

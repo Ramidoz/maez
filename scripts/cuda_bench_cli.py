@@ -1977,7 +1977,15 @@ def _valid_command_completion_result(
         return False
     if attempt.command == "static-preflight":
         return True
-    expected_type: type[object] = cm.PhasePacket
+    # Command-aware: stage 2 cites an assembly RECEIPT, not a measurement
+    # packet. Treating every non-static artifact as a PhasePacket rejected
+    # stage 2's own valid work. Unknown commands still refuse.
+    if attempt.command == "assemble-stage2":
+        expected_type = cm.AssembleReceiptDoc
+    elif attempt.command in {"vulkan-baseline", "cuda-candidate"}:
+        expected_type = cm.PhasePacket
+    else:
+        return False
     try:
         artifact_bytes = driver.open_bench_file(
             completion.artifact_ref, root=root
@@ -1996,13 +2004,22 @@ def _valid_command_completion_result(
         )
     except Exception:
         return False
-    packet = artifact.obj
+    published = artifact.obj
+    if attempt.command == "assemble-stage2":
+        # The permit's own semantics, not a measurement packet's: exact
+        # window, the provisional decision, and the frozen reasons.
+        return (
+            type(published) is cm.AssembleReceiptDoc
+            and published.cutover_window_id == result.window_id
+            and published.decision == "provisional_cuda_boot"
+            and published.reasons == ("cold_boot_witness_pending",)
+        )
     return (
-        type(packet) is cm.PhasePacket
-        and packet.phase == completion.decoded_phase
-        and packet.window_id == result.window_id
-        and packet.outcome == "completed"
-        and packet.order_sha256 == cm.FROZEN_ORDER_SHA256
+        type(published) is cm.PhasePacket
+        and published.phase == completion.decoded_phase
+        and published.window_id == result.window_id
+        and published.outcome == "completed"
+        and published.order_sha256 == cm.FROZEN_ORDER_SHA256
     )
 
 
@@ -2622,6 +2639,7 @@ def _run_command(
     root: Path,
     clock: driver.Clock,
     authority_ref: str | None = None,
+    admission_window_id: str | None = None,
 ) -> int:
     global _cleanup_incomplete_committing, _linearized_durable_success
     global _terminal_committed
@@ -2691,6 +2709,16 @@ def _run_command(
                     "refused", "authorization_malformed", None, None, None
                 )
                 return _commit_terminal(terminal)
+        if command == "assemble-stage2":
+            # Stage 2's window comes from the parsed --window-id, NOT from
+            # authority_ref: that parameter names a persisted PHASE
+            # authorization, and overloading it would claim an
+            # authorization document that does not exist for assembly.
+            if not admission_window_id:
+                return _commit_terminal(
+                    TerminalResult("refused", "invocation_invalid", None, None, None)
+                )
+            window_id = admission_window_id
         try:
             attempt = driver._admit_command(
                 command=command,
@@ -3839,6 +3867,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             handler,
             root=driver.BENCH_ROOT,
             clock=clock,
+            admission_window_id=(
+                parsed.window_id if command == "assemble-stage2" else None
+            ),
             authority_ref=(
                 parsed.window_authorization
                 if command == "vulkan-baseline"

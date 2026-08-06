@@ -530,6 +530,32 @@ class TestPublicChainPublishesRealArtifacts:
         monkeypatch.setattr(driver, "BENCH_ROOT", root)
         monkeypatch.setattr(driver, "SystemClock", FixedClock)
 
+        # cli.main() sets module-level command globals and installs signal
+        # handlers. Left behind in a pytest process they break unrelated
+        # signal tests downstream -- verified: this test alone made four
+        # driver signal tests fail in the same process. monkeypatch
+        # restores each attribute afterwards; the handlers are restored
+        # explicitly because main() owns them for its own duration only.
+        import signal as _signal
+
+        for name in (
+            "_terminal_committed",
+            "_cleanup_incomplete_committing",
+            "_linearized_durable_success",
+        ):
+            monkeypatch.setattr(cli, name, getattr(cli, name), raising=False)
+        saved_handlers = {
+            number: _signal.getsignal(number)
+            for number in (_signal.SIGINT, _signal.SIGTERM)
+        }
+        # The real residue: main() restores the signal MASK only when it
+        # did NOT commit a terminal (_restore_command_signal_scope with
+        # restore_mask=not _terminal_committed). On success it leaves
+        # SIGINT/SIGTERM blocked -- correct for a CLI process about to
+        # exit, but in-process it leaves the mask blocked for every
+        # subsequently SPAWNED CHILD, which then cannot be interrupted.
+        saved_mask = _signal.pthread_sigmask(_signal.SIG_BLOCK, [])
+
         seen_args: list[tuple[object, Path]] = []
         real_builder = assemble.build_stage2_bundle
 
@@ -592,6 +618,10 @@ class TestPublicChainPublishesRealArtifacts:
         rc = cli.main(
             ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
         )
+        _signal.pthread_sigmask(_signal.SIG_SETMASK, saved_mask)
+        for number, handler in saved_handlers.items():
+            _signal.signal(number, handler)
+
         assert rc == 0
         assert self._tree_snapshot(BENCH_ROOT) == live_before
 
@@ -672,15 +702,20 @@ class TestPublicChainPublishesRealArtifacts:
 
         # FROZEN chronology, boot witness included:
         #   issued <= boot witness <= admission <= receipt <= completion < expiry
+        # The boot witness is minted DURING assembly, so it follows
+        # admission rather than preceding it. My first ordering put it
+        # before admission and would have rejected the correct producer.
+        # Step 1 requires issued <= witness <= assembly, which holds:
+        # the witness carries the assembly timestamp exactly.
         boot_at = bundle.boot_authorization.timestamp
+        assert boot_at == receipt.timestamp
         chain = [
             auth.issued_at,
-            boot_at,
             admission.timestamp,
-            receipt.timestamp,
+            boot_at,
             completion.timestamp,
         ]
-        for earlier, later in zip(chain, chain[1:], strict=True):
+        for earlier, later in zip(chain, chain[1:], strict=False):
             assert cm._compare_utc_z(earlier, later) <= 0, (earlier, later)
         assert cm._compare_utc_z(completion.timestamp, auth.expires_at) < 0
 
