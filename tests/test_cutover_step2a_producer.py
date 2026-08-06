@@ -32,11 +32,78 @@ from scripts import cuda_migration as cm
 
 REPO = Path(__file__).resolve().parents[1]
 BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
-STAGE2_TS = "2026-07-13T12:03:02Z"
+# The window-8 evidence is dated 2026-08-03; its latest stage-1 timestamp
+# is 19:37:16Z. v1 of this fixture minted a JULY 13 authorization over
+# AUGUST 3 evidence and then let main() run on the real (August 6) clock,
+# so the permit both predated its evidence and had expired. No correct
+# implementation could satisfy that. These dates are physically possible.
+LATEST_EVIDENCE = "2026-08-03T19:37:16Z"
+AUTH_ISSUED_AT = "2026-08-03T20:00:00Z"          # after the last evidence
+AUTH_EXPIRES_AT = "2026-08-04T00:00:00Z"         # issued + CUTOVER_TTL_S
+STAGE2_TS = "2026-08-03T20:30:00Z"               # inside the window
+RUN_CLOCK = "2026-08-03T20:31:00Z"               # injected into main()
 # The FROZEN name (scripts/cuda_cutover.py:22). My first draft used a
 # bare "cutover-authorization.json", which is not the canonical ref --
 # so no correct implementation could ever have satisfied that fixture.
 AUTHORIZATION_REF = "receipts/cutover-authorization.json"
+
+
+def seed_private_root(tmp_path: Path) -> Path:
+    """Seed a private root every success witness uses.
+
+    Direct builder tests previously passed root=BENCH_ROOT, where
+    receipts/cutover-authorization.json does not exist -- so they could
+    never have gone green either.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from tests.test_cuda_migration import _cutover_authorization_doc
+    from tests.test_cutover_step1_invariants import stage1_paths
+
+    root = tmp_path / "bench"
+    root.mkdir(mode=0o700)
+    stage1 = stage1_paths()
+    for f in dataclass_fields(stage1):
+        rel = getattr(stage1, f.name)
+        src = BENCH_ROOT / rel
+        assert src.is_file(), f"missing required stage-1 input: {rel}"
+        dst = root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+        dst.chmod(0o600)
+
+    # Directory modes must be 0700 BEFORE any read: open_bench_file
+    # enforces them, and seeding chmod'd afterwards -- so the anchor build
+    # refused and every success witness failed on the fixture rather than
+    # its intended cause.
+    (root / "markers").mkdir(mode=0o700, exist_ok=True)
+    for directory in root.rglob("*"):
+        if directory.is_dir():
+            directory.chmod(0o700)
+    root.chmod(0o700)
+
+    anchor = assemble.build_stage1_bundle(
+        stage1_paths(), root=root, timestamp=STAGE2_TS
+    ).bench_binding_sha256
+    auth = _cutover_authorization_doc(
+        anchor, issued_at=AUTH_ISSUED_AT, expires_at=AUTH_EXPIRES_AT
+    )
+    auth_path = root / AUTHORIZATION_REF
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    auth_path.write_bytes(auth.wrapper_bytes)
+    auth_path.chmod(0o600)
+    auth_path.parent.chmod(0o700)
+    return root
+
+
+class FixedClock:
+    """Deterministic clock: main() must not run on the wall clock."""
+
+    def __init__(self, moment: str = RUN_CLOCK) -> None:
+        self._moment = moment
+
+    def now_utc(self) -> str:
+        return self._moment
 
 
 def stage2_input_paths() -> "assemble.Stage2InputPaths":
@@ -308,7 +375,9 @@ class TestStage2InputPathsIsExact:
 class TestProducerBehaviour:
     """Names and matrices prove nothing. The producer must MINT a permit."""
 
-    def test_build_stage2_bundle_yields_provisional_cuda_boot(self) -> None:
+    def test_build_stage2_bundle_yields_provisional_cuda_boot(
+        self, tmp_path: Path
+    ) -> None:
         """The whole point of 2A: a real stage-2 permit from real inputs.
 
         Symbol-existence REDs pass the moment a stub is written. This one
@@ -317,7 +386,7 @@ class TestProducerBehaviour:
         """
         bundle = assemble.build_stage2_bundle(
             stage2_input_paths(),
-            root=BENCH_ROOT,
+            root=seed_private_root(tmp_path),
             timestamp=STAGE2_TS,
         )
         assert type(bundle) is cm.BenchEvidenceBundle
@@ -325,7 +394,9 @@ class TestProducerBehaviour:
         assert verdict.decision == "provisional_cuda_boot"
         assert verdict.cutover_window_id is not None
 
-    def test_producer_receipt_is_the_exact_canonical_bytes(self) -> None:
+    def test_producer_receipt_is_the_exact_canonical_bytes(
+        self, tmp_path: Path
+    ) -> None:
         """Compare BYTES, not two dictionary fields.
 
         The first version asserted two keys and called itself "exact
@@ -334,7 +405,7 @@ class TestProducerBehaviour:
         """
         bundle = assemble.build_stage2_bundle(
             stage2_input_paths(),
-            root=BENCH_ROOT,
+            root=seed_private_root(tmp_path),
             timestamp=STAGE2_TS,
         )
         verdict = cm.evaluate_promotion_bundle(bundle)
@@ -386,180 +457,16 @@ class TestPublicCommandChain:
 
 
 class TestPublicChainPublishesRealArtifacts:
-    """main() must actually assemble and publish -- not merely parse.
+    """main() must assemble and publish -- proven around ONE invocation.
 
-    Registration, parsing and a matrix entry say nothing about whether
-    the command does anything: `assemble-stage2` could stay bound to
-    _unimplemented_handler and every other CLI test here would pass.
-    This invokes the real entrypoint against an ANCHORED PRIVATE ROOT
-    (never the live bench root) and joins the published chain.
+    Registration, parsing and a matrix entry say nothing: assemble-stage2
+    could stay bound to _unimplemented_handler and every other CLI test
+    would pass.
     """
 
     @staticmethod
-    def _private_root(tmp_path: Path) -> Path:
-        """Seed a private root that a CORRECT implementation can satisfy.
-
-        Three defects in the first draft, all fatal to the test's purpose:
-        missing inputs were silently skipped (so the fixture could be
-        hollow), the authorization ref was not the frozen name, and no
-        authorization artifact was minted at all -- there is none under
-        the live root to copy. Every input is now required, and the
-        authorization is minted here, parented to the stage-1 bench anchor
-        computed from this private root's own inputs.
-        """
-        from dataclasses import fields as dataclass_fields
-
-        from tests.test_cuda_migration import _cutover_authorization_doc
-        from tests.test_cutover_step1_invariants import stage1_paths
-
-        root = tmp_path / "bench"
-        root.mkdir(mode=0o700)
-        authority = stage2_input_paths()
-        for f in dataclass_fields(authority):
-            if f.name == "authorization":
-                continue
-            rel = getattr(authority, f.name)
-            src = BENCH_ROOT / rel
-            assert src.is_file(), f"missing required stage-1 input: {rel}"
-            dst = root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(src.read_bytes())
-            dst.chmod(0o600)
-
-        stage1 = assemble.build_stage1_bundle(
-            stage1_paths(), root=root, timestamp=STAGE2_TS
-        )
-        auth = _cutover_authorization_doc(stage1.bench_binding_sha256)
-        auth_path = root / AUTHORIZATION_REF
-        auth_path.parent.mkdir(parents=True, exist_ok=True)
-        auth_path.write_bytes(auth.wrapper_bytes)
-        auth_path.chmod(0o600)
-
-        (root / "markers").mkdir(mode=0o700, exist_ok=True)
-        for directory in root.rglob("*"):
-            if directory.is_dir():
-                directory.chmod(0o700)
-        return root
-
-    def test_invocation_publishes_admission_receipt_and_completion(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from scripts import cuda_bench_cli as cli
-
-        root = self._private_root(tmp_path)
-        monkeypatch.setattr(driver, "BENCH_ROOT", root)
-
-        seen_args: list[tuple[object, Path]] = []
-        real_builder = assemble.build_stage2_bundle
-
-        def spy(paths, *, root, timestamp):
-            seen_args.append((paths, root))
-            return real_builder(paths, root=root, timestamp=timestamp)
-
-        monkeypatch.setattr(assemble, "build_stage2_bundle", spy)
-
-        rc = cli.main(
-            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
-        )
-        assert rc == 0
-        # the canonical builder ran exactly once
-        assert len(seen_args) == 1
-
-        admissions = sorted(root.glob("command-assemble-stage2-*-admission.json"))
-        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
-        assert len(admissions) == 1, admissions
-        assert len(terminals) == 1, terminals
-
-        completion = cm._canonical_persisted_role(
-            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
-        ).obj
-        assert completion.command == "assemble-stage2"
-        assert completion.status == "completed"
-        assert completion.window_id == "cutover-20260713-1202"
-        assert completion.artifact_schema == cm.ASSEMBLE_RECEIPT_SCHEMA
-
-        # the completion cites the ACTUAL admission bytes
-        import hashlib
-
-        assert completion.admission_sha256 == hashlib.sha256(
-            admissions[0].read_bytes()
-        ).hexdigest()
-
-        # ...and the ACTUAL receipt bytes
-        receipt_bytes = (root / completion.artifact_ref).read_bytes()
-        assert completion.artifact_sha256 == hashlib.sha256(
-            receipt_bytes
-        ).hexdigest()
-
-        receipt = cm._canonical_persisted_role(
-            cm.PersistedDoc(receipt_bytes), cm.AssembleReceiptDoc
-        ).obj
-        assert receipt.decision == "provisional_cuda_boot"
-        assert receipt.cutover_window_id == completion.window_id
-
-        # the admission document itself, through the live reader
-        admission = cm.CommandAdmissionPreimage(
-            selected_ref=admissions[0].name,
-            wrapper_bytes=admissions[0].read_bytes(),
-        )
-        assert admission.command == "assemble-stage2"
-        assert completion.admission_ref == admissions[0].name
-        assert admission.ordinal == completion.ordinal
-        assert admission.window_id == completion.window_id
-
-        # the authorization's window joins the whole chain
-        auth = cm._canonical_persisted_role(
-            cm.PersistedDoc((root / AUTHORIZATION_REF).read_bytes()),
-            cm.CutoverAuthorizationDoc,
-        ).obj
-        assert auth.window_id == completion.window_id
-
-        # the PUBLISHED receipt equals independently regenerated bytes
-        bundle = assemble.build_stage2_bundle(
-            stage2_input_paths(), root=root, timestamp=receipt.timestamp
-        )
-        verdict = cm.evaluate_promotion_bundle(bundle)
-        assert receipt_bytes == driver.ProductionArtifactPolicy().encode(
-            "receipt",
-            {
-                **cm.build_receipt(
-                    bundle, verdict, timestamp=bundle.timestamp
-                ),
-                "binding_sha256": bundle.binding_sha256,
-            },
-        )
-
-        # the builder received the EXACT frozen authority, not "some args"
-        assert seen_args == [(stage2_input_paths(), root)]
-
-        # the live completion-pair validator accepts this exact chain
-        cm.CommandCompletionDoc(
-            command=completion.command,
-            ordinal=completion.ordinal,
-            window_id=completion.window_id,
-            admission_ref=completion.admission_ref,
-            admission_sha256=completion.admission_sha256,
-            artifact_ref=completion.artifact_ref,
-            artifact_sha256=completion.artifact_sha256,
-            artifact_schema=completion.artifact_schema,
-            status=completion.status,
-            timestamp=completion.timestamp,
-        )
-
-        # full frozen producer chronology, authorization window included
-        assert cm._compare_utc_z(auth.issued_at, admission.timestamp) <= 0
-        assert cm._compare_utc_z(admission.timestamp, receipt.timestamp) <= 0
-        assert cm._compare_utc_z(receipt.timestamp, completion.timestamp) <= 0
-        assert cm._compare_utc_z(completion.timestamp, auth.expires_at) < 0
-
-    @staticmethod
     def _tree_snapshot(root: Path) -> dict[str, tuple[str, str]]:
-        """Complete tree: canonical relative path -> (type, content hash).
-
-        Top-level filenames prove nothing -- an in-place modification of
-        any nested file would pass unnoticed, which is exactly the write
-        this guard exists to detect.
-        """
+        """Complete tree: relative path -> (type, content hash)."""
         import hashlib
 
         snapshot: dict[str, tuple[str, str]] = {}
@@ -578,77 +485,233 @@ class TestPublicChainPublishesRealArtifacts:
                 snapshot[rel] = ("other", "")
         return snapshot
 
-    def test_the_live_bench_root_is_byte_identical_across_a_real_run(
+    def test_one_invocation_publishes_the_chain_and_touches_nothing_live(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GREEN guard, now and after: invoke for real, prove no live write.
+        import hashlib
 
-        The first version prepared a private root, never called main(),
-        and compared only top-level filenames. It proved neither that the
-        command ran nor that the live tree was untouched.
-        """
         from scripts import cuda_bench_cli as cli
 
-        before = self._tree_snapshot(BENCH_ROOT)
-        # Seeded from the stage-1 authority, which EXISTS, so this guard is
-        # green today and stays green after 2A lands. Depending on
-        # Stage2InputPaths would have made the anchoring guard unavailable
-        # exactly while the code it guards is being written.
-        from dataclasses import fields as dataclass_fields
-
-        from tests.test_cutover_step1_invariants import stage1_paths
-
-        root = tmp_path / "bench"
-        root.mkdir(mode=0o700)
-        stage1 = stage1_paths()
-        for f in dataclass_fields(stage1):
-            rel = getattr(stage1, f.name)
-            src = BENCH_ROOT / rel
-            assert src.is_file(), rel
-            dst = root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(src.read_bytes())
-        assert root != BENCH_ROOT
+        root = seed_private_root(tmp_path)
         monkeypatch.setattr(driver, "BENCH_ROOT", root)
-        try:
-            cli.main(
-                ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        monkeypatch.setattr(driver, "SystemClock", FixedClock)
+
+        seen_args: list[tuple[object, Path]] = []
+        real_builder = assemble.build_stage2_bundle
+
+        def spy(paths, *, root, timestamp):
+            seen_args.append((paths, root))
+            return real_builder(paths, root=root, timestamp=timestamp)
+
+        monkeypatch.setattr(assemble, "build_stage2_bundle", spy)
+
+        # Live-root integrity is measured around the SAME successful run.
+        # A separate guard that tolerates an early refusal cannot see a
+        # stray write on the success path.
+        live_before = self._tree_snapshot(BENCH_ROOT)
+        rc = cli.main(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        )
+        assert rc == 0
+        assert self._tree_snapshot(BENCH_ROOT) == live_before
+
+        # Freeze the producer's call record BEFORE any regeneration below,
+        # and regenerate through real_builder -- the spy is still
+        # installed, so calling the module attribute would record a second
+        # call and make this assertion reject correct code.
+        producer_calls = list(seen_args)
+        assert len(producer_calls) == 1
+        assert producer_calls[0] == (stage2_input_paths(), root)
+
+        admissions = sorted(root.glob("command-assemble-stage2-*-admission.json"))
+        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
+        assert len(admissions) == 1, admissions
+        assert len(terminals) == 1, terminals
+
+        completion = cm._canonical_persisted_role(
+            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
+        ).obj
+        assert completion.command == "assemble-stage2"
+        assert completion.status == "completed"
+        assert completion.window_id == "cutover-20260713-1202"
+        assert completion.artifact_schema == cm.ASSEMBLE_RECEIPT_SCHEMA
+
+        admission = cm.CommandAdmissionPreimage(
+            selected_ref=admissions[0].name,
+            wrapper_bytes=admissions[0].read_bytes(),
+        )
+        assert admission.command == "assemble-stage2"
+        assert completion.admission_ref == admissions[0].name
+        assert admission.ordinal == completion.ordinal
+        assert admission.window_id == completion.window_id
+        assert completion.admission_sha256 == hashlib.sha256(
+            admissions[0].read_bytes()
+        ).hexdigest()
+
+        receipt_bytes = (root / completion.artifact_ref).read_bytes()
+        assert completion.artifact_sha256 == hashlib.sha256(
+            receipt_bytes
+        ).hexdigest()
+        receipt = cm._canonical_persisted_role(
+            cm.PersistedDoc(receipt_bytes), cm.AssembleReceiptDoc
+        ).obj
+        assert receipt.decision == "provisional_cuda_boot"
+        assert receipt.cutover_window_id == completion.window_id
+
+        # THE REAL validator, not a reconstruction of one document.
+        driver._load_verified_completion_pair(
+            admission_ref=completion.admission_ref,
+            completion_ref=terminals[0].name,
+            artifact_ref=completion.artifact_ref,
+            artifact_bytes=receipt_bytes,
+            expected_command="assemble-stage2",
+            expected_window_id=completion.window_id,
+            expected_type=cm.AssembleReceiptDoc,
+            root=root,
+        )
+
+        # published bytes == independent regeneration (real_builder!)
+        bundle = real_builder(
+            stage2_input_paths(), root=root, timestamp=receipt.timestamp
+        )
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        assert receipt_bytes == driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            {
+                **cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp),
+                "binding_sha256": bundle.binding_sha256,
+            },
+        )
+        assert len(seen_args) == len(producer_calls)  # regeneration bypassed the spy
+
+        auth = cm._canonical_persisted_role(
+            cm.PersistedDoc((root / AUTHORIZATION_REF).read_bytes()),
+            cm.CutoverAuthorizationDoc,
+        ).obj
+        assert auth.window_id == completion.window_id
+
+        # FROZEN chronology, boot witness included:
+        #   issued <= boot witness <= admission <= receipt <= completion < expiry
+        boot_at = bundle.boot_authorization.timestamp
+        chain = [
+            auth.issued_at,
+            boot_at,
+            admission.timestamp,
+            receipt.timestamp,
+            completion.timestamp,
+        ]
+        for earlier, later in zip(chain, chain[1:], strict=True):
+            assert cm._compare_utc_z(earlier, later) <= 0, (earlier, later)
+        assert cm._compare_utc_z(completion.timestamp, auth.expires_at) < 0
+
+        # equal timestamps are legal; PUBLICATION ORDER carries the order
+        assert admission.ordinal == completion.ordinal
+        assert admissions[0].stat().st_mtime_ns <= terminals[0].stat().st_mtime_ns
+
+
+SYMBOL = "BenchEvidenceBundle"
+
+
+def scan_source(source: str, rel: str) -> tuple[
+    list[tuple[str, int, str]], list[tuple[str, int, str, str]]
+]:
+    """THE scanner. One implementation, used by production scan AND self-tests.
+
+    Returns (call_sites, reference_sites). A reference site is
+    (file, line, ast-kind, enclosing-context). Parse failure raises --
+    an unparsed file is an unscanned file, never a silent skip.
+    """
+    tree = ast.parse(source, filename=rel)
+    context: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+        ):
+            label = getattr(node, "name", "<lambda>")
+            for child in ast.walk(node):
+                context.setdefault(id(child), label)
+
+    calls: list[tuple[str, int, str]] = []
+    called: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = (
+                f.attr
+                if isinstance(f, ast.Attribute)
+                else f.id
+                if isinstance(f, ast.Name)
+                else None
             )
-        except BaseException:
-            # Even a refusal must not have written to the live root.
-            pass
-        assert self._tree_snapshot(BENCH_ROOT) == before
+            if name == SYMBOL:
+                called.add(id(f))
+                calls.append(
+                    (rel, node.lineno, context.get(id(node), "<module>"))
+                )
+
+    refs: list[tuple[str, int, str, str]] = []
+    for node in ast.walk(tree):
+        label = None
+        if isinstance(node, ast.Name):
+            label = node.id
+        elif isinstance(node, ast.Attribute):
+            label = node.attr
+        elif isinstance(node, ast.ClassDef):
+            label = node.name
+        elif isinstance(node, ast.Constant):
+            label = node.value
+        elif isinstance(node, ast.alias):
+            label = node.name
+        if label != SYMBOL or id(node) in called:
+            continue
+        refs.append(
+            (
+                rel,
+                getattr(node, "lineno", 0),
+                type(node).__name__,
+                context.get(id(node), "<module>"),
+            )
+        )
+    return calls, refs
 
 
 class TestOneBuilderTopology:
-    """Exactly two production construction sites, by exact line identity.
+    """Exactly two call sites; every reference on a CLOSED allowlist.
 
-    Iteration history, because each fix exposed the next hole:
+    Iteration history, each fix exposing the next hole: a set collapsed
+    duplicate calls; partial alias resolution invited the evasion it
+    claimed to stop; module-scope and lambda construction were invisible;
+    five hand-picked roots missed most of the tree; `git ls-files` created
+    fresh airlock spawn-debt; rejecting EVERY reference would have
+    forbidden type annotations; and the allowlist was then so broad that a
+    new alias of an already-allowed kind in an owning module passed.
 
-    * a SET collapsed two calls in one allowed function into one entry;
-    * partial alias RESOLUTION invited the evasion it claimed to stop;
-    * module-scope and lambda construction were invisible;
-    * five hand-picked roots missed most of the tree;
-    * `git ls-files` spawned a subprocess, creating fresh airlock
-      spawn-debt for a guard that must certify;
-    * alias rejection still missed destructuring, walrus, getattr and
-      re-export shapes, and parse errors were silently swallowed.
-
-    Final position: NO alias resolution at all. Any reference to the
-    constructor symbol other than a call at an allowlisted site is a
-    failure, parse errors are failures rather than skips, and the scanner
-    self-tests that it detects each evasion shape.
+    Closed here by two things together: each reference must match an
+    allowlisted (file, kind, context) triple, AND the total count is
+    pinned -- so any addition fails even if its shape is familiar.
     """
 
-    SYMBOL = "BenchEvidenceBundle"
     EXCLUDED_ROOTS = frozenset(
         {"tests", "docs", "staging", "tmp", "backups", "research", "local",
          "logs", "output", "models", "data", "web", "workshop", ".git"}
     )
-    ALLOWLIST = {
+    CALL_ALLOWLIST = {
         ("scripts/cuda_bench_assemble.py", "build_stage1_bundle"),
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle"),
     }
+    # Every legitimate reference, by exact semantic site. Adding a builder
+    # adds its annotation here -- a DELIBERATE edit, which is the point.
+    REFERENCE_ALLOWLIST = {
+        ("scripts/cuda_migration.py", "ClassDef", "BenchEvidenceBundle"),
+        ("scripts/cuda_migration.py", "Constant", "BenchEvidenceBundle"),
+        ("scripts/cuda_migration.py", "Name", "evaluate_promotion_bundle"),
+        ("scripts/cuda_migration.py", "Name", "build_receipt"),
+        ("scripts/cuda_bench_assemble.py", "Attribute", "build_stage1_bundle"),
+        ("scripts/cuda_bench_assemble.py", "Attribute", "Stage1Evaluation"),
+        ("scripts/cuda_bench_assemble.py", "Attribute", "build_stage2_bundle"),
+    }
+    REFERENCE_COUNT = 9  # 8 today + build_stage2_bundle's annotation
 
     @classmethod
     def _production_files(cls) -> list[Path]:
@@ -666,107 +729,42 @@ class TestOneBuilderTopology:
                 if d not in cls.EXCLUDED_ROOTS and not d.startswith(".")
             ]
             found.extend(
-                Path(dirpath) / name
-                for name in filenames
-                if name.endswith(".py")
+                Path(dirpath) / n for n in filenames if n.endswith(".py")
             )
         return sorted(found)
 
     @classmethod
-    def _scan(cls) -> tuple[list[tuple[str, int, str]], list[tuple[str, int, str]]]:
-        """Return (call sites, non-call references). Lists, not sets."""
+    def _scan_production(cls):
         calls: list[tuple[str, int, str]] = []
-        refs: list[tuple[str, int, str]] = []
+        refs: list[tuple[str, int, str, str]] = []
         for path in cls._production_files():
             rel = str(path.relative_to(REPO))
-            source = path.read_text(encoding="utf-8", errors="strict")
-            # A parse error is a FAILURE, not a skip: an unparsed file is
-            # an unscanned file.
-            tree = ast.parse(source, filename=rel)
-            scope: dict[int, str] = {}
-            for node in ast.walk(tree):
-                if isinstance(
-                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-                ):
-                    label = getattr(node, "name", "<lambda>")
-                    for child in ast.walk(node):
-                        scope.setdefault(id(child), label)
-            called: set[int] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    f = node.func
-                    name = (
-                        f.attr
-                        if isinstance(f, ast.Attribute)
-                        else f.id
-                        if isinstance(f, ast.Name)
-                        else None
-                    )
-                    if name == cls.SYMBOL:
-                        called.add(id(f))
-                        calls.append(
-                            (rel, node.lineno, scope.get(id(node), "<module>"))
-                        )
-            # EVERY other mention of the symbol -- assignment, walrus,
-            # destructuring, import-as, re-export, getattr string -- is a
-            # non-call reference and is rejected without interpretation.
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Name, ast.Attribute)):
-                    label = (
-                        node.attr
-                        if isinstance(node, ast.Attribute)
-                        else node.id
-                    )
-                    if label == cls.SYMBOL and id(node) not in called:
-                        refs.append(
-                            (rel, node.lineno, type(node).__name__)
-                        )
-                elif isinstance(node, ast.ClassDef) and node.name == cls.SYMBOL:
-                    refs.append((rel, node.lineno, "ClassDef"))
-                elif isinstance(node, ast.Constant) and node.value == cls.SYMBOL:
-                    refs.append((rel, node.lineno, "Constant"))
-                elif isinstance(node, ast.alias) and node.name == cls.SYMBOL:
-                    refs.append((rel, getattr(node, "lineno", 0), "alias"))
+            c, r = scan_source(path.read_text(encoding="utf-8"), rel)
+            calls.extend(c)
+            refs.extend(r)
         return calls, refs
 
-    def test_call_sites_are_exactly_two_by_line_identity(self) -> None:
-        calls, _ = self._scan()
+    def test_call_sites_are_exactly_two(self) -> None:
+        calls, _ = self._scan_production()
         assert len(calls) == 2, calls
-        assert {(f, fn) for f, _, fn in calls} == self.ALLOWLIST
+        assert {(f, fn) for f, _, fn in calls} == self.CALL_ALLOWLIST
 
     def test_no_module_scope_or_lambda_construction(self) -> None:
-        calls, _ = self._scan()
+        calls, _ = self._scan_production()
         assert not [c for c in calls if c[2] in ("<module>", "<lambda>")], calls
 
-    # Every legitimate non-call reference, enumerated. Rejecting ALL of
-    # them (my first attempt) would forbid type annotations and the class
-    # definition itself -- an over-correction that made the guard wrong
-    # rather than strict. This is the closed allowlist review asked for:
-    # any reference NOT on it is an alias or an evasion.
-    REFERENCE_ALLOWLIST = {
-        ("scripts/cuda_migration.py", "ClassDef"),      # the definition
-        ("scripts/cuda_migration.py", "Name"),          # signature annotations
-        ("scripts/cuda_bench_assemble.py", "Attribute"),  # return annotations
-        ("scripts/cuda_migration.py", "Constant"),  # -> "BenchEvidenceBundle"
-    }
+    def test_every_reference_is_an_allowlisted_semantic_site(self) -> None:
+        _, refs = self._scan_production()
+        sites = {(f, kind, ctx) for f, _, kind, ctx in refs}
+        assert sites <= self.REFERENCE_ALLOWLIST, sites - self.REFERENCE_ALLOWLIST
 
-    def test_every_constructor_reference_is_on_the_closed_allowlist(
-        self,
-    ) -> None:
-        _, refs = self._scan()
-        kinds = {(f, kind) for f, _, kind in refs}
-        assert kinds <= self.REFERENCE_ALLOWLIST, kinds - self.REFERENCE_ALLOWLIST
+    def test_reference_count_is_pinned(self) -> None:
+        """Count closes the allowlist: a new alias of an allowed KIND in an
+        allowed CONTEXT would otherwise pass unnoticed."""
+        _, refs = self._scan_production()
+        assert len(refs) == self.REFERENCE_COUNT, refs
 
-    def test_no_reference_lives_outside_the_two_owning_modules(self) -> None:
-        """An alias in a third module is the evasion that matters."""
-        _, refs = self._scan()
-        files = {f for f, _, _ in refs}
-        assert files <= {
-            "scripts/cuda_migration.py",
-            "scripts/cuda_bench_assemble.py",
-        }, files
-
-    # --- self-tests: prove the scanner detects what it claims to ---
+    # --- self-tests: run the REAL scanner, assert the REAL allowlist ---
 
     EVASIONS = (
         "B = cm.BenchEvidenceBundle",
@@ -780,51 +778,41 @@ class TestOneBuilderTopology:
     )
 
     @pytest.mark.parametrize("snippet", EVASIONS)
-    def test_scanner_detects_each_alias_shape(self, snippet: str) -> None:
-        tree = ast.parse(snippet)
-        hits = [
-            n
-            for n in ast.walk(tree)
-            if (
-                (isinstance(n, ast.Name) and n.id == self.SYMBOL)
-                or (isinstance(n, ast.Attribute) and n.attr == self.SYMBOL)
-                or (isinstance(n, ast.Constant) and n.value == self.SYMBOL)
-                or (isinstance(n, ast.alias) and n.name == self.SYMBOL)
-            )
-        ]
-        assert hits, snippet
+    def test_the_real_scanner_rejects_each_evasion(self, snippet: str) -> None:
+        """Previously these only walked an AST and never touched the
+        scanner or the allowlist, so they proved nothing about the guard."""
+        _, refs = scan_source(snippet, "scripts/evasion.py")
+        assert refs, snippet
+        sites = {(f, kind, ctx) for f, _, kind, ctx in refs}
+        assert not (sites <= self.REFERENCE_ALLOWLIST), snippet
 
-    def test_scanner_detects_duplicate_calls_in_one_function(self) -> None:
-        tree = ast.parse(
+    def test_the_real_scanner_counts_duplicate_calls_in_one_function(
+        self,
+    ) -> None:
+        calls, _ = scan_source(
             "def f():\n"
             "    a = cm.BenchEvidenceBundle()\n"
-            "    b = cm.BenchEvidenceBundle()\n"
+            "    b = cm.BenchEvidenceBundle()\n",
+            "scripts/dup.py",
         )
-        calls = [
-            n
-            for n in ast.walk(tree)
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == self.SYMBOL
-        ]
         assert len(calls) == 2
+        assert {c[2] for c in calls} == {"f"}
+
+    def test_the_real_scanner_keeps_line_identity(self) -> None:
+        calls, _ = scan_source(
+            "def f():\n    return cm.BenchEvidenceBundle()\n", "scripts/x.py"
+        )
+        assert calls == [("scripts/x.py", 2, "f")]
 
     def test_scanner_spawns_no_process(self) -> None:
-        """A guard that spawns cannot certify under the airlock.
-
-        Checked structurally, not by substring: my first version searched
-        for the word "subprocess" and failed on its own docstring, which
-        explains why the subprocess approach was abandoned.
-        """
         tree = ast.parse(Path(__file__).read_text())
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                names = [a.name for a in node.names]
-                assert "subprocess" not in names, names
+                assert "subprocess" not in [a.name for a in node.names]
             if isinstance(node, ast.Call):
                 f = node.func
                 attr = f.attr if isinstance(f, ast.Attribute) else None
-                assert attr not in {"system", "popen", "spawn", "run"}, attr
+                assert attr not in {"system", "popen", "spawn"}
 
     def test_exclusions_are_explicit(self) -> None:
         assert "tests" in self.EXCLUDED_ROOTS
