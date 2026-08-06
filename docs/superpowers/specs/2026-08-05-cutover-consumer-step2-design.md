@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v12
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v13
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -19,7 +19,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v9 | R1 ruled by the owner on a **false premise I supplied** — WITHDRAWN |
 | v10 | R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector |
 | v11 | R1 ruled: the tap is REQUIRED; S7 path bound. Arming authority recorded on my INFERENCE, not the owner's words |
-| **v12** | **arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one** |
+| v12 | arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one |
+| **v13** | **no-fallback ruled; work class ruled `self_modification`; credential predicate, action preimage, grant projection and consumption seam frozen; stale canon swept** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -679,6 +680,55 @@ taking something I produced and presenting it as established fact. It was
 caught by review, not by me. Part 2 is now recorded from an explicit
 question and an explicit answer.
 
+#### Part 3 — no procedural fallback (ruled 2026-08-06)
+
+**Zero usable credentials REFUSES.** `procedural` is removed from
+cutover's reachable receipt vocabulary. It survives only as a defined
+value for other callers of the receipt type; **no cutover path can emit
+it**, and there is no configuration under which one could.
+
+v11 kept a procedural fallback beside a required tap. Those cannot both
+be true: a fallback means anything that disables or hides the credentials
+also removes the gate, silently — the gate would protect the case where
+nothing is wrong and evaporate exactly when something is. The owner
+accepted the cost: if every founder credential were lost or disabled,
+cutover is blocked until a new one is enrolled.
+
+Refusal: `presence_no_usable_credential`, pre-burn, nonce reusable, zero
+executor calls.
+
+#### Part 4 — the work class is `self_modification` (ruled 2026-08-06)
+
+v11 proposed inventing a "new non-voice-seat" class. That would have been
+an **authority-policy change** — a new category of thing the owner's key
+can approve — disguised as wiring, and I had written it as though it were
+the latter.
+
+Ruled: cutover uses the **existing `self_modification`** class, which is
+voice-seat guarded
+([operator_user_boundary.py:380](/home/rohit/maez/core/governance/operator_user_boundary.py#L380)).
+Consequences accepted and now binding on this design:
+
+* minting goes through the **guarded store**, not the raw authorization
+  store, which forces source-bundle validation and one-use reservation
+  ([s7_guarded_execution.py:2291](/home/rohit/maez/core/governance/s7_guarded_execution.py#L2291));
+* the v11 text describing a non-voice-seat path is **void**.
+
+#### The credential predicate, exact
+
+v12 recorded "any enabled founder credential". The real S7 predicate is
+narrower: `credential_can_authorize` requires **enabled AND `bonded_user`
+in `role_names`**
+([s7_webauthn_bootstrap.py:738](/home/rohit/maez/core/governance/s7_webauthn_bootstrap.py#L738)).
+"Any enrolled" would admit disabled or wrongly-scoped records.
+
+Frozen as the S7 predicate, not a restatement of it: a credential arms
+cutover **iff** it is record-valid, enabled, and carries `bonded_user`.
+
+Verified: both currently enrolled credentials satisfy this, so the broad
+and narrow readings *happen* to agree today. That is coincidence, not
+equivalence, and the narrow one is normative.
+
 #### What the owner accepted, stated plainly
 
 The arming set is **not fixed at two**. It is *"any enabled founder
@@ -714,23 +764,71 @@ Required of the artifact, all exact:
 | join | rule |
 |---|---|
 | work class | a **new non-voice-seat** class for cutover execution |
-| binding | `action_params_hash` binds the **cutover authorization's nonce**, so a tap for one cutover cannot authorize another |
+| binding | `action_params_hash` binds the **full canonical action preimage** below — not the nonce alone |
 | presence | `user_presence` **true** |
 | verification | `user_verification` **true** |
 | freshness | not expired at the pre-link recheck |
 | single use | `consumed_at` is null when verified |
 | credential | `credential_ref` names an **enabled** founder credential |
 
-`presence_mode` becomes `founder_webauthn` and
-`presence_evidence_sha256` cites the canonical hash of that artifact —
-the proof, not the label.
+#### The action preimage, frozen
 
-Note the work class must be **non-voice-seat**: voice-seat classes are
-forced through the guarded store with source-bundle validation
-([s7_guarded_execution.py:2291](/home/rohit/maez/core/governance/s7_guarded_execution.py#L2291)).
-Cutover execution is founder custody, not voice seat. **Flagged for
-review** — if review reads cutover as voice-seat-adjacent, the guarded
-path applies instead and this section changes.
+v11 bound `action_params_hash` to the cutover nonce alone. A nonce
+identifies *which* authorization, not *what it authorizes* — so one tap
+would not describe the mutation it permits. The canonical preimage covers:
+
+| element | why |
+|---|---|
+| exact cutover action | the tap must name the act, not a token |
+| authorization identity | file hash + binding hash of the cutover authorization |
+| stage-2 permit | file hash + binding hash of the stage-2 receipt |
+| recovery identity | `FROZEN_ROLLBACK_MANIFEST_SHA256` — the tap covers what we can return to |
+| target identity | the override / runtime identity being switched **to** |
+| window | the cutover window id |
+
+A tap that does not describe the target runtime is a tap for an unnamed
+mutation.
+
+#### `presence_evidence_sha256` must name a REPRODUCIBLE object
+
+v11 pointed it at `S7AuthorizationArtifact`. That artifact has **no
+canonical binding**, and its database row **changes at consumption**
+(`consumed_at` is written) — so the hash would be unrecomputable from
+durable state the moment it mattered. That is A2 again: a hash whose
+preimage cannot be reconstructed is not evidence.
+
+Frozen: `presence_evidence_sha256` binds a **canonical post-consumption
+`S7ExecutionGrant` projection**
+([operator_user_boundary.py:2332](/home/rohit/maez/core/governance/operator_user_boundary.py#L2332)),
+which is by its own docstring *"artifact-backed execution proof minted
+only after atomic consumption"* — stable, post-transition, and
+explicitly serialized. The projection is canonically encoded and its
+preimage is durable, so the hash is recomputable later by anyone holding
+the grant.
+
+#### R4 RULED: consume S7 BEFORE the cutover link
+
+My position is upheld. A wasted tap on a failed burn is the correct
+fail-closed cost; a replayable tap beside a published burn is not.
+
+Frozen sequence at that seam:
+
+1. call `consume_for_execution()` **without its callback** — the consumer
+   supplies no continuation, so nothing executes inside S7;
+2. require **committed success** and the **exact returned grant**;
+3. project and hash the grant into the receipt;
+4. *then* the eligibility recheck and the link.
+
+**An existing-store, no-initialization opener is required.** Constructing
+`S7AuthorizationStore` creates and migrates schema and commits — the same
+hazard as `S7WebAuthnBootstrapStore` in v10, and forbidden for the same
+reason. The opener attaches to an existing store or refuses; it never
+creates one.
+
+**VOID (v13):** this paragraph proposed a non-voice-seat class. The owner
+ruled `self_modification`, which **is** voice-seat guarded, so minting
+goes through the guarded store. Retained struck-through rather than
+deleted, because it was the load-bearing assumption of v11's S7 section.
 
 #### TWO single-use resources — the new ordering question
 
@@ -783,7 +881,12 @@ bound the blast radius; **they do not authenticate a human.** No sentence
 in this design, in any commit message, or in any receipt may describe
 this state as authenticated presence.
 
-#### The tap slot — specified now, unarmed now
+#### HISTORICAL (v9, superseded) — "the tap slot, unarmed"
+
+> **Everything in this subsection is FALSE as of v10-v13** and is retained
+> only to show what the withdrawn v9 ruling rested on. The tap is ARMED,
+> two `bonded_user` credentials are enrolled, and there is no procedural
+> fallback. Do not read any sentence below as current.
 
 The owner's June authority model
 ([2026-06-28-authority-model-provenance-firewall-design.md](2026-06-28-authority-model-provenance-firewall-design.md))
@@ -888,8 +991,9 @@ it makes validation → burn → first mutation structurally contiguous. It
 also correctly declines to amend the covenant on Rohit's behalf. So does
 this design.
 
-**Until R1 is ruled, step 2 stops at `prepare()` and exposes NO production
-consumer entrypoint.** The burn, publication and `begin()` are specified
+**HISTORICAL (superseded v13):** ~~until R1 is ruled, step 2 stops at
+`prepare()`~~. R1 is ruled in four parts; the burn is in scope, gated by
+a required founder tap. The burn, publication and `begin()` are specified
 here; nothing production-reachable invokes them, and no burn REDs are
 written.
 
@@ -998,6 +1102,9 @@ side of the linearization point:
 | 29e | presence store corrupt | pre | reusable | **zero** | `presence_store_corrupt` |
 | 29f | credential `record_hash` invalid | pre | reusable | **zero** | `presence_record_invalid` |
 | 29g | S7 artifact missing/expired/already consumed | pre | reusable | **zero** | `presence_assertion_invalid` |
+| 29g2 | zero usable credentials (no fallback exists) | pre | reusable | **zero** | `presence_no_usable_credential` |
+| 29g3 | credential lacks `bonded_user` or is disabled | pre | reusable | **zero** | `presence_credential_unscoped` |
+| 29g4 | S7 store absent (opener must not create) | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
 | 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |
 | 29j | S7 artifact consumption write failed | pre | reusable | **zero** | `presence_consumption_failed` |
@@ -1061,7 +1168,10 @@ entrypoint while R1 is open.
 
 ## Carried
 
-* **R1 — OPEN, owner-only.** Does an owner-typed ceremony satisfy "the
+* **R1 — RULED in four parts (v11-v13):** tap required; existing founder
+  credentials arm it; no procedural fallback; work class
+  `self_modification`. Historical question text follows.
+* ~~**R1 — OPEN, owner-only.** Does an owner-typed ceremony satisfy "the
   owner types every mutating command", and if so, is procedural (not
   technically authenticated) owner presence acceptable?
 * **R2 — RULED.** Reconstruct, do not sign.
