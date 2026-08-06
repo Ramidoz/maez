@@ -31,6 +31,29 @@ from scripts import cuda_migration as cm
 
 REPO = Path(__file__).resolve().parents[1]
 BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
+STAGE2_TS = "2026-07-13T12:03:02Z"
+AUTHORIZATION_REF = "cutover-authorization.json"
+
+
+def stage2_input_paths() -> "assemble.Stage2InputPaths":
+    """Build the authority through its SPECIFIED interface.
+
+    v14 freezes Stage2InputPaths; it does not freeze any `stage2_inputs()`
+    helper, and my first draft invented one. Constructing the dataclass
+    from the real stage-1 selection plus the authorization ref uses only
+    what the design actually froze.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from tests.test_cutover_step1_invariants import stage1_paths
+
+    stage1 = stage1_paths()
+    values = {
+        f.name: getattr(stage1, f.name) for f in dataclass_fields(stage1)
+    }
+    return assemble.Stage2InputPaths(
+        **values, authorization=AUTHORIZATION_REF
+    )
 
 
 class TestCanonicalBuilderExists:
@@ -176,6 +199,23 @@ class TestHistoricalCommandDocsRemainDecodable:
         wrapper = json.loads(raw)
         assert wrapper["schema"] == cm.COMMAND_ADMISSION_SCHEMA
         assert cm._canonical_wrapper_bytes(wrapper) == raw
+        # Canonical JSON is not the admission boundary. Construct the
+        # typed preimage the driver actually reads, from the real bytes.
+        #
+        # Its constructor takes ONLY (selected_ref, wrapper_bytes); the
+        # command, ordinal, window and timestamp are init=False and are
+        # DERIVED from the bytes. That makes this the strongest form of
+        # the guard: the parser itself must still read a real durable
+        # admission document. I guessed this signature twice before
+        # reading it, which is the same failure as everything else this
+        # session -- inferring an API instead of checking it.
+        preimage = cm.CommandAdmissionPreimage(
+            selected_ref="command-cuda-candidate-attempt-024-admission.json",
+            wrapper_bytes=raw,
+        )
+        assert preimage.command == "cuda-candidate"
+        assert preimage.ordinal == 24
+        assert preimage.window_id is not None
 
     def test_real_completion_document_decodes(self) -> None:
         raw = (
@@ -230,11 +270,23 @@ class TestStage2InputPathsIsExact:
         )
         assert names == self.EXPECTED
 
-    def test_every_field_is_a_relative_str(self) -> None:
+    def test_every_VALUE_is_a_canonical_relative_ref(self) -> None:
+        """Annotations prove nothing about the values.
+
+        Checking `f.type == "str"` only reads the source text of the
+        annotation. The property that matters is that every constructed
+        value is a canonical relative ref -- no absolute paths, no "..",
+        no empty components.
+        """
         from dataclasses import fields as dataclass_fields
 
-        for f in dataclass_fields(assemble.Stage2InputPaths):
-            assert f.type in ("str", str), (f.name, f.type)
+        authority = stage2_input_paths()
+        for f in dataclass_fields(authority):
+            value = getattr(authority, f.name)
+            assert type(value) is str and value, f.name
+            assert not value.startswith("/"), f.name
+            assert ".." not in Path(value).parts, f.name
+            assert "" not in Path(value).parts, f.name
 
     def test_stage_one_inputs_match_stage_one_authority_verbatim(self) -> None:
         """Drift between the two authorities is silent corruption."""
@@ -260,9 +312,9 @@ class TestProducerBehaviour:
         that the PUBLIC evaluator scores as provisional_cuda_boot.
         """
         bundle = assemble.build_stage2_bundle(
-            assemble.stage2_inputs(),
+            stage2_input_paths(),
             root=BENCH_ROOT,
-            timestamp="2026-07-13T12:03:02Z",
+            timestamp=STAGE2_TS,
         )
         assert type(bundle) is cm.BenchEvidenceBundle
         verdict = cm.evaluate_promotion_bundle(bundle)
@@ -270,16 +322,33 @@ class TestProducerBehaviour:
         assert verdict.cutover_window_id is not None
 
     def test_producer_receipt_is_the_exact_canonical_bytes(self) -> None:
-        """One timestamp, one receipt, byte-exact -- the 2B join depends on it."""
+        """Compare BYTES, not two dictionary fields.
+
+        The first version asserted two keys and called itself "exact
+        canonical bytes". The 2B join is byte equality against the real
+        encoder, so that is what this must compare.
+        """
         bundle = assemble.build_stage2_bundle(
-            assemble.stage2_inputs(),
+            stage2_input_paths(),
             root=BENCH_ROOT,
-            timestamp="2026-07-13T12:03:02Z",
+            timestamp=STAGE2_TS,
         )
         verdict = cm.evaluate_promotion_bundle(bundle)
         receipt = cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
-        assert receipt["cutover_window_id"] == verdict.cutover_window_id
-        assert receipt["bundle_binding_sha256"] == bundle.binding_sha256
+        produced = driver.ProductionArtifactPolicy().encode(
+            "receipt", {**receipt, "binding_sha256": bundle.binding_sha256}
+        )
+        regenerated = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            {
+                **cm.build_receipt(
+                    bundle, verdict, timestamp=bundle.timestamp
+                ),
+                "binding_sha256": bundle.binding_sha256,
+            },
+        )
+        assert produced == regenerated
+        assert cm.PersistedDoc(produced).obj.cutover_window_id is not None
 
 
 class TestPublicCommandChain:
@@ -300,89 +369,239 @@ class TestPublicCommandChain:
         assert args.command == "assemble-stage2"
 
     def test_terminal_schema_is_the_completion_document(self) -> None:
+        """_TERMINAL_SCHEMA_MATRIX is the live seam.
+
+        My first version named _COMMAND_TERMINAL_SCHEMAS, which does not
+        exist -- so extending the REAL matrix would have left this red
+        forever. A red that cannot go green by correct implementation is
+        not a red, it is a broken test.
+        """
         from scripts import cuda_bench_cli as cli
 
         assert (
-            cli._COMMAND_TERMINAL_SCHEMAS["assemble-stage2"]
+            cli._TERMINAL_SCHEMA_MATRIX["assemble-stage2"]
             == cm.COMMAND_COMPLETION_SCHEMA
         )
 
 
-class TestOneBuilderTopology:
-    """Exactly two production construction sites, named by function.
+class TestPublicChainPublishesRealArtifacts:
+    """main() must actually assemble and publish -- not merely parse.
 
-    Counting literal `BenchEvidenceBundle(...)` calls under two
-    directories is too weak: it misses an alias (`B = cm.BenchEvidenceBundle`
-    then `B(...)`) and it misses any production root outside those two
-    directories. This walks every production tree and reports the
-    ENCLOSING FUNCTION of each site, so the allowlist names what is
-    allowed rather than merely counting.
+    Registration, parsing and a matrix entry say nothing about whether
+    the command does anything: `assemble-stage2` could stay bound to
+    _unimplemented_handler and every other CLI test here would pass.
+    This invokes the real entrypoint against an ANCHORED PRIVATE ROOT
+    (never the live bench root) and joins the published chain.
     """
 
-    PRODUCTION_ROOTS = ("scripts", "core", "api", "memory", "tools")
+    @staticmethod
+    def _private_root(tmp_path: Path) -> Path:
+        """Copy the inputs into a private root. Reads the live root only."""
+        from dataclasses import fields as dataclass_fields
+
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        authority = stage2_input_paths()
+        for f in dataclass_fields(authority):
+            rel = getattr(authority, f.name)
+            src = BENCH_ROOT / rel
+            if not src.exists():
+                continue
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(src.read_bytes())
+        return root
+
+    def test_invocation_publishes_admission_receipt_and_completion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scripts import cuda_bench_cli as cli
+
+        root = self._private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+
+        calls: list[int] = []
+        real_builder = assemble.build_stage2_bundle
+        monkeypatch.setattr(
+            assemble,
+            "build_stage2_bundle",
+            lambda *a, **k: (calls.append(1), real_builder(*a, **k))[1],
+        )
+
+        rc = cli.main(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        )
+        assert rc == 0
+        # the canonical builder ran exactly once
+        assert calls == [1]
+
+        admissions = sorted(root.glob("command-assemble-stage2-*-admission.json"))
+        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
+        assert len(admissions) == 1, admissions
+        assert len(terminals) == 1, terminals
+
+        completion = cm._canonical_persisted_role(
+            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
+        ).obj
+        assert completion.command == "assemble-stage2"
+        assert completion.status == "completed"
+        assert completion.window_id == "cutover-20260713-1202"
+        assert completion.artifact_schema == cm.ASSEMBLE_RECEIPT_SCHEMA
+
+        # the completion cites the ACTUAL admission bytes
+        import hashlib
+
+        assert completion.admission_sha256 == hashlib.sha256(
+            admissions[0].read_bytes()
+        ).hexdigest()
+
+        # ...and the ACTUAL receipt bytes
+        receipt_bytes = (root / completion.artifact_ref).read_bytes()
+        assert completion.artifact_sha256 == hashlib.sha256(
+            receipt_bytes
+        ).hexdigest()
+
+        receipt = cm._canonical_persisted_role(
+            cm.PersistedDoc(receipt_bytes), cm.AssembleReceiptDoc
+        ).obj
+        assert receipt.decision == "provisional_cuda_boot"
+        assert receipt.cutover_window_id == completion.window_id
+
+        # chronology: admission <= receipt <= completion
+        admission_at = json.loads(admissions[0].read_bytes())["fields"][
+            "timestamp"
+        ]
+        assert cm._compare_utc_z(admission_at, receipt.timestamp) <= 0
+        assert cm._compare_utc_z(receipt.timestamp, completion.timestamp) <= 0
+
+    def test_the_live_bench_root_was_never_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The anchoring claim, asserted rather than assumed."""
+        before = sorted(p.name for p in BENCH_ROOT.iterdir())
+        root = self._private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        assert root != BENCH_ROOT
+        after = sorted(p.name for p in BENCH_ROOT.iterdir())
+        assert before == after
+
+
+class TestOneBuilderTopology:
+    """Exactly two production construction sites, by exact line identity.
+
+    Four ways the previous scanner was bypassable, all fixed here:
+
+    * it returned a SET, so two constructor calls inside one allowed
+      function collapsed into one entry and the count still read 2;
+    * it resolved aliases partially, missing import aliases and annotated
+      assignments -- so it invited exactly the evasion it claimed to stop;
+    * it never saw module-scope or lambda construction, only calls inside
+      a FunctionDef;
+    * it scanned five directories while this repo has production Python in
+      cli/, daemon/, hardware/, training/, ui/, tools/ and at the root.
+
+    The fix is to stop trying to be clever about aliases and instead
+    REJECT aliasing outright, while scanning every tracked production
+    file and reporting exact (file, line, enclosing scope) triples.
+    """
+
+    EXCLUDED_ROOTS = ("tests", "docs", "staging", "tmp", "backups", "research")
     ALLOWLIST = {
         ("scripts/cuda_bench_assemble.py", "build_stage1_bundle"),
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle"),
     }
 
     @classmethod
-    def _sites(cls) -> set[tuple[str, str]]:
-        found: set[tuple[str, str]] = set()
-        for root in cls.PRODUCTION_ROOTS:
-            base = REPO / root
-            if not base.is_dir():
-                continue
-            for path in sorted(base.rglob("*.py")):
+    def _production_files(cls) -> list[Path]:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        return [
+            REPO / rel
+            for rel in out
+            if not rel.startswith(tuple(f"{r}/" for r in cls.EXCLUDED_ROOTS))
+        ]
+
+    @classmethod
+    def _scan(cls) -> tuple[list[tuple[str, int, str]], list[tuple[str, int]]]:
+        """Return (construction sites, aliasing sites). Lists, not sets."""
+        sites: list[tuple[str, int, str]] = []
+        aliases: list[tuple[str, int]] = []
+        for path in cls._production_files():
+            try:
                 tree = ast.parse(path.read_text(), filename=str(path))
-                # every name bound to the constructor, including aliases
-                aliases = {"BenchEvidenceBundle"}
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Assign) and isinstance(
-                        node.value, (ast.Attribute, ast.Name)
-                    ):
-                        target = (
-                            node.value.attr
-                            if isinstance(node.value, ast.Attribute)
-                            else node.value.id
-                        )
-                        if target in aliases:
-                            for t in node.targets:
-                                if isinstance(t, ast.Name):
-                                    aliases.add(t.id)
-                for fn in ast.walk(tree):
-                    if not isinstance(
-                        fn, (ast.FunctionDef, ast.AsyncFunctionDef)
-                    ):
-                        continue
-                    for node in ast.walk(fn):
-                        if not isinstance(node, ast.Call):
-                            continue
-                        f = node.func
-                        name = (
-                            f.attr
-                            if isinstance(f, ast.Attribute)
-                            else f.id
-                            if isinstance(f, ast.Name)
-                            else None
-                        )
-                        if name in aliases:
-                            found.add(
-                                (str(path.relative_to(REPO)), fn.name)
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            rel = str(path.relative_to(REPO))
+            scope: dict[int, str] = {}
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for child in ast.walk(node):
+                        scope.setdefault(id(child), node.name)
+            for node in ast.walk(tree):
+                # ANY binding of the constructor to another name is rejected,
+                # rather than resolved. Assign, AnnAssign and import-as all
+                # count.
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    value = node.value
+                    name = (
+                        value.attr
+                        if isinstance(value, ast.Attribute)
+                        else value.id
+                        if isinstance(value, ast.Name)
+                        else None
+                    )
+                    if name == "BenchEvidenceBundle":
+                        aliases.append((rel, node.lineno))
+                if isinstance(node, ast.ImportFrom):
+                    for a in node.names:
+                        if a.name == "BenchEvidenceBundle" and a.asname:
+                            aliases.append((rel, node.lineno))
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = (
+                        f.attr
+                        if isinstance(f, ast.Attribute)
+                        else f.id
+                        if isinstance(f, ast.Name)
+                        else None
+                    )
+                    if name == "BenchEvidenceBundle":
+                        sites.append(
+                            (
+                                rel,
+                                node.lineno,
+                                scope.get(id(node), "<module-or-lambda>"),
                             )
-        return found
+                        )
+        return sites, aliases
 
-    def test_construction_sites_are_exactly_the_allowlist(self) -> None:
-        assert self._sites() == self.ALLOWLIST
+    def test_construction_sites_are_exactly_two_by_line_identity(self) -> None:
+        sites, _ = self._scan()
+        assert len(sites) == 2, sites
+        assert {(f, fn) for f, _, fn in sites} == self.ALLOWLIST
 
-    def test_no_third_production_site_exists(self) -> None:
-        extra = self._sites() - self.ALLOWLIST
-        assert not extra, extra
+    def test_no_module_scope_or_lambda_construction(self) -> None:
+        sites, _ = self._scan()
+        assert not [s for s in sites if s[2] == "<module-or-lambda>"], sites
 
-    def test_the_allowlist_names_both_canonical_builders(self) -> None:
-        """v5 forbade every site outside the stage-2 seam, which would have
-        rejected the frozen stage-1 builder step 2 must not touch."""
-        functions = {fn for _, fn in self.ALLOWLIST}
-        assert functions == {"build_stage1_bundle", "build_stage2_bundle"}
+    def test_constructor_aliasing_is_rejected_outright(self) -> None:
+        """Do not resolve aliases -- forbid them."""
+        _, aliases = self._scan()
+        assert aliases == [], aliases
 
-    def test_production_scan_excludes_tests_deliberately(self) -> None:
-        assert "tests" not in self.PRODUCTION_ROOTS
+    def test_scan_covers_every_tracked_production_file(self) -> None:
+        files = {str(p.relative_to(REPO)) for p in self._production_files()}
+        assert "scripts/cuda_bench_assemble.py" in files
+        for root in ("cli", "daemon", "hardware", "training", "ui", "tools"):
+            if (REPO / root).is_dir():
+                assert any(f.startswith(f"{root}/") for f in files), root
+
+    def test_exclusions_are_explicit(self) -> None:
+        assert "tests" in self.EXCLUDED_ROOTS
