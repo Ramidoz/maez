@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v22
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v23
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -29,7 +29,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v19 | items 4 and 5 concrete: the durable grant projection and the store opener |
 | v20 | receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding |
 | v21 | the impossible descriptor rule removed everywhere; post-commit connection named; founder authority proven exactly |
-| **v22** | **journal posture: the header proves NOT-WAL, not `delete` — two-stage check frozen** |
+| v22 | journal posture: the header proves NOT-WAL, not `delete` — two-stage check |
+| **v23** | **the identity recheck must be anchored and NO-FOLLOW; `os.stat(path)` was symlink-bypassable** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1394,9 +1395,28 @@ of being altered.
 
 `presence_store_identity_mismatch` is redefined to an **observable**
 predicate, since the connection-descriptor comparison it originally
-described cannot exist: after opening, `os.stat(path)` is compared
-against `os.fstat(fd)`; disagreement means the name no longer refers to
-the file we verified.
+described cannot exist. But v21's form was **symlink-bypassable**:
+`os.stat(path)` **follows symlinks and re-resolves the whole path**, so
+replacing the database's name with a symlink pointing back at the held
+inode makes it agree — the check passes on exactly the substitution A3
+forbids.
+
+Reproduced: after renaming the database and symlinking the old name to
+the held inode, `os.stat(path)` matched `os.fstat(fd)`, while the
+anchored no-follow form saw the symlink and disagreed.
+
+Frozen anchored form:
+
+```python
+os.stat(leaf, dir_fd=held_parent_fd, follow_symlinks=False)
+```
+
+compared against `os.fstat(fd)` on **type, uid, mode, link count, device
+and inode** — not device/inode alone, since a link-count or mode change
+is also a loss of the posture we verified.
+
+**Binding RED:** rename the database, replace its old name with a symlink
+to the held inode, and require refusal.
 
 #### Grant evidence must be durable canon
 
