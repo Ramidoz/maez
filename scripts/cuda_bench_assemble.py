@@ -140,6 +140,97 @@ def _summary(
         _refuse()
 
 
+@dataclass(frozen=True, slots=True)
+class Stage2InputPaths:
+    """The stage-2 locating authority: the 22 stage-1 inputs + authorization.
+
+    It names NO command record. Command ordinals are runtime-allocated, so
+    admission and completion refs cannot be constants; the completion
+    arrives as a locator and the admission and receipt derive from it.
+    """
+
+    control_packet: str
+    candidate_packet: str
+    static_admission: str
+    static_completion: str
+    control_admission: str
+    control_completion: str
+    candidate_admission: str
+    candidate_completion: str
+    window_authorization: str
+    continuation: str
+    window_consumption: str
+    continuation_consumption: str
+    control_containment_before: str
+    control_containment_after: str
+    candidate_containment_before: str
+    candidate_containment_after: str
+    bench_identity: str
+    runtime_identity: str
+    static_preflight: str
+    quality: str
+    owner_voice: str
+    rollback: str
+    authorization: str
+
+
+def build_stage2_bundle(
+    paths: Stage2InputPaths,
+    *,
+    root: Path,
+    timestamp: str,
+) -> cm.BenchEvidenceBundle:
+    """The SOLE production stage-2 assembly seam.
+
+    Reuses build_stage1_bundle for the shared evidence rather than
+    duplicating it -- the consumer's guarantee is that it reconstructs
+    through the same seam the producer used, which two builders would
+    quietly falsify.
+    """
+
+    if type(paths) is not Stage2InputPaths:
+        _refuse()
+    stage_one = build_stage1_bundle(
+        Stage1ArtifactPaths(
+            **{
+                field.name: getattr(paths, field.name)
+                for field in fields(Stage1ArtifactPaths)
+            }
+        ),
+        root=root,
+        timestamp=timestamp,
+    )
+    try:
+        authorization = _persisted(
+            open_bench_file(paths.authorization, root=root),
+            cm.CutoverAuthorizationDoc,
+        )
+        # The descriptive witness must NAME the enforceable document: its
+        # artifact hash is the authorization's file hash, which is the
+        # join step 1 exists to enforce.
+        boot = cm.AuthorizationWitness(
+            "boot_authorization",
+            "pass",
+            authorization.file_sha256,
+            stage_one.bench_binding_sha256,
+            timestamp,
+        )
+        values = {
+            field.name: getattr(stage_one, field.name)
+            for field in fields(cm.BenchEvidenceBundle)
+            if field.init
+        }
+        values["cutover_authorization"] = authorization
+        values["boot_authorization"] = boot
+        return cm.BenchEvidenceBundle(**values)
+    except BenchRefusal as exc:
+        if exc.code == "assembly_refused":
+            raise
+        _refuse()
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+        _refuse()
+
+
 def build_stage1_bundle(
     paths: Stage1ArtifactPaths,
     *,

@@ -1,7 +1,8 @@
 # Cutover slice step 2 — stage-2 producer + consumer primitive, design v23
 
-Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
-v11 binds the S7 path; that binding needs a review round before REDs.**
+Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
+R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
+2B REDs may begin after 2A.
 
 Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 (step 1, merged at `348332b`).
