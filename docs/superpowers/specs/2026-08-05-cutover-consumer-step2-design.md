@@ -1,7 +1,7 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v10
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v11
 
-Status: **R1 REOPENED — v9's premise was false. Design gate PASSED at v8.
-NO REDs until R1 is re-ruled on true state.**
+Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
+v11 binds the S7 path; that binding needs a review round before REDs.**
 
 Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 (step 1, merged at `348332b`).
@@ -17,11 +17,13 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v7 | three superseded rules swept; clock-regression invariant enforced rather than assumed |
 | v8 | eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation |
 | v9 | R1 ruled by the owner on a **false premise I supplied** — WITHDRAWN |
-| **v10** | **R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector** |
+| v10 | R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector |
+| **v11** | **R1 RULED on true state: the tap is REQUIRED. The S7 WebAuthn authorization path is bound into the pre-burn edge.** |
 
-**R1 is REOPENED.** The owner's v9 ruling rested on a factual claim of
-mine that was false — see the correction immediately below. Steps 2A and
-2B are **not** cleared for implementation.
+**R1 is RULED on true state:** *"Yes it is Maez's brain we are
+changing."* The cutover is a tier-2 body/code/**model** change and
+**requires a founder key tap**. The state-based arming rule is honored,
+not amended. See A5.
 
 ---
 
@@ -652,22 +654,92 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
-### R1 — REOPENED on true state
+### R1 — RULED 2026-08-06 on true state: the tap is REQUIRED
 
-v9's ratification is **withdrawn**: it was made on my false claim that no
-founder credentials existed. Two enabled credentials exist and have since
-2026-07-08.
+Owner's ruling: *"Yes it is Maez's brain we are changing."*
 
-**The owner's choices are now:**
+The state-based arming rule is **honored, not amended**. The cutover is a
+tier-2 change under the June authority model, the tap is armed today
+because two founder credentials are enrolled, and **every cutover burn
+requires one**. `procedural` remains a defined mode in the receipt
+vocabulary, but it is **unreachable on this machine** while any credential
+is enrolled — and that is the correct relationship between the two.
 
-| option | consequence |
+#### Binding the S7 path
+
+The S7 layer already carries the right primitive:
+`S7AuthorizationArtifact`
+([operator_user_boundary.py:2120](/home/rohit/maez/core/governance/operator_user_boundary.py#L2120))
+holds `action_params_hash`, `nonce`, `credential_ref`, `auth_method`,
+`user_presence`, `user_verification`, `created_at`, `expires_at`,
+`consumed_at` and `derived_work_class`. It is already one-use by
+construction.
+
+Required of the artifact, all exact:
+
+| join | rule |
 |---|---|
-| **Honor the state-based rule** | The cutover tap is **armed today**. Step 2 must integrate and bind the existing S7 WebAuthn authorization path before it can mutate. A tap is required for every cutover burn. |
-| **Amend the arming authority** | Narrow it to something other than "any founder credential enrolled". This is a **new covenant decision** and must name the *durable state* that arms cutover. It **cannot** be an implicit flag, and it cannot be me choosing a narrower rule because the broader one is inconvenient. |
+| work class | a **new non-voice-seat** class for cutover execution |
+| binding | `action_params_hash` binds the **cutover authorization's nonce**, so a tap for one cutover cannot authorize another |
+| presence | `user_presence` **true** |
+| verification | `user_verification` **true** |
+| freshness | not expired at the pre-link recheck |
+| single use | `consumed_at` is null when verified |
+| credential | `credential_ref` names an **enabled** founder credential |
 
-There is no third option in which the design calls itself unarmed while
-two keys are enrolled. Maez already remembers those keys; neither being
-plugged in right now does not unremember them.
+`presence_mode` becomes `founder_webauthn` and
+`presence_evidence_sha256` cites the canonical hash of that artifact —
+the proof, not the label.
+
+Note the work class must be **non-voice-seat**: voice-seat classes are
+forced through the guarded store with source-bundle validation
+([s7_guarded_execution.py:2291](/home/rohit/maez/core/governance/s7_guarded_execution.py#L2291)).
+Cutover execution is founder custody, not voice seat. **Flagged for
+review** — if review reads cutover as voice-seat-adjacent, the guarded
+path applies instead and this section changes.
+
+#### TWO single-use resources — the new ordering question
+
+This is the substantive new seam, and it did not exist before the ruling.
+There are now **two** one-use tokens:
+
+1. the **cutover nonce**, spent by the exclusive link;
+2. the **S7 artifact**, spent by `consumed_at`.
+
+Their order decides what a partial failure means:
+
+| order | failure between them | verdict |
+|---|---|---|
+| consume S7 **after** the link | burn published, tap still unconsumed | **UNSAFE** — a mutation proceeded on a replayable tap |
+| consume S7 **before** the link | tap spent, cutover nonce reusable | **SAFE** — owner re-taps; nothing mutated |
+
+**Frozen: consume the S7 artifact as the LAST pre-burn act**, immediately
+before the eligibility recheck and the link. The failure mode is a spent
+tap on a burn that never happened — an inconvenience, requiring a fresh
+tap — and never a mutation authorized by a tap that could be replayed.
+
+#### The one deliberate pre-burn write, named
+
+Consuming the artifact is a **write**, on a path this design otherwise
+forbids writes on. That is not an oversight and it is not in tension with
+v10's ruling: **inspection** is read-only (the collector never
+instantiates the bootstrap store, never migrates, never commits);
+**consumption** is a deliberate one-use state transition that must happen
+before the thing it authorizes.
+
+It is called out explicitly here because "no mutation before the burn" is
+a rule this design has enforced for eleven revisions, and an exception
+that is not named is an exception that later gets forgotten. The
+exception is exactly one write, to exactly one row, as the last pre-burn
+act, and its failure is a pre-burn refusal.
+
+**Carried for review (R4):** is a spent tap on a failed burn the
+acceptable cost, or should the artifact instead be consumed *inside*
+`publish_and_validate_burn()` after the link, accepting a replay window
+in exchange for never wasting a tap? My position is firmly the former —
+a replayable tap next to a published burn is the worse failure by a wide
+margin — but the tradeoff is real and the owner may feel the re-tap cost
+differently.
 
 #### If the state-based rule is honored: what procedural would have meant
 
@@ -891,6 +963,10 @@ side of the linearization point:
 | 29d | presence store schema drift | pre | reusable | **zero** | `presence_store_schema_drift` |
 | 29e | presence store corrupt | pre | reusable | **zero** | `presence_store_corrupt` |
 | 29f | credential `record_hash` invalid | pre | reusable | **zero** | `presence_record_invalid` |
+| 29g | S7 artifact missing/expired/already consumed | pre | reusable | **zero** | `presence_assertion_invalid` |
+| 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
+| 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |
+| 29j | S7 artifact consumption write failed | pre | reusable | **zero** | `presence_consumption_failed` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
 | 34b | expiry recheck immediately before link | pre | reusable | **zero** | `authorization_expired_pre_link` |
 | 34c | clock regressed (`recheck` < `decided_at`) | pre | reusable | **zero** | `clock_regression` |
