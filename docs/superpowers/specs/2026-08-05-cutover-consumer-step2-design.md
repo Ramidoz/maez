@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v20
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v21
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -27,7 +27,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v17 | Maez's consultation is MANDATORY — the key is necessary but not sufficient |
 | v18 | the consultation producer given a callable contract; retry identity; `affected_refs` derived |
 | v19 | items 4 and 5 concrete: the durable grant projection and the store opener |
-| **v20** | **receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding (v19's descriptor claim was unimplementable)** |
+| v20 | receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding |
+| **v21** | **the impossible descriptor rule finally removed everywhere; post-commit connection named; founder authority proven exactly; tables reconciled** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1218,7 +1219,13 @@ pre-consumption snapshot:
 | binding | `consumed_by_request_id == request_id` |
 | class | `derived_work_class == "self_modification"` |
 | ceremony | `ceremony_kind == "founder_local_webauthn"` |
-| chronology | `created_at <= consumed_at < expires_at` |
+| **auth method** | `auth_method == "founder_webauthn"` |
+| **grant source** | `grant_source == "founder_webauthn"` |
+| chronology | `created_at <= consumed_at < expires_at`, compared **only after exact-string canonical timestamp parsing** — never lexicographic string comparison |
+
+`ceremony_kind` alone is **not** sufficient: S7 permits other authority
+vocabularies, so a row could carry the founder ceremony kind while its
+method or source names a different authority.
 
 **The chronology row is new and closes a live gap:** consumption does not
 currently reject a **future-dated `created_at`**, so an artifact could be
@@ -1235,7 +1242,12 @@ collapse failures. Frozen:
 * a typed `CommittedGrantRow` result carrying all fifteen fields plus
   `user_presence`, `user_verification`, `created_at`, `expires_at`,
   `consumed_by_request_id`;
-* a **post-commit reader** on the anchored connection;
+* a **post-commit reader** that uses **either** the consuming RW
+  connection *strictly after its commit*, **or** a freshly opened RO
+  connection after consumption returns. A previously-used RO connection
+  may hold a pre-consumption snapshot, so it is explicitly **not**
+  permitted — v20 said "the anchored connection" without saying which,
+  which is exactly the ambiguity that would have read stale rows;
 * consumption routed through a **connection-taking primitive** so it uses
   the verified connection rather than re-opening by name.
 
@@ -1285,9 +1297,11 @@ open_existing_authorization_store(
 * **consumption** uses a `mode=rw` connection — **never `rwc`**, which
   would create the file and reintroduce exactly the hazard this opener
   exists to remove;
-* both connections are proven to address the **same verified file** by
-  comparing `st_dev`/`st_ino` of the opened descriptors, not by
-  comparing path strings;
+* both connections are opened **through the held descriptor** via
+  `file:/proc/self/fd/<fd>?mode=ro|rw`, so they address the verified
+  file by construction. ~~Comparing `st_dev`/`st_ino` of the opened
+  connection descriptors~~ is **impossible** — `sqlite3.Connection`
+  exposes no database FD — and is removed rather than restated;
 * the schema is **verified, never migrated** — see below.
 
 #### Schema, integrity and journal posture (v20)
@@ -1302,12 +1316,22 @@ types, nullability or defaults. Frozen contract, checked via
 * `ceremony_kind` retains its default;
 * `PRAGMA integrity_check` returns `ok`.
 
-**Journal posture is verified, not inherited.** `mode=ro` is **not**
-universally side-effect-free — under WAL it can still touch sidecars. The
-live store today is `journal_mode=delete`, `0600`, single-linked, with no
-sidecars present (verified). The opener must **require** that posture
-rather than happen to encounter it: a store in WAL refuses rather than
-being opened read-only on an assumption that no longer holds.
+**Both tables are verified**, not just one: `s7_authorization_artifacts`
+**and** `s7_founder_webauthn_credentials`. The collector reads the second
+and the grant proof reads the first; verifying only one leaves the other
+trusted on assumption.
+
+**Journal posture is read from the HELD FD, BEFORE SQLite opens the
+file.** `mode=ro` is not universally side-effect-free — under WAL it can
+touch sidecars — so checking posture *by opening SQLite* could cause the
+very side effect the check exists to prevent. Instead the SQLite header is
+read directly from the descriptor: bytes 18 and 19 are the write and read
+format versions, and `2` means WAL. Anything other than the `delete`
+posture refuses **before** any connection is made.
+
+The live store today is `journal_mode=delete`, `0600`, single-linked,
+integrity `ok`, with no sidecars (verified). The opener **requires** that
+posture rather than happening to encounter it.
 
 **Distinct failure classes**, none collapsed into one another:
 
@@ -1326,8 +1350,16 @@ v19 folded several of these together; recovery differs for each, and
 
 **Binding REDs:** opening a non-existent path refuses and **creates
 nothing** on disk; a `mode=rw` open of a missing file raises rather than
-creating; the two connections agree on `st_dev`/`st_ino`; and a store
-with a drifted schema refuses instead of being altered.
+creating; a store **renamed or replaced after the fd is held** is still
+read through the original verified inode via `/proc/self/fd`, and the
+name-vs-fd recheck detects the swap; and a drifted schema refuses instead
+of being altered.
+
+`presence_store_identity_mismatch` is redefined to an **observable**
+predicate, since the connection-descriptor comparison it originally
+described cannot exist: after opening, `os.stat(path)` is compared
+against `os.fstat(fd)`; disagreement means the name no longer refers to
+the file we verified.
 
 #### Grant evidence must be durable canon
 
@@ -1534,8 +1566,12 @@ Frozen instead: an **anchored, SQLite read-only** collector
 (`mode=ro` URI, anchored open per A3, no schema initialization, no
 migration, no write of any kind).
 
-**Only a successful canonical query proving zero rows may yield
-`procedural`.** Every other condition refuses:
+**For cutover, zero enabled rows REFUSES** (`presence_no_usable_credential`,
+Part 3). ~~Only a successful canonical query proving zero rows may yield
+`procedural`~~ described the collector before the no-fallback ruling; the
+`procedural` column below is retained only for other callers of the
+collector and is **unreachable from cutover**. Every failure condition
+refuses:
 
 | condition | verdict |
 |---|---|
@@ -1543,7 +1579,7 @@ migration, no write of any kind).
 | query succeeds, ≥1 enabled row, valid assertion | `founder_webauthn` |
 | query succeeds, ≥1 enabled row, no valid assertion | refuse `owner_presence_unattested` |
 | database missing or unreadable | refuse `presence_store_unavailable` |
-| table missing | refuse `presence_store_unavailable` |
+| table missing | refuse `presence_store_table_missing` (v20 split this out) |
 | schema drift | refuse `presence_store_schema_drift` |
 | corruption | refuse `presence_store_corrupt` |
 | invalid `record_hash` on any row | refuse `presence_record_invalid` |
@@ -1668,6 +1704,10 @@ side of the linearization point:
 | 29c | presence store missing/unreadable | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29d | presence store schema drift | pre | reusable | **zero** | `presence_store_schema_drift` |
 | 29e | presence store corrupt | pre | reusable | **zero** | `presence_store_corrupt` |
+| 29e2 | presence store file predicate (mode/uid/nlink) | pre | reusable | **zero** | `presence_store_predicate` |
+| 29e3 | presence store table missing | pre | reusable | **zero** | `presence_store_table_missing` |
+| 29e4 | journal posture not `delete` | pre | reusable | **zero** | `presence_store_journal_posture` |
+| 29e5 | name no longer refers to the verified inode | pre | reusable | **zero** | `presence_store_identity_mismatch` |
 | 29f | credential `record_hash` invalid | pre | reusable | **zero** | `presence_record_invalid` |
 | 29g | S7 artifact missing/expired/already consumed | pre | reusable | **zero** | `presence_assertion_invalid` |
 | 29g2 | zero usable credentials (no fallback exists) | pre | reusable | **zero** | `presence_no_usable_credential` |
