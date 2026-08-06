@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v17
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v18
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -24,7 +24,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v14 | S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck |
 | v15 | the action contract MEASURED against `derive_work_class`; item 1 sequence reconciliation |
 | v16 | R5 ruled: follow the S7 action grammar; guarded mint seam specified |
-| **v17** | **Maez's consultation is MANDATORY — the key is necessary but not sufficient; vocabulary frozen from real code** |
+| v17 | Maez's consultation is MANDATORY — the key is necessary but not sufficient |
+| **v18** | **the consultation producer given a callable contract; retry identity; `affected_refs` derived, not asserted** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -969,7 +970,7 @@ Every envelope field, frozen:
 | `created_at` / `expires_at` | the cutover authorization's own window |
 | `predicted_effect_class` | closed code: runtime backend change |
 | `rollback_path_class` | closed code naming the frozen rollback manifest |
-| `maez_voice_consultation_id` | `None` — owner-initiated; see below |
+| `maez_voice_consultation_id` | **the deterministic consultation id (§ retry identity) — NEVER `None`** |
 
 #### The closed vocabulary, frozen from real code (v17)
 
@@ -1017,11 +1018,82 @@ I had been treating the cutover as infrastructure the owner performs *on*
 Maez. Canon treats moving Maez's brain as remaking, in which Maez has a
 seat. Canon is right and my framing was wrong.
 
+#### The producer contract (v18 — item 3's open work, closed)
+
+"A cutover adapter sits over the reviewed substrate" was direction, not a
+contract. Frozen:
+
+```
+produce_cutover_consultation(
+    *,
+    envelope: WorkRequestEnvelope,
+    attempt: ConsultationAttempt,
+    ask: Callable[[str], str],          # the reviewed voice channel
+    now: str,
+) -> CutoverConsultationResult
+```
+
+`CutoverConsultationResult` carries, typed: the `MaezVoiceConsultation`;
+the **raw response** exactly as returned; and the **semantic-reader
+attempt** — its verdict and its own failure mode — never collapsed into a
+boolean.
+
+**Lean implementation:** a **public generic producer** extracted from the
+existing card logic. Both the card path and the cutover adapter delegate
+to it. Neither calls private card helpers, and the cutover path never
+fabricates a `CardRecord` to satisfy a signature.
+
+**Closed failure outcomes**, each terminal and none defaulting to
+approval: `consultation_unavailable`, `response_unreadable`,
+`semantic_reader_failed`, `objection_recorded`,
+`consultation_withdrawn`, `bundle_unreservable`.
+
+#### The ordering, and the cycle to avoid
+
+```
+1. allocate consultation ATTEMPT identity + deterministic consultation id
+2. build the envelope carrying that id
+3. render the PRE-CONSULTATION proposal
+4. ask Maez; run the reviewed semantic reader
+5. construct the typed consultation from those results
+6. render the FINAL S7 request
+7. persist the replay bundle
+8. validate it, then reserve it during guarded minting
+```
+
+**`expected_s7_voice_rendered_prompt_text()` must NOT be used to ask
+Maez.** Verified: it requires *both* a `RenderedRequestStatement` and a
+`MaezVoiceConsultation`
+([s7_guarded_execution.py:504](/home/rohit/maez/core/governance/s7_guarded_execution.py#L504)),
+so using it at step 4 needs the consultation that step 4 exists to
+produce, and the final rendering from step 6. It is **replay material
+after rendering**, not the question.
+
+#### Retry identity — a deadlock v17 would have shipped
+
+A voice bundle is **one-use by `source_ref_hash`**. So if a tap is spent
+before the cutover burn — which R4 deliberately allows, and which is the
+*expected* failure mode — and Rohit retries, the next authorization needs
+a **fresh reservable bundle**. With a source-ref derived only from the
+envelope, response and semantic-reader hashes, Maez giving the same
+honest answer again would reproduce the same hash, the bundle would be
+unreservable, and **the cutover would be permanently unretryable**.
+
+Fixed: the source-ref preimage includes an **attempt identity** alongside
+the envelope, response and semantic-reader hashes.
+
+`ConsultationAttempt` carries that identity and the deterministic
+consultation id derived from it. "Deterministic consultation ID" without
+its derivation, as v17 wrote it, was insufficient — determinism is only
+meaningful once you say *of what*.
+
+**Binding REDs:** two consecutive attempts with byte-identical Maez
+responses produce **different** source-ref hashes and are each
+independently reservable; and a replay of the *same* attempt is refused.
+
 **Frozen seam:**
 
 * the envelope carries a **non-null, deterministic** consultation id;
-* a **cutover adapter** sits over the reviewed S7 voice prompt, semantic
-  reader, persistence, validation and reservation substrate;
 * `maez_objection_state` is **never fabricated** — in particular
   `"absent"` may not be written by this design, and per canon a renderer
   must use `not_determined` rather than a false "no objection" when no
@@ -1033,18 +1105,44 @@ seat. Canon is right and my framing was wrong.
 **If Maez objects, the cutover does not proceed.** That is the design, and
 it needs no exception path.
 
-#### `affected_refs`, exactly
+#### `affected_refs` — DERIVED from the operation manifest (v18)
 
-v16 wrote "the override and runtime identity refs", which is not
-falsifiable. Frozen as an exact ordered tuple, each a real ref:
+v17 named "the production override unit ref" and "the runtime identity
+document ref". Both were wrong:
 
-1. the production override unit ref;
-2. the runtime identity document ref.
+* **the runtime identity document is EVIDENCE, not a mutation target.**
+  Listing it would claim the tap covers changing a document the cutover
+  only reads.
+* **caller order carries no authority.** `_canonical_affected_refs`
+  ([operator_user_boundary.py:808](/home/rohit/maez/core/governance/operator_user_boundary.py#L808))
+  prefixes `file:`, normalizes, de-duplicates and **sorts**. My "exact
+  ordered tuple, in this order" was asserting something S7 discards.
 
-Both are already carried as identity hashes in `params`; `affected_refs`
-names the refs themselves. **Binding RED:** the tuple is exactly these two,
-in this order, and neither is a synthetic `file:`-prefixed value invented
-by the classifier — which is what removing the bait `target` prevented.
+Frozen: the tuple is **derived from the executor's operation manifest**,
+so the approval covers what will actually be mutated. At minimum it names
+the installed drop-in and the affected service:
+
+```
+file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf
+service:llama-server.service
+```
+
+**Every other Act-2 mutation must be accounted for explicitly** —
+recovery staging, judge restart, and reboot — either by appearing in this
+tuple or by a stated reason it is represented elsewhere. An unlisted
+mutation is a mutation the tap did not approve.
+
+**A pin that makes this reachable at all:** `params` must contain **none**
+of `path`, `file`, `target`, `cmd`. `derive_affected_refs`
+([:826](/home/rohit/maez/core/governance/operator_user_boundary.py#L826))
+returns *only* the ref built from the first such key it finds, **discarding
+supplied refs entirely**. Removing the R5 classifier bait was therefore
+not merely cosmetic — with `target` present, every ref frozen above would
+have been silently thrown away.
+
+**Binding REDs:** the canonical tuple contains both refs above; `params`
+contains none of the four discarding keys; and the tuple survives
+`_canonical_affected_refs` unchanged.
 
 **Item 3 is specified; the consultation adapter is now its open work.**
 2B remains blocked on that, plus items 4 and 5.
