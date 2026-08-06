@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,10 @@ from scripts import cuda_migration as cm
 REPO = Path(__file__).resolve().parents[1]
 BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
 STAGE2_TS = "2026-07-13T12:03:02Z"
-AUTHORIZATION_REF = "cutover-authorization.json"
+# The FROZEN name (scripts/cuda_cutover.py:22). My first draft used a
+# bare "cutover-authorization.json", which is not the canonical ref --
+# so no correct implementation could ever have satisfied that fixture.
+AUTHORIZATION_REF = "receipts/cutover-authorization.json"
 
 
 def stage2_input_paths() -> "assemble.Stage2InputPaths":
@@ -335,20 +339,17 @@ class TestProducerBehaviour:
         )
         verdict = cm.evaluate_promotion_bundle(bundle)
         receipt = cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
-        produced = driver.ProductionArtifactPolicy().encode(
+        regenerated = driver.ProductionArtifactPolicy().encode(
             "receipt", {**receipt, "binding_sha256": bundle.binding_sha256}
         )
-        regenerated = driver.ProductionArtifactPolicy().encode(
-            "receipt",
-            {
-                **cm.build_receipt(
-                    bundle, verdict, timestamp=bundle.timestamp
-                ),
-                "binding_sha256": bundle.binding_sha256,
-            },
+        # A tautology check: encoding the same expression twice compares
+        # nothing. The meaningful comparison is against bytes the PRODUCER
+        # published, which TestPublicChainPublishesRealArtifacts performs.
+        assert cm.PersistedDoc(regenerated).obj.cutover_window_id is not None
+        assert (
+            cm.PersistedDoc(regenerated).obj.bundle_binding_sha256
+            == bundle.binding_sha256
         )
-        assert produced == regenerated
-        assert cm.PersistedDoc(produced).obj.cutover_window_id is not None
 
 
 class TestPublicCommandChain:
@@ -396,20 +397,48 @@ class TestPublicChainPublishesRealArtifacts:
 
     @staticmethod
     def _private_root(tmp_path: Path) -> Path:
-        """Copy the inputs into a private root. Reads the live root only."""
+        """Seed a private root that a CORRECT implementation can satisfy.
+
+        Three defects in the first draft, all fatal to the test's purpose:
+        missing inputs were silently skipped (so the fixture could be
+        hollow), the authorization ref was not the frozen name, and no
+        authorization artifact was minted at all -- there is none under
+        the live root to copy. Every input is now required, and the
+        authorization is minted here, parented to the stage-1 bench anchor
+        computed from this private root's own inputs.
+        """
         from dataclasses import fields as dataclass_fields
+
+        from tests.test_cuda_migration import _cutover_authorization_doc
+        from tests.test_cutover_step1_invariants import stage1_paths
 
         root = tmp_path / "bench"
         root.mkdir(mode=0o700)
         authority = stage2_input_paths()
         for f in dataclass_fields(authority):
+            if f.name == "authorization":
+                continue
             rel = getattr(authority, f.name)
             src = BENCH_ROOT / rel
-            if not src.exists():
-                continue
+            assert src.is_file(), f"missing required stage-1 input: {rel}"
             dst = root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(src.read_bytes())
+            dst.chmod(0o600)
+
+        stage1 = assemble.build_stage1_bundle(
+            stage1_paths(), root=root, timestamp=STAGE2_TS
+        )
+        auth = _cutover_authorization_doc(stage1.bench_binding_sha256)
+        auth_path = root / AUTHORIZATION_REF
+        auth_path.parent.mkdir(parents=True, exist_ok=True)
+        auth_path.write_bytes(auth.wrapper_bytes)
+        auth_path.chmod(0o600)
+
+        (root / "markers").mkdir(mode=0o700, exist_ok=True)
+        for directory in root.rglob("*"):
+            if directory.is_dir():
+                directory.chmod(0o700)
         return root
 
     def test_invocation_publishes_admission_receipt_and_completion(
@@ -420,20 +449,21 @@ class TestPublicChainPublishesRealArtifacts:
         root = self._private_root(tmp_path)
         monkeypatch.setattr(driver, "BENCH_ROOT", root)
 
-        calls: list[int] = []
+        seen_args: list[tuple[object, Path]] = []
         real_builder = assemble.build_stage2_bundle
-        monkeypatch.setattr(
-            assemble,
-            "build_stage2_bundle",
-            lambda *a, **k: (calls.append(1), real_builder(*a, **k))[1],
-        )
+
+        def spy(paths, *, root, timestamp):
+            seen_args.append((paths, root))
+            return real_builder(paths, root=root, timestamp=timestamp)
+
+        monkeypatch.setattr(assemble, "build_stage2_bundle", spy)
 
         rc = cli.main(
             ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
         )
         assert rc == 0
         # the canonical builder ran exactly once
-        assert calls == [1]
+        assert len(seen_args) == 1
 
         admissions = sorted(root.glob("command-assemble-stage2-*-admission.json"))
         terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
@@ -467,45 +497,154 @@ class TestPublicChainPublishesRealArtifacts:
         assert receipt.decision == "provisional_cuda_boot"
         assert receipt.cutover_window_id == completion.window_id
 
-        # chronology: admission <= receipt <= completion
-        admission_at = json.loads(admissions[0].read_bytes())["fields"][
-            "timestamp"
-        ]
-        assert cm._compare_utc_z(admission_at, receipt.timestamp) <= 0
-        assert cm._compare_utc_z(receipt.timestamp, completion.timestamp) <= 0
+        # the admission document itself, through the live reader
+        admission = cm.CommandAdmissionPreimage(
+            selected_ref=admissions[0].name,
+            wrapper_bytes=admissions[0].read_bytes(),
+        )
+        assert admission.command == "assemble-stage2"
+        assert completion.admission_ref == admissions[0].name
+        assert admission.ordinal == completion.ordinal
+        assert admission.window_id == completion.window_id
 
-    def test_the_live_bench_root_was_never_written(
+        # the authorization's window joins the whole chain
+        auth = cm._canonical_persisted_role(
+            cm.PersistedDoc((root / AUTHORIZATION_REF).read_bytes()),
+            cm.CutoverAuthorizationDoc,
+        ).obj
+        assert auth.window_id == completion.window_id
+
+        # the PUBLISHED receipt equals independently regenerated bytes
+        bundle = assemble.build_stage2_bundle(
+            stage2_input_paths(), root=root, timestamp=receipt.timestamp
+        )
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        assert receipt_bytes == driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            {
+                **cm.build_receipt(
+                    bundle, verdict, timestamp=bundle.timestamp
+                ),
+                "binding_sha256": bundle.binding_sha256,
+            },
+        )
+
+        # the builder received the EXACT frozen authority, not "some args"
+        assert seen_args == [(stage2_input_paths(), root)]
+
+        # the live completion-pair validator accepts this exact chain
+        cm.CommandCompletionDoc(
+            command=completion.command,
+            ordinal=completion.ordinal,
+            window_id=completion.window_id,
+            admission_ref=completion.admission_ref,
+            admission_sha256=completion.admission_sha256,
+            artifact_ref=completion.artifact_ref,
+            artifact_sha256=completion.artifact_sha256,
+            artifact_schema=completion.artifact_schema,
+            status=completion.status,
+            timestamp=completion.timestamp,
+        )
+
+        # full frozen producer chronology, authorization window included
+        assert cm._compare_utc_z(auth.issued_at, admission.timestamp) <= 0
+        assert cm._compare_utc_z(admission.timestamp, receipt.timestamp) <= 0
+        assert cm._compare_utc_z(receipt.timestamp, completion.timestamp) <= 0
+        assert cm._compare_utc_z(completion.timestamp, auth.expires_at) < 0
+
+    @staticmethod
+    def _tree_snapshot(root: Path) -> dict[str, tuple[str, str]]:
+        """Complete tree: canonical relative path -> (type, content hash).
+
+        Top-level filenames prove nothing -- an in-place modification of
+        any nested file would pass unnoticed, which is exactly the write
+        this guard exists to detect.
+        """
+        import hashlib
+
+        snapshot: dict[str, tuple[str, str]] = {}
+        for path in sorted(root.rglob("*")):
+            rel = str(path.relative_to(root))
+            if path.is_symlink():
+                snapshot[rel] = ("symlink", os.readlink(path))
+            elif path.is_dir():
+                snapshot[rel] = ("dir", "")
+            elif path.is_file():
+                snapshot[rel] = (
+                    "file",
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+            else:
+                snapshot[rel] = ("other", "")
+        return snapshot
+
+    def test_the_live_bench_root_is_byte_identical_across_a_real_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The anchoring claim, asserted rather than assumed."""
-        before = sorted(p.name for p in BENCH_ROOT.iterdir())
-        root = self._private_root(tmp_path)
-        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        """GREEN guard, now and after: invoke for real, prove no live write.
+
+        The first version prepared a private root, never called main(),
+        and compared only top-level filenames. It proved neither that the
+        command ran nor that the live tree was untouched.
+        """
+        from scripts import cuda_bench_cli as cli
+
+        before = self._tree_snapshot(BENCH_ROOT)
+        # Seeded from the stage-1 authority, which EXISTS, so this guard is
+        # green today and stays green after 2A lands. Depending on
+        # Stage2InputPaths would have made the anchoring guard unavailable
+        # exactly while the code it guards is being written.
+        from dataclasses import fields as dataclass_fields
+
+        from tests.test_cutover_step1_invariants import stage1_paths
+
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        stage1 = stage1_paths()
+        for f in dataclass_fields(stage1):
+            rel = getattr(stage1, f.name)
+            src = BENCH_ROOT / rel
+            assert src.is_file(), rel
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(src.read_bytes())
         assert root != BENCH_ROOT
-        after = sorted(p.name for p in BENCH_ROOT.iterdir())
-        assert before == after
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        try:
+            cli.main(
+                ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+            )
+        except BaseException:
+            # Even a refusal must not have written to the live root.
+            pass
+        assert self._tree_snapshot(BENCH_ROOT) == before
 
 
 class TestOneBuilderTopology:
     """Exactly two production construction sites, by exact line identity.
 
-    Four ways the previous scanner was bypassable, all fixed here:
+    Iteration history, because each fix exposed the next hole:
 
-    * it returned a SET, so two constructor calls inside one allowed
-      function collapsed into one entry and the count still read 2;
-    * it resolved aliases partially, missing import aliases and annotated
-      assignments -- so it invited exactly the evasion it claimed to stop;
-    * it never saw module-scope or lambda construction, only calls inside
-      a FunctionDef;
-    * it scanned five directories while this repo has production Python in
-      cli/, daemon/, hardware/, training/, ui/, tools/ and at the root.
+    * a SET collapsed two calls in one allowed function into one entry;
+    * partial alias RESOLUTION invited the evasion it claimed to stop;
+    * module-scope and lambda construction were invisible;
+    * five hand-picked roots missed most of the tree;
+    * `git ls-files` spawned a subprocess, creating fresh airlock
+      spawn-debt for a guard that must certify;
+    * alias rejection still missed destructuring, walrus, getattr and
+      re-export shapes, and parse errors were silently swallowed.
 
-    The fix is to stop trying to be clever about aliases and instead
-    REJECT aliasing outright, while scanning every tracked production
-    file and reporting exact (file, line, enclosing scope) triples.
+    Final position: NO alias resolution at all. Any reference to the
+    constructor symbol other than a call at an allowlisted site is a
+    failure, parse errors are failures rather than skips, and the scanner
+    self-tests that it detects each evasion shape.
     """
 
-    EXCLUDED_ROOTS = ("tests", "docs", "staging", "tmp", "backups", "research")
+    SYMBOL = "BenchEvidenceBundle"
+    EXCLUDED_ROOTS = frozenset(
+        {"tests", "docs", "staging", "tmp", "backups", "research", "local",
+         "logs", "output", "models", "data", "web", "workshop", ".git"}
+    )
     ALLOWLIST = {
         ("scripts/cuda_bench_assemble.py", "build_stage1_bundle"),
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle"),
@@ -513,56 +652,47 @@ class TestOneBuilderTopology:
 
     @classmethod
     def _production_files(cls) -> list[Path]:
-        import subprocess
-
-        out = subprocess.run(
-            ["git", "ls-files", "*.py"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
-        return [
-            REPO / rel
-            for rel in out
-            if not rel.startswith(tuple(f"{r}/" for r in cls.EXCLUDED_ROOTS))
-        ]
+        """No subprocess: walking avoids new airlock spawn-debt."""
+        found: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(REPO):
+            rel_dir = Path(dirpath).relative_to(REPO)
+            top = rel_dir.parts[0] if rel_dir.parts else ""
+            if top in cls.EXCLUDED_ROOTS:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in cls.EXCLUDED_ROOTS and not d.startswith(".")
+            ]
+            found.extend(
+                Path(dirpath) / name
+                for name in filenames
+                if name.endswith(".py")
+            )
+        return sorted(found)
 
     @classmethod
-    def _scan(cls) -> tuple[list[tuple[str, int, str]], list[tuple[str, int]]]:
-        """Return (construction sites, aliasing sites). Lists, not sets."""
-        sites: list[tuple[str, int, str]] = []
-        aliases: list[tuple[str, int]] = []
+    def _scan(cls) -> tuple[list[tuple[str, int, str]], list[tuple[str, int, str]]]:
+        """Return (call sites, non-call references). Lists, not sets."""
+        calls: list[tuple[str, int, str]] = []
+        refs: list[tuple[str, int, str]] = []
         for path in cls._production_files():
-            try:
-                tree = ast.parse(path.read_text(), filename=str(path))
-            except (SyntaxError, UnicodeDecodeError):
-                continue
             rel = str(path.relative_to(REPO))
+            source = path.read_text(encoding="utf-8", errors="strict")
+            # A parse error is a FAILURE, not a skip: an unparsed file is
+            # an unscanned file.
+            tree = ast.parse(source, filename=rel)
             scope: dict[int, str] = {}
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+                ):
+                    label = getattr(node, "name", "<lambda>")
                     for child in ast.walk(node):
-                        scope.setdefault(id(child), node.name)
+                        scope.setdefault(id(child), label)
+            called: set[int] = set()
             for node in ast.walk(tree):
-                # ANY binding of the constructor to another name is rejected,
-                # rather than resolved. Assign, AnnAssign and import-as all
-                # count.
-                if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    value = node.value
-                    name = (
-                        value.attr
-                        if isinstance(value, ast.Attribute)
-                        else value.id
-                        if isinstance(value, ast.Name)
-                        else None
-                    )
-                    if name == "BenchEvidenceBundle":
-                        aliases.append((rel, node.lineno))
-                if isinstance(node, ast.ImportFrom):
-                    for a in node.names:
-                        if a.name == "BenchEvidenceBundle" and a.asname:
-                            aliases.append((rel, node.lineno))
                 if isinstance(node, ast.Call):
                     f = node.func
                     name = (
@@ -572,36 +702,129 @@ class TestOneBuilderTopology:
                         if isinstance(f, ast.Name)
                         else None
                     )
-                    if name == "BenchEvidenceBundle":
-                        sites.append(
-                            (
-                                rel,
-                                node.lineno,
-                                scope.get(id(node), "<module-or-lambda>"),
-                            )
+                    if name == cls.SYMBOL:
+                        called.add(id(f))
+                        calls.append(
+                            (rel, node.lineno, scope.get(id(node), "<module>"))
                         )
-        return sites, aliases
+            # EVERY other mention of the symbol -- assignment, walrus,
+            # destructuring, import-as, re-export, getattr string -- is a
+            # non-call reference and is rejected without interpretation.
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Name, ast.Attribute)):
+                    label = (
+                        node.attr
+                        if isinstance(node, ast.Attribute)
+                        else node.id
+                    )
+                    if label == cls.SYMBOL and id(node) not in called:
+                        refs.append(
+                            (rel, node.lineno, type(node).__name__)
+                        )
+                elif isinstance(node, ast.ClassDef) and node.name == cls.SYMBOL:
+                    refs.append((rel, node.lineno, "ClassDef"))
+                elif isinstance(node, ast.Constant) and node.value == cls.SYMBOL:
+                    refs.append((rel, node.lineno, "Constant"))
+                elif isinstance(node, ast.alias) and node.name == cls.SYMBOL:
+                    refs.append((rel, getattr(node, "lineno", 0), "alias"))
+        return calls, refs
 
-    def test_construction_sites_are_exactly_two_by_line_identity(self) -> None:
-        sites, _ = self._scan()
-        assert len(sites) == 2, sites
-        assert {(f, fn) for f, _, fn in sites} == self.ALLOWLIST
+    def test_call_sites_are_exactly_two_by_line_identity(self) -> None:
+        calls, _ = self._scan()
+        assert len(calls) == 2, calls
+        assert {(f, fn) for f, _, fn in calls} == self.ALLOWLIST
 
     def test_no_module_scope_or_lambda_construction(self) -> None:
-        sites, _ = self._scan()
-        assert not [s for s in sites if s[2] == "<module-or-lambda>"], sites
+        calls, _ = self._scan()
+        assert not [c for c in calls if c[2] in ("<module>", "<lambda>")], calls
 
-    def test_constructor_aliasing_is_rejected_outright(self) -> None:
-        """Do not resolve aliases -- forbid them."""
-        _, aliases = self._scan()
-        assert aliases == [], aliases
+    # Every legitimate non-call reference, enumerated. Rejecting ALL of
+    # them (my first attempt) would forbid type annotations and the class
+    # definition itself -- an over-correction that made the guard wrong
+    # rather than strict. This is the closed allowlist review asked for:
+    # any reference NOT on it is an alias or an evasion.
+    REFERENCE_ALLOWLIST = {
+        ("scripts/cuda_migration.py", "ClassDef"),      # the definition
+        ("scripts/cuda_migration.py", "Name"),          # signature annotations
+        ("scripts/cuda_bench_assemble.py", "Attribute"),  # return annotations
+        ("scripts/cuda_migration.py", "Constant"),  # -> "BenchEvidenceBundle"
+    }
 
-    def test_scan_covers_every_tracked_production_file(self) -> None:
-        files = {str(p.relative_to(REPO)) for p in self._production_files()}
-        assert "scripts/cuda_bench_assemble.py" in files
-        for root in ("cli", "daemon", "hardware", "training", "ui", "tools"):
-            if (REPO / root).is_dir():
-                assert any(f.startswith(f"{root}/") for f in files), root
+    def test_every_constructor_reference_is_on_the_closed_allowlist(
+        self,
+    ) -> None:
+        _, refs = self._scan()
+        kinds = {(f, kind) for f, _, kind in refs}
+        assert kinds <= self.REFERENCE_ALLOWLIST, kinds - self.REFERENCE_ALLOWLIST
+
+    def test_no_reference_lives_outside_the_two_owning_modules(self) -> None:
+        """An alias in a third module is the evasion that matters."""
+        _, refs = self._scan()
+        files = {f for f, _, _ in refs}
+        assert files <= {
+            "scripts/cuda_migration.py",
+            "scripts/cuda_bench_assemble.py",
+        }, files
+
+    # --- self-tests: prove the scanner detects what it claims to ---
+
+    EVASIONS = (
+        "B = cm.BenchEvidenceBundle",
+        "B: object = cm.BenchEvidenceBundle",
+        "(B, C) = (cm.BenchEvidenceBundle, 1)",
+        "x = [cm.BenchEvidenceBundle][0]",
+        "from scripts.cuda_migration import BenchEvidenceBundle as B",
+        "B = getattr(cm, 'BenchEvidenceBundle')",
+        "if (B := cm.BenchEvidenceBundle):\n    pass",
+        "__all__ = ['BenchEvidenceBundle']",
+    )
+
+    @pytest.mark.parametrize("snippet", EVASIONS)
+    def test_scanner_detects_each_alias_shape(self, snippet: str) -> None:
+        tree = ast.parse(snippet)
+        hits = [
+            n
+            for n in ast.walk(tree)
+            if (
+                (isinstance(n, ast.Name) and n.id == self.SYMBOL)
+                or (isinstance(n, ast.Attribute) and n.attr == self.SYMBOL)
+                or (isinstance(n, ast.Constant) and n.value == self.SYMBOL)
+                or (isinstance(n, ast.alias) and n.name == self.SYMBOL)
+            )
+        ]
+        assert hits, snippet
+
+    def test_scanner_detects_duplicate_calls_in_one_function(self) -> None:
+        tree = ast.parse(
+            "def f():\n"
+            "    a = cm.BenchEvidenceBundle()\n"
+            "    b = cm.BenchEvidenceBundle()\n"
+        )
+        calls = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == self.SYMBOL
+        ]
+        assert len(calls) == 2
+
+    def test_scanner_spawns_no_process(self) -> None:
+        """A guard that spawns cannot certify under the airlock.
+
+        Checked structurally, not by substring: my first version searched
+        for the word "subprocess" and failed on its own docstring, which
+        explains why the subprocess approach was abandoned.
+        """
+        tree = ast.parse(Path(__file__).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [a.name for a in node.names]
+                assert "subprocess" not in names, names
+            if isinstance(node, ast.Call):
+                f = node.func
+                attr = f.attr if isinstance(f, ast.Attribute) else None
+                assert attr not in {"system", "popen", "spawn", "run"}, attr
 
     def test_exclusions_are_explicit(self) -> None:
         assert "tests" in self.EXCLUDED_ROOTS
