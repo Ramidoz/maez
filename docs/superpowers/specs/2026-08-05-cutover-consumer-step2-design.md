@@ -1,6 +1,7 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v9
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v10
 
-Status: **R1 RULED 2026-08-06. Design gate PASSED at v8. REDs may begin.**
+Status: **R1 REOPENED — v9's premise was false. Design gate PASSED at v8.
+NO REDs until R1 is re-ruled on true state.**
 
 Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 (step 1, merged at `348332b`).
@@ -15,12 +16,45 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v6 | five implementability contradictions resolved: one locating authority, two-site constructor allowlist, exact canon result, pre-link expiry recheck, AST boundary |
 | v7 | three superseded rules swept; clock-regression invariant enforced rather than assumed |
 | v8 | eligibility rechecked immediately before `begin()` — the pre-link check bounded the burn, not the mutation |
-| **v9** | **R1 RULED by the owner: build now with procedural presence; the tap is a specified, currently-unarmed pre-burn refusal point** |
+| v9 | R1 ruled by the owner on a **false premise I supplied** — WITHDRAWN |
+| **v10** | **R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector** |
 
-**R1 is RULED** — see A5. Rohit ratified the owner-typed ceremony with
-**procedural presence**, and the hardware tap is specified here as a
-named pre-burn refusal point that a later slice arms. Steps 2A and 2B may
-now be implemented.
+**R1 is REOPENED.** The owner's v9 ruling rested on a factual claim of
+mine that was false — see the correction immediately below. Steps 2A and
+2B are **not** cleared for implementation.
+
+---
+
+## CORRECTION — v9 rested on a false claim of mine
+
+**What I asserted (v9):** the `s7_founder_webauthn_credentials` table
+"has never been provisioned in any database", so there was "currently
+nothing to tap into".
+
+**The truth:** the canonical store
+`memory/s7_1_webauthn/ceremony.sqlite3` (owner-owned, `0600`) contains
+**two enabled founder credentials** — a primary key enrolled
+2026-07-07 and a backup enrolled 2026-07-08, both
+`ceremony_kind = founder_local_webauthn`. Verified read-only.
+
+**Why I got it wrong:** I globbed `memory/*.db`, `*.db`, `evolution/*.db`
+and `config/*.db`. The canonical store is one directory deeper and uses
+`.sqlite3`. My search **could not have found it**, and I reported its
+absence as established fact rather than as the limit of where I had
+looked. A negative from an incomplete search is not a finding.
+
+**Why this is the most serious error in this slice:** it was not a design
+mistake, it was **false information given to the owner immediately before
+a covenant decision**, and it pointed that decision toward the weaker
+option. Rohit ruled "procedural presence, nothing to tap into yet" on a
+premise I manufactured. Every other error in this document cost review
+rounds; this one cost the owner an uninformed ruling.
+
+**Consequences applied here:** v9's ruling is withdrawn, R1 is reopened
+on true state, and the "unplugged key" reasoning is void — a key absent
+from USB means an assertion may be **unavailable**, not that enrolment
+never happened. Under v9's own "armed iff at least one credential is
+enrolled" rule, **the cutover tap is armed today.**
 
 ---
 
@@ -114,7 +148,7 @@ used.
 | **2A** | one canonical pure `build_stage2_bundle` / evaluation seam |
 | **2A** | the anchored production stage-2 command uses it and durably publishes its command-bound receipt |
 | **2B** | the consumer reconstructs through that exact seam, regenerates the receipt, validates the producer record, then `prepare()`s |
-| — | burn and `begin()` remain unreachable until R1 is decided |
+| — | burn and `begin()` remain unreachable until R1 is **re-ruled on true state** (v10) |
 | — | **step 5 is amended to own stages 3–5 only** |
 
 ### `Stage2InputPaths` — ONE locating authority
@@ -618,13 +652,24 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
-### R1 — RULED 2026-08-06 by the owner
+### R1 — REOPENED on true state
 
-**Ratified:** the owner-typed ceremony is a single authorization-bound
-invocation, built now, with **procedural** owner presence. The hardware
-tap is specified below and armed by a later slice.
+v9's ratification is **withdrawn**: it was made on my false claim that no
+founder credentials existed. Two enabled credentials exist and have since
+2026-07-08.
 
-#### What "procedural" means, stated without softening
+**The owner's choices are now:**
+
+| option | consequence |
+|---|---|
+| **Honor the state-based rule** | The cutover tap is **armed today**. Step 2 must integrate and bind the existing S7 WebAuthn authorization path before it can mutate. A tap is required for every cutover burn. |
+| **Amend the arming authority** | Narrow it to something other than "any founder credential enrolled". This is a **new covenant decision** and must name the *durable state* that arms cutover. It **cannot** be an implicit flag, and it cannot be me choosing a narrower rule because the broader one is inconvenient. |
+
+There is no third option in which the design calls itself unarmed while
+two keys are enrolled. Maez already remembers those keys; neither being
+plugged in right now does not unremember them.
+
+#### If the state-based rule is honored: what procedural would have meant
 
 Any process running as the owner's uid can invoke the ceremony while an
 authorization is valid. The nonce, the named window, and the chronology
@@ -667,15 +712,68 @@ attested must not consume the authorization.
 nonce reusable, zero executor calls. With none present → proceed, and the
 outcome records `presence: procedural`.
 
-#### One question for the review lane
+#### Ruling: presence belongs in the DURABLE receipt (v10)
 
-Recording presence mode inside `CutoverConsumptionReceipt` would make the
-durable evidence self-describing, but that receipt is **step-1 frozen
-canon** and adding a ninth field moves it. My position: record presence
-mode on the **step-2 outcome surface**, not in the step-1 receipt, and
-leave step-1 canon untouched. Flagged rather than decided unilaterally,
-because "the evidence should say which mode produced it" is a fair
-counter-argument.
+I proposed recording presence mode on the step-2 outcome surface to avoid
+moving step-1 canon. **Ruled against, correctly.** An executor can crash
+or partially fail before any outcome is published; the **burn marker is
+the one artifact guaranteed durable before mutation**. Outcome-only
+recording therefore loses exactly the fact that matters most after a
+partial failure: *which authority mode permitted this burn.*
+
+I optimized for not disturbing canon and traded away the durability
+property the record exists for.
+
+**`CutoverConsumptionReceipt` → v2, now.** No v1 cutover-consumption
+artifact exists under the bench root, so this is the cheapest safe moment
+— the field is added before any durable artifact can be orphaned. Active
+family count stays **26**: this is a *replacement*, not an addition.
+
+Two new fields, both inside the binding:
+
+| field | rule |
+|---|---|
+| `presence_mode` | exact closed value: `procedural` \| `founder_webauthn` |
+| `presence_evidence_sha256` | `None` **iff** `procedural`; the canonical S7 authorization-artifact hash when WebAuthn-attested |
+
+The second field is the point. A bare `founder_webauthn` string is
+**descriptive, not proof** — the same error as A2, where a self-chosen
+hash was mistaken for evidence. The receipt must cite the artifact that
+attested, not merely name the mode.
+
+#### Ruling: the presence collector is read-only and fails closed (v10)
+
+**`S7WebAuthnBootstrapStore` must never be instantiated by the consumer.**
+Verified: its constructor
+([s7_webauthn_bootstrap.py:251](/home/rohit/maez/core/governance/s7_webauthn_bootstrap.py#L251))
+calls `mkdir(parents=True)`, `chmod(0o700)`, `_init_db()` — which runs
+`executescript`, an `INSERT`, a column migration and a `commit` — and
+`_ensure_audit_file()`. Constructing it **writes**. Doing that on the
+pre-burn path would violate the no-mutation boundary at the exact edge
+this design exists to protect, and would do it while merely *asking*
+whether anyone is present.
+
+Frozen instead: an **anchored, SQLite read-only** collector
+(`mode=ro` URI, anchored open per A3, no schema initialization, no
+migration, no write of any kind).
+
+**Only a successful canonical query proving zero rows may yield
+`procedural`.** Every other condition refuses:
+
+| condition | verdict |
+|---|---|
+| query succeeds, zero enabled rows | `procedural` |
+| query succeeds, ≥1 enabled row, valid assertion | `founder_webauthn` |
+| query succeeds, ≥1 enabled row, no valid assertion | refuse `owner_presence_unattested` |
+| database missing or unreadable | refuse `presence_store_unavailable` |
+| table missing | refuse `presence_store_unavailable` |
+| schema drift | refuse `presence_store_schema_drift` |
+| corruption | refuse `presence_store_corrupt` |
+| invalid `record_hash` on any row | refuse `presence_record_invalid` |
+
+None of these may masquerade as zero enrollment. "I could not read the
+key store" and "there are no keys" are opposite facts, and collapsing
+them is precisely how I got here.
 
 ### Historical: the reasoning before the ruling
 
@@ -789,6 +887,10 @@ side of the linearization point:
 | 29 | clock or boot read | pre | reusable | no | `edge_state_unreadable` |
 | 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
 | 29b | founder credential enrolled, no valid assertion | pre | reusable | **zero** | `owner_presence_unattested` |
+| 29c | presence store missing/unreadable | pre | reusable | **zero** | `presence_store_unavailable` |
+| 29d | presence store schema drift | pre | reusable | **zero** | `presence_store_schema_drift` |
+| 29e | presence store corrupt | pre | reusable | **zero** | `presence_store_corrupt` |
+| 29f | credential `record_hash` invalid | pre | reusable | **zero** | `presence_record_invalid` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
 | 34b | expiry recheck immediately before link | pre | reusable | **zero** | `authorization_expired_pre_link` |
 | 34c | clock regressed (`recheck` < `decided_at`) | pre | reusable | **zero** | `clock_regression` |
