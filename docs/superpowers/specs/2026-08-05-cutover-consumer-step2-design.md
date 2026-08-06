@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v15
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v16
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -22,7 +22,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v12 | arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one |
 | v13 | no-fallback ruled; work class ruled `self_modification`; predicate, preimage, projection and consumption seam frozen |
 | v14 | S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck |
-| **v15** | **the action contract MEASURED against `derive_work_class`, not assumed; item 1 sequence reconciliation** |
+| v15 | the action contract MEASURED against `derive_work_class`; item 1 sequence reconciliation |
+| **v16** | **R5 ruled: follow the S7 action grammar; guarded mint seam specified from `build_work_request_envelope`** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -855,7 +856,7 @@ build + round-trip the cutover receipt (carries the grant hash)
 O_TMPFILE, write_all, fsync(file)
 recheck clock, expiry, regression, identity, eligibility
 consume_execution_grant_for_action(grant, ACTION, PARAMS)   # LAST pre-burn act
-  # ACTION = "cuda.cutover.execute"; PARAMS["target"] = "model_routing"
+  # ACTION = "model_routing.cutover_cuda" (R5); no classifier-bait target
   # -- measured to derive self_modification, not assumed
 --------------------------------------------------------- last no-mutation point
 publish_and_validate_burn()
@@ -894,44 +895,93 @@ So the owner's ruling — work class `self_modification` — would **not have
 held** under v14's mapping. The class is derived, not declared, and I had
 written params that derive `undeterminable_work_class`.
 
+#### R5 RULED — follow the S7 action grammar (neither option I offered)
+
+I proposed either classifier bait in `params["target"]` or widening
+`_touches_self_mod_substrate`. Ruled: **neither.** Use the grammar S7
+already has.
+
 **Frozen action contract:**
 
-* action literal: `cuda.cutover.execute`
-* `params["target"]`: `model_routing` — the material that *earns*
-  `self_modification` rather than asserting it
-* the remaining members carry identity and are **not** classification
-  material: authorization file and binding hashes; stage-2 receipt file
-  and binding hashes; `FROZEN_ROLLBACK_MANIFEST_SHA256`; the target
-  override and runtime identity hashes; the window id.
+* `ACTION = "model_routing.cutover_cuda"`
+* `params["target"]` is **removed** — it no longer doubles as classifier
+  bait, and it no longer derives the nonsensical affected ref
+  `file:model_routing`
+* the actual target stays bound through the already-specified **override
+  and runtime identity hashes**
+* `_touches_self_mod_substrate` is **not widened** in step 2
 
-**Binding RED:** `derive_work_class(action=ACTION, params=PARAMS) ==
-"self_modification"`, asserted directly. Not inferred from the ruling —
-the ruling is what must be *satisfied*, and only this call can say
-whether it is.
+This matches the established `model_routing.swap_primary` precedent:
+`build_brain_swap_work_request_envelope`
+([operator_user_boundary.py:2914](/home/rohit/maez/core/governance/operator_user_boundary.py#L2914))
+requires `"brain_swap"` or `"model_routing"` in the action for exactly
+this reason. The action honestly names the authority-bearing operation.
 
-**Open for review (R5):** `target = "model_routing"` is chosen because it
-is the substring the classifier matches. That is honest but slightly
-uncomfortable — the value is doing double duty as semantic description
-and classifier trigger. The alternative is extending
-`_touches_self_mod_substrate` to recognise the runtime path, which is an
-S7 change with wider blast radius. I lean to the former for step 2 and
-flag the latter as the cleaner long-term shape.
+Measured, and better than my proposal in a way I had missed: the class is
+earned by the **action alone**, independent of params.
 
-#### The guarded mint path, named
+| action | params | derived |
+|---|---|---|
+| `model_routing.cutover_cuda` | full identity mapping | **`self_modification`** |
+| `model_routing.cutover_cuda` | `{}` | **`self_modification`** |
+| `cutover_cuda` (no `model_routing`) | full identity mapping | `undeterminable_work_class` |
+
+**Binding REDs:**
+
+1. the exact action and params derive `self_modification`;
+2. removing `model_routing` from the action makes the class
+   undeterminable;
+3. guarded minting, store consumption and action-edge consumption use
+   **byte-identical** action and params.
+
+#### The guarded mint seam, SPECIFIED (v16 — item 3)
 
 `self_modification` is voice-seat guarded, so "use the guarded store" is
-not enough to build a valid artifact. v14 must name, and a later revision
-must fill in concretely:
+not enough to build a valid artifact. The concrete seam is
+`build_work_request_envelope`
+([operator_user_boundary.py:1360](/home/rohit/maez/core/governance/operator_user_boundary.py#L1360)),
+which derives the class from action material and rejects a mismatched
+claim.
 
-* the **rendered request** text and its hash;
-* the **validated source bundle** and its ref hash;
-* the **reservation token**;
-* the **authority context** hash;
-* the **aggregation group**.
+**Not** `build_brain_swap_work_request_envelope`: that wrapper requires an
+S5 *admission artifact* and a candidate model fingerprint, because it
+exists for swapping the model. A CUDA cutover changes the **runtime
+backend** and admits no new model, so its precondition is different and
+borrowing that wrapper would mean fabricating an S5 admission that never
+happened.
 
-**Flagged honestly:** these are S7 concepts this design has not yet
-specified for cutover, and until they are, 2B cannot be implemented. 2A
-does not depend on them.
+Every envelope field, frozen:
+
+| field | value |
+|---|---|
+| `request_id` | the cutover window id |
+| `action` | `model_routing.cutover_cuda` |
+| `params` | the frozen identity mapping (§ action contract) |
+| `claimed_work_class` | `self_modification` — *checked against* the derived class, never trusted |
+| `requesting_subsystem` | `cuda_cutover` |
+| `closed_symptom_code` | closed code for backend migration |
+| `proposed_change_class` | `model_routing_change` — the precedent's value |
+| `why_self_fix_failed_class` | closed code: owner-initiated migration, not a repair |
+| `affected_refs` | the override and runtime identity refs — **real** refs, which is what removing the classifier-bait `target` restored |
+| `content_exposure_risk` | closed low/none code |
+| `precondition_hash` | canonical hash over the stage-2 permit, the bench anchor and the rollback manifest |
+| `created_at` / `expires_at` | the cutover authorization's own window |
+| `predicted_effect_class` | closed code: runtime backend change |
+| `rollback_path_class` | closed code naming the frozen rollback manifest |
+| `maez_voice_consultation_id` | `None` — owner-initiated; see below |
+
+**Two things flagged rather than assumed:**
+
+* the closed codes above must be **existing** members of their
+  vocabularies. I have not yet enumerated them, and inventing values
+  would be exactly the error R5 just corrected.
+* `maez_voice_consultation_id = None` presumes a voice-seat class may
+  proceed without a voice consultation when the owner initiates. If S7
+  requires one, cutover needs a consultation record and that is a larger
+  question than step 2.
+
+**Item 3 is therefore specified but not closed.** 2B remains blocked on
+those two, plus items 4 and 5.
 
 #### Grant evidence must be durable canon
 
