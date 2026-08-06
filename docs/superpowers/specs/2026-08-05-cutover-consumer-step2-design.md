@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v21
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v22
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -28,7 +28,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v18 | the consultation producer given a callable contract; retry identity; `affected_refs` derived |
 | v19 | items 4 and 5 concrete: the durable grant projection and the store opener |
 | v20 | receipt rules reconciled; exact encoder + post-commit row proof; `/proc/self/fd` binding |
-| **v21** | **the impossible descriptor rule finally removed everywhere; post-commit connection named; founder authority proven exactly; tables reconciled** |
+| v21 | the impossible descriptor rule removed everywhere; post-commit connection named; founder authority proven exactly |
+| **v22** | **journal posture: the header proves NOT-WAL, not `delete` — two-stage check frozen** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1321,13 +1322,49 @@ types, nullability or defaults. Frozen contract, checked via
 and the grant proof reads the first; verifying only one leaves the other
 trusted on assumption.
 
-**Journal posture is read from the HELD FD, BEFORE SQLite opens the
-file.** `mode=ro` is not universally side-effect-free — under WAL it can
-touch sidecars — so checking posture *by opening SQLite* could cause the
-very side effect the check exists to prevent. Instead the SQLite header is
-read directly from the descriptor: bytes 18 and 19 are the write and read
-format versions, and `2` means WAL. Anything other than the `delete`
-posture refuses **before** any connection is made.
+**Journal posture is a TWO-STAGE check.** v21 claimed the header proves
+`journal_mode=delete`. It does not. Reproduced independently:
+
+| journal mode | header bytes 18/19 |
+|---|---|
+| `delete` | `(1, 1)` |
+| `truncate` | `(1, 1)` |
+| `persist` | `(1, 1)` |
+| `wal` | `(2, 2)` |
+
+So the header distinguishes **legacy rollback format from WAL** and
+nothing finer. `truncate` and `persist` would have passed a check that
+claimed to prove `delete`.
+
+The reason for a pre-open stage still stands: `mode=ro` is not
+universally side-effect-free — under WAL it can touch sidecars — so
+posture cannot be established *only* by opening SQLite. Frozen:
+
+**Stage 1, before SQLite opens anything**, from the held fd:
+
+* the SQLite **magic/header** is well-formed;
+* bytes 18/19 are exactly `(1, 1)` — legacy rollback, **not** WAL;
+* **no `-journal`, `-wal` or `-shm` sidecar exists**, checked through the
+  same anchored directory descriptor as the database itself.
+
+**Stage 2, after the RO connection opens:**
+
+* `PRAGMA journal_mode` returns exactly `"delete"`.
+
+Stage 1 makes stage 2 safe to perform; stage 2 is what actually proves
+`delete`.
+
+**Classification:**
+
+| condition | code |
+|---|---|
+| malformed magic/header | `presence_store_corrupt` |
+| header `(2, 2)` | `presence_store_journal_posture` |
+| sidecar present, or sidecar predicate/identity failure | `presence_store_journal_posture` |
+| `PRAGMA journal_mode != "delete"` | `presence_store_journal_posture` |
+
+A malformed header is **corruption**, not a posture problem, and the two
+have different recoveries.
 
 The live store today is `journal_mode=delete`, `0600`, single-linked,
 integrity `ok`, with no sidecars (verified). The opener **requires** that
