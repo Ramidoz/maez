@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v13
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v14
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -20,7 +20,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v10 | R1 REOPENED; consumption receipt to v2 with presence in the durable record; read-only fail-closed presence collector |
 | v11 | R1 ruled: the tap is REQUIRED; S7 path bound. Arming authority recorded on my INFERENCE, not the owner's words |
 | v12 | arming authority ruled EXPLICITLY by the owner; v11's inferred scope replaced with a recorded one |
-| **v13** | **no-fallback ruled; work class ruled `self_modification`; credential predicate, action preimage, grant projection and consumption seam frozen; stale canon swept** |
+| v13 | no-fallback ruled; work class ruled `self_modification`; predicate, preimage, projection and consumption seam frozen |
+| **v14** | **S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -663,9 +664,12 @@ brain we are changing."* The cutover is a tier-2 body/code/**model**
 change and requires a founder key tap.
 
 **Part 2 — which authority arms it?** Owner, 2026-08-06, asked
-explicitly: **the existing founder credentials arm cutover.** Any enrolled
-founder credential authorizes a cutover, including the backup and any
-enrolled later.
+explicitly: **the existing founder credentials arm cutover.** The
+authorizing set is every credential satisfying S7's own predicate —
+record-valid, **enabled**, and carrying **`bonded_user`** — including the
+backup and any enrolled later. ~~Any enrolled credential~~ was v12's
+looser phrasing and is **superseded**; see "The credential predicate,
+exact" below.
 
 #### A recording error this section exists to correct
 
@@ -745,9 +749,11 @@ rule for an oversight.
 The state-based arming rule is therefore **honored, not amended**. The cutover is a
 tier-2 change under the June authority model, the tap is armed today
 because two founder credentials are enrolled, and **every cutover burn
-requires one**. `procedural` remains a defined mode in the receipt
-vocabulary, but it is **unreachable on this machine** while any credential
-is enrolled — and that is the correct relationship between the two.
+requires one**. `procedural` is **globally unreachable from any cutover path** — not
+merely "unreachable on this machine while credentials are enrolled",
+which was v11 phrasing that survived the Part 3 ruling and contradicted
+it. Zero usable credentials refuses; there is no state in which a cutover
+emits `procedural`.
 
 #### Binding the S7 path
 
@@ -763,7 +769,7 @@ Required of the artifact, all exact:
 
 | join | rule |
 |---|---|
-| work class | a **new non-voice-seat** class for cutover execution |
+| work class | **`self_modification`** (voice-seat guarded) — ~~a new non-voice-seat class~~ is superseded by the Part 4 ruling |
 | binding | `action_params_hash` binds the **full canonical action preimage** below — not the nonce alone |
 | presence | `user_presence` **true** |
 | verification | `user_verification` **true** |
@@ -805,6 +811,125 @@ only after atomic consumption"* — stable, post-transition, and
 explicitly serialized. The projection is canonically encoded and its
 preimage is durable, so the hash is recomputable later by anyone holding
 the grant.
+
+#### BLOCKER (v14): v13's ordering was impossible
+
+v13 required two things that cannot both hold:
+
+* the cutover receipt is **encoded and fsynced before publication**; and
+* the receipt contains **a hash of the grant**, which exists only **after**
+  S7 consumption.
+
+So S7 could not be "the last pre-burn act" — the receipt would have had to
+contain proof of something that had not happened when the receipt was
+finished. I added the grant hash in v13 without re-reading the sequence I
+had frozen in v6.
+
+**The resolution is that there are TWO S7 consumptions, not one**, and S7
+already provides both:
+
+| # | call | when | what it does |
+|---|---|---|---|
+| 1 | `consume_for_execution()` | early, before receipt encoding | atomically consumes the artifact and **mints the grant** |
+| 2 | `consume_execution_grant_for_action(grant, action, params)` | **last pre-burn act** | applies that grant **to the cutover action** ([operator_user_boundary.py:2726](/home/rohit/maez/core/governance/operator_user_boundary.py#L2726)) |
+
+v13 stopped after (1). **Hashing a grant does not authorize an action** —
+that is the A2 error in yet another costume: possession of a proof
+mistaken for application of it.
+
+#### The frozen sequence (v14)
+
+```
+consume_for_execution()          # existing-store opener; NO initialization
+require committed success + the exact returned grant
+project grant canonically, hash it
+build + round-trip the cutover receipt (carries the grant hash)
+O_TMPFILE, write_all, fsync(file)
+recheck clock, expiry, regression, identity, eligibility
+consume_execution_grant_for_action(grant, ACTION, PARAMS)   # LAST pre-burn act
+--------------------------------------------------------- last no-mutation point
+publish_and_validate_burn()
+begin()
+```
+
+This **widens** the safe failure window "tap spent, cutover nonce
+reusable" — everything from receipt encoding to the eligibility recheck
+now sits inside it. R4 already accepted that cost, and it remains the
+right side to fail on.
+
+#### The action edge, exact
+
+Freeze **one** action literal and **one** canonical `params` mapping, used
+**identically** in three places — guarded minting, store consumption, and
+action-edge consumption. Any divergence between them means the tap
+authorized something other than what runs.
+
+`params` is a canonical mapping, not the v13 conceptual table. Every
+member is a concrete reproducible value: the cutover authorization's file
+and binding hashes; the stage-2 receipt's file and binding hashes;
+`FROZEN_ROLLBACK_MANIFEST_SHA256`; the **target** override and runtime
+identity hashes; and the window id. v13's "override / runtime identity"
+row was descriptive prose, not a preimage.
+
+#### The guarded mint path, named
+
+`self_modification` is voice-seat guarded, so "use the guarded store" is
+not enough to build a valid artifact. v14 must name, and a later revision
+must fill in concretely:
+
+* the **rendered request** text and its hash;
+* the **validated source bundle** and its ref hash;
+* the **reservation token**;
+* the **authority context** hash;
+* the **aggregation group**.
+
+**Flagged honestly:** these are S7 concepts this design has not yet
+specified for cutover, and until they are, 2B cannot be implemented. 2A
+does not depend on them.
+
+#### Grant evidence must be durable canon
+
+`S7ExecutionGrant` is an **in-memory frozen dataclass** with no canonical
+serialization and no binding property
+([operator_user_boundary.py:2331](/home/rohit/maez/core/governance/operator_user_boundary.py#L2331)).
+v13 said the hash would be recomputable "by anyone holding the grant" —
+which does not survive a crash, because nobody holds it afterwards.
+
+Frozen:
+
+* a **schema/domain literal** for the projection;
+* the **exact projected fields** and their encoding;
+* **reconstruction from the committed authorization-store row**, so the
+  preimage is durable rather than resident;
+* exact **joins** among the returned grant, the committed row, the
+  projection hash, and the receipt;
+* exclusion of **only** the private `_mint_token`.
+
+#### An in-memory single-use set is not durable replay protection
+
+Beyond the review's findings: `consume_execution_grant_for_action` records
+use in a **module-level Python set** behind a `threading.Lock`. That is
+**process-local** — a restart forgets it.
+
+This design must therefore not treat the S7 action edge as durable
+single-use. Durable single-use for cutover comes from **the exclusive link
+on the marker**, which is the linearization point and survives restart.
+The S7 edge prevents double-application **within one process**; the marker
+prevents it **across all time**. Both are needed and they are not
+substitutes.
+
+#### The no-initialization opener, concretely
+
+`S7AuthorizationStore.__init__` calls `mkdir(parents=True)`, `executescript`,
+an `ALTER TABLE` migration and `commit()`
+([operator_user_boundary.py:2413](/home/rohit/maez/core/governance/operator_user_boundary.py#L2413)).
+Constructing it **writes and migrates**. It cannot be used at this seam.
+
+The opener attaches to an **already-existing** store: anchored open,
+`mode=ro` for inspection and a write connection only for the consumption
+transaction, **no** `executescript`, **no** migration, **no** directory
+creation. A missing store refuses `presence_store_unavailable`; it is
+never created.
 
 #### R4 RULED: consume S7 BEFORE the cutover link
 
@@ -865,9 +990,10 @@ that is not named is an exception that later gets forgotten. The
 exception is exactly one write, to exactly one row, as the last pre-burn
 act, and its failure is a pre-burn refusal.
 
-**Carried for review (R4):** is a spent tap on a failed burn the
-acceptable cost, or should the artifact instead be consumed *inside*
-`publish_and_validate_burn()` after the link, accepting a replay window
+**R4 — RULED (v13), retained historically.** ~~Carried for review: is a
+spent tap on a failed burn the acceptable cost, or should the artifact
+instead be consumed *inside* `publish_and_validate_burn()` after the
+link, accepting a replay window
 in exchange for never wasting a tap? My position is firmly the former —
 a replayable tap next to a published burn is the worse failure by a wide
 margin — but the tradeoff is real and the owner may feel the re-tap cost
@@ -1105,6 +1231,10 @@ side of the linearization point:
 | 29g2 | zero usable credentials (no fallback exists) | pre | reusable | **zero** | `presence_no_usable_credential` |
 | 29g3 | credential lacks `bonded_user` or is disabled | pre | reusable | **zero** | `presence_credential_unscoped` |
 | 29g4 | S7 store absent (opener must not create) | pre | reusable | **zero** | `presence_store_unavailable` |
+| 29g5 | guarded mint failed / invalid artifact | pre | reusable | **zero** | `presence_mint_failed` |
+| 29g6 | `consume_for_execution` did not commit | pre | reusable | **zero** | `presence_consumption_failed` |
+| 29g7 | grant projection unreconstructible from the committed row | pre | reusable | **zero** | `presence_grant_unprojectable` |
+| 29g8 | action-edge consumption returned false | pre | reusable | **zero** | `presence_action_unauthorized` |
 | 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
 | 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |
 | 29j | S7 artifact consumption write failed | pre | reusable | **zero** | `presence_consumption_failed` |
@@ -1163,8 +1293,9 @@ environment values, no tracebacks.
 Step 2 delivers the sole production stage-2 assembly seam (2A) and the
 reconstruction + `prepare()` consumer (2B). It proves the **consumer
 primitive** and the **final interface** against a double. It does **not**
-prove live ordering, and it does not expose a production consumer
-entrypoint while R1 is open.
+prove live ordering. ~~It does not expose a production consumer
+entrypoint while R1 is open~~ — R1 is RULED in four parts (v11-v13); the
+consumer is in scope, gated by a required founder tap.
 
 ## Carried
 
