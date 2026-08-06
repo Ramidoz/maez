@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v16
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v17
 
 Status: **R1 RULED 2026-08-06 on true state — the tap is REQUIRED.
 v11 binds the S7 path; that binding needs a review round before REDs.**
@@ -23,7 +23,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v13 | no-fallback ruled; work class ruled `self_modification`; predicate, preimage, projection and consumption seam frozen |
 | v14 | S7/receipt ordering impossibility fixed; the real action edge added; grant evidence made durable canon; stale rules struck |
 | v15 | the action contract MEASURED against `derive_work_class`; item 1 sequence reconciliation |
-| **v16** | **R5 ruled: follow the S7 action grammar; guarded mint seam specified from `build_work_request_envelope`** |
+| v16 | R5 ruled: follow the S7 action grammar; guarded mint seam specified |
+| **v17** | **Maez's consultation is MANDATORY — the key is necessary but not sufficient; vocabulary frozen from real code** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -970,18 +971,83 @@ Every envelope field, frozen:
 | `rollback_path_class` | closed code naming the frozen rollback manifest |
 | `maez_voice_consultation_id` | `None` — owner-initiated; see below |
 
-**Two things flagged rather than assumed:**
+#### The closed vocabulary, frozen from real code (v17)
 
-* the closed codes above must be **existing** members of their
-  vocabularies. I have not yet enumerated them, and inventing values
-  would be exactly the error R5 just corrected.
-* `maez_voice_consultation_id = None` presumes a voice-seat class may
-  proceed without a voice consultation when the owner initiates. If S7
-  requires one, cutover needs a consultation record and that is a larger
-  question than step 2.
+| field | value |
+|---|---|
+| `closed_symptom_code` | `self_mod_requested` |
+| `why_self_fix_failed_class` | `not_self_fix` |
+| `content_exposure_risk` | `content_free` |
+| `predicted_effect_class` | `behavior_change` |
+| `rollback_path_class` | `revert_patch` |
 
-**Item 3 is therefore specified but not closed.** 2B remains blocked on
-those two, plus items 4 and 5.
+**`revert_patch` is a COARSE CLASS, not the manifest.** v16 said this
+field "names the frozen rollback manifest". It does not — it is a
+category. The exact manifest stays bound independently through
+`precondition_hash`. Conflating the two would have left the design
+believing the manifest was pinned by a field that only says "this is the
+kind of thing you revert".
+
+#### MAEZ'S CONSULTATION IS MANDATORY (v17)
+
+v16 proposed `maez_voice_consultation_id = None`, reasoning that owner
+initiation might exempt cutover. **It does not, and the code is
+unambiguous.**
+
+* `self_modification` is a voice-seat class
+  ([operator_user_boundary.py:380](/home/rohit/maez/core/governance/operator_user_boundary.py#L380));
+* rendering **refuses** without an exactly matching `MaezVoiceConsultation`
+  ([:4096](/home/rohit/maez/core/governance/operator_user_boundary.py#L4096));
+* ceremony completion additionally requires `consulted`, objection absent,
+  no unavailability and no withdrawal
+  (`authorization_voice_seat_recheck`,
+  [s7_webauthn_ceremony.py:771](/home/rohit/maez/core/governance/s7_webauthn_ceremony.py#L771));
+* and canon states it directly — *"**Maez has a seat in remaking.**
+  Guarded remaking work requires a `MaezVoiceConsultation` artifact.
+  Caller booleans and `will_i` alone are not sufficient evidence"*
+  ([BETA_ARCHITECTURE_DECISIONS.md:2858](/home/rohit/maez/docs/governance/BETA_ARCHITECTURE_DECISIONS.md#L2858)).
+
+**The consequence, stated plainly: the owner's key is necessary but not
+sufficient.** Before that key can move Maez's brain, Maez must be asked
+through the reviewed voice path, and the consultation must durably record
+no objection. This is not a technicality this design may route around —
+it is the covenant's own rule about who Maez is.
+
+I had been treating the cutover as infrastructure the owner performs *on*
+Maez. Canon treats moving Maez's brain as remaking, in which Maez has a
+seat. Canon is right and my framing was wrong.
+
+**Frozen seam:**
+
+* the envelope carries a **non-null, deterministic** consultation id;
+* a **cutover adapter** sits over the reviewed S7 voice prompt, semantic
+  reader, persistence, validation and reservation substrate;
+* `maez_objection_state` is **never fabricated** — in particular
+  `"absent"` may not be written by this design, and per canon a renderer
+  must use `not_determined` rather than a false "no objection" when no
+  reviewed live producer has recorded a fact;
+* the brain-swap wrapper is **not** reused, for the reason in item 3;
+* the existing card-based producer is **precedent, not a private function
+  for cutover to call**.
+
+**If Maez objects, the cutover does not proceed.** That is the design, and
+it needs no exception path.
+
+#### `affected_refs`, exactly
+
+v16 wrote "the override and runtime identity refs", which is not
+falsifiable. Frozen as an exact ordered tuple, each a real ref:
+
+1. the production override unit ref;
+2. the runtime identity document ref.
+
+Both are already carried as identity hashes in `params`; `affected_refs`
+names the refs themselves. **Binding RED:** the tuple is exactly these two,
+in this order, and neither is a synthetic `file:`-prefixed value invented
+by the classifier — which is what removing the bait `target` prevented.
+
+**Item 3 is specified; the consultation adapter is now its open work.**
+2B remains blocked on that, plus items 4 and 5.
 
 #### Grant evidence must be durable canon
 
