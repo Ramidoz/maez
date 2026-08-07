@@ -2778,7 +2778,29 @@ The load-bearing rule is:
 
 S7 turns S6's role vocabulary into a runtime `AuthorityContext`, a trusted
 work-class derivation system, content-free operator health, exact-request
-authorization grammar, and execution-edge gating. It accepts the founder-local
+authorization grammar, and execution-edge gating.
+
+> **Amendment 2026-08-07 — S7 v2 exact action binding.** S7 v1 did *not*
+> meet the exact-request promise above. Its execution edge compared only
+> the derived work class and `canonical_hash(params)`; neither carries the
+> action, so one grant authorized every sibling operation of the same
+> class with identical parameters (reproduced with
+> `model_routing.cutover_cuda` versus `model_routing.wipe_and_replace`).
+> A tap for "switch to CUDA" was, at the substrate, a tap for "some
+> self-modification with these arguments".
+>
+> S7 v2 binds the exact action through envelope, **visible** rendered
+> statement, artifact, durable row, grant, source-bundle binding and grant
+> projection, and requires exact action equality at every execution edge.
+> Visibility is required, not optional: "what you see is what you sign"
+> cannot be met by a hash the human never reads.
+>
+> **Historical v1 posture:** v1 records remain readable and auditable;
+> a missing action is never inferred or backfilled; and a v1 record is
+> structurally unable to authorize new guarded execution. Verified at
+> amendment time: the live store held four artifact rows, all
+> `founder_credential_management`, all expired 2026-07-08, so no live
+> authority was retired by this change. It accepts the founder-local
 WebAuthn security-key ceremony as future-facing trust-source grammar for
 work-on-Maez, but not as v1 live authority, not as universal law, and not as S6
 lineage-capsule signing.

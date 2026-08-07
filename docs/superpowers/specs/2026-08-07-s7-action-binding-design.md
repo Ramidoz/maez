@@ -1,4 +1,4 @@
-# S7 action binding — design v1
+# S7 action binding — design v2
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -128,11 +128,128 @@ must describe it that way.
    grant shape;
 5. complete 2B RED gaps 2–5 before any consumer implementation.
 
+---
+
+## Frozen schema identities (v2)
+
+"Schema version bumps" was not implementable: `WorkRequestEnvelope` uses
+the shared `s7.v1`, the artifact and grant carry **no version field at
+all**, and the renderer is `s7.rendered_request.v1`. Frozen:
+
+| carrier | v1 identity | v2 identity | v2 adds |
+|---|---|---|---|
+| envelope | `s7.v1` (shared) | `s7.work_request_envelope.v2` | `action` retained, not discarded |
+| rendered statement | `s7.rendered_request.v1` | `s7.rendered_request.v2` | visible `Action:` line |
+| authorization artifact | *(unversioned)* | `s7.authorization_artifact.v2` | `action` field + explicit version |
+| durable row | *(unversioned)* | `s7_authorization_artifacts_v2` | `action` column + `schema_version` |
+| execution grant | *(unversioned)* | `s7.execution_grant.v2` | `action` field + explicit version |
+| voice source bundle | current binding | v2 binding | action in the bound preimage |
+| cutover grant projection | `…grant_projection.v1` | `…grant_projection.v2` | `action` in the projected fields |
+
+v1 records stay decodable **for audit** and are structurally unable to
+authorize: they have no action to satisfy exact equality with, and the
+absence is never filled in.
+
+## The database transition
+
+`S7AuthorizationStore.__init__` creates directories, runs `executescript`,
+`ALTER TABLE`s and commits
+([operator_user_boundary.py:2413](/home/rohit/maez/core/governance/operator_user_boundary.py#L2413)).
+**Putting a v2 migration there would rewrite the live store merely by
+opening it** — precisely what this design forbids elsewhere.
+
+Frozen: a **separate v2 table**, `s7_authorization_artifacts_v2`, not an
+in-place alter. Coexistence is by distinct table, which is auditable
+without tagging every row.
+
+**Migration is a separately owner-authorized entrypoint**, never a
+side effect of construction:
+
+* **idempotent** — re-running changes nothing;
+* **transactional** — any failure rolls back whole; no partial table;
+* **refuses a partial or future schema** rather than repairing it;
+* **cross-version nonce collisions refuse** — a nonce present in v1 may
+  not be reused in v2;
+* **no historical-row backfill**, ever. The `ceremony.sqlite3.pre-backfill.bak`
+  beside the live store proves a backfill has happened here before, which
+  is why this is a rule and not an assumption.
+
+## The complete authority join
+
+```
+envelope.action
+  == rendered.action
+  == artifact.action
+  == committed row.action
+  == grant.action
+  == runtime action
+```
+
+Two further requirements, because equality alone is not enough:
+
+* **consumption matches the stored action in its atomic SQL**, and mints
+  the grant **from the matched row** — never from an unchecked caller
+  value. A grant whose action came from the caller would bind nothing.
+* the **source bundle binds the same action**.
+
+Each link carries its own mutation-killing RED.
+
+## S1 — RULED: where the action renders
+
+An exact metadata line, **after `Request id` and before `Work class`**:
+
+```
+Action: model_routing.cutover_cuda
+```
+
+Exact literal, no truncation, no summarising. The renderer version bumps
+with it.
+
+## S2 — ENUMERATED (not promised)
+
+Scanned rather than assumed. Every site that must pass the action
+through, and structurally pin it:
+
+**Envelope producers (6)**
+`core/evolution/dream_state.py:1054`, `:1132`;
+`core/governance/s7_webauthn_ceremony.py:61`, `:101`;
+`core/governance/operator_user_boundary.py:2933`;
+`core/decision/decision_pipeline.py:1069`.
+
+**Artifact / grant mints (4)**
+`s7_guarded_execution.py:2291` (`mint_authorization_artifact`);
+`s7_webauthn_ceremony.py:659` (`S7AuthorizationArtifact(`), `:682`;
+`operator_user_boundary.py:2393` (`S7ExecutionGrant(`).
+
+**Consumption / action edges (7)**
+`s7_webauthn_ceremony.py:886`;
+`operator_user_boundary.py:2524`, `:2541` (`consume_for_execution`),
+`:2695` (`execution_grant_authorizes_action`),
+`:2726` (`consume_execution_grant_for_action`),
+`:2744` (`execution_grant_authorizes_card_transition`);
+`dream_state.py:1182`; `decision_pipeline.py:1566`.
+
+**The finding this enumeration produced:** `consume_for_execution` has
+**four** callers and mints grants **without** consulting the action
+helper, and `execution_grant_authorizes_card_transition` is a **second**
+edge. Changing only `execution_grant_authorizes_action` — the obvious
+single-site fix — would have left both bypasses open.
+
+## RED contract
+
+* a **v1 record refuses** new guarded execution (audit-only);
+* a **v2 grant refuses every sibling** `model_routing.*` action with
+  identical params, **at the generic edge**;
+* the action is **visible** in the rendered statement, exact and
+  untruncated;
+* **malformed or missing** action refuses, never defaults;
+* migration is **idempotent** and **rolls back** whole on failure;
+* the **live store is byte- and metadata-identical** throughout testing —
+  asserted, not assumed.
+
 ## Carried
 
-* **S1** — does the rendered statement's existing text format have a
-  natural place for the action, or does its layout need amending? The
-  visibility requirement is settled; where it renders is not.
-* **S2** — every existing mint site must pass the action through. I have
-  not yet enumerated them, and enumerating rather than assuming is the
-  first implementation task.
+* **S3** — `consume_for_execution`'s four callers each need the action
+  threaded from their own authority material. Whether they all *have* an
+  action to thread is not yet established, and assuming they do is how
+  this class of bug started.
