@@ -1,4 +1,4 @@
-# S7 action binding — design v13
+# S7 action binding — design v14
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -1074,7 +1074,7 @@ rather than a gap it must describe in prose.
 12. verify to_fingerprint_bundle == S7_TARGET_FINGERPRINT_VOICE
 13. verify both v2 row counts are 0
 14. COMMIT
-15. fsync the database AND its parent directory
+15. fsync the database AND its parent directory     (lock RELEASED)
 16. publish the migration receipt          <- THE linearization point
 ```
 
@@ -1147,7 +1147,7 @@ def write_private_file(relative, data, *, root, on_link=None) -> Path
 def read_private_file(relative, *, root, expected_uid) -> bytes
 
 # ACTIVATION ONLY — no root parameter exists
-def read_migration_receipt(*, store_dir_fd: int, store_fd: int) -> bytes
+def read_migration_receipt(*, store_dir_fd: int) -> bytes
 ```
 
 **Activation must not take a caller-supplied root (v12).** A generic
@@ -1162,14 +1162,33 @@ directory fd** — verified: `openat` through it raises
 pathname to find the sibling would reintroduce exactly the path race the
 anchoring exists to remove.
 
-**Two descriptors, each with one job:**
+**v13's two descriptors were UNJOINED (v14).** `store_dir_fd` anchored
+the receipt and `store_fd` supplied identity, but **nothing proved the
+database beneath that directory was the supplied store**. A caller could
+pair directory A's receipt with store B's descriptor, and every check
+would pass: the receipt is genuine, the store fd is genuine, and they
+have nothing to do with each other. I split a single trust root into two
+arguments and never rejoined them.
 
-| descriptor | used for |
-|---|---|
-| `store_dir_fd` | the **anchored directory**; the fixed receipt leaf is opened relative to it with `O_NOFOLLOW` |
-| `store_fd` | **identity only** — its `st_dev`/`st_ino` are what the receipt's `store_dev`/`store_ino` must match |
+**Frozen: one descriptor.**
 
-Neither is a path, and no path is ever re-resolved.
+```python
+def read_migration_receipt(*, store_dir_fd: int) -> bytes
+```
+
+The wrapper opens **both leaves itself**, relative to that one anchored
+directory, each with `O_NOFOLLOW`:
+
+* `ceremony.sqlite3` → identity comes from **this** fd's `st_dev`/`st_ino`,
+  which the receipt's `store_dev`/`store_ino` must match;
+* `s7_migration_receipt.json` → the bytes.
+
+There is no argument through which a foreign store could arrive, because
+the caller supplies no store at all. No path is re-resolved.
+
+**Binding RED:** directory A's receipt with store B — impossible to
+express through this signature, and a wrapper that reintroduces a store
+argument fails the structural pin.
 
 **File predicates it enforces**, which v11 omitted entirely:
 
@@ -1192,7 +1211,7 @@ points from bench tooling to governance, not from governance to bench
 tooling.
 
 The receipt is read back **only** through
-`read_migration_receipt(store_dir_fd=…, store_fd=…)`. The generic
+`read_migration_receipt(store_dir_fd=…)`. The generic
 `read_private_file` is for bench callers and is **not** an activation
 route — v12 said it was, three sections after freezing the wrapper that
 replaced it.
@@ -1214,8 +1233,9 @@ deactivate itself on its first real artifact.
 **Every activation consumer revalidates** before treating v2 as live:
 
 * the receipt is read **only** through
-  `read_migration_receipt(store_dir_fd=…, store_fd=…)` — the sole
-  activation route, never the generic `read_private_file` — enforcing
+  `read_migration_receipt(store_dir_fd=…)` — the sole
+  activation route, never the generic `read_private_file` — opening both
+  leaves under one anchored directory and enforcing
   regular-file, uid, `0600`, single-link, `<= 8192` bytes, short-read
   refusal and pre/post-stat stability;
 * its bytes **decode canonically** and round-trip byte-identical;
@@ -1250,11 +1270,27 @@ The lock is taken first; classification is step 2a, inside it:
 
 | observed | classification | action |
 |---|---|---|
-| receipt absent, **source** fingerprints match | not started | migrate normally |
-| receipt absent, **target** fingerprints match, both v2 tables hold **0** rows | committed-not-published | **resume** at step 15: fsync, publish |
-| receipt present and valid | complete | verified no-op |
-| receipt absent, neither source nor target matches | indeterminate | **refuse** — never repair |
-| receipt absent, target matches, any v2 table **non-empty** | indeterminate | **refuse** |
+| receipt absent, **source** fingerprints match | not started | migrate (steps 5–13), **COMMIT**, then fsync + publish |
+| receipt absent, **target** fingerprints match, both v2 tables hold **0** rows | committed-not-published | verify, **COMMIT the classification transaction** (releasing the lock), *then* fsync + publish |
+| receipt present and valid | complete | verify, **COMMIT**, return — no publication |
+| receipt absent, neither source nor target matches | indeterminate | **ROLLBACK**, refuse — never repair |
+| receipt absent, target matches, any v2 table **non-empty** | indeterminate | **ROLLBACK**, refuse |
+
+**Every branch closes its transaction, and v13's did not (v14).** Every
+run opens `BEGIN IMMEDIATE` at step 1, but `committed-not-published` said
+"resume at step 15", **skipping step 14's `COMMIT`** — so recovery would
+have held the write lock across the fsync and the receipt publication.
+That is the one part of the sequence that must be **unlocked**, since the
+receipt rather than the commit is the linearization point; holding the
+lock through it would block every other writer on a filesystem operation
+and invert the ordering the design rests on.
+
+The `complete` and `indeterminate` branches had no ending at all — a
+read-only classification transaction left open until the process exits.
+
+**Binding RED:** recovery **releases the write lock before** fsync and
+publication — asserted by a second connection acquiring `BEGIN IMMEDIATE`
+during that window.
 
 The non-empty check is what makes resumption safe: v2 is inert without a
 receipt, so v2 rows cannot legitimately exist yet. A non-zero count means
