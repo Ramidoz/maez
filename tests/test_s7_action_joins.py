@@ -488,26 +488,13 @@ _CONSUMING_CALLS = frozenset(
 )
 
 
-def _is_action_expr(expr: str) -> bool:
-    """Is this expression an ACTION, rather than merely action-flavoured?
-
-    `authorization.action_params_hash` contains the substring "action" and
-    was accepted as the counterpart of a join, so
-    `card.action == authorization.action_params_hash` counted as binding
-    the action. It binds a hash. An action is a string literal, or an
-    expression whose FINAL attribute is exactly `action`.
-    """
-    stripped = expr.strip()
-    if stripped[:1] in {"'", '"'}:
-        return True
-    return stripped.split(".")[-1] == "action"
-
-
-def _joins_action_in_source(source: str, expression: str) -> bool:
+def _joins_action_in_source(
+    source: str, expression: str, *, counterpart: str
+) -> bool:
     """Does this SOURCE equate `expression` with an action, or hand it to a
     consuming call?
 
-    Three shapes short of this were accepted by earlier versions and none
+    Five shapes short of this were accepted by earlier versions and none
     is a join:
 
     * any mention of "action" -- every consumer already says
@@ -515,10 +502,16 @@ def _joins_action_in_source(source: str, expression: str) -> bool:
     * `if card.action in ALLOWED:` -- a membership test, whose sides both
       land in a set of "compared" expressions;
     * `log_event(action=card.action)` -- an `action=` keyword to a call
-      that consumes nothing.
+      that consumes nothing;
+    * `card.action == authorization.action_params_hash` -- both sides
+      contain "action", but one is a HASH;
+    * `card.action == audit.action` or `card.action == 'anything'` -- both
+      sides ARE actions, but the counterpart is not the authority the
+      caller must be joined to.
 
-    So an equality must be an EQUALITY and must name an action on BOTH
-    sides, and a keyword must go to a call that actually consumes it.
+    So the caller expression must be equated with THE named counterpart --
+    supplied by the test, never inferred -- or handed to a call that
+    actually consumes an action.
 
     Takes source rather than a function so the helper can be attacked with
     synthetic cases instead of only exercised on production code.
@@ -532,7 +525,7 @@ def _joins_action_in_source(source: str, expression: str) -> bool:
             if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
                 continue
             sides = {ast.unparse(node.left), ast.unparse(node.comparators[0])}
-            if expression in sides and all(_is_action_expr(s) for s in sides):
+            if sides == {expression, counterpart}:
                 return True
         if isinstance(node, ast.Call):
             name = (
@@ -548,10 +541,12 @@ def _joins_action_in_source(source: str, expression: str) -> bool:
     return False
 
 
-def _joins_action(func, expression: str) -> bool:
+def _joins_action(func, expression: str, *, counterpart: str) -> bool:
     import inspect
 
-    return _joins_action_in_source(inspect.getsource(func), expression)
+    return _joins_action_in_source(
+        inspect.getsource(func), expression, counterpart=counterpart
+    )
 
 
 class TestTheFourCallerJoins:
@@ -600,8 +595,10 @@ class TestTheFourCallerJoins:
         from core.decision.decision_pipeline import DecisionPipeline
 
         assert _joins_action(
-            DecisionPipeline._consume_s7_execution_authorization, "card.action"
-        ), "the decision pipeline consumer never joins card.action"
+            DecisionPipeline._consume_s7_execution_authorization,
+            "card.action",
+            counterpart="rendered.action",
+        ), "the decision pipeline consumer never joins card.action to rendered.action"
 
     def test_the_dream_state_consumer_binds_envelope_action(self) -> None:
         """Its authoritative action is the reconstructed `envelope.action`."""
@@ -610,7 +607,8 @@ class TestTheFourCallerJoins:
         assert _joins_action(
             DreamState._consume_s7_execution_authorization_for_envelope,
             "envelope.action",
-        ), "the dream-state consumer never joins envelope.action"
+            counterpart="rendered.action",
+        ), "the dream-state consumer never joins envelope.action to rendered.action"
 
     def test_the_backup_ceremony_joins_its_fixed_literal(self) -> None:
         """Same strict helper as the other two: membership in a loose set of
@@ -620,7 +618,8 @@ class TestTheFourCallerJoins:
         assert _joins_action(
             ceremony._consume_backup_registration_authorization,
             "'register_backup_webauthn_credential'",
-        ), "the backup consumer never joins the action it is for"
+            counterpart="rendered.action",
+        ), "the backup consumer never joins its literal to the rendered action"
 
     def test_the_disable_ceremony_joins_its_fixed_literal(self) -> None:
         from daemon import maez_daemon
@@ -628,39 +627,87 @@ class TestTheFourCallerJoins:
         assert _joins_action(
             maez_daemon._s7_disable_credential_for_proof,
             "'disable_founder_webauthn_credential'",
-        ), "the disable consumer never joins the action it is for"
+            counterpart="rendered.action",
+        ), "the disable consumer never joins its literal to the rendered action"
 
 
 class TestTheJoinHelperIsItselfAttacked:
-    """This helper decides whether every caller join passes, and two earlier
-    versions were wrong in opposite directions -- one accepted any mention
-    of "action", the next accepted any comparison side or any `action=`
-    keyword. So it is attacked directly rather than trusted because
-    production happens to be red."""
+    """This helper decides whether every caller join passes, and three
+    earlier versions were wrong in escalating ways -- any mention of
+    "action", then any comparison side or `action=` keyword, then any
+    action-shaped counterpart including a hash, an unrelated audit record
+    or a bare literal. So it is attacked directly rather than trusted
+    because production happens to be red.
+
+    RENDERED = "rendered.action"
+
+    is the counterpart every caller must be joined to; the tests supply it
+    explicitly so the helper can never infer an authority of its own.
+    """
+
+    RENDERED = "rendered.action"
 
     def test_a_membership_test_is_not_a_join(self) -> None:
         assert not _joins_action_in_source(
-            "def f(card):\n    if card.action in ALLOWED: pass\n", "card.action"
+            "def f(card):\n    if card.action in ALLOWED: pass\n",
+            "card.action",
+            counterpart=self.RENDERED,
         )
 
     def test_an_action_kwarg_to_a_non_consumer_is_not_a_join(self) -> None:
         assert not _joins_action_in_source(
-            "def f(card):\n    log_event(action=card.action)\n", "card.action"
-        )
-
-    def test_equality_against_a_non_action_is_not_a_join(self) -> None:
-        assert not _joins_action_in_source(
-            "def f(card):\n    return card.action == mode\n", "card.action"
+            "def f(card):\n    log_event(action=card.action)\n",
+            "card.action",
+            counterpart=self.RENDERED,
         )
 
     def test_an_inequality_is_not_a_join(self) -> None:
         assert not _joins_action_in_source(
-            "def f(card, r):\n    return card.action != r.action\n", "card.action"
+            "def f(card, rendered):\n"
+            "    return card.action != rendered.action\n",
+            "card.action",
+            counterpart=self.RENDERED,
         )
 
-    def test_equality_against_the_rendered_action_is_a_join(self) -> None:
+    def test_a_params_hash_counterpart_is_not_a_join(self) -> None:
+        """Both sides contain "action", but one is a HASH."""
+        assert not _joins_action_in_source(
+            "def f(card, a):\n"
+            "    return card.action == a.action_params_hash\n",
+            "card.action",
+            counterpart=self.RENDERED,
+        )
+
+    def test_an_unrelated_action_counterpart_is_not_a_join(self) -> None:
+        """Both sides ARE actions -- but an audit record is not the
+        authority the caller must be joined to."""
+        assert not _joins_action_in_source(
+            "def f(card, audit):\n    return card.action == audit.action\n",
+            "card.action",
+            counterpart=self.RENDERED,
+        )
+
+    def test_an_arbitrary_literal_counterpart_is_not_a_join(self) -> None:
+        assert not _joins_action_in_source(
+            "def f(card):\n    return card.action == 'anything'\n",
+            "card.action",
+            counterpart=self.RENDERED,
+        )
+
+    def test_equality_against_the_named_counterpart_is_a_join(self) -> None:
         assert _joins_action_in_source(
-            "def f(card, r):\n    return card.action == r.action\n", "card.action"
+            "def f(card, rendered):\n"
+            "    return card.action == rendered.action\n",
+            "card.action",
+            counterpart=self.RENDERED,
+        )
+
+    def test_the_join_is_order_insensitive(self) -> None:
+        assert _joins_action_in_source(
+            "def f(card, rendered):\n"
+            "    return rendered.action == card.action\n",
+            "card.action",
+            counterpart=self.RENDERED,
         )
 
     def test_handing_it_to_a_consuming_call_is_a_join(self) -> None:
@@ -669,20 +716,13 @@ class TestTheJoinHelperIsItselfAttacked:
             "    return execution_grant_authorizes_action("
             "g, action=card.action, params={})\n",
             "card.action",
+            counterpart=self.RENDERED,
         )
 
-    def test_a_params_hash_counterpart_is_not_a_join(self) -> None:
-        """The false join that survived the previous repair: both sides
-        contain "action", but one is a HASH."""
-        assert not _joins_action_in_source(
-            "def f(card, a):\n"
-            "    return card.action == a.action_params_hash\n",
-            "card.action",
-        )
-
-    def test_a_string_literal_counterpart_is_a_join(self) -> None:
+    def test_a_fixed_literal_joined_to_the_rendered_action(self) -> None:
         assert _joins_action_in_source(
-            "def f(a):\n"
-            "    return a.action == 'register_backup_webauthn_credential'\n",
+            "def f(rendered):\n"
+            "    return rendered.action == 'register_backup_webauthn_credential'\n",
             "'register_backup_webauthn_credential'",
+            counterpart=self.RENDERED,
         )
