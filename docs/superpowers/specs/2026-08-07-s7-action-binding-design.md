@@ -1,4 +1,4 @@
-# S7 action binding — design v2
+# S7 action binding — design v3
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -205,10 +205,17 @@ Action: model_routing.cutover_cuda
 Exact literal, no truncation, no summarising. The renderer version bumps
 with it.
 
-## S2 — ENUMERATED (not promised)
+## S2 — ENUMERATED, CORRECTED (v3)
 
-Scanned rather than assumed. Every site that must pass the action
-through, and structurally pin it:
+**v2's "complete map" was not complete, and the way it failed matters
+more than the misses.** I scanned `--include=*.py core/ scripts/`. The
+**`daemon/` tree was never in scope** — and the daemon is the *live*
+path. I then wrote "enumerated rather than promised" and called the
+allowlist complete. That is the same error as the credential search that
+misled the owner: a search whose scope excluded the answer, reported as a
+finding.
+
+Re-scanned repo-wide. Full set:
 
 **Envelope producers (6)**
 `core/evolution/dream_state.py:1054`, `:1132`;
@@ -216,40 +223,149 @@ through, and structurally pin it:
 `core/governance/operator_user_boundary.py:2933`;
 `core/decision/decision_pipeline.py:1069`.
 
+**Renderer / source-bundle production (3)**
+`daemon/maez_daemon.py:580` (renderer), `:628` (source-bundle binding);
+`core/decision/decision_pipeline.py:1211`.
+
 **Artifact / grant mints (4)**
-`s7_guarded_execution.py:2291` (`mint_authorization_artifact`);
-`s7_webauthn_ceremony.py:659` (`S7AuthorizationArtifact(`), `:682`;
-`operator_user_boundary.py:2393` (`S7ExecutionGrant(`).
+`s7_guarded_execution.py:2291`; `s7_webauthn_ceremony.py:659`, `:682`;
+`operator_user_boundary.py:2393`.
 
-**Consumption / action edges (7)**
-`s7_webauthn_ceremony.py:886`;
-`operator_user_boundary.py:2524`, `:2541` (`consume_for_execution`),
-`:2695` (`execution_grant_authorizes_action`),
-`:2726` (`consume_execution_grant_for_action`),
-`:2744` (`execution_grant_authorizes_card_transition`);
-`dream_state.py:1182`; `decision_pipeline.py:1566`.
+**`consume_for_execution` callers (5)** — v2 said four
+`dream_state.py:1182`; `s7_webauthn_ceremony.py:886`;
+`operator_user_boundary.py:2524`; `decision_pipeline.py:1566`;
+**`daemon/maez_daemon.py:1056`** ← missed.
 
-**The finding this enumeration produced:** `consume_for_execution` has
-**four** callers and mints grants **without** consulting the action
-helper, and `execution_grant_authorizes_card_transition` is a **second**
-edge. Changing only `execution_grant_authorizes_action` — the obvious
-single-site fix — would have left both bypasses open.
+**Action edges (2)** — v2 said none beyond the helpers
+`core/actions/action_engine.py:616`; **`daemon/maez_daemon.py:1070`**.
+
+**Card-transition callers (2)** — v2 said none
+`core/decision/decision_pipeline.py:1875`;
+`core/decision/pending_cards.py:851`.
+
+**A further finding from the corrected scan:**
+`daemon/maez_daemon.py:1056` constructs
+`s7.S7AuthorizationStore(store.db_path)` **inline, on the live request
+path** — and that constructor creates, `ALTER`s and commits. The live
+daemon therefore already migrates the store merely by handling a request.
+Any v2 migration placed in that constructor would run **from the
+daemon**, unauthorized. This is why "normal opening is verification-only"
+must be enforced, not merely stated.
+
+## S3 — ANSWERED (v3), not carried
+
+Each consumer has an authoritative action; none needs inventing:
+
+| consumer | authoritative action |
+|---|---|
+| decision pipeline | `card.action` |
+| dream state | reconstructed `envelope.action` |
+| backup registration | fixed `register_backup_webauthn_credential` |
+| credential disable | fixed `disable_founder_webauthn_credential` |
+| `consume_verified` | `rendered.action` |
+
+**Frozen join per caller:** caller-action **==** rendered-action, each
+with its own mutation-killing RED. Carrying S3 into implementation would
+have meant deciding this while writing code, which is how the original
+defect arrived.
+
+## Action grammar
+
+`Action: <literal>` raw is unsafe: a newline or control character in the
+literal injects metadata into the signed statement the human reads.
+Frozen:
+
+* the action matches `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`;
+* length bounded at 128 bytes UTF-8;
+* anything else **refuses at construction** — never escaped, never
+  truncated, never rendered.
+
+Refusing beats escaping here: an escaped action is still an action the
+human must decode, and *what you see is what you sign* requires that they
+not have to.
+
+## Voice bundle and projection identities (v3)
+
+v2 wrote "current binding → v2 binding", which is a placeholder. Frozen:
+
+| carrier | identity | fields | hash domain | decoder routing |
+|---|---|---|---|---|
+| voice source bundle | `s7.voice_source_bundle.v2` | v1 fields **+ `action`** | `s7.voice_source_bundle.v2` | v1 decodes audit-only; v2 required for execution |
+| cutover grant projection | `cuda_migration.s7_execution_grant_projection.v2` | the 15 grant fields **+ `action`** = 16 | `…projection.v2` | v1 projection is audit-only |
+
+## The database transition, concrete (v3)
+
+**Exact v2 DDL** — the v1 columns plus two, in a **separate table**:
+
+```sql
+CREATE TABLE IF NOT EXISTS s7_authorization_artifacts_v2 (
+    <all v1 columns, unchanged>,
+    action TEXT NOT NULL,
+    schema_version TEXT NOT NULL DEFAULT 's7.authorization_artifact.v2'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS s7_v2_nonce ON s7_authorization_artifacts_v2(nonce);
+```
+
+**Schema fingerprint:** canonical hash over `PRAGMA table_info` +
+`PRAGMA index_list` for the v2 table, pinned as a literal; drift refuses.
+
+**Routing:** v1 table is **audit-only** — readable, never written, never
+consumable. v2 is the only writable and consumable table.
+
+**Migration is an owner-authorized command**, `s7-migrate-v2`, which:
+
+* mints a **durable migration receipt** (from/to fingerprints, row
+  counts, timestamp, no row contents);
+* is **idempotent** — a second run is a no-op and says so;
+* is **transactional** — any failure rolls back whole, leaving no partial
+  table;
+* **refuses** a partial or future schema rather than repairing it;
+* **rejects atomically** on cross-table collision of **either** `nonce`
+  **or** `artifact_id`;
+* **never backfills** a historical row.
+
+**Before activation:** if the v2 table is **absent**, every guarded
+execution path **refuses** — it does not silently fall back to v1. Absent
+is not permission.
+
+**Normal store opening is verification-only.** It may read and verify a
+fingerprint; it may **never** create, alter, migrate or commit. Enforced
+structurally, given `daemon/maez_daemon.py:1056` already constructs the
+mutating store on the live request path.
 
 ## RED contract
 
-* a **v1 record refuses** new guarded execution (audit-only);
-* a **v2 grant refuses every sibling** `model_routing.*` action with
-  identical params, **at the generic edge**;
-* the action is **visible** in the rendered statement, exact and
-  untruncated;
+**Joins** — one mutation-killing RED per link:
+envelope==rendered, rendered==artifact, artifact==row, row==grant,
+grant==runtime; plus each of the five caller-action==rendered-action
+joins from S3.
+
+**Routes** — every one of the 22 enumerated sites is structurally pinned;
+adding a 23rd unpinned site fails.
+
+**Refusals**
+* an **unexpired v1** record still refuses new guarded execution — not
+  merely an expired one, which would pass for the wrong reason;
+* a v2 grant **refuses every sibling** `model_routing.*` action with
+  identical params, at the **generic** edge;
 * **malformed or missing** action refuses, never defaults;
-* migration is **idempotent** and **rolls back** whole on failure;
-* the **live store is byte- and metadata-identical** throughout testing —
-  asserted, not assumed.
+* an action failing the grammar refuses **at construction**;
+* the v2 table **absent** refuses; no fallback to v1.
+
+**Migration**
+* idempotent; a fault **injected mid-migration rolls back whole**;
+* partial and future schemas refuse;
+* cross-version **nonce** and **artifact_id** collisions both refuse
+  atomically.
+
+**Invariance**
+* credential rows and **sign counts unchanged** by any of this;
+* the live DB and its sidecars are **externally measured** identical
+  before and after every test — size, mtime_ns, inode, and content hash,
+  taken outside the process under test rather than by the code being
+  tested.
 
 ## Carried
 
-* **S3** — `consume_for_execution`'s four callers each need the action
-  threaded from their own authority material. Whether they all *have* an
-  action to thread is not yet established, and assuming they do is how
-  this class of bug started.
+Nothing. S1, S2 and S3 are all ruled or enumerated. The remaining work is
+REDs, then implementation.

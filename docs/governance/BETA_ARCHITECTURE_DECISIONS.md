@@ -2800,7 +2800,9 @@ authorization grammar, and execution-edge gating.
 > structurally unable to authorize new guarded execution. Verified at
 > amendment time: the live store held four artifact rows, all
 > `founder_credential_management`, all expired 2026-07-08, so no live
-> authority was retired by this change. It accepts the founder-local
+> authority was retired by this change.
+
+S7 accepts the founder-local
 WebAuthn security-key ceremony as future-facing trust-source grammar for
 work-on-Maez, but not as v1 live authority, not as universal law, and not as S6
 lineage-capsule signing.

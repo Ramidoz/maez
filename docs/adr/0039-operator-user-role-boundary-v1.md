@@ -1,11 +1,9 @@
-# ADR 0039: Operator / User Role Boundary v1
-
-**Status: accepted, AMENDED 2026-08-07 (S7 v2 exact action binding — see
-the amendment section below and BAD's S7 amendment).**
+# ADR 0039: Operator / User Role Boundary v1 (AMENDED 2026-08-07)
 
 **Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral;
 amended 2026-05-18 for ratified S7.1 local-ceremony plan; amended 2026-05-18
-for S7.1 as-built canonicalization
+for S7.1 as-built canonicalization; **amended 2026-08-07 for S7 v2 exact
+action binding**
 **Date:** 2026-05-17
 
 ## Context
