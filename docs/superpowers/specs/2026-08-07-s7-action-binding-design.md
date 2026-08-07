@@ -1,4 +1,4 @@
-# S7 action binding — design v3
+# S7 action binding — design v4
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -215,33 +215,49 @@ allowlist complete. That is the same error as the credential search that
 misled the owner: a search whose scope excluded the answer, reported as a
 finding.
 
-Re-scanned repo-wide. Full set:
+Re-scanned repo-wide, and **separated by ROLE** — v3 mixed definitions,
+constructors and callers in one list, which is why it read as complete
+while missing bridges.
 
-**Envelope producers (6)**
-`core/evolution/dream_state.py:1054`, `:1132`;
-`core/governance/s7_webauthn_ceremony.py:61`, `:101`;
-`core/governance/operator_user_boundary.py:2933`;
-`core/decision/decision_pipeline.py:1069`.
+**Producers — build the envelope (6)**
+`dream_state.py:1054`, `:1132`; `s7_webauthn_ceremony.py:61`, `:101`;
+`operator_user_boundary.py:2933`; `decision_pipeline.py:1069`.
 
-**Renderer / source-bundle production (3)**
-`daemon/maez_daemon.py:580` (renderer), `:628` (source-bundle binding);
-`core/decision/decision_pipeline.py:1211`.
+**Renderers (2)**
+`operator_user_boundary.py:4071` (definition, `:4137` construction);
+`daemon/maez_daemon.py:580`.
 
-**Artifact / grant mints (4)**
+**Constructors — mint artifact/grant (5)**
 `s7_guarded_execution.py:2291`; `s7_webauthn_ceremony.py:659`, `:682`;
-`operator_user_boundary.py:2393`.
+`operator_user_boundary.py:2393` (`S7ExecutionGrant(`);
+**`operator_user_boundary.py:2637`** ← the actual mint CALL
+(`_mint_s7_execution_grant`), missed by v3 which listed only the class
+construction.
 
-**`consume_for_execution` callers (5)** — v2 said four
+**Source-bundle construction / round-trip (5)** — v3 listed none of these
+`s7_guarded_execution.py:604` (`S7VoiceSourceBundleHashBinding(`),
+`:666` (`derive_…_hash_binding`), `:703`, `:1389`
+(`S7VoiceConsultationBundle(`);
+`daemon/maez_daemon.py:628`; `decision_pipeline.py:1211`.
+
+**Validators (1)**
+**`s7_guarded_execution.py:1839`** (`_bundle_matches_expected_hash_binding`)
+← the source-bundle validation join, missed by v3.
+
+**Durable writers / consumers (5)**
 `dream_state.py:1182`; `s7_webauthn_ceremony.py:886`;
-`operator_user_boundary.py:2524`; `decision_pipeline.py:1566`;
-**`daemon/maez_daemon.py:1056`** ← missed.
+`operator_user_boundary.py:2524`, `:2541`; `decision_pipeline.py:1566`;
+`daemon/maez_daemon.py:1056`.
 
-**Action edges (2)** — v2 said none beyond the helpers
-`core/actions/action_engine.py:616`; **`daemon/maez_daemon.py:1070`**.
+**Execution edges (4)**
+`operator_user_boundary.py:2695`, `:2726`, `:2744` (definitions);
+`action_engine.py:616`; `daemon/maez_daemon.py:1070`.
 
-**Card-transition callers (2)** — v2 said none
-`core/decision/decision_pipeline.py:1875`;
-`core/decision/pending_cards.py:851`.
+**Card-transition callers (2)**
+`decision_pipeline.py:1875`; `pending_cards.py:851`.
+
+Each role gets its **own** structural allowlist. A site added to any role
+without being pinned fails.
 
 **A further finding from the corrected scan:**
 `daemon/maez_daemon.py:1056` constructs
@@ -262,7 +278,14 @@ Each consumer has an authoritative action; none needs inventing:
 | dream state | reconstructed `envelope.action` |
 | backup registration | fixed `register_backup_webauthn_credential` |
 | credential disable | fixed `disable_founder_webauthn_credential` |
-| `consume_verified` | `rendered.action` |
+| `consume_verified` | **stored-row action ↔ `rendered.action`** — see below |
+
+**`consume_verified` is NOT a caller join.** v3 listed its caller action
+as `rendered.action` and its rendered action as `rendered.action` — a
+tautology proving nothing. It is correctly classified as a **stored-row ↔
+rendered** join: the committed row's action must equal the rendered
+statement's, and neither is supplied by the caller. Reclassified rather
+than dressed up.
 
 **Frozen join per caller:** caller-action **==** rendered-action, each
 with its own mutation-killing RED. Carrying S3 into implementation would
@@ -273,12 +296,38 @@ defect arrived.
 
 `Action: <literal>` raw is unsafe: a newline or control character in the
 literal injects metadata into the signed statement the human reads.
-Frozen:
 
-* the action matches `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`;
+**v3's grammar closed four roads already in use** — worse than reported,
+it also refused `run_shell` and `backup_status`. I froze a dotted-suffix
+form from the single action I cared about and never tested it against the
+actions S7 already carries:
+
+| action | v3 grammar |
+|---|---|
+| `write_soul_note` | **REFUSED** |
+| `edit_soul_section` | **REFUSED** |
+| `register_backup_webauthn_credential` | **REFUSED** |
+| `disable_founder_webauthn_credential` | **REFUSED** |
+| `run_shell` | **REFUSED** |
+| `backup_status` | **REFUSED** |
+| `model_routing.cutover_cuda` | pass |
+
+Frozen instead — dotted segments **optional**, so established undotted
+actions remain valid:
+
+```
+^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$
+```
+
 * length bounded at 128 bytes UTF-8;
 * anything else **refuses at construction** — never escaped, never
-  truncated, never rendered.
+  truncated, never rendered. An escaped action is still one the human
+  must decode, and *what you see is what you sign* requires they not
+  have to.
+
+**Boundary REDs:** every action literal S7 currently uses passes; a
+newline, a control character, a leading dot, a trailing dot, a double
+dot, an empty segment, uppercase, and a 129-byte literal each refuse.
 
 Refusing beats escaping here: an escaped action is still an action the
 human must decode, and *what you see is what you sign* requires that they
@@ -295,16 +344,54 @@ v2 wrote "current binding → v2 binding", which is a placeholder. Frozen:
 
 ## The database transition, concrete (v3)
 
-**Exact v2 DDL** — the v1 columns plus two, in a **separate table**:
+**Exact v2 DDL** — literal, no placeholder:
 
 ```sql
 CREATE TABLE IF NOT EXISTS s7_authorization_artifacts_v2 (
-    <all v1 columns, unchanged>,
+    artifact_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    rendered_text_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    precondition_hash TEXT NOT NULL,
+    authority_context_hash TEXT NOT NULL,
+    derived_work_class TEXT NOT NULL,
+    derived_aggregation_group TEXT NOT NULL,
+    nonce TEXT NOT NULL UNIQUE,
+    credential_ref TEXT NOT NULL,
+    auth_method TEXT NOT NULL,
+    grant_source TEXT NOT NULL,
+    user_presence INTEGER NOT NULL,
+    user_verification INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    consumed_by_request_id TEXT,
+    ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn',
     action TEXT NOT NULL,
     schema_version TEXT NOT NULL DEFAULT 's7.authorization_artifact.v2'
 );
-CREATE UNIQUE INDEX IF NOT EXISTS s7_v2_nonce ON s7_authorization_artifacts_v2(nonce);
+CREATE UNIQUE INDEX IF NOT EXISTS s7_v2_nonce
+    ON s7_authorization_artifacts_v2(nonce);
 ```
+
+The first twenty columns are the v1 definitions verbatim, read from the
+live store's `sqlite_master` rather than transcribed from memory.
+
+**Fingerprint preimage:** canonical JSON of
+`[(cid, name, type, notnull, dflt_value, pk) …]` from
+`PRAGMA table_info(s7_authorization_artifacts_v2)` plus
+`[(name, unique, origin) …]` from `PRAGMA index_list(…)`, both sorted by
+name, hashed with the project canonical encoder. The resulting literal is
+pinned once the table exists; drift refuses.
+
+**Migration receipt** — schema `s7.migration_receipt.v1`, fields:
+`from_fingerprint`, `to_fingerprint`, `row_count_v1`, `row_count_v2`,
+`started_at`, `completed_at`, `store_dev`, `store_ino`. Bound by the
+project canonical wrapper. **Published by the `s7-migrate-v2` command
+only**, durably beside the store as `s7_migration_receipt.json`, written
+through the anchored `write_private_file` primitive. No row contents ever
+appear in it.
 
 **Schema fingerprint:** canonical hash over `PRAGMA table_info` +
 `PRAGMA index_list` for the v2 table, pinned as a literal; drift refuses.
@@ -327,6 +414,37 @@ consumable. v2 is the only writable and consumable table.
 **Before activation:** if the v2 table is **absent**, every guarded
 execution path **refuses** — it does not silently fall back to v1. Absent
 is not permission.
+
+**Activation has ONE durable linearization point: the migration
+receipt.** Creating the table does **not** activate v2. Until the receipt
+exists and verifies, v2 is inert and guarded execution refuses. Otherwise
+a half-finished migration — table present, rows not moved — would look
+like an activated system.
+
+**Cross-version collision rejection applies to EVERY v2 insert**, not
+only to migration. A nonce or `artifact_id` present in the v1 table may
+never be written to v2, at any time, by any path. Restricting the check
+to migration would leave the collision reachable the moment normal
+minting resumed.
+
+**Deployment ordering:** an old daemon must not continue writing v1
+during activation. The migration command refuses while any process holds
+the store, and the daemon refuses to serve guarded paths once the receipt
+exists but its own build predates v2. Two writers of different vintages
+is the one failure this design cannot detect after the fact.
+
+## Voice-bundle persistence (v4)
+
+Its store has the **same defect**: it auto-creates and auto-`ALTER`s an
+unversioned table. Frozen on the same pattern:
+
+* separate physical storage — `s7_voice_source_bundles_v2`;
+* v1 rows **audit-readable**, structurally unable to mint v2 authority;
+* **writer** routes only to v2; **decoder** reads both and tags the
+  version; **validator** accepts v1 for audit and refuses it for
+  execution;
+* its own fingerprint and its own entry in the migration receipt;
+* the same never-backfill and never-migrate-on-open rules.
 
 **Normal store opening is verification-only.** It may read and verify a
 fingerprint; it may **never** create, alter, migrate or commit. Enforced
@@ -361,9 +479,12 @@ adding a 23rd unpinned site fails.
 **Invariance**
 * credential rows and **sign counts unchanged** by any of this;
 * the live DB and its sidecars are **externally measured** identical
-  before and after every test — size, mtime_ns, inode, and content hash,
-  taken outside the process under test rather than by the code being
-  tested.
+  before and after every test — content hash, size, `mtime_ns`,
+  `dev`/`ino`, **mode, uid, gid, link count**, the **complete sidecar
+  set** (`-journal`, `-wal`, `-shm`, `.bak`), and the **parent
+  directory's entry list** — taken outside the process under test rather
+  than by the code being tested. A new sidecar or a changed mode is a
+  write.
 
 ## Carried
 
