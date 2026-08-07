@@ -101,8 +101,48 @@ def _bundle(action: str = ACTION):
     return env, authority, params_hash, rendered
 
 
-def _store(tmp: Path) -> "s7.S7AuthorizationStore":
-    return s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+def _artifact(env, authority, params_hash, rendered):
+    """Construct the REAL carrier.
+
+    My first version called mint_artifact_for_envelope, which exists
+    nowhere in the design or the allowlist -- adding it would have created
+    a NEW mint route purely to satisfy a test. S7AuthorizationArtifact is
+    the frozen carrier; constructing it is not a new route.
+    """
+    return s7.S7AuthorizationArtifact(
+        artifact_id="artifact-action-binding-1",
+        request_id=env.request_id,
+        request_envelope_hash=s7.work_request_envelope_hash(env),
+        rendered_text_hash=rendered.rendered_text_hash,
+        action_params_hash=params_hash,
+        precondition_hash=env.precondition_hash,
+        authority_context_hash=s7.authority_context_hash(authority),
+        derived_work_class=env.derived_work_class,
+        derived_aggregation_group=env.derived_aggregation_group,
+        nonce="n" * 64,
+        credential_ref="cred-1",
+        auth_method="founder_webauthn",
+        grant_source="founder_webauthn",
+        user_presence=True,
+        user_verification=True,
+        created_at=NOW,
+        expires_at=FUTURE,
+        consumed_at=None,
+        action=ACTION,
+    )
+
+
+def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
+    """A private store carried through the REAL migration seam.
+
+    Opening S7AuthorizationStore must NOT make v2 appear -- the design
+    forbids open-time migration -- so the fixture must invoke the
+    migration entrypoint explicitly. That entrypoint does not exist yet,
+    which is the intended red.
+    """
+    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    s7.migrate_authorization_store_to_v2(store_dir_fd=None, _private_root=tmp)
+    return store
 
 
 class TestTheBypassExistsToday:
@@ -119,15 +159,8 @@ class TestTheGenericEdgeRefusesSiblings:
 
     def test_a_real_grant_refuses_a_sibling_action(self, tmp_path: Path) -> None:
         env, authority, params_hash, rendered = _bundle()
-        store = _store(tmp_path)
-        artifact = s7.mint_artifact_for_envelope(
-            envelope=env,
-            rendered=rendered,
-            authority_context=authority,
-            action_params_hash=params_hash,
-            now=NOW,
-            expires_at=FUTURE,
-        )
+        store = _migrated_store(tmp_path)
+        artifact = _artifact(env, authority, params_hash, rendered)
         store.put(artifact)
         grant, _ = store.consume_for_execution(
             artifact.artifact_id,
@@ -159,15 +192,8 @@ class TestActionSurvivesEveryJoin:
         assert env.action == ACTION
         assert rendered.action == ACTION
 
-        store = _store(tmp_path)
-        artifact = s7.mint_artifact_for_envelope(
-            envelope=env,
-            rendered=rendered,
-            authority_context=authority,
-            action_params_hash=params_hash,
-            now=NOW,
-            expires_at=FUTURE,
-        )
+        store = _migrated_store(tmp_path)
+        artifact = _artifact(env, authority, params_hash, rendered)
         assert artifact.action == ACTION
         store.put(artifact)
 
@@ -197,20 +223,25 @@ class TestTheActionIsVISIBLE:
 
     def test_the_signed_text_shows_the_exact_action_line_once(self) -> None:
         _env, _authority, _params_hash, rendered = _bundle()
-        text = rendered.text
+        text = rendered.rendered_text
         assert text.count(f"Action: {ACTION}") == 1, text
 
     def test_the_action_line_sits_between_request_id_and_work_class(
         self,
     ) -> None:
         _env, _authority, _params_hash, rendered = _bundle()
-        lines = rendered.text.splitlines()
-        idx = {
-            "request": next(i for i, l in enumerate(lines) if l.startswith("Request id")),
-            "action": next(i for i, l in enumerate(lines) if l.startswith("Action:")),
-            "work": next(i for i, l in enumerate(lines) if l.startswith("Work class")),
-        }
-        assert idx["request"] < idx["action"] < idx["work"], lines
+        lines = rendered.rendered_text.splitlines()
+
+        def line_index(prefix: str) -> int:
+            hits = [i for i, l in enumerate(lines) if l.startswith(prefix)]
+            assert len(hits) == 1, (prefix, lines)
+            return hits[0]
+
+        assert (
+            line_index("Request id")
+            < line_index("Action:")
+            < line_index("Work class")
+        ), lines
 
 
 class TestActionGrammarAtTheCARRIERS:
@@ -243,42 +274,63 @@ class TestActionGrammarAtTheCARRIERS:
 
 
 class TestHistoricalV1CannotAuthorize:
-    """An UNEXPIRED v1 row, through the PUBLIC execution boundary."""
+    """An UNEXPIRED v1 row, seeded BEFORE migration, through the public edge."""
 
     def test_an_unexpired_v1_row_cannot_authorize_execution(
         self, tmp_path: Path
     ) -> None:
+        """Seed v1, THEN migrate, THEN submit.
+
+        My first version inserted into the legacy table with
+        INSERT … SELECT * across two different shapes, and did it AFTER
+        activation -- when the v1 freeze triggers must forbid that write
+        anyway. Both mistakes came from treating the legacy row as
+        something to place rather than something that was already there.
+        """
         env, authority, params_hash, rendered = _bundle()
-        store = _store(tmp_path)
-        artifact = s7.mint_artifact_for_envelope(
-            envelope=env,
-            rendered=rendered,
-            authority_context=authority,
-            action_params_hash=params_hash,
-            now=NOW,
-            expires_at=FUTURE,
-        )
-        store.put(artifact)
-        # Move it to the LEGACY table, unexpired -- an expired row would
-        # refuse for the wrong reason; all four live rows are expired.
+        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+
+        # 1. seed an UNEXPIRED v1 row while v1 is still writable.
+        #    An expired row would refuse for the wrong reason -- all four
+        #    live rows are expired.
+        legacy = _artifact(env, authority, params_hash, rendered)
+        store.put(legacy)
         with sqlite3.connect(store.db_path) as conn:
-            conn.execute(
-                "INSERT INTO s7_authorization_artifacts "
-                "SELECT * FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
-                (artifact.artifact_id,),
-            )
-            conn.execute(
-                "DELETE FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
-                (artifact.artifact_id,),
-            )
+            unexpired = conn.execute(
+                "select count(*) from s7_authorization_artifacts "
+                "where artifact_id = ? and expires_at > ?",
+                (legacy.artifact_id, NOW),
+            ).fetchone()[0]
+        assert unexpired == 1
+
+        # 2. migrate that PRIVATE store through the real seam.
+        s7.migrate_authorization_store_to_v2(
+            store_dir_fd=None, _private_root=tmp_path
+        )
+
+        # 3. the v1 row must not authorize anything.
         grant, _ = store.consume_for_execution(
-            artifact.artifact_id,
+            legacy.artifact_id,
             rendered=rendered,
             action_params_hash=params_hash,
             authority_context=authority,
-            precondition_hash=artifact.precondition_hash,
-            derived_work_class=artifact.derived_work_class,
-            derived_aggregation_group=artifact.derived_aggregation_group,
+            precondition_hash=legacy.precondition_hash,
+            derived_work_class=legacy.derived_work_class,
+            derived_aggregation_group=legacy.derived_aggregation_group,
             now=NOW,
         )
         assert grant is None
+
+
+class TestOpeningTheStoreDoesNotMigrate:
+    """Open-time migration is forbidden by the design."""
+
+    def test_v2_does_not_appear_merely_by_opening(self, tmp_path: Path) -> None:
+        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        with sqlite3.connect(store.db_path) as conn:
+            names = {
+                n for (n,) in conn.execute(
+                    "select name from sqlite_master where type='table'"
+                )
+            }
+        assert "s7_authorization_artifacts_v2" not in names, names
