@@ -1305,6 +1305,26 @@ class TestChronologyIsEqualitySafeAndBracketed:
         assert rc != 0
         assert not self._valid_completions(root)
 
+    def test_completion_strictly_after_expiry_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the AT-expiry case was covered, so mutating the production
+        predicate from >= 0 to == 0 admitted every post-expiry completion
+        while all 60 tests stayed green."""
+        rc, root = self._run(
+            tmp_path,
+            monkeypatch,
+            issued="2026-08-03T20:00:00Z",
+            expires="2026-08-04T00:00:00Z",
+            moments=[
+                "2026-08-03T20:31:00Z",  # admission -- valid
+                "2026-08-03T20:32:00Z",  # bundle -- valid
+                "2026-08-04T00:05:00Z",  # completion -- AFTER expiry
+            ],
+        )
+        assert rc != 0
+        assert not self._valid_completions(root)
+
     def test_bundle_before_admission_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1496,9 +1516,15 @@ class TestNormalizationRejectsForgedPermits:
             terminals[0].name,
             hashlib.sha256(encoded).hexdigest(),
         )
-        assert not cli._valid_command_completion_result(
+        # Through NORMALIZATION, which is what the class claims to cover.
+        # Calling the validator directly left the normalization path
+        # itself unexercised.
+        normalized = cli._normalize_handler_result(
             attempt, forged_result, root=root
         )
+        assert normalized.status != "ok", normalized
+        assert normalized.outcome == "provider_uncertain", normalized
+        assert normalized.artifact_ref == attempt.admission_ref, normalized
 
 
 def test_the_helper_restores_state_on_the_RAISING_path() -> None:
@@ -1512,8 +1538,15 @@ def test_the_helper_restores_state_on_the_RAISING_path() -> None:
         n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM)
     }
 
+    def _distinctive(_signum, _frame):  # pragma: no cover - never invoked
+        raise AssertionError("distinctive handler must not survive")
+
     def boom(_argv):
+        # Change BOTH pieces of state. Blocking the mask alone left the
+        # handler-restoration loop unproven: deleting it kept this green.
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        signal.signal(signal.SIGINT, _distinctive)
+        signal.signal(signal.SIGTERM, _distinctive)
         raise RuntimeError("main exploded")
 
     original = cli.main

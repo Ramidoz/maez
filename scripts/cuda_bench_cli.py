@@ -3020,7 +3020,11 @@ def _stage2_assembly_handler(
     receipt_ref = f"receipts/stage2-{args.window_id}.json"
     driver.write_private_file(receipt_ref, receipt_bytes, root=root)
     completion_at = clock.now_utc()
-    # The MIDDLE joins, checked BEFORE anything durable is published.
+    # The MIDDLE joins, checked before the COMPLETION is durably
+    # published. The receipt is already durable at this point -- saying
+    # "before anything durable" was false. An orphan receipt with no
+    # completion citing it remains structurally inadmissible: every
+    # consumer reaches the receipt only through a verified completion.
     # Without them: admission 20:31 / bundle 20:30 / completion 20:32
     # returned exit 0, and a regressing clock minted a durable completed
     # completion before failing.
