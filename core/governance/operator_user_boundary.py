@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 from core.governance import successor_governance as s6
 
 
-SCHEMA_VERSION = "s7.v1"
+SCHEMA_VERSION = "s7.work_request_envelope.v2"
 S7_LIVE_WEBAUTHN_CEREMONY_ENV = "S7_LIVE_WEBAUTHN_CEREMONY"
 S7_CEREMONY_DEFERRED_REASON = "s7_ceremony_deferred"
 GUARDED_SELF_MODIFICATION_PAUSED_MODE = "guarded_self_modification_paused_pending_s7.1"
@@ -2377,6 +2377,7 @@ class S7ExecutionGrant:
     consumed_at: str
     ceremony_kind: str
     _mint_token: InitVar[object]
+    schema_version: str = "s7.execution_grant.v2"
 
     def __post_init__(self, _mint_token: object) -> None:
         if _mint_token is not _EXECUTION_GRANT_TOKEN:
@@ -2421,6 +2422,7 @@ def _mint_s7_execution_grant(
 ) -> S7ExecutionGrant:
     return S7ExecutionGrant(
         artifact_id=artifact_id,
+        action=rendered.action,
         request_id=rendered.request_id,
         request_envelope_hash=rendered.request_envelope_hash,
         rendered_text_hash=rendered.rendered_text_hash,
@@ -4014,6 +4016,9 @@ class RenderedRequestStatement:
             ("Surface: ", f"Surface: {self.surface}"),
             ("Origin: ", f"Origin: {self.origin}"),
             ("Request id: ", f"Request id: {self.request_id}"),
+            # The visible line MUST equal the field. Without this the
+            # record could be relabelled after the owner read it.
+            ("Action: ", f"Action: {self.action}"),
             ("Work class: ", f"Work class: {self.derived_work_class}"),
             ("Change class: ", f"Change class: {self.proposed_change_class}"),
             ("Predicted effect class: ", f"Predicted effect class: {self.predicted_effect_class}"),
