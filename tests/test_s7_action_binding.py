@@ -592,10 +592,11 @@ class TestArtifactMustMatchTheRenderedAction:
             mismatched,
             rendered=rendered,
             action_params_hash=params_hash,
-            authority_context=authority,
+            authority_context_hash=s7.authority_context_hash(authority),
             precondition_hash=artifact.precondition_hash,
             derived_work_class=artifact.derived_work_class,
             derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
         )
 
     def test_an_arbitrary_schema_version_refuses(self, tmp_path: Path) -> None:
@@ -606,10 +607,11 @@ class TestArtifactMustMatchTheRenderedAction:
             forged,
             rendered=rendered,
             action_params_hash=params_hash,
-            authority_context=authority,
+            authority_context_hash=s7.authority_context_hash(authority),
             precondition_hash=artifact.precondition_hash,
             derived_work_class=artifact.derived_work_class,
             derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
         )
 
 
@@ -628,59 +630,150 @@ class TestFrozenV2Identities:
 
 
 class TestARealGrantCanBeMinted:
-    """_mint_s7_execution_grant must pass the now-required action."""
+    """Drive _mint_s7_execution_grant itself.
 
-    def test_minting_a_grant_carries_the_action(self, tmp_path: Path) -> None:
-        env, authority, params_hash, rendered = _bundle()
-        store = _migrated_store(tmp_path)
-        artifact = _stored_artifact(env, authority, params_hash, rendered)
-        store.put(artifact)
-        grant, _ = store.consume_for_execution(
-            artifact.artifact_id,
+    My first version routed through the migrated store, so it stopped at
+    the missing migration helper and never reached the mint at all -- a
+    red for the wrong seam.
+    """
+
+    def test_minting_a_grant_carries_the_action_and_v2_schema(self) -> None:
+        _e, authority, params_hash, rendered = _bundle()
+        grant = s7._mint_s7_execution_grant(
+            artifact_id="artifact-action-binding-1",
             rendered=rendered,
             action_params_hash=params_hash,
-            authority_context=authority,
-            precondition_hash=artifact.precondition_hash,
-            derived_work_class=artifact.derived_work_class,
-            derived_aggregation_group=artifact.derived_aggregation_group,
-            now=NOW,
+            precondition_hash="a" * 64,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class="self_modification",
+            derived_aggregation_group="g",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=NOW,
         )
-        # A swallowed TypeError would surface here as a None grant.
-        assert grant is not None, "mint raised and the error was swallowed"
         assert grant.action == ACTION
+        # The v2 LITERAL on a real grant, not dataclass field presence.
+        assert grant.schema_version == "s7.execution_grant.v2"
 
 
 class TestFixedActionConsumersCheckTheirAction:
-    """Backup registration consumed by params hash and class only."""
+    """Behaviour, not source text.
 
-    def test_backup_registration_checks_its_fixed_action(self) -> None:
-        import inspect
+    My first version grepped the function body for the literal, which a
+    comment or a dead branch would satisfy.
+    """
 
+    def test_backup_registration_refuses_a_grant_for_another_action(
+        self,
+    ) -> None:
         from core.governance import s7_webauthn_ceremony as ceremony
 
-        source = inspect.getsource(
-            ceremony._consume_backup_registration_authorization
+        _e, authority, params_hash, rendered = _bundle()
+        wrong = s7._mint_s7_execution_grant(
+            artifact_id="artifact-wrong-action",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            precondition_hash="a" * 64,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class="founder_credential_management",
+            derived_aggregation_group="g",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=NOW,
         )
-        assert "register_backup_webauthn_credential" in source, source
+        # The grant is for model_routing.cutover_cuda, NOT for
+        # register_backup_webauthn_credential.
+        assert not ceremony.backup_registration_grant_authorizes(wrong)
 
 
 class TestActionsAreExactStrings:
-    """A hostile str subclass defeats ordinary equality."""
+    """A hostile str subclass defeats ordinary equality.
 
-    def test_a_str_subclass_is_refused_by_the_grammar(self) -> None:
-        class Sneaky(str):
-            def __eq__(self, other):  # noqa: D105
-                return True
+    My first version pinned only the helper and the envelope builder,
+    leaving the rendered statement, artifact, grant, voice bundle and the
+    generic edge free.
+    """
 
-            def __hash__(self):  # noqa: D105
-                return hash(str(self))
+    class Sneaky(str):
+        def __eq__(self, other):  # noqa: D105
+            return True
 
+        def __hash__(self):  # noqa: D105
+            return hash(str(self))
+
+    def test_the_grammar_refuses_a_subclass(self) -> None:
         with pytest.raises(ValueError):
-            s7.validate_action_literal(Sneaky(ACTION))
+            s7.validate_action_literal(self.Sneaky(ACTION))
 
-    def test_the_envelope_refuses_a_str_subclass_action(self) -> None:
-        class Sneaky(str):
-            pass
-
+    def test_the_envelope_refuses_a_subclass(self) -> None:
         with pytest.raises(ValueError):
-            _bundle(Sneaky(ACTION))
+            _bundle(self.Sneaky(ACTION))
+
+    def test_the_rendered_statement_refuses_a_subclass(self) -> None:
+        _e, _a, _p, rendered = _bundle()
+        with pytest.raises(ValueError):
+            replace(rendered, action=self.Sneaky(ACTION))
+
+    def test_the_artifact_refuses_a_subclass(self) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
+        with pytest.raises(ValueError):
+            replace(artifact, action=self.Sneaky(ACTION))
+
+    def test_the_voice_bundle_refuses_a_subclass(self) -> None:
+        with pytest.raises(ValueError):
+            _voice_bundle(self.Sneaky(ACTION))
+
+    def test_the_generic_edge_refuses_a_subclass(self) -> None:
+        _e, authority, params_hash, rendered = _bundle()
+        grant = s7._mint_s7_execution_grant(
+            artifact_id="artifact-subclass",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            precondition_hash="a" * 64,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class="self_modification",
+            derived_aggregation_group="g",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=NOW,
+        )
+        # Sneaky.__eq__ returns True for anything; exact typing must win.
+        assert not s7.execution_grant_authorizes_action(
+            grant, action=self.Sneaky(SIBLING), params=dict(PARAMS)
+        )
+
+
+class TestTheVisibleLineCannotBeAlteredEither:
+    """The INVERSE of relabelling: change the text, keep the field."""
+
+    def test_altering_the_action_line_and_rehashing_still_refuses(
+        self,
+    ) -> None:
+        """Recompute the hash the REAL way, so only the action differs.
+
+        My first version hashed with a bare sha256 and the construction
+        refused on "rendered_text_hash mismatch" -- passing, but never
+        reaching the action/text agreement it claimed to test.
+
+        RenderedRequestStatement already has an expected_metadata loop
+        that binds metadata lines to the signed text; the Action line is
+        simply not in it. This red says it must be.
+        """
+        _e, _a, _p, rendered = _bundle()
+        forged_text = rendered.rendered_text.replace(
+            f"Action: {ACTION}", f"Action: {SIBLING}"
+        )
+        assert forged_text != rendered.rendered_text
+        with pytest.raises(ValueError, match="signed text"):
+            replace(
+                rendered,
+                rendered_text=forged_text,
+                rendered_text_hash=s7.rendered_text_hash(forged_text),
+            )
