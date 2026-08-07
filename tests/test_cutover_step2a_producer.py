@@ -1175,3 +1175,185 @@ class TestProductionIdentityProjection:
             "socket",
         ):
             assert banned not in source, banned
+
+
+class ConstantClock:
+    """A clock that does NOT advance -- the frozen chronology permits it."""
+
+    def __init__(self, moment: str = RUN_CLOCK) -> None:
+        self._moment = moment
+
+    def now_utc(self) -> str:
+        return self._moment
+
+
+def _call_cli_restoring_signal_state(argv: list[str]) -> int:
+    """Call main(), then restore this process exactly -- even if it raises.
+
+    main() restores the signal MASK only when it did not commit a
+    terminal, so an in-process success leaves SIGINT/SIGTERM blocked for
+    every subsequently spawned child. Restoring only after a normal return
+    leaves that contamination on the raising path, which is exactly the
+    case this exists to prevent. Mirrors the established helper in
+    tests/test_cuda_bench_cli.py.
+    """
+    import signal
+
+    from scripts import cuda_bench_cli as cli
+
+    caller_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    handlers = {
+        number: signal.getsignal(number)
+        for number in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        return cli.main(argv)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
+        for number, handler in handlers.items():
+            signal.signal(number, handler)
+
+
+class TestChronologyIsEqualitySafeAndBracketed:
+    """The frozen order, enforced at both ends.
+
+    latest evidence < issued <= admission <= boot == bundle/receipt
+      <= completion < expiry
+    """
+
+    def test_same_second_invocation_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A constant clock must WORK. The 2A test previously advanced its
+        clock to dodge a strict comparison the design does not contain."""
+        root = seed_private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        monkeypatch.setattr(driver, "SystemClock", ConstantClock)
+        rc = _call_cli_restoring_signal_state(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        )
+        assert rc == 0
+        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
+        completion = cm._canonical_persisted_role(
+            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
+        ).obj
+        assert completion.status == "completed"
+
+    def _run_with_window(
+        self, tmp_path, monkeypatch, *, issued: str, expires: str, clock: str
+    ) -> tuple[int, Path]:
+        from tests.test_cuda_migration import _cutover_authorization_doc
+        from tests.test_cutover_step1_invariants import stage1_paths
+
+        root = seed_private_root(tmp_path)
+        anchor = assemble.build_stage1_bundle(
+            stage1_paths(), root=root, timestamp=STAGE2_TS
+        ).bench_binding_sha256
+        auth = _cutover_authorization_doc(
+            anchor, issued_at=issued, expires_at=expires
+        )
+        (root / AUTHORIZATION_REF).write_bytes(auth.wrapper_bytes)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        monkeypatch.setattr(
+            driver, "SystemClock", lambda: ConstantClock(clock)
+        )
+        rc = _call_cli_restoring_signal_state(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        )
+        return rc, root
+
+    def test_admission_predating_issuance_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rc, root = self._run_with_window(
+            tmp_path,
+            monkeypatch,
+            issued="2026-08-03T22:00:00Z",
+            expires="2026-08-04T02:00:00Z",
+            clock="2026-08-03T20:31:00Z",  # BEFORE issuance
+        )
+        assert rc != 0
+        assert not self._valid_completions(root)
+
+    def test_completion_at_expiry_boundary_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rc, root = self._run_with_window(
+            tmp_path,
+            monkeypatch,
+            issued="2026-08-03T20:00:00Z",
+            expires="2026-08-04T00:00:00Z",
+            clock="2026-08-04T00:00:00Z",  # exactly AT expiry
+        )
+        assert rc != 0
+        assert not self._valid_completions(root)
+
+    @staticmethod
+    def _valid_completions(root: Path) -> list[Path]:
+        found = []
+        for path in root.glob("command-assemble-stage2-*-terminal.json"):
+            try:
+                obj = cm._canonical_persisted_role(
+                    cm.PersistedDoc(path.read_bytes()), cm.CommandCompletionDoc
+                ).obj
+            except Exception:
+                continue
+            if obj.status == "completed":
+                found.append(path)
+        return found
+
+
+class TestSemanticValidatorIsLoadBearing:
+    """Replacing the stage-2 decision/reasons check with `return True`
+    left all 47 tests green, so the check was unproven. It is now a named
+    predicate and these mutate a REAL published permit against it."""
+
+    def _published_permit(self, tmp_path, monkeypatch):
+        root = seed_private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        monkeypatch.setattr(driver, "SystemClock", ConstantClock)
+        assert _call_cli_restoring_signal_state(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        ) == 0
+        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
+        completion = cm._canonical_persisted_role(
+            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
+        ).obj
+        return root, completion
+
+    def test_the_real_published_permit_is_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scripts import cuda_bench_cli as cli
+
+        root, completion = self._published_permit(tmp_path, monkeypatch)
+        published = cm._canonical_persisted_role(
+            cm.PersistedDoc((root / completion.artifact_ref).read_bytes()),
+            cm.AssembleReceiptDoc,
+        ).obj
+        assert cli._valid_stage2_permit(
+            published, window_id=completion.window_id
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("decision", "bench_passed"),
+            ("reasons", ["forged_reason"]),
+            ("cutover_window_id", "cutover-forged"),
+        ],
+    )
+    def test_wrong_permit_semantics_are_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field, value
+    ) -> None:
+        from scripts import cuda_bench_cli as cli
+
+        root, completion = self._published_permit(tmp_path, monkeypatch)
+        wrapper = json.loads((root / completion.artifact_ref).read_bytes())
+        wrapper["fields"][field] = value
+        forged = cm.AssembleReceiptDoc(
+            fields=__import__("types").MappingProxyType(dict(wrapper["fields"]))
+        )
+        assert not cli._valid_stage2_permit(
+            forged, window_id=completion.window_id
+        )

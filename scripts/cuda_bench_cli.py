@@ -2006,20 +2006,29 @@ def _valid_command_completion_result(
         return False
     published = artifact.obj
     if attempt.command == "assemble-stage2":
-        # The permit's own semantics, not a measurement packet's: exact
-        # window, the provisional decision, and the frozen reasons.
-        return (
-            type(published) is cm.AssembleReceiptDoc
-            and published.cutover_window_id == result.window_id
-            and published.decision == "provisional_cuda_boot"
-            and published.reasons == ("cold_boot_witness_pending",)
-        )
+        return _valid_stage2_permit(published, window_id=result.window_id)
     return (
         type(published) is cm.PhasePacket
         and published.phase == completion.decoded_phase
         and published.window_id == result.window_id
         and published.outcome == "completed"
         and published.order_sha256 == cm.FROZEN_ORDER_SHA256
+    )
+
+
+def _valid_stage2_permit(published: object, *, window_id: str | None) -> bool:
+    """The permit's own semantics, not a measurement packet's.
+
+    Named rather than inline so it can be mutation-tested directly:
+    replacing the inline form with `return True` left all 47 focused
+    tests green, which means the check was unproven.
+    """
+
+    return (
+        type(published) is cm.AssembleReceiptDoc
+        and published.cutover_window_id == window_id
+        and published.decision == "provisional_cuda_boot"
+        and published.reasons == ("cold_boot_witness_pending",)
     )
 
 
@@ -2994,12 +3003,25 @@ def _stage2_assembly_handler(
     verdict = cm.evaluate_promotion_bundle(bundle)
     if verdict.cutover_window_id != args.window_id:
         raise driver.BenchRefusal("assembly_refused")
+    # The authorization brackets the whole act. Without these the command
+    # accepted an admission minted BEFORE the authorization was issued and
+    # a completion at or after expiry -- both reproduced at exit 0.
+    authorization = bundle.cutover_authorization.obj
+    admission_at = cm.CommandAdmissionPreimage(
+        attempt.admission_ref,
+        driver.open_bench_file(attempt.admission_ref, root=root),
+    ).timestamp
+    if cm._compare_utc_z(authorization.issued_at, admission_at) > 0:
+        raise driver.BenchRefusal("assembly_refused")
     receipt = cm.build_receipt(bundle, verdict, timestamp=bundle.timestamp)
     receipt_bytes = driver.ProductionArtifactPolicy().encode(
         "receipt", {**receipt, "binding_sha256": bundle.binding_sha256}
     )
     receipt_ref = f"receipts/stage2-{args.window_id}.json"
     driver.write_private_file(receipt_ref, receipt_bytes, root=root)
+    completion_at = clock.now_utc()
+    if cm._compare_utc_z(completion_at, authorization.expires_at) >= 0:
+        raise driver.BenchRefusal("assembly_refused")
     completion = cm.CommandCompletionDoc(
         command=attempt.command,
         ordinal=attempt.ordinal,
@@ -3010,7 +3032,7 @@ def _stage2_assembly_handler(
         artifact_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
         artifact_schema=cm.ASSEMBLE_RECEIPT_SCHEMA,
         status="completed",
-        timestamp=clock.now_utc(),
+        timestamp=completion_at,
     )
     encoded = driver.ProductionArtifactPolicy().encode(
         "command_completion", _completion_fields(completion)

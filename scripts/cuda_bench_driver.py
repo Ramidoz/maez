@@ -7844,11 +7844,16 @@ def _load_verified_completion_pair(
         or completion.artifact_sha256 != artifact_doc.file_sha256
         or completion.artifact_schema
         != _COMPLETION_ARTIFACT_SCHEMAS.get(expected_type)
+        # Equality-safe for assembly, strict for phases. The frozen
+        # chronology permits admission == completion (second-resolution
+        # stamps; publication order carries the ordering), and a strict
+        # comparison here forced the 2A test to advance its clock to dodge
+        # a rule the design does not contain. Phase behaviour is unchanged.
         or cm._compare_utc_z(
             admission.timestamp,
             completion.timestamp,
         )
-        >= 0
+        > (0 if expected_type is cm.AssembleReceiptDoc else -1)
         or cm._compare_utc_z(
             artifact_doc.obj.timestamp,
             completion.timestamp,
