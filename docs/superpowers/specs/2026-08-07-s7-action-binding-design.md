@@ -1,4 +1,4 @@
-# S7 action binding — design v6
+# S7 action binding — design v7
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -222,98 +222,130 @@ hand-assembled. The RED contract also demanded five caller joins *after*
 `consume_verified` had been correctly reclassified as a row ↔ rendered
 join, so it required a proof the design had just removed.
 
-**Derived mechanically (v6)** by AST walk over every tracked production
-file, emitting exact `(file, function, role, syntactic role)` tuples.
-v5's role set was still incomplete — it omitted the envelope
-constructor, the hash producers (`work_request_envelope_hash`,
-`s7_voice_consultation_bundle_hash`), the artifact-match validator
-(`authorization_artifact_matches`) and the durable writers
-(`S7AuthorizationStore.put`, `put_bundle`). Counts come from the table:
+**Derived mechanically (v7)**, now with **line-level occurrence
+identity**. v6 keyed on `(file, function, role, syntactic role)`, which
+**collapses multiplicity**: `_s7_voice_consultation_for_card` calls
+`work_request_envelope_hash` twice (`decision_pipeline.py:1152` and
+`:1178`) and the table recorded **one** row — so one branch could stay
+unwired without the allowlist noticing. Both now appear.
 
-| file | function | role | syntactic role |
-|---|---|---|---|
-| `core/actions/action_engine.py` | `_s7_invocation_gate` | execution_edge | call:consume_execution_grant_for_action |
-| `core/decision/decision_pipeline.py` | `_consume_s7_execution_authorization` | durable_writer | call:consume_for_execution |
-| `core/decision/decision_pipeline.py` | `_on_approve` | execution_edge | call:execution_grant_authorizes_card_transition |
-| `core/decision/decision_pipeline.py` | `_s7_request_envelope_for_card` | producer | call:build_work_request_envelope |
-| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash |
-| `core/decision/decision_pipeline.py` | `handle_action` | hash | call:work_request_envelope_hash |
-| `core/decision/pending_cards.py` | `approve_and_mark_running` | execution_edge | call:execution_grant_authorizes_card_transition |
-| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | durable_writer | call:consume_for_execution |
-| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | hash | call:work_request_envelope_hash |
-| `core/evolution/dream_state.py` | `build_apply_s7_envelope` | producer | call:build_work_request_envelope |
-| `core/evolution/dream_state.py` | `build_section_edit_s7_envelope` | producer | call:build_work_request_envelope |
-| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | call:S7ExecutionGrant |
-| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | definition |
-| `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope |
-| `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash |
-| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope |
-| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition |
-| `core/governance/operator_user_boundary.py` | `consume_for_execution` | constructor | call:_mint_s7_execution_grant |
-| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition |
-| `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition |
-| `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition |
-| `core/governance/operator_user_boundary.py` | `put` | durable_writer | definition |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition |
-| `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash |
-| `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition |
-| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash |
-| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition |
-| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put_bundle |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding |
-| `core/governance/s7_guarded_execution.py` | `put` | durable_writer | definition |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:put |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition |
-| `core/governance/s7_guarded_execution.py` | `put_bundle` | durable_writer | definition |
-| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash |
-| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition |
-| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding |
-| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution |
-| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact |
-| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact |
-| `core/governance/s7_webauthn_ceremony.py` | `build_backup_registration_envelope` | producer | call:build_work_request_envelope |
-| `core/governance/s7_webauthn_ceremony.py` | `build_disable_credential_envelope` | producer | call:build_work_request_envelope |
-| `daemon/maez_daemon.py` | `_s7_authorization_route_material` | renderer | call:render_request_statement |
-| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | durable_writer | call:consume_for_execution |
-| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | execution_edge | call:consume_execution_grant_for_action |
-| `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding |
-| `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash |
-| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put |
-| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put |
-| `ui/maez_terminal_ui.py` | `_compose_status_bar` | durable_writer | call:put |
-| `ui/maez_terminal_ui.py` | `_glitch_transition` | durable_writer | call:put |
-| `ui/maez_terminal_ui.py` | `put` | durable_writer | definition |
+| file | function | role | syntactic role | line |
+|---|---|---|---|---|
+| `core/actions/action_engine.py` | `_s7_invocation_gate` | execution_edge | call:consume_execution_grant_for_action | 616 |
+| `core/decision/decision_pipeline.py` | `_consume_s7_execution_authorization` | durable_writer | call:consume_for_execution | 1566 |
+| `core/decision/decision_pipeline.py` | `_on_approve` | execution_edge | call:execution_grant_authorizes_card_transition | 1875 |
+| `core/decision/decision_pipeline.py` | `_s7_request_envelope_for_card` | producer | call:build_work_request_envelope | 1069 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1152 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1178 |
+| `core/decision/decision_pipeline.py` | `handle_action` | hash | call:work_request_envelope_hash | 677 |
+| `core/decision/pending_cards.py` | `approve_and_mark_running` | execution_edge | call:execution_grant_authorizes_card_transition | 851 |
+| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | durable_writer | call:consume_for_execution | 1182 |
+| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | hash | call:work_request_envelope_hash | 1175 |
+| `core/evolution/dream_state.py` | `build_apply_s7_envelope` | producer | call:build_work_request_envelope | 1054 |
+| `core/evolution/dream_state.py` | `build_section_edit_s7_envelope` | producer | call:build_work_request_envelope | 1132 |
+| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | call:S7ExecutionGrant | 2393 |
+| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | definition | 2378 |
+| `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition | 2253 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 2983 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 2999 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 2882 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 2929 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 2933 |
+| `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash | 1240 |
+| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope | 1398 |
+| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition | 1360 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 2733 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 2726 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | constructor | call:_mint_s7_execution_grant | 2637 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition | 2541 |
+| `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution | 2524 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 2695 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 2760 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 2744 |
+| `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition | 1475 |
+| `core/governance/operator_user_boundary.py` | `put` | durable_writer | definition | 2430 |
+| `core/governance/operator_user_boundary.py` | `put` | durable_writer | definition | 3557 |
+| `core/governance/operator_user_boundary.py` | `put` | durable_writer | definition | 3639 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4100 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4111 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4137 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4071 |
+| `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1493 |
+| `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1155 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 1866 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 1839 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 588 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 587 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 604 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 568 |
+| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 1389 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 2291 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put | 2324 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 2316 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put | 678 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put_bundle | 702 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 703 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 666 |
+| `core/governance/s7_guarded_execution.py` | `put` | durable_writer | definition | 1464 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:put | 2287 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 2258 |
+| `core/governance/s7_guarded_execution.py` | `put_bundle` | durable_writer | definition | 1288 |
+| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1294 |
+| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 821 |
+| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2090 |
+| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 886 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 659 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 682 |
+| `core/governance/s7_webauthn_ceremony.py` | `build_backup_registration_envelope` | producer | call:build_work_request_envelope | 61 |
+| `core/governance/s7_webauthn_ceremony.py` | `build_disable_credential_envelope` | producer | call:build_work_request_envelope | 101 |
+| `daemon/maez_daemon.py` | `_s7_authorization_route_material` | renderer | call:render_request_statement | 580 |
+| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | durable_writer | call:consume_for_execution | 1056 |
+| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | execution_edge | call:consume_execution_grant_for_action | 1070 |
+| `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 628 |
+| `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 420 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 424 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 431 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 434 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 440 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 442 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 444 |
+| `ui/maez_terminal_ui.py` | `_compose_corner` | durable_writer | call:put | 445 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 286 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 291 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 301 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 303 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 304 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 317 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 318 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 321 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 336 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 337 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 340 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 351 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 352 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 353 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 356 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 360 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 371 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 374 |
+| `ui/maez_terminal_ui.py` | `_compose_fullscreen` | durable_writer | call:put | 377 |
+| `ui/maez_terminal_ui.py` | `_compose_status_bar` | durable_writer | call:put | 388 |
+| `ui/maez_terminal_ui.py` | `_compose_status_bar` | durable_writer | call:put | 400 |
+| `ui/maez_terminal_ui.py` | `_compose_status_bar` | durable_writer | call:put | 402 |
+| `ui/maez_terminal_ui.py` | `_compose_status_bar` | durable_writer | call:put | 404 |
+| `ui/maez_terminal_ui.py` | `_glitch_transition` | durable_writer | call:put | 262 |
+| `ui/maez_terminal_ui.py` | `put` | durable_writer | definition | 104 |
 
-**Counts, derived mechanically:** constructor 6, durable_writer 20, execution_edge 9, hash 19, producer 8, renderer 3, source_bundle 6, validator 3 — **total 74**.
+**Counts, derived mechanically:** constructor 6, durable_writer 50, execution_edge 9, hash 20, producer 8, renderer 3, source_bundle 6, validator 3 — **total 105**.
 
-**`put` is deliberately broad.** It matches more sites than S7's own
-store, and that is the safe direction: an over-inclusive allowlist forces
-a deliberate exclusion, while an under-inclusive one hides a bypass. The
-implementation slice narrows it by qualified receiver, not by dropping
-the role.
+**Qualified-receiver rule, frozen now.** `put` is a common method name;
+matching it bare inflated `durable_writer` to 50. The allowlist keys on
+the **qualified receiver**, not the bare name — only
+`S7AuthorizationStore.put` and `S7GuardedStateStore.put_bundle` are
+S7 authority writers. The broad list above is deliberately retained as
+the *scan*; the *allowlist* narrows it by receiver, and narrowing is a
+deliberate, reviewable act rather than a silent omission.
 
 **Four caller joins**, not five: `consume_verified` is the row ↔ rendered
 join and is counted there, not among the callers.
@@ -437,38 +469,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS s7_v2_nonce
 The first twenty columns are the v1 definitions verbatim, read from the
 live store's `sqlite_master` rather than transcribed from memory.
 
-**Fingerprint preimage:** canonical JSON of
-`[(cid, name, type, notnull, dflt_value, pk) …]` from
-`PRAGMA table_info(s7_authorization_artifacts_v2)` plus
-`[(name, unique, origin) …]` from `PRAGMA index_list(…)`, both sorted by
-name, hashed with the project canonical encoder. The resulting literal is
-pinned once the table exists; drift refuses.
-
-**Migration receipt** — schema `s7.migration_receipt.v1`, fields:
-`from_fingerprint`, `to_fingerprint`, `row_count_v1`, `row_count_v2`,
-`started_at`, `completed_at`, `store_dev`, `store_ino`. Bound by the
-project canonical wrapper. **Published by the `s7-migrate-v2` command
-only**, durably beside the store as `s7_migration_receipt.json`, written
-through the anchored `write_private_file` primitive. No row contents ever
-appear in it.
-
-**Schema fingerprint:** canonical hash over `PRAGMA table_info` +
-`PRAGMA index_list` for the v2 table, pinned as a literal; drift refuses.
-
-**Routing:** v1 table is **audit-only** — readable, never written, never
-consumable. v2 is the only writable and consumable table.
-
-**Migration is an owner-authorized command**, `s7-migrate-v2`, which:
-
-* mints a **durable migration receipt** (from/to fingerprints, row
-  counts, timestamp, no row contents);
-* is **idempotent** — a second run is a no-op and says so;
-* is **transactional** — any failure rolls back whole, leaving no partial
-  table;
-* **refuses** a partial or future schema rather than repairing it;
-* **rejects atomically** on cross-table collision of **either** `nonce`
-  **or** `artifact_id`;
-* **never backfills** a historical row.
+**SUPERSEDED by v6/v7.** This paragraph described a PRAGMA-based
+preimage and a receipt schema that v6 replaced. Retained struck-through
+would only invite reading it as current, so it is removed; the
+authoritative fingerprint recipe and receipt schema are below under
+*Fingerprint literals (v7)* and *Activation ordering*.
 
 **Before activation:** if the v2 table is **absent**, every guarded
 execution path **refuses** — it does not silently fall back to v1. Absent
@@ -528,6 +533,37 @@ BEGIN SELECT RAISE(ABORT, 's7_cross_version_artifact'); END;
 ```
 
 Migration itself runs in a single `BEGIN IMMEDIATE` transaction.
+
+## The live store does not HAVE a voice plane (v7)
+
+Verified read-only: `ceremony.sqlite3` contains
+`s7_authorization_artifacts`, `s7_bootstrap_intents`,
+`s7_ceremony_challenges`, `s7_ceremony_metadata`,
+`s7_founder_webauthn_credentials`, `s7_refusal_history` — and **no
+`s7_voice_consultation_bundles`**.
+
+So v6's migration was **not executable against the database that exists**:
+its very first voice trigger would fail `no such table`. I froze DDL and
+triggers for a plane I never checked was present, in the same store.
+
+**Frozen transition:** migration **creates the empty legacy table first**,
+then freezes it:
+
+```sql
+CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles ( … 25 v1 columns … );
+-- then the three v1 freeze triggers, then the v2 table and its triggers
+```
+
+The table is created **empty and immediately frozen** — it exists only so
+the freeze and cross-version triggers have a referent, and so a later
+component that expects v1 finds a table it cannot write.
+
+**The absent→empty transition is part of the migration identity.** The
+`from_fingerprint_bundle` literal below is the fingerprint of the
+**absent** plane, so a store that already had a populated voice table
+would not match and the migration would refuse — which is correct: that
+is a different starting state than the one this migration was designed
+and reviewed against.
 
 ## Voice-bundle persistence, concrete (v5)
 
@@ -591,16 +627,44 @@ validate_voice_source_bundle(*, bundle, version, purpose) -> bool
     # purpose="audit" accepts v1; purpose="execution" refuses v1
 ```
 
-**The action travels as authority.** Frozen join, enforced at artifact
-minting:
+**The action travels as authority — and the current result type cannot
+carry it.** `S7VoiceSourceBundleValidationResult`
+([s7_guarded_execution.py:390](/home/rohit/maez/core/governance/s7_guarded_execution.py#L390))
+holds `status`, `source_bundle_valid`, `mint_eligible`,
+`authority_projection` and `failure_reason_code` — **booleans and a
+projection, no action and no version**. v6 wrote the join as prose over a
+type that has nowhere to put it.
+
+**Frozen result type (v2):**
+
+```python
+@dataclass(frozen=True)
+class S7VoiceSourceBundleValidationResultV2:
+    status: str
+    source_bundle_valid: bool
+    mint_eligible: bool
+    authority_projection: str
+    failure_reason_code: str | None
+    action: str | None        # NEW — the validated action
+    schema_version: str       # NEW — "s7.voice_source_bundle.v1" | ".v2"
+```
+
+`action` is `None` **iff** the bundle is v1, and a v1 bundle is never
+`mint_eligible`.
+
+**Minting API, frozen:**
 
 ```
-bundle.action == validated_binding.action == artifact.action
+mint_from_validated_bundle(*, validation: …ResultV2, …) -> artifact
+    # takes NO action argument. The action comes from
+    # validation.action, which the validator fixed.
 ```
 
-The validated v2 action and version are **carried into minting**, never
-re-supplied there. A mint that accepts an action argument alongside a
-validated bundle can disagree with it, and the disagreement is the bug.
+**Frozen join:** `bundle.action == validation.action == artifact.action`.
+
+**Binding RED:** a bundle validated for action **A** cannot mint an
+artifact for action **B** — there is no parameter through which B could
+be supplied.
 
 **Same freezes as the authorization plane:** v1 write-frozen by trigger,
 never backfilled, never migrated on open, its own fingerprint, its own
@@ -655,9 +719,17 @@ literals. A design literal nobody recomputes is a literal that drifts.
 ## v1 fingerprints, also literal
 
 `from_fingerprint_*` were self-chosen in v5 — the receipt asserted
-whatever it found. They are now pinned literals computed the same way
-over the **pre-migration** planes, so a receipt claiming to have migrated
-*from* something else refuses.
+whatever it found — and v6 said "pinned literals" while supplying none.
+Computed read-only from the live store with the v6/v7 recipe:
+
+| plane | v1 (pre-migration) fingerprint |
+|---|---|
+| authorization | `b8946c79c8edf9386ce73522aac8b18b6181212a949570cf9c01c01e3ac1af00` |
+| voice (**absent**) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+
+The voice literal is the hash of an **empty preimage** — the absent plane
+has a defined identity, so "not there" is something the receipt can bind
+rather than a gap it must describe in prose.
 
 ## Activation ordering, frozen (v5)
 
@@ -673,11 +745,23 @@ over the **pre-migration** planes, so a receipt claiming to have migrated
 The receipt binds **both** tables. Schema `s7.migration_receipt.v1`:
 
 ```
-from_fingerprint_auth, to_fingerprint_auth,
+from_fingerprint_auth,   to_fingerprint_auth,
 from_fingerprint_bundle, to_fingerprint_bundle,
-row_count_v1_auth, row_count_v1_bundle,
+row_count_v1_auth,       row_count_v1_bundle,
+row_count_v2_auth_at_migration,
+row_count_v2_bundle_at_migration,
 started_at, completed_at, store_dev, store_ino
 ```
+
+**Two corrections v6 needed here.** Its field list carried only the two
+v1 counts while later text required two v2 counts — the receipt could
+not carry the evidence its own validator demanded.
+
+And requiring **live** v2 counts to stay zero would have **deactivated S7
+the moment the first legitimate v2 artifact was minted**. Zero is a
+*migration-time* fact, not a standing invariant. It is bound in the
+receipt as `…_at_migration`, verified **before publication**, and never
+re-checked against live tables afterwards.
 
 canonically wrapped by the project encoder, published only by
 `s7-migrate-v2` through `write_private_file`. No row contents ever.
@@ -690,10 +774,11 @@ commit is then followed by fsync of the database **and** its parent
 directory. This is the same two-stage posture check the cutover store
 opener uses, for the same reason.
 
-**No-backfill is asserted, not merely stated:** both v2 row counts are
-pinned at **0** in the receipt and revalidated as 0 by every activation
-consumer. A non-zero count means rows were moved and the receipt is
-refused.
+**No-backfill is asserted, not merely stated:** both v2 counts are
+verified **0 immediately before the receipt is published**, and bound
+into it as `row_count_v2_*_at_migration`. Consumers check the *bound*
+values, never the live tables — checking live counts would make S7
+deactivate itself on its first real artifact.
 
 **Every activation consumer revalidates** before treating v2 as live:
 
@@ -703,7 +788,8 @@ refused.
 * **both** activation fingerprints match the live planes — which now
   includes every trigger;
 * both `from_fingerprint_*` match the pinned v1 literals;
-* both v2 row counts are **0**;
+* the receipt's `row_count_v2_*_at_migration` fields are **0** — a
+  statement about migration time, **not** about the live tables now;
 * `store_dev`/`store_ino` match the store actually held.
 
 **Failure behaviour, exact:** a **missing** receipt means v2 is inert and
@@ -757,7 +843,29 @@ hand-counts in one document is what produced this rule.
   than by the code being tested. A new sidecar or a changed mode is a
   write.
 
+## The migration command's authority (v7)
+
+"Owner-authorized `s7-migrate-v2`" named no enforceable input — it was a
+word, not a contract. It cannot be S7-authorized without circularity:
+S7 v2 is not active until this command completes.
+
+**Frozen and stated plainly: `s7-migrate-v2` is an owner-typed
+procedural ceremony.** It is authorized by Rohit running it, not by a
+document, a nonce or a TTL. It has:
+
+* no authorization document to forge, because there is none;
+* a **durable receipt** afterwards, which is the auditable artifact;
+* an **offline precondition** — it refuses while the daemon is running;
+* no capability to mint, consume or alter any authorization row. It
+  creates tables and triggers and nothing else.
+
+That is weaker than the ceremonies it enables, and it is named as such
+rather than dressed up. **This requires the owner's explicit ratification
+(R7)**, because "procedural, not authenticated" is the same class of
+statement he already ruled on for the cutover itself.
+
 ## Carried
 
-Nothing. S1, S2 and S3 are all ruled or enumerated. The remaining work is
-REDs, then implementation.
+* **R7** — ratify `s7-migrate-v2` as an owner-typed procedural ceremony,
+  or specify an authorization contract that does not depend on the
+  authority it is installing.
