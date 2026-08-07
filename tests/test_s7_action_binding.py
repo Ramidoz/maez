@@ -110,9 +110,11 @@ def _bundle(action: str = ACTION):
 
 
 BACKUP_ACTION = "register_backup_webauthn_credential"
-# Same derived class, same params hash, different operation. Registering a
-# backup credential and DISABLING a founder credential are siblings to the
-# seam that consumes them.
+# A different operation in the SAME derived work class. The canonical
+# producers emit different params, so this is not a natural collision --
+# the exposure is a FORGED pairing of this action with backup-registration
+# params, which the backup consumer cannot distinguish because it never
+# checks the action.
 BACKUP_SIBLING = "disable_founder_webauthn_credential"
 
 
@@ -769,6 +771,99 @@ class TestARealGrantCanBeMinted:
         assert grant.schema_version == "s7.execution_grant.v2"
 
 
+class _Sentinel(Exception):
+    """Not a ValueError: nothing in the seam may plausibly raise this."""
+
+
+def _consume(auth, **over):
+    """Invoke consume_for_execution with the fixture's own fields."""
+    kwargs = {
+        "rendered": auth.rendered,
+        "action_params_hash": auth.action_params_hash,
+        "authority_context": auth.authority_context,
+        "precondition_hash": auth.precondition_hash,
+        "derived_work_class": auth.derived_work_class,
+        "derived_aggregation_group": auth.derived_aggregation_group,
+        "now": auth.now,
+    }
+    artifact_id = over.pop("artifact_id", auth.artifact_id)
+    kwargs.update(over)
+    return auth.store.consume_for_execution(artifact_id, **kwargs)
+
+
+def _consumed_at(store) -> object:
+    with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
+        row = conn.execute(
+            "SELECT consumed_at FROM s7_authorization_artifacts"
+        ).fetchone()
+    return row[0] if row else "NO ROW"
+
+
+class TestExceptionsAreClassifiedNotSwallowed:
+    """`except Exception: return None, None` makes "the code broke" look
+    exactly like "authorization refused".
+
+    A programming error inside the mint is currently reported to every
+    caller as an ordinary denial. That is fail-closed, so it is safe -- but
+    it is not honest, and it hid the fact that the entire execution path is
+    dead on this branch. A genuine non-match must still return (None, None);
+    a broken seam must not be able to impersonate one.
+    """
+
+    def test_a_mint_exception_propagates(self, tmp_path: Path, monkeypatch) -> None:
+        auth = _backup_authorization(tmp_path, action=BACKUP_ACTION)
+
+        def boom(**_kwargs):
+            raise _Sentinel("mint")
+
+        monkeypatch.setattr(s7, "_mint_s7_execution_grant", boom)
+        with pytest.raises(_Sentinel):
+            _consume(auth)
+
+    def test_a_mint_exception_leaves_the_row_unconsumed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Propagating is not enough: the UPDATE already ran, so the row
+        must not be left consumed by a ceremony that never produced a
+        grant. That would burn a founder tap for nothing."""
+        auth = _backup_authorization(tmp_path, action=BACKUP_ACTION)
+
+        def boom(**_kwargs):
+            raise _Sentinel("mint")
+
+        monkeypatch.setattr(s7, "_mint_s7_execution_grant", boom)
+        with contextlib.suppress(_Sentinel):
+            _consume(auth)
+        assert _consumed_at(auth.store) is None
+
+    def test_a_precommit_callback_exception_propagates_and_rolls_back(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The mint is stubbed to SUCCEED here on purpose: without that this
+        test would die in the mint and never reach the callback, proving
+        nothing about the callback."""
+        auth = _backup_authorization(tmp_path, action=BACKUP_ACTION)
+        monkeypatch.setattr(
+            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
+        )
+
+        def boom(_grant):
+            raise _Sentinel("callback")
+
+        with pytest.raises(_Sentinel):
+            _consume(auth, after_consume_before_commit=boom)
+        assert _consumed_at(auth.store) is None
+
+    def test_an_ordinary_non_match_still_returns_none_none(
+        self, tmp_path: Path
+    ) -> None:
+        """GUARD: closing the swallow must not convert real refusals into
+        exceptions. A wrong artifact_id matches no row and is a denial."""
+        auth = _backup_authorization(tmp_path, action=BACKUP_ACTION)
+        assert _consume(auth, artifact_id="no-such-artifact") == (None, None)
+        assert _consumed_at(auth.store) is None
+
+
 class TestFixedActionConsumersCheckTheirAction:
     """Behaviour, not source text.
 
@@ -776,24 +871,46 @@ class TestFixedActionConsumersCheckTheirAction:
     comment or a dead branch would satisfy.
     """
 
-    def test_the_sibling_is_indistinguishable_to_the_seam_today(self) -> None:
-        """GUARD on the defect itself, provable now.
+    def test_the_canonical_producers_are_not_confusable(self) -> None:
+        """The natural path is already safe, and the finding must not
+        overstate itself: the two canonical producers emit DIFFERENT params,
+        so a genuine disable request never carries backup params."""
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        backup = ceremony.backup_registration_action_params()
+        disable = ceremony.disable_credential_action_params(
+            credential_ref="cred-1", credential_kind="backup"
+        )
+        assert backup != disable
+        assert s7.canonical_hash(dict(backup)) != s7.canonical_hash(dict(disable))
+
+    def test_a_forged_pairing_satisfies_every_current_predicate(self) -> None:
+        """GUARD on the defect itself, stated at its true width.
 
         _consume_backup_registration_authorization gates on exactly two
-        things: action_params_hash equal to the backup params, and
+        things: action_params_hash equal to the BACKUP params, and
         derived_work_class == founder_credential_management. It never
-        compares the action. disable_founder_webauthn_credential satisfies
-        BOTH -- so an authorization to DISABLE a founder credential meets
-        every check the backup-registration seam makes.
+        compares the action. So a FORGED envelope -- the disable action
+        paired with backup-registration params, which no canonical producer
+        emits -- satisfies both predicates and is accepted as a backup
+        registration. The action is the only field that could separate them.
         """
         from core.governance import s7_webauthn_ceremony as ceremony
 
-        params = ceremony.backup_registration_action_params()
-        assert s7.derive_work_class(
-            action=BACKUP_ACTION, params=dict(params)
-        ) == s7.derive_work_class(action=BACKUP_SIBLING, params=dict(params))
-        # identical params => identical params hash, the seam's only other gate
-        assert s7.canonical_hash(dict(params)) == s7.canonical_hash(dict(params))
+        backup_params = ceremony.backup_registration_action_params()
+
+        # predicate 1: the forged action still derives the gating class
+        assert (
+            s7.derive_work_class(action=BACKUP_SIBLING, params=dict(backup_params))
+            == "founder_credential_management"
+        )
+        # predicate 2: carrying backup params, it produces the backup hash
+        forged_hash = s7.canonical_hash(dict(backup_params))
+        assert forged_hash == s7.canonical_hash(
+            dict(ceremony.backup_registration_action_params())
+        )
+        # ...and the two actions are nevertheless different operations
+        assert BACKUP_SIBLING != BACKUP_ACTION
 
     def test_the_positive_control_reaches_a_grant(self, tmp_path: Path) -> None:
         """Without this the refusal below is vacuous.
