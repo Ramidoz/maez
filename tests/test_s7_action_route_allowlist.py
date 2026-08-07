@@ -15,7 +15,11 @@ single authority and derives everything else from it:
 * the prose "Counts, derived mechanically" line is checked AGAINST the
   table rather than trusted, which is the drift the rule exists to catch.
 
-The broad discovery scan is a separate concern and is not this file's job.
+The pinned table can only see roads it already lists, so this file also
+carries the repo-wide DISCOVERY guard: a sweep of every production file
+for tracked call targets, including the shapes a file-scoped scan misses
+-- module-level calls, aliased imports and getattr-by-string. Narrowing
+that sweep is then a deliberate reviewable act rather than an omission.
 """
 
 from __future__ import annotations
@@ -73,6 +77,52 @@ def _prose_counts() -> tuple[dict[str, int], int]:
     )
     total = pairs.pop("total")
     return pairs, total
+
+
+def _scan_with_lines(
+    path: str, *, call_targets: set[str], def_targets: set[tuple[str, str]]
+):
+    """As _scan, but carrying the line each site sits on.
+
+    Line-level identity is part of the contract: without it a site can move
+    to a different line -- or two sites can swap -- while the multiset stays
+    identical.
+    """
+    tree = ast.parse((REPO / path).read_text())
+    found: list[tuple[str, str, str, int]] = []
+
+    def walk(node, fnstack: list[str], clsstack: list[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                walk(child, fnstack, clsstack + [child.name])
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualified = (
+                    f"{clsstack[-1]}.{child.name}" if clsstack else child.name
+                )
+                for candidate in (qualified, child.name):
+                    if (path, candidate) in def_targets:
+                        found.append((path, candidate, "definition", child.lineno))
+                        break
+                walk(child, fnstack + [child.name], clsstack)
+                continue
+            if isinstance(child, ast.Call) and fnstack:
+                dotted = ast.unparse(child.func)
+                bare = (
+                    child.func.attr
+                    if isinstance(child.func, ast.Attribute)
+                    else getattr(child.func, "id", None)
+                )
+                for target in (dotted, bare):
+                    if target in call_targets:
+                        found.append(
+                            (path, fnstack[-1], f"call:{target}", child.lineno)
+                        )
+                        break
+            walk(child, fnstack, clsstack)
+
+    walk(tree, [], [])
+    return found
 
 
 def _scan(path: str, *, call_targets: set[str], def_targets: set[tuple[str, str]]):
@@ -203,3 +253,172 @@ class TestTheAllowlistMatchesTheCode:
         assert repeated, "no multiplicity in the table; this check is vacuous"
         for key, n in repeated.items():
             assert scanned[key] == n, (key, scanned[key], n)
+
+
+class TestLineLevelIdentity:
+    """The table records a line per site; without checking it, a site can
+    move -- or two sites can swap -- while the multiset stays identical."""
+
+    def test_identity_ignoring_lines_is_already_exact(self, table, scanned) -> None:
+        """CONTROL. If this failed, a line mismatch below could mean a road
+        moved rather than a line moving under a stationary road."""
+        expected = collections.Counter((r[0], r[1], r[3]) for r in table)
+        assert expected == scanned
+
+    def test_every_row_sits_on_the_line_it_claims(self, table) -> None:
+        """RED, with a precise cause.
+
+        The roads are unchanged -- the control above proves that -- but this
+        slice has been editing core/governance/operator_user_boundary.py, so
+        the ratified table's line numbers for that file are stale. The table
+        is generator-derived, and the fix is to regenerate it once that file
+        stops moving, NOT to relax this check: dropping line identity lets a
+        site move, or two sites swap, while the multiset stays identical.
+        """
+        call_targets = {r[3][5:] for r in table if r[3].startswith("call:")}
+        def_targets = {(r[0], r[1]) for r in table if r[3] == "definition"}
+        found = set()
+        for path in sorted({r[0] for r in table}):
+            found.update(
+                _scan_with_lines(
+                    path, call_targets=call_targets, def_targets=def_targets
+                )
+            )
+        expected = {(r[0], r[1], r[3], int(r[4])) for r in table}
+        drifted = sorted({row[0] for row in (expected - found) | (found - expected)})
+        assert expected == found, (
+            f"table line numbers are stale for: {drifted}. "
+            f"{len(expected - found)} of {len(expected)} rows. "
+            "Regenerate the table; do not relax this check."
+        )
+
+
+def _production_files() -> list[str]:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    return [f for f in out if not f.startswith("tests/")]
+
+
+def _discover(table):
+    """Repo-wide sweep for tracked call targets, in ANY production file.
+
+    The pinned inventory can only see roads it already lists. This sweep is
+    the discovery half: it looks everywhere, and additionally at the shapes
+    a file-scoped scan misses -- module-level calls, aliased imports, and
+    getattr-by-string.
+
+    Definition names are deliberately NOT swept as call targets. Reducing
+    `S7AuthorizationStore.put` to bare `put` matched a terminal-UI buffer
+    write and reported a new S7 road that did not exist.
+    """
+    call_targets = {r[3][5:] for r in table if r[3].startswith("call:")}
+    bare = {t for t in call_targets if "." not in t}
+    dotted = {t for t in call_targets if "." in t}
+
+    sites: list[tuple[str, str, str, int]] = []
+    module_level: list[tuple[str, str, int]] = []
+    via_getattr: list[tuple[str, str, int]] = []
+    via_alias: list[tuple[str, str, int]] = []
+
+    for path in _production_files():
+        try:
+            tree = ast.parse((REPO / path).read_text())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        aliases = {
+            a.asname: a.name.split(".")[-1]
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for a in node.names
+            if a.asname and a.name.split(".")[-1] in bare
+        }
+
+        def walk(node, fn, *, path=path, aliases=aliases):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    walk(child, child.name, path=path, aliases=aliases)
+                    continue
+                if isinstance(child, ast.ClassDef):
+                    walk(child, fn, path=path, aliases=aliases)
+                    continue
+                if isinstance(child, ast.Call):
+                    name = (
+                        child.func.attr
+                        if isinstance(child.func, ast.Attribute)
+                        else getattr(child.func, "id", None)
+                    )
+                    if name in aliases:
+                        via_alias.append((path, aliases[name], child.lineno))
+                        name = aliases[name]
+                    hit = (
+                        ast.unparse(child.func)
+                        if ast.unparse(child.func) in dotted
+                        else (name if name in bare else None)
+                    )
+                    if hit:
+                        sites.append((path, fn or "<module>", hit, child.lineno))
+                        if fn is None:
+                            module_level.append((path, hit, child.lineno))
+                    if (
+                        name == "getattr"
+                        and len(child.args) > 1
+                        and isinstance(child.args[1], ast.Constant)
+                        and child.args[1].value in (bare | dotted)
+                    ):
+                        via_getattr.append(
+                            (path, child.args[1].value, child.lineno)
+                        )
+                walk(child, fn, path=path, aliases=aliases)
+
+        walk(tree, None, path=path, aliases=aliases)
+    return sites, module_level, via_getattr, via_alias
+
+
+class TestRepoWideDiscoveryGuard:
+    """The pinned table cannot see a NEW road. This can.
+
+    It fires when a tracked target is called anywhere outside the
+    allowlist, so narrowing it is a deliberate reviewable act rather than
+    an omission nobody notices.
+    """
+
+    def test_the_sweep_actually_reaches_the_repo(self, table) -> None:
+        """CONTROL: an empty sweep would make every check below vacuous."""
+        assert len(_production_files()) > 500
+        sites, _m, _g, _a = _discover(table)
+        # The sweep looks for CALL targets only; definitions are not call
+        # sites. So the floor is the table's call-row count, not its total.
+        call_rows = sum(1 for r in table if r[3].startswith("call:"))
+        assert call_rows == 51
+        assert len(sites) >= call_rows, (len(sites), call_rows)
+
+    def test_no_tracked_call_lives_outside_the_allowlisted_files(
+        self, table
+    ) -> None:
+        listed = {r[0] for r in table}
+        sites, _m, _g, _a = _discover(table)
+        strangers = sorted({(f, fn, t) for f, fn, t, _ln in sites if f not in listed})
+        assert not strangers, f"tracked S7 calls in unpinned files: {strangers}"
+
+    def test_no_tracked_call_happens_at_module_level(self, table) -> None:
+        """A module-level call runs at import time, before any authority
+        exists, and the file-scoped scanner cannot attribute it."""
+        _s, module_level, _g, _a = _discover(table)
+        assert not module_level, module_level
+
+    def test_no_tracked_target_is_reached_by_getattr(self, table) -> None:
+        """getattr(obj, "consume_for_execution") is invisible to every
+        call-graph check in this file."""
+        _s, _m, via_getattr, _a = _discover(table)
+        assert not via_getattr, via_getattr
+
+    def test_no_tracked_target_is_reached_through_an_alias(self, table) -> None:
+        _s, _m, _g, via_alias = _discover(table)
+        assert not via_alias, via_alias

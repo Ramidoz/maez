@@ -155,16 +155,35 @@ def _grant(**overrides):
     return s7.S7ExecutionGrant(_mint_token=s7._EXECUTION_GRANT_TOKEN, **fields)
 
 
-def _row_columns() -> set[str]:
-    import tempfile
+# The design freezes a SEPARATE v2 table and leaves v1 untouched, so a
+# test that inspects v1 for the new column stays red no matter how
+# correctly v2 is built.
+V2_TABLE = "s7_authorization_artifacts_v2"
+V1_TABLE = "s7_authorization_artifacts"
 
-    tmp = Path(tempfile.mkdtemp())
-    s7.S7AuthorizationStore(tmp / "c.sqlite3")
-    with closing(sqlite3.connect(tmp / "c.sqlite3")) as conn:
-        return {
-            r[1]
-            for r in conn.execute("PRAGMA table_info(s7_authorization_artifacts)")
-        }
+
+def _migrated_store(tmp: Path):
+    """A private store carried through the REAL migration seam.
+
+    Opening the store must not make v2 appear -- the design forbids
+    open-time migration -- so the fixture invokes the migration explicitly.
+    That entrypoint does not exist yet; tests that need it are red on a
+    named blocker rather than on an absent column.
+    """
+    import os
+
+    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+    finally:
+        os.close(fd)
+    return store
+
+
+def _columns(db_path, table: str) -> set[str]:
+    with closing(sqlite3.connect(db_path)) as conn:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
 class TestLinkEnvelopeToRendered:
@@ -180,41 +199,98 @@ class TestLinkEnvelopeToRendered:
             replace(rendered, action=SIBLING)
 
 
-class TestLinkRenderedToArtifact:
-    def test_the_control_constructs(self) -> None:
-        env, authority, params_hash, rendered = _chain()
-        assert _artifact(env, authority, params_hash, rendered).action == ACTION
+def _matches(artifact, rendered, env, authority, params_hash) -> bool:
+    return s7.authorization_artifact_matches(
+        artifact,
+        rendered=rendered,
+        action_params_hash=params_hash,
+        authority_context_hash=s7.authority_context_hash(authority),
+        precondition_hash=env.precondition_hash,
+        derived_work_class=env.derived_work_class,
+        derived_aggregation_group=env.derived_aggregation_group,
+        now=NOW,
+    )
 
-    def test_an_artifact_may_not_carry_a_different_action(self) -> None:
-        """RED: the artifact currently accepts any action string, so a
-        record rendered for one operation can be stored for another."""
+
+class TestLinkRenderedToArtifact:
+    """The join lives at authorization_artifact_matches, not at the
+    constructor: S7AuthorizationArtifact never receives the rendered
+    statement, so it cannot possibly detect a mismatch against it.
+    """
+
+    def test_the_control_matches(self) -> None:
+        """Without this the refusal below could come from any of the nine
+        other fields the boundary compares."""
         env, authority, params_hash, rendered = _chain()
-        with pytest.raises(ValueError):
-            _artifact(env, authority, params_hash, rendered, action=SIBLING)
+        artifact = _artifact(env, authority, params_hash, rendered)
+        assert _matches(artifact, rendered, env, authority, params_hash)
+
+    def test_an_artifact_carrying_a_different_action_does_not_match(self) -> None:
+        """RED: `action` is absent from the boundary's expected-field map,
+        so a record rendered for one operation matches an artifact stored
+        for another."""
+        env, authority, params_hash, rendered = _chain()
+        artifact = _artifact(env, authority, params_hash, rendered, action=SIBLING)
+        assert not _matches(artifact, rendered, env, authority, params_hash)
 
 
 class TestLinkArtifactToRow:
-    def test_the_row_carries_an_action_column(self) -> None:
-        """RED, and the prerequisite for every join below it: without a
-        durable column the stored action cannot exist, so the mint has
-        nothing honest to read."""
-        assert "action" in _row_columns()
+    def test_the_v2_row_carries_an_action_column(self, tmp_path: Path) -> None:
+        """RED, and the prerequisite for every join below it. Checked on the
+        SEPARATE v2 table: v1 is left untouched by design, so inspecting it
+        for the new column would stay red however correctly v2 is built."""
+        store = _migrated_store(tmp_path)
+        assert "action" in _columns(store.db_path, V2_TABLE)
+
+    def test_v1_is_left_untouched(self, tmp_path: Path) -> None:
+        """The migration adds a table; it must not alter the old one."""
+        store = _migrated_store(tmp_path)
+        assert "action" not in _columns(store.db_path, V1_TABLE)
 
 
 class TestLinkRowToGrant:
-    def test_the_mint_reads_the_action_from_the_row(self) -> None:
-        """RED. The mint must take the action from the committed row, never
-        from a caller-carried record -- taking it from `rendered` is the
-        caller-chosen-authority defect this slice removes."""
-        import inspect
+    def test_the_grant_action_comes_from_the_committed_row(
+        self, tmp_path: Path
+    ) -> None:
+        """Behavioural, not source-text: hardcoded or unrelated `action`
+        text in the mint would green a source check while establishing no
+        join at all. This stores a row, consumes it, and reads the grant.
+        """
+        env, authority, params_hash, rendered = _chain()
+        store = _migrated_store(tmp_path)
+        store.put(_artifact(env, authority, params_hash, rendered))
+        grant, _result = store.consume_for_execution(
+            "artifact-join-1",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=env.precondition_hash,
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            now=NOW,
+        )
+        assert grant is not None, "consumption produced no grant"
+        assert grant.action == ACTION
 
-        source = inspect.getsource(s7._mint_s7_execution_grant)
-        assert "action=rendered.action" not in source, (
-            "the mint must not take the action from the caller-carried record"
+    def test_the_mint_does_not_take_the_action_from_the_caller(self) -> None:
+        """The one structural check that IS the point: the action must not
+        come from the caller-carried rendered record. Kept as an AST check
+        because it asserts an ABSENCE, which no behavioural test can."""
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(
+            textwrap.dedent(inspect.getsource(s7._mint_s7_execution_grant))
         )
-        assert "action=" in source.split("S7ExecutionGrant(", 1)[1], (
-            "the mint supplies no action at all; it must read the stored row"
-        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if kw.arg == "action":
+                        assert ast.unparse(kw.value) != "rendered.action", (
+                            "the mint takes the action from the caller-carried "
+                            "record; it must read the committed row"
+                        )
 
 
 class TestLinkGrantToRuntime:
@@ -241,23 +317,56 @@ class TestConsumeVerifiedRowRenderedJoin:
     def test_the_seam_exists(self) -> None:
         assert hasattr(s7.S7AuthorizationStore, "consume_verified")
 
-    def test_the_row_action_is_compared_to_the_rendered_action(self) -> None:
-        """RED: the comparison cannot exist while the column does not."""
-        import inspect
-
-        assert "action" in _row_columns(), (
-            "no stored action column; the row-rendered join cannot be built yet"
+    def test_a_row_whose_action_differs_from_the_rendered_action_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        """Behavioural. A source check for the word `action` would green on
+        unrelated text; this stores a row whose action differs from the
+        signed statement and requires the verification to refuse it."""
+        env, authority, params_hash, rendered = _chain()
+        store = _migrated_store(tmp_path)
+        store.put(_artifact(env, authority, params_hash, rendered, action=SIBLING))
+        verified = store.consume_verified(
+            "artifact-join-1",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=env.precondition_hash,
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            now=NOW,
         )
-        source = inspect.getsource(s7.S7AuthorizationStore.consume_verified)
-        assert "action" in source
+        assert not verified
+
+    def test_the_control_verifies_a_matching_row(self, tmp_path: Path) -> None:
+        env, authority, params_hash, rendered = _chain()
+        store = _migrated_store(tmp_path)
+        store.put(_artifact(env, authority, params_hash, rendered))
+        assert store.consume_verified(
+            "artifact-join-1",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=env.precondition_hash,
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            now=NOW,
+        )
 
 
 def _action_uses(func) -> tuple[set[str], set[str]]:
-    """(literals compared with ==, literals passed as an `action=` argument).
+    """(expressions compared with ==, expressions passed as `action=`).
 
     Substring checks are not proofs: `"x" in source` passes on a comment or
-    a dead branch. These two sets are the only shapes that can actually
-    bind an action, so a literal that appears anywhere else does not count.
+    a dead branch. These two shapes are the only ones that can bind an
+    action.
+
+    Expressions are returned UNPARSED, not just string constants. The two
+    fixed-literal ceremonies bind a constant, but the decision pipeline's
+    authoritative action is `card.action` and dream state's is
+    `envelope.action` -- a constants-only helper could never accept the
+    correct dynamic implementation, which would make those two tests
+    unpassable rather than red.
     """
     import ast
     import inspect
@@ -269,14 +378,18 @@ def _action_uses(func) -> tuple[set[str], set[str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             for side in [node.left, *node.comparators]:
-                if isinstance(side, ast.Constant) and isinstance(side.value, str):
-                    compared.add(side.value)
+                compared.add(ast.unparse(side))
         if isinstance(node, ast.Call):
             for kw in node.keywords:
-                if kw.arg == "action" and isinstance(kw.value, ast.Constant):
-                    if isinstance(kw.value.value, str):
-                        passed.add(kw.value.value)
+                if kw.arg == "action":
+                    passed.add(ast.unparse(kw.value))
     return compared, passed
+
+
+def _binds_an_action(func) -> bool:
+    """Any comparison or `action=` argument that mentions an action."""
+    compared, passed = _action_uses(func)
+    return any("action" in expr for expr in compared | passed) or bool(passed)
 
 
 class TestTheFourCallerJoins:
@@ -295,25 +408,32 @@ class TestTheFourCallerJoins:
     work rather than being faked here.
     """
 
-    def test_the_decision_pipeline_consumer_binds_an_action(self) -> None:
-        from core.decision import decision_pipeline
+    def test_the_consumers_are_reachable_where_the_tests_look(self) -> None:
+        """CONTROL. Both consumers are METHODS, not module functions. Looking
+        for them at module level raises AttributeError, and a test that dies
+        that way is red for neither its stated reason nor any real one."""
+        from core.decision.decision_pipeline import DecisionPipeline
+        from core.evolution.dream_state import DreamState
 
-        compared, passed = _action_uses(
-            decision_pipeline._consume_s7_execution_authorization
-        )
-        assert compared or passed, (
-            "the decision pipeline consumer neither compares nor passes an action"
-        )
+        assert callable(DecisionPipeline._consume_s7_execution_authorization)
+        assert callable(DreamState._consume_s7_execution_authorization_for_envelope)
+
+    def test_the_decision_pipeline_consumer_binds_an_action(self) -> None:
+        """Its authoritative action is `card.action` -- an attribute, not a
+        literal, so this must accept a dynamic expression."""
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        assert _binds_an_action(
+            DecisionPipeline._consume_s7_execution_authorization
+        ), "the decision pipeline consumer neither compares nor passes an action"
 
     def test_the_dream_state_consumer_binds_an_action(self) -> None:
-        from core.evolution import dream_state
+        """Its authoritative action is the reconstructed `envelope.action`."""
+        from core.evolution.dream_state import DreamState
 
-        compared, passed = _action_uses(
-            dream_state._consume_s7_execution_authorization_for_envelope
-        )
-        assert compared or passed, (
-            "the dream-state consumer neither compares nor passes an action"
-        )
+        assert _binds_an_action(
+            DreamState._consume_s7_execution_authorization_for_envelope
+        ), "the dream-state consumer neither compares nor passes an action"
 
     def test_the_backup_ceremony_binds_its_fixed_literal(self) -> None:
         from core.governance import s7_webauthn_ceremony as ceremony
@@ -321,7 +441,7 @@ class TestTheFourCallerJoins:
         compared, passed = _action_uses(
             ceremony._consume_backup_registration_authorization
         )
-        assert "register_backup_webauthn_credential" in (compared | passed), (
+        assert "'register_backup_webauthn_credential'" in (compared | passed), (
             "the backup consumer never binds the action it is for"
         )
 
@@ -334,6 +454,6 @@ class TestTheFourCallerJoins:
         compared, passed = _action_uses(
             maez_daemon._s7_disable_credential_for_proof
         )
-        assert "disable_founder_webauthn_credential" in passed, (
+        assert "'disable_founder_webauthn_credential'" in passed, (
             "the disable consumer never passes the action to the edge"
         )
