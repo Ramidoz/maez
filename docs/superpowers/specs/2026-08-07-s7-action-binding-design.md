@@ -1146,8 +1146,8 @@ primitive:
 def write_private_file(relative, data, *, root, on_link=None) -> Path
 def read_private_file(relative, *, root, expected_uid) -> bytes
 
-# ACTIVATION ONLY — no root parameter exists
-def read_migration_receipt(*, store_dir_fd: int) -> bytes
+# ACTIVATION ONLY — takes NOTHING; see the frozen entrypoint below
+def read_migration_receipt() -> bytes
 ```
 
 **Activation must not take a caller-supplied root (v12).** A generic
@@ -1238,7 +1238,7 @@ points from bench tooling to governance, not from governance to bench
 tooling.
 
 The receipt is read back **only** through
-`read_migration_receipt(store_dir_fd=…)`. The generic
+`read_migration_receipt()`. The generic
 `read_private_file` is for bench callers and is **not** an activation
 route — v12 said it was, three sections after freezing the wrapper that
 replaced it.
@@ -1260,7 +1260,7 @@ deactivate itself on its first real artifact.
 **Every activation consumer revalidates** before treating v2 as live:
 
 * the receipt is read **only** through
-  `read_migration_receipt(store_dir_fd=…)` — the sole
+  `read_migration_receipt()` — the sole
   activation route, never the generic `read_private_file` — opening both
   leaves under one anchored directory and enforcing
   regular-file, uid, `0600`, single-link, `<= 8192` bytes, short-read

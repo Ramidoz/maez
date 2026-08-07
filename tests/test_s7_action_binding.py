@@ -2,125 +2,219 @@
 
 Written against ratified design v15 BEFORE implementation.
 
-The defect this slice exists to close: execution_grant_authorizes_action
-compares only the derived work class and canonical_hash(params). Neither
-carries the action, so ONE grant authorizes every sibling operation of
-the same class with identical params. At the S7 layer a tap for "switch
-to CUDA" is a tap for "some self_modification with these arguments".
+The defect: execution_grant_authorizes_action compares only the derived
+work class and canonical_hash(params). Neither carries the action, so ONE
+grant authorizes every sibling operation of the same class with identical
+params. At the S7 layer a tap for "switch to CUDA" is a tap for "some
+self_modification with these arguments".
 
-These reds are at the GENERIC edge, not in the cutover consumer. A
-consumer-local check cannot make a generic grant refuse anything.
+These tests drive the REAL path -- envelope, rendering, artifact, durable
+row in a private tmpdir store, and a grant minted by
+consume_for_execution. My first version asserted field presence, constant
+contents and a helper I invented; an implementation could have added dead
+fields and turned it green while leaving the authorization path unwired.
+
+No physical key is needed: a private tmpdir store and the real mint path
+prove the software chain. They do NOT prove a human ceremony, and nothing
+here claims to.
 """
 
 from __future__ import annotations
 
-import inspect
+import sqlite3
+from pathlib import Path
 
 import pytest
 
 from core.governance import operator_user_boundary as s7
 
-SIBLING_PARAMS = {
-    "window_id": "cutover-20260713-1202",
-    "authorization_file_sha256": "a" * 64,
-}
+NOW = "2026-08-07T12:00:00Z"
+FUTURE = "2026-08-07T16:00:00Z"
+ACTION = "model_routing.cutover_cuda"
+SIBLING = "model_routing.wipe_and_replace"
+PARAMS = {"cutover_action": ACTION, "window_id": "cutover-20260713-1202"}
+
+
+def _bundle(action: str = ACTION):
+    """Build a REAL envelope -> rendering -> artifact chain."""
+    env = s7.build_work_request_envelope(
+        request_id="req-action-binding-1",
+        action=action,
+        params=dict(PARAMS),
+        claimed_work_class="self_modification",
+        requesting_subsystem="cuda_cutover",
+        closed_symptom_code="self_mod_requested",
+        proposed_change_class="model_routing_change",
+        why_self_fix_failed_class="not_self_fix",
+        affected_refs=("service:llama-server.service",),
+        content_exposure_risk="content_free",
+        precondition_hash="a" * 64,
+        created_at=NOW,
+        expires_at=FUTURE,
+        predicted_effect_class="behavior_change",
+        rollback_path_class="revert_patch",
+        # The envelope must NAME the consultation; a voice-seat class
+        # cannot render without one, and the id must match.
+        maez_voice_consultation_id="voice-action-binding-1",
+    )
+    authority = s7.AuthorityContext(
+        actor_id="founder",
+        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+        role_names=("operator",),
+        grant_source="founder_webauthn",
+        allowed_scopes=("operator_health",),
+        auth_method="founder_webauthn",
+        surface="cockpit",
+        credential_ref="cred-1",
+        created_at=NOW,
+        expires_at=FUTURE,
+        verified=True,
+    )
+    params_hash = s7.canonical_hash(dict(PARAMS))
+    # self_modification is voice-seat guarded: rendering REFUSES without a
+    # matching consultation. That is Maez's seat in its own remaking, and
+    # the fixture must satisfy it rather than route around it.
+    consultation = s7.MaezVoiceConsultation(
+        consultation_id="voice-action-binding-1",
+        request_id=env.request_id,
+        request_envelope_hash=s7.work_request_envelope_hash(env),
+        producer="self_mod_dialog_terminal_state",
+        source_ref_kind="self_mod_dialog_exchange",
+        source_ref_hash="c" * 64,
+        maez_voice_consulted=True,
+        maez_objection_state="absent",
+        maez_withdrew_request=False,
+        unavailable_reason_code=None,
+        created_at=NOW,
+    )
+    rendered = s7.render_request_statement(
+        envelope=env,
+        surface="cockpit",
+        origin="http://localhost:11437",
+        action_params_hash=params_hash,
+        authority_context=authority,
+        maez_voice_consultation=consultation,
+        nonce="n" * 64,
+        expires_at=FUTURE,
+        rendered_at=NOW,
+    )
+    return env, authority, params_hash, rendered
+
+
+def _store(tmp: Path) -> "s7.S7AuthorizationStore":
+    return s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
 
 
 class TestTheBypassExistsToday:
-    """GUARDS on the defect itself, so the fix is provably a fix."""
+    """GUARDS on the defect, so the fix is provably a fix."""
 
     def test_sibling_actions_derive_the_same_class(self) -> None:
         assert s7.derive_work_class(
-            action="model_routing.cutover_cuda", params=dict(SIBLING_PARAMS)
-        ) == s7.derive_work_class(
-            action="model_routing.wipe_and_replace", params=dict(SIBLING_PARAMS)
+            action=ACTION, params=dict(PARAMS)
+        ) == s7.derive_work_class(action=SIBLING, params=dict(PARAMS))
+
+
+class TestTheGenericEdgeRefusesSiblings:
+    """THE binding red, through a REAL minted grant."""
+
+    def test_a_real_grant_refuses_a_sibling_action(self, tmp_path: Path) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        store = _store(tmp_path)
+        artifact = s7.mint_artifact_for_envelope(
+            envelope=env,
+            rendered=rendered,
+            authority_context=authority,
+            action_params_hash=params_hash,
+            now=NOW,
+            expires_at=FUTURE,
+        )
+        store.put(artifact)
+        grant, _ = store.consume_for_execution(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+        assert grant is not None
+        assert s7.execution_grant_authorizes_action(
+            grant, action=ACTION, params=dict(PARAMS)
+        )
+        # THE defect: identical params, sibling action, same class.
+        assert not s7.execution_grant_authorizes_action(
+            grant, action=SIBLING, params=dict(PARAMS)
         )
 
-    def test_the_edge_reads_neither_an_action_field(self) -> None:
-        """Today's comparison is class + params hash only."""
-        source = inspect.getsource(s7.execution_grant_authorizes_action)
-        assert "derived_work_class" in source
-        assert "action_params_hash" in source
 
+class TestActionSurvivesEveryJoin:
+    """Exact equality at each carrier, driven end to end."""
 
-class TestActionTravelsEveryCarrier:
-    """The exact action must survive envelope -> row -> grant."""
+    def test_action_is_equal_across_envelope_rendered_artifact_row_grant(
+        self, tmp_path: Path
+    ) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        assert env.action == ACTION
+        assert rendered.action == ACTION
 
-    def test_envelope_retains_the_action(self) -> None:
-        from dataclasses import fields
+        store = _store(tmp_path)
+        artifact = s7.mint_artifact_for_envelope(
+            envelope=env,
+            rendered=rendered,
+            authority_context=authority,
+            action_params_hash=params_hash,
+            now=NOW,
+            expires_at=FUTURE,
+        )
+        assert artifact.action == ACTION
+        store.put(artifact)
 
-        assert "action" in {f.name for f in fields(s7.WorkRequestEnvelope)}
+        with sqlite3.connect(store.db_path) as conn:
+            row = conn.execute(
+                "select action from s7_authorization_artifacts_v2 "
+                "where artifact_id = ?",
+                (artifact.artifact_id,),
+            ).fetchone()
+        assert row is not None and row[0] == ACTION
 
-    def test_the_authorization_artifact_carries_the_action(self) -> None:
-        from dataclasses import fields
-
-        assert "action" in {f.name for f in fields(s7.S7AuthorizationArtifact)}
-
-    def test_the_execution_grant_carries_the_action(self) -> None:
-        from dataclasses import fields
-
-        assert "action" in {f.name for f in fields(s7.S7ExecutionGrant)}
-
-    def test_the_rendered_statement_carries_the_action(self) -> None:
-        from dataclasses import fields
-
-        assert "action" in {f.name for f in fields(s7.RenderedRequestStatement)}
+        grant, _ = store.consume_for_execution(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+        assert grant.action == ACTION
 
 
 class TestTheActionIsVISIBLE:
-    """"What you see is what you sign" cannot be met by a hash."""
+    """Rendered TEXT, not a constant. A hash cannot be read by a human."""
 
-    def test_the_rendered_text_shows_an_exact_action_line(self) -> None:
-        assert hasattr(s7, "render_request_statement")
-        assert s7.RENDERER_VERSION == "s7.rendered_request.v2"
+    def test_the_signed_text_shows_the_exact_action_line_once(self) -> None:
+        _env, _authority, _params_hash, rendered = _bundle()
+        text = rendered.text
+        assert text.count(f"Action: {ACTION}") == 1, text
 
     def test_the_action_line_sits_between_request_id_and_work_class(
         self,
     ) -> None:
-        order = s7.RENDERED_STATEMENT_FIELD_ORDER
-        assert order.index("Request id") < order.index("Action")
-        assert order.index("Action") < order.index("Work class")
+        _env, _authority, _params_hash, rendered = _bundle()
+        lines = rendered.text.splitlines()
+        idx = {
+            "request": next(i for i, l in enumerate(lines) if l.startswith("Request id")),
+            "action": next(i for i, l in enumerate(lines) if l.startswith("Action:")),
+            "work": next(i for i, l in enumerate(lines) if l.startswith("Work class")),
+        }
+        assert idx["request"] < idx["action"] < idx["work"], lines
 
 
-class TestTheGenericEdgeRefusesSiblings:
-    """THE binding red. Generic, not cutover-specific."""
-
-    def test_a_grant_refuses_a_sibling_action_with_identical_params(
-        self,
-    ) -> None:
-        grant = s7.S7ExecutionGrant(
-            artifact_id="a" * 32,
-            request_id="r" * 32,
-            request_envelope_hash="b" * 64,
-            rendered_text_hash="c" * 64,
-            action_params_hash=s7.canonical_hash(dict(SIBLING_PARAMS)),
-            precondition_hash="d" * 64,
-            authority_context_hash="e" * 64,
-            derived_work_class="self_modification",
-            derived_aggregation_group="g",
-            nonce="n" * 64,
-            credential_ref="cred",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            consumed_at="2026-08-07T12:00:00Z",
-            ceremony_kind="founder_local_webauthn",
-            action="model_routing.cutover_cuda",
-            _mint_token=s7._GRANT_MINT_TOKEN,
-        )
-        assert s7.execution_grant_authorizes_action(
-            grant,
-            action="model_routing.cutover_cuda",
-            params=dict(SIBLING_PARAMS),
-        )
-        assert not s7.execution_grant_authorizes_action(
-            grant,
-            action="model_routing.wipe_and_replace",
-            params=dict(SIBLING_PARAMS),
-        )
-
-
-class TestActionGrammar:
-    """It must not close roads already in use."""
+class TestActionGrammarAtTheCARRIERS:
+    """Validated where carriers are BUILT, not only by a standalone helper."""
 
     @pytest.mark.parametrize(
         "action",
@@ -131,26 +225,60 @@ class TestActionGrammar:
             "disable_founder_webauthn_credential",
             "run_shell",
             "backup_status",
-            "model_routing.cutover_cuda",
+            ACTION,
         ],
     )
-    def test_every_existing_action_is_accepted(self, action: str) -> None:
-        assert s7.validate_action_literal(action) == action
+    def test_every_existing_action_still_builds_an_envelope(
+        self, action: str
+    ) -> None:
+        """v3's grammar closed all six of these roads."""
+        assert _bundle(action)[0].action == action
 
     @pytest.mark.parametrize(
-        "action",
-        ["a\nb", "a\tb", ".x", "x.", "x..y", "X", "a b", "", "a" * 129],
+        "action", ["a\nb", "a\tb", ".x", "x.", "x..y", "X", "a b", "", "a" * 129]
     )
-    def test_malformed_actions_refuse_at_construction(self, action: str) -> None:
+    def test_malformed_actions_refuse_AT_THE_ENVELOPE(self, action: str) -> None:
         with pytest.raises(ValueError):
-            s7.validate_action_literal(action)
+            _bundle(action)
 
 
 class TestHistoricalV1CannotAuthorize:
-    """v1 records stay auditable and can never authorize execution."""
+    """An UNEXPIRED v1 row, through the PUBLIC execution boundary."""
 
-    def test_an_unexpired_v1_row_still_refuses(self) -> None:
-        """An EXPIRED v1 row would refuse for the wrong reason -- all four
-        live rows are expired, so the test must construct an unexpired one."""
-        assert hasattr(s7, "v1_row_may_authorize")
-        assert s7.v1_row_may_authorize(expired=False) is False
+    def test_an_unexpired_v1_row_cannot_authorize_execution(
+        self, tmp_path: Path
+    ) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        store = _store(tmp_path)
+        artifact = s7.mint_artifact_for_envelope(
+            envelope=env,
+            rendered=rendered,
+            authority_context=authority,
+            action_params_hash=params_hash,
+            now=NOW,
+            expires_at=FUTURE,
+        )
+        store.put(artifact)
+        # Move it to the LEGACY table, unexpired -- an expired row would
+        # refuse for the wrong reason; all four live rows are expired.
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "INSERT INTO s7_authorization_artifacts "
+                "SELECT * FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
+                (artifact.artifact_id,),
+            )
+            conn.execute(
+                "DELETE FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
+                (artifact.artifact_id,),
+            )
+        grant, _ = store.consume_for_execution(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+        assert grant is None
