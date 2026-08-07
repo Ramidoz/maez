@@ -1,4 +1,4 @@
-# S7 action binding — design v8
+# S7 action binding — design v9
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -419,6 +419,20 @@ number that appeared nowhere.
 
 **Counts, derived mechanically:** constructor 6, durable_writer 12, execution_edge 9, hash 20, producer 8, renderer 3, source_bundle 6, validator 3 — **total 67**.
 
+**Two definitions the narrowing dropped (v9).** Filtering by call-site
+receiver removed the two writers' own **definitions**:
+
+| file | class-qualified definition | role |
+|---|---|---|
+| `core/governance/operator_user_boundary.py:2430` | `S7AuthorizationStore.put` | durable_writer |
+| `core/governance/s7_guarded_execution.py:1288` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer |
+
+Both **must be changed or retired** by this migration — they are the
+functions that write the v1 tables the freeze triggers are about to make
+unwritable. Narrowing by receiver is correct for *calls* and wrong for
+*definitions*; the allowlist now carries both, keyed by class-qualified
+name.
+
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a
 deliberate reviewable act. The RED contract pins **this** table.
@@ -754,11 +768,61 @@ class S7VoiceSourceBundleValidationResultV2:
     source_bundle_hash: str     # WHICH bundle this validates
     binding_hash: str           # the validated binding
 
-    def __init__(self, *, …, _validator_token: object | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        status: str,
+        source_bundle_valid: bool,
+        mint_eligible: bool,
+        authority_projection: str,
+        failure_reason_code: str | None,
+        action: str | None,
+        schema_version: str,
+        source_bundle_hash: str,
+        binding_hash: str,
+        _validator_token: object | None = None,
+    ) -> None:
         if _validator_token is not _VALIDATOR_TOKEN:
             raise ValueError("s7_validation_result_forged")
-        …
 ```
+
+**Valid state matrix** — no other combination constructs:
+
+| `schema_version` | `action` | `mint_eligible` | meaning |
+|---|---|---|---|
+| `…v2` | non-`None`, matches grammar | may be `True` | executable |
+| `…v2` | non-`None` | `False` | validated, refused for another reason |
+| `…v1` | **must be `None`** | **must be `False`** | audit-only |
+
+`_VALIDATOR_TOKEN` is a module-private sentinel. The **only** producers
+are `validate_voice_source_bundle()` and its v1 audit counterpart; both
+are module-private factories. Nothing else may pass the token.
+
+**`binding_hash` recipe:** the project canonical encoder over
+`{"schema": "s7.voice_source_bundle.v2", "fields": {…bundle fields…,
+"action": action}}`, SHA-256 of those exact bytes — the same encoder and
+newline-bearing form as every other binding in this design.
+
+**Mint signature, exact:**
+
+```python
+def mint_from_validated_bundle(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    validation: S7VoiceSourceBundleValidationResultV2,
+    conn: sqlite3.Connection,
+) -> S7AuthorizationArtifact:
+```
+
+**takes no `action` argument.** Checks, all required:
+
+1. `validation._token_verified` — constructed by a factory, not a caller;
+2. `validation.schema_version == "s7.voice_source_bundle.v2"`;
+3. `validation.mint_eligible is True`;
+4. `validation.action` is non-`None` and matches the action grammar;
+5. `bundle.source_bundle_hash == validation.source_bundle_hash`;
+6. `recompute_binding_hash(bundle, validation.action) == validation.binding_hash`;
+7. the minted artifact's `action` **is** `validation.action`.
 
 **v7's plain dataclass was caller-forgeable** — anyone could construct a
 `mint_eligible=True` result carrying any action and hand it to
@@ -836,14 +900,46 @@ Because it hashes the **SQL text**, expression indexes, partial
 predicates and every trigger body participate by construction rather than
 by enumerating PRAGMA fields and hoping the list is complete.
 
-| plane | activation fingerprint |
-|---|---|
-| authorization (`s7_authorization_artifacts` + `_v2`, indexes, all 5 triggers) | `ffee1bcb9a0508dcb4c4cc3b2240ac91aae9654ee257800c215746ce485260ca` |
-| voice (`s7_voice_consultation_bundles` + `_v2`, index, all 4 triggers) | `b93735fee7ef217a0604b75b5cafe6b0f52cdd9f887b93233a7dcbe215ffc1e9` |
+**THE TARGET LITERALS ARE WITHDRAWN (v9).**
 
-**Executable literal-recomputation guard:** a test rebuilds both planes
-from the frozen DDL in a scratch database and asserts these exact
-literals. A design literal nobody recomputes is a literal that drifts.
+v8 published `ffee1bcb…` and `b93735fe…`. Review recomputed
+`5bea4677…` and `a4546eb9…`. I recomputed a third pair,
+`3ecc2ead…` and `5ee4d7d0…`. **Three careful parties, three answers.**
+
+My own error is identifiable: I computed the v8 literals against **stub**
+v1 tables — a two-column `s7_authorization_artifacts` I wrote to make the
+scratch script run — not the real twenty-column DDL. The fingerprint
+covers both planes, so a stub v1 poisons the target hash.
+
+But the divergence between the other two values is the more useful
+finding: **a fingerprint literal transcribed into prose cannot be
+verified by reading.** Whitespace, `IF NOT EXISTS`, trailing commas and
+column-text extraction all move it invisibly, and every party believed
+they were applying the same canonicalizer.
+
+**Frozen instead: the canonicalizer is executable code, committed, and
+the literals are MINTED BY RUNNING IT — never transcribed.**
+
+* `scripts/s7_schema_fingerprint.py` holds `canon_sql()` and
+  `fingerprint(conn, tables)`, and is the single definition;
+* the migration, the activation consumers and the guard **all import
+  it** — no second implementation exists to drift;
+* the guard builds both planes from the frozen DDL in a scratch database,
+  computes the pair, and asserts them against a literal **it emitted**;
+* minting the literals is an explicit, reviewable step at implementation
+  time, not a value in a document.
+
+Until that guard exists and has run, **there are no target literals**,
+and the design says so rather than printing a number that looks
+authoritative.
+
+The **source** literals stand — `b8946c79…` and `4f53cda1…` — because
+they were computed read-only from the live store and reproduced
+independently by review.
+
+**The guard is now the source of the literals, not their checker.** A
+design literal nobody recomputes drifts; a design literal three parties
+compute differently was never a literal at all.
 
 **Verified:** dropping any freeze trigger changes the fingerprint.
 
@@ -865,10 +961,11 @@ rather than a gap it must describe in prose.
 ## Activation ordering, frozen (v5)
 
 ```
-1.  verify journal_mode=delete and synchronous=FULL      (refuse otherwise)
-2.  verify from_fingerprint_auth   == b8946c79…
-3.  verify from_fingerprint_bundle == 4f53cda1…          (the ABSENT plane)
-4.  BEGIN IMMEDIATE
+1.  BEGIN IMMEDIATE                    <- LOCK FIRST (v9)
+2.  verify journal_mode=delete and synchronous=FULL      (refuse otherwise)
+3.  verify from_fingerprint_auth   == b8946c79…          INSIDE the lock
+4.  verify from_fingerprint_bundle == 4f53cda1…          (the ABSENT plane)
+4a. verify v1 row counts match the receipt's claim       INSIDE the lock
 5.  CREATE the empty legacy voice table                  <- v7 omitted this
 6.  create the three v1 voice freeze triggers
 7.  create the three v1 auth freeze triggers
@@ -883,9 +980,17 @@ rather than a gap it must describe in prose.
 16. publish the migration receipt          <- THE linearization point
 ```
 
-Steps 11–13 run **inside** the transaction, so a mismatch rolls back
-rather than leaving a half-built wall. v7's sequence created triggers on
-a table it had not created.
+**Everything after step 1 runs inside the write lock.** v8 verified both
+source fingerprints *before* `BEGIN IMMEDIATE`, leaving a window in which
+a daemon or any same-UID process could change the source between
+verification and lock acquisition — the migration would then build on a
+foundation it had checked and no longer had. Source verification, row
+counts and target verification are all now inside.
+
+**Race RED:** a writer mutates the source plane between the verification
+point and the lock; the migration must refuse rather than proceed.
+
+v7's sequence also created triggers on a table it had not created.
 
 The receipt binds **both** tables. Schema `s7.migration_receipt.v1`:
 
@@ -994,6 +1099,16 @@ hand-counts in one document is what produced this rule.
 * the **exact qualified allowlist** matches, **including multiplicity**,
   so a second call in the same function cannot hide.
 
+**v9 rules**
+* the fingerprint guard **emits** the target literals and asserts its own
+  output; no literal is transcribed;
+* the migration **acquires the write lock before** verifying anything,
+  and a source mutated between verification and lock refuses;
+* a validation result constructed **without the token** refuses;
+* every row of the valid-state matrix constructs, and no other
+  combination does;
+* both writer **definitions** are pinned by class-qualified name.
+
 **Invariance**
 * credential rows and **sign counts unchanged** by any of this;
 * the live DB and its sidecars are **externally measured** identical
@@ -1023,8 +1138,15 @@ option from a decision that is his.
 
 **(a) Owner-typed procedural command.** Authorized by Rohit running it.
 Explicitly acknowledged: **any same-UID process can invoke it, and owner
-presence is not authenticated.** Same posture he already ruled on for the
-cutover — and the same caveat.
+presence is not authenticated.**
+
+**Correction: this is NOT the posture already ruled on.** I wrote that it
+was. Procedural presence was the v9-era *proposal* for the cutover, and
+it was **withdrawn** once the enrolled credentials were discovered —
+Rohit then ruled the cutover **key-required with no procedural
+fallback**. Option (a) would therefore be a **new, narrower exception**,
+not a continuation of accepted practice. Framing it as precedent would
+have made the weaker option look like the settled one.
 
 **(b) A separate founder-key bootstrap ceremony**, not depending on S7
 v2, binding store identity, both fingerprint pairs and the exact
@@ -1047,6 +1169,7 @@ statement he already ruled on for the cutover itself.
 ## Carried
 
 * **R7 — owner's choice, two real options:** (a) owner-typed procedural
-  command, with unauthenticated presence stated; or (b) a separate
-  founder-key bootstrap ceremony independent of S7 v2. I do not choose
-  between them.
+  command, with unauthenticated presence stated — a **new exception**,
+  since procedural fallback was withdrawn for the cutover; or (b) a
+  separate founder-key bootstrap ceremony independent of S7 v2. **Review
+  recommends (b).** I do not choose between them.
