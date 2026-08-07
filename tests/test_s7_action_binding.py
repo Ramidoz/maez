@@ -63,7 +63,12 @@ def _bundle(action: str = ACTION):
     authority = s7.AuthorityContext(
         actor_id="founder",
         actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
-        role_names=("operator",),
+        # bonded_user, not operator: _authority_context_roles_allow_work gates
+        # self_modification on bonded_user. With ("operator",) consume_for_
+        # execution refuses on the ROLE and never reaches the action edge --
+        # the generic-edge witness would have been red for the wrong reason
+        # even after the v2 row lands.
+        role_names=("bonded_user",),
         grant_source="founder_webauthn",
         allowed_scopes=("operator_health",),
         auth_method="founder_webauthn",
@@ -102,6 +107,112 @@ def _bundle(action: str = ACTION):
         rendered_at=NOW,
     )
     return env, authority, params_hash, rendered
+
+
+BACKUP_ACTION = "register_backup_webauthn_credential"
+# Same derived class, same params hash, different operation. Registering a
+# backup credential and DISABLING a founder credential are siblings to the
+# seam that consumes them.
+BACKUP_SIBLING = "disable_founder_webauthn_credential"
+
+
+def _backup_authorization(tmp: Path, *, action: str):
+    """The REAL production backup chain, ending at the carrier the seam eats.
+
+    Field values are copied from build_register_backup_envelope so this
+    exercises the shipped shape rather than a convenient one. The role must
+    include bonded_user: founder_credential_management is gated on it, and
+    without it consume_for_execution refuses before reaching any action check.
+    """
+    from core.governance import s7_webauthn_ceremony as ceremony
+
+    params = ceremony.backup_registration_action_params()
+    params_hash = s7.canonical_hash(dict(params))
+    precondition_hash = s7.canonical_hash(
+        {
+            "schema_version": "s7.1.register_backup.precondition.v1",
+            "registration_class": "backup",
+        }
+    )
+    env = s7.build_work_request_envelope(
+        request_id="req-backup-1",
+        action=action,
+        params=dict(params),
+        claimed_work_class="founder_credential_management",
+        requesting_subsystem="s7_1_webauthn_ceremony",
+        closed_symptom_code="self_mod_requested",
+        proposed_change_class="protection_change",
+        why_self_fix_failed_class="needs_human_authority",
+        affected_refs=("file:memory/s7_1_webauthn/founder_credentials",),
+        content_exposure_risk="credential_sensitive",
+        precondition_hash=precondition_hash,
+        created_at=NOW,
+        expires_at=FUTURE,
+        predicted_effect_class="protection_change",
+        rollback_path_class="manual_review",
+        maez_voice_consultation_id=None,
+    )
+    authority = s7.AuthorityContext(
+        actor_id="founder",
+        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+        role_names=("bonded_user",),
+        grant_source="founder_webauthn",
+        allowed_scopes=("operator_health",),
+        auth_method="founder_webauthn",
+        surface="cockpit",
+        credential_ref="cred-1",
+        created_at=NOW,
+        expires_at=FUTURE,
+        verified=True,
+    )
+    # founder_credential_management is NOT a voice-seat class, so rendering
+    # takes no consultation. Supplying one would be fixture theatre.
+    rendered = s7.render_request_statement(
+        envelope=env,
+        surface="cockpit",
+        origin="http://localhost:11437",
+        action_params_hash=params_hash,
+        authority_context=authority,
+        maez_voice_consultation=None,
+        nonce="n" * 64,
+        expires_at=FUTURE,
+        rendered_at=NOW,
+    )
+    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    store.put(
+        s7.S7AuthorizationArtifact(
+            artifact_id="artifact-backup-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=params_hash,
+            precondition_hash=precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce="n" * 64,
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+            action=action,
+        )
+    )
+    return s7.S7ExecutionAuthorization(
+        store=store,
+        artifact_id="artifact-backup-1",
+        rendered=rendered,
+        action_params_hash=params_hash,
+        authority_context=authority,
+        precondition_hash=precondition_hash,
+        derived_work_class=env.derived_work_class,
+        derived_aggregation_group=env.derived_aggregation_group,
+        now=NOW,
+    )
 
 
 def _stored_artifact(env, authority, params_hash, rendered):
@@ -665,29 +776,61 @@ class TestFixedActionConsumersCheckTheirAction:
     comment or a dead branch would satisfy.
     """
 
-    def test_backup_registration_refuses_a_grant_for_another_action(
-        self,
-    ) -> None:
+    def test_the_sibling_is_indistinguishable_to_the_seam_today(self) -> None:
+        """GUARD on the defect itself, provable now.
+
+        _consume_backup_registration_authorization gates on exactly two
+        things: action_params_hash equal to the backup params, and
+        derived_work_class == founder_credential_management. It never
+        compares the action. disable_founder_webauthn_credential satisfies
+        BOTH -- so an authorization to DISABLE a founder credential meets
+        every check the backup-registration seam makes.
+        """
         from core.governance import s7_webauthn_ceremony as ceremony
 
-        _e, authority, params_hash, rendered = _bundle()
-        wrong = s7._mint_s7_execution_grant(
-            artifact_id="artifact-wrong-action",
-            rendered=rendered,
-            action_params_hash=params_hash,
-            precondition_hash="a" * 64,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class="founder_credential_management",
-            derived_aggregation_group="g",
-            credential_ref="cred-1",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            ceremony_kind="founder_local_webauthn",
-            consumed_at=NOW,
+        params = ceremony.backup_registration_action_params()
+        assert s7.derive_work_class(
+            action=BACKUP_ACTION, params=dict(params)
+        ) == s7.derive_work_class(action=BACKUP_SIBLING, params=dict(params))
+        # identical params => identical params hash, the seam's only other gate
+        assert s7.canonical_hash(dict(params)) == s7.canonical_hash(dict(params))
+
+    def test_the_positive_control_reaches_a_grant(self, tmp_path: Path) -> None:
+        """Without this the refusal below is vacuous.
+
+        RED TODAY, and NOT for an action-binding reason: S7ExecutionGrant
+        now requires `action`, _mint_s7_execution_grant deliberately supplies
+        none until the v2 row exists, and consume_for_execution's bare
+        `except Exception` turns that TypeError into a silent (None, None).
+        Every seam that needs a real grant is therefore dead on this branch.
+        Fail-closed, so safe -- but it means this witness cannot be honest
+        until the v2 row lands. It is written now so that it flips the moment
+        it can, rather than being retro-fitted around whatever ships.
+        """
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        auth = _backup_authorization(tmp_path, action=BACKUP_ACTION)
+        grant = ceremony._consume_backup_registration_authorization(
+            s7_execution_authorization=auth
         )
-        # The grant is for model_routing.cutover_cuda, NOT for
-        # register_backup_webauthn_credential.
-        assert not ceremony.backup_registration_grant_authorizes(wrong)
+        assert grant is not None, (
+            "the correct backup action must reach a grant; while this fails, "
+            "the sibling refusal below proves nothing"
+        )
+
+    def test_backup_registration_refuses_a_grant_for_another_action(
+        self, tmp_path: Path
+    ) -> None:
+        """THE red: same class, same params, different action."""
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        auth = _backup_authorization(tmp_path, action=BACKUP_SIBLING)
+        assert (
+            ceremony._consume_backup_registration_authorization(
+                s7_execution_authorization=auth
+            )
+            is None
+        )
 
 
 class TestActionsAreExactStrings:
@@ -724,29 +867,74 @@ class TestActionsAreExactStrings:
         with pytest.raises(ValueError):
             replace(artifact, action=self.Sneaky(ACTION))
 
+    def test_the_voice_bundle_carries_an_action_at_all(self) -> None:
+        """CONTROL for the subclass test below.
+
+        RED, and NOT for a typing reason: S7VoiceConsultationBundle has no
+        action field yet -- that is the voice-plane v2 work. Passing one
+        raises TypeError, not the ValueError exact typing would raise, so
+        the subclass test cannot be measuring exact typing until this holds.
+        """
+        from dataclasses import fields as dataclass_fields
+
+        names = {f.name for f in dataclass_fields(guarded.S7VoiceConsultationBundle)}
+        assert "action" in names, (
+            "the voice bundle has no action field; the subclass test below "
+            "is red for the missing field, not for exact typing"
+        )
+
     def test_the_voice_bundle_refuses_a_subclass(self) -> None:
         with pytest.raises(ValueError):
             _voice_bundle(self.Sneaky(ACTION))
 
-    def test_the_generic_edge_refuses_a_subclass(self) -> None:
-        _e, authority, params_hash, rendered = _bundle()
-        grant = s7._mint_s7_execution_grant(
-            artifact_id="artifact-subclass",
-            rendered=rendered,
-            action_params_hash=params_hash,
-            precondition_hash="a" * 64,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class="self_modification",
-            derived_aggregation_group="g",
-            credential_ref="cred-1",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            ceremony_kind="founder_local_webauthn",
-            consumed_at=NOW,
+    def test_the_generic_edge_accepts_its_own_action(self) -> None:
+        """CONTROL: without this the refusal below could come from a grant
+        that authorizes nothing at all."""
+        grant = _direct_grant(
+            action=ACTION, action_params_hash=s7.canonical_hash(dict(PARAMS))
         )
-        # Sneaky.__eq__ returns True for anything; exact typing must win.
+        assert s7.execution_grant_authorizes_action(
+            grant, action=ACTION, params=dict(PARAMS)
+        )
+
+    def test_a_hostile_subclass_is_not_classified_as_its_own_text(self) -> None:
+        """CONTROL, and a finding in its own right.
+
+        Sneaky.__eq__ returns True, so `action == "capability.acquire"` fires
+        early in derive_work_class and the hostile action classifies as
+        capability_acquisition -- nothing to do with its text. An edge test
+        that leaves derived_work_class at self_modification therefore passes
+        on a CLASS MISMATCH and never reaches the action comparison at all.
+        The refusal test below must neutralise this.
+        """
+        sneaky = self.Sneaky(SIBLING)
+        assert s7.derive_work_class(
+            action=sneaky, params=dict(PARAMS)
+        ) != s7.derive_work_class(action=SIBLING, params=dict(PARAMS))
+
+    def test_the_generic_edge_refuses_a_subclass(self) -> None:
+        """Built WITHOUT the mint (no action source until the v2 row), and
+        with every non-typing check ALIGNED so exact typing is the only
+        thing left that can refuse.
+        """
+        sneaky = self.Sneaky(SIBLING)
+        grant = _direct_grant(
+            action=ACTION,
+            action_params_hash=s7.canonical_hash(dict(PARAMS)),
+            # align the class to whatever the hostile value derives, so the
+            # edge cannot refuse on a class mismatch
+            derived_work_class=s7.derive_work_class(
+                action=sneaky, params=dict(PARAMS)
+            ),
+        )
+        # Both non-typing checks now PASS; only exact typing can refuse.
+        assert grant.derived_work_class == s7.derive_work_class(
+            action=sneaky, params=dict(PARAMS)
+        )
+        assert grant.action_params_hash == s7.canonical_hash(dict(PARAMS))
+        assert grant.action == sneaky  # Sneaky.__eq__ lies; typing must win
         assert not s7.execution_grant_authorizes_action(
-            grant, action=self.Sneaky(SIBLING), params=dict(PARAMS)
+            grant, action=sneaky, params=dict(PARAMS)
         )
 
 
