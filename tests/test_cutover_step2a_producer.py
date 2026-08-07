@@ -524,7 +524,6 @@ class TestPublicChainPublishesRealArtifacts:
     ) -> None:
         import hashlib
 
-        from scripts import cuda_bench_cli as cli
 
         root = seed_private_root(tmp_path)
         monkeypatch.setattr(driver, "BENCH_ROOT", root)
@@ -536,26 +535,7 @@ class TestPublicChainPublishesRealArtifacts:
         # driver signal tests fail in the same process. monkeypatch
         # restores each attribute afterwards; the handlers are restored
         # explicitly because main() owns them for its own duration only.
-        import signal as _signal
-
-        for name in (
-            "_terminal_committed",
-            "_cleanup_incomplete_committing",
-            "_linearized_durable_success",
-        ):
-            monkeypatch.setattr(cli, name, getattr(cli, name), raising=False)
-        saved_handlers = {
-            number: _signal.getsignal(number)
-            for number in (_signal.SIGINT, _signal.SIGTERM)
-        }
-        # The real residue: main() restores the signal MASK only when it
-        # did NOT commit a terminal (_restore_command_signal_scope with
-        # restore_mask=not _terminal_committed). On success it leaves
-        # SIGINT/SIGTERM blocked -- correct for a CLI process about to
-        # exit, but in-process it leaves the mask blocked for every
-        # subsequently SPAWNED CHILD, which then cannot be interrupted.
-        saved_mask = _signal.pthread_sigmask(_signal.SIG_BLOCK, [])
-
+        # Signal restoration is owned by _call_cli_restoring_signal_state.
         seen_args: list[tuple[object, Path]] = []
         real_builder = assemble.build_stage2_bundle
 
@@ -615,13 +595,12 @@ class TestPublicChainPublishesRealArtifacts:
         # A separate guard that tolerates an early refusal cannot see a
         # stray write on the success path.
         live_before = self._tree_snapshot(BENCH_ROOT)
-        rc = cli.main(
+        # Through the exception-safe helper: calling cli.main() directly and
+        # restoring only after a normal return leaves the contamination on
+        # the raising path -- the exact case the restoration exists for.
+        rc = _call_cli_restoring_signal_state(
             ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
         )
-        _signal.pthread_sigmask(_signal.SIG_SETMASK, saved_mask)
-        for number, handler in saved_handlers.items():
-            _signal.signal(number, handler)
-
         assert rc == 0
         assert self._tree_snapshot(BENCH_ROOT) == live_before
 
@@ -1177,6 +1156,24 @@ class TestProductionIdentityProjection:
             assert banned not in source, banned
 
 
+class SequenceClock:
+    """Yields an explicit sequence, so each predicate is actually reached.
+
+    Both authorization-boundary reds previously used ONE constant stamp,
+    so they were rejected by an earlier check -- the bundle witness also
+    predating issuance, or bundle construction itself landing at expiry.
+    Deleting the handler checks left all 54 tests green.
+    """
+
+    def __init__(self, moments: list[str]) -> None:
+        self._moments = list(moments)
+
+    def now_utc(self) -> str:
+        return (
+            self._moments.pop(0) if len(self._moments) > 1 else self._moments[0]
+        )
+
+
 class ConstantClock:
     """A clock that does NOT advance -- the frozen chronology permits it."""
 
@@ -1209,9 +1206,11 @@ def _call_cli_restoring_signal_state(argv: list[str]) -> int:
     try:
         return cli.main(argv)
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
+        # Handlers FIRST, then the mask: unblocking before the handlers are
+        # back would deliver a pending signal to main()'s handler.
         for number, handler in handlers.items():
             signal.signal(number, handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
 
 
 class TestChronologyIsEqualitySafeAndBracketed:
@@ -1239,9 +1238,12 @@ class TestChronologyIsEqualitySafeAndBracketed:
         ).obj
         assert completion.status == "completed"
 
-    def _run_with_window(
-        self, tmp_path, monkeypatch, *, issued: str, expires: str, clock: str
-    ) -> tuple[int, Path]:
+    def _run(self, tmp_path, monkeypatch, *, issued, expires, moments):
+        """Drive main() with an explicit clock SEQUENCE.
+
+        The admission is stamped by _admit_command from the first read;
+        the bundle/receipt from the second; the completion from the third.
+        """
         from tests.test_cuda_migration import _cutover_authorization_doc
         from tests.test_cutover_step1_invariants import stage1_paths
 
@@ -1255,35 +1257,86 @@ class TestChronologyIsEqualitySafeAndBracketed:
         (root / AUTHORIZATION_REF).write_bytes(auth.wrapper_bytes)
         monkeypatch.setattr(driver, "BENCH_ROOT", root)
         monkeypatch.setattr(
-            driver, "SystemClock", lambda: ConstantClock(clock)
+            driver, "SystemClock", lambda: SequenceClock(moments)
         )
         rc = _call_cli_restoring_signal_state(
             ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
         )
         return rc, root
 
-    def test_admission_predating_issuance_refuses(
+    def test_admission_before_issuance_with_valid_bundle_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        rc, root = self._run_with_window(
+        """Admission predates issuance; the BUNDLE does not.
+
+        The previous form used one stamp, so the bundle witness predated
+        issuance too and step 1 refused first -- the handler check was
+        never reached.
+        """
+        rc, root = self._run(
             tmp_path,
             monkeypatch,
-            issued="2026-08-03T22:00:00Z",
-            expires="2026-08-04T02:00:00Z",
-            clock="2026-08-03T20:31:00Z",  # BEFORE issuance
+            issued="2026-08-03T20:30:00Z",
+            expires="2026-08-04T00:30:00Z",
+            moments=[
+                "2026-08-03T20:29:00Z",  # admission -- BEFORE issuance
+                "2026-08-03T20:31:00Z",  # bundle -- valid
+                "2026-08-03T20:32:00Z",  # completion -- valid
+            ],
         )
         assert rc != 0
         assert not self._valid_completions(root)
 
-    def test_completion_at_expiry_boundary_refuses(
+    def test_completion_at_expiry_with_valid_admission_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        rc, root = self._run_with_window(
+        """Admission and bundle valid; only the COMPLETION reaches expiry."""
+        rc, root = self._run(
             tmp_path,
             monkeypatch,
             issued="2026-08-03T20:00:00Z",
             expires="2026-08-04T00:00:00Z",
-            clock="2026-08-04T00:00:00Z",  # exactly AT expiry
+            moments=[
+                "2026-08-03T20:31:00Z",  # admission -- valid
+                "2026-08-03T20:32:00Z",  # bundle -- valid
+                "2026-08-04T00:00:00Z",  # completion -- AT expiry
+            ],
+        )
+        assert rc != 0
+        assert not self._valid_completions(root)
+
+    def test_bundle_before_admission_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """admission 20:31 -> bundle 20:30 previously returned exit 0."""
+        rc, root = self._run(
+            tmp_path,
+            monkeypatch,
+            issued="2026-08-03T20:00:00Z",
+            expires="2026-08-04T00:00:00Z",
+            moments=[
+                "2026-08-03T20:31:00Z",
+                "2026-08-03T20:30:00Z",  # bundle BEFORE admission
+                "2026-08-03T20:32:00Z",
+            ],
+        )
+        assert rc != 0
+        assert not self._valid_completions(root)
+
+    def test_regressing_clock_mints_no_durable_completion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Previously exit 4 -- but AFTER a completed completion was durable."""
+        rc, root = self._run(
+            tmp_path,
+            monkeypatch,
+            issued="2026-08-03T20:00:00Z",
+            expires="2026-08-04T00:00:00Z",
+            moments=[
+                "2026-08-03T20:30:00Z",
+                "2026-08-03T20:31:00Z",
+                "2026-08-03T20:29:00Z",  # completion REGRESSES
+            ],
         )
         assert rc != 0
         assert not self._valid_completions(root)
@@ -1357,3 +1410,121 @@ class TestSemanticValidatorIsLoadBearing:
         assert not cli._valid_stage2_permit(
             forged, window_id=completion.window_id
         )
+
+
+class TestNormalizationRejectsForgedPermits:
+    """Through the AUTHORITY BOUNDARY, not the predicate directly.
+
+    The earlier tests called _valid_stage2_permit() itself, so bypassing
+    its CALL SITE inside _valid_command_completion_result left all 54
+    green. These forge a fully joined receipt and drive normalization.
+    """
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("decision", "bench_passed"),
+            ("reasons", ["forged_reason"]),
+            ("cutover_window_id", "cutover-forged"),
+        ],
+    )
+    def test_forged_permit_never_normalizes_to_ok(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field, value
+    ) -> None:
+        import hashlib
+
+        from scripts import cuda_bench_cli as cli
+
+        root = seed_private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        monkeypatch.setattr(driver, "SystemClock", ConstantClock)
+
+        captured: list[object] = []
+        real_handler = cli._stage2_assembly_handler
+
+        def spy(attempt, *, root, clock, args):
+            captured.append(attempt)
+            return real_handler(attempt, root=root, clock=clock, args=args)
+
+        monkeypatch.setattr(cli, "_stage2_assembly_handler", spy)
+        assert _call_cli_restoring_signal_state(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        ) == 0
+        attempt = captured[0]
+
+        terminals = sorted(root.glob("command-assemble-stage2-*-terminal.json"))
+        completion = cm._canonical_persisted_role(
+            cm.PersistedDoc(terminals[0].read_bytes()), cm.CommandCompletionDoc
+        ).obj
+        result = cli.TerminalResult(
+            "ok",
+            "completed",
+            completion.window_id,
+            terminals[0].name,
+            hashlib.sha256(terminals[0].read_bytes()).hexdigest(),
+        )
+        # the real chain normalizes to ok
+        assert cli._valid_command_completion_result(attempt, result, root=root)
+
+        # now forge the receipt and RE-JOIN the completion to it, so every
+        # hash join still passes and ONLY the permit semantics differ
+        receipt_path = root / completion.artifact_ref
+        wrapper = json.loads(receipt_path.read_bytes())
+        wrapper["fields"][field] = value
+        forged = cm._canonical_wrapper_bytes(wrapper)
+        receipt_path.write_bytes(forged)
+        rejoined = cm.CommandCompletionDoc(
+            command=completion.command,
+            ordinal=completion.ordinal,
+            window_id=completion.window_id,
+            admission_ref=completion.admission_ref,
+            admission_sha256=completion.admission_sha256,
+            artifact_ref=completion.artifact_ref,
+            artifact_sha256=hashlib.sha256(forged).hexdigest(),
+            artifact_schema=completion.artifact_schema,
+            status=completion.status,
+            timestamp=completion.timestamp,
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "command_completion", cli._completion_fields(rejoined)
+        )
+        terminals[0].write_bytes(encoded)
+        forged_result = cli.TerminalResult(
+            "ok",
+            "completed",
+            completion.window_id,
+            terminals[0].name,
+            hashlib.sha256(encoded).hexdigest(),
+        )
+        assert not cli._valid_command_completion_result(
+            attempt, forged_result, root=root
+        )
+
+
+def test_the_helper_restores_state_on_the_RAISING_path() -> None:
+    """The case the whole restoration exists for."""
+    import signal
+
+    from scripts import cuda_bench_cli as cli
+
+    before_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    before_handlers = {
+        n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM)
+    }
+
+    def boom(_argv):
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        raise RuntimeError("main exploded")
+
+    original = cli.main
+    cli.main = boom
+    try:
+        with pytest.raises(RuntimeError):
+            _call_cli_restoring_signal_state(["assemble-stage2"])
+    finally:
+        cli.main = original
+
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == before_mask
+    assert {
+        n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM)
+    } == before_handlers

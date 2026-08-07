@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v24
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v25
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -32,7 +32,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v21 | the impossible descriptor rule removed everywhere; post-commit connection named; founder authority proven exactly |
 | v22 | journal posture: the header proves NOT-WAL, not `delete` — two-stage check |
 | v23 | the identity recheck must be anchored and NO-FOLLOW |
-| **v24** | **the production identity is PROJECTED from the persisted bench identity — no live probe, no new locator** |
+| v24 | the production identity is PROJECTED from the persisted bench identity |
+| **v25** | **chronology corrected: admission precedes the boot witness; middle joins enforced at runtime** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -356,14 +357,20 @@ discovery.
 ### Producer chronology, frozen
 
 ```
-auth.issued_at
-  <= boot witness
+latest stage-1 evidence
+  < auth.issued_at
   <= command admission
-  <= receipt timestamp == stage-2 bundle timestamp
+  <= boot witness == stage-2 bundle timestamp == receipt timestamp
   <= command completion
   <= consumer now
   < auth.expires_at
 ```
+
+**Corrected (v25):** v18 placed the boot witness BEFORE admission. The
+producer mints that witness during assembly, which necessarily follows
+admission, so the frozen order contradicted every correct implementation.
+Code and tests used the right order while canon kept the wrong one --
+exactly the drift the frozen tables are supposed to prevent.
 
 Equality is **permitted** throughout: these timestamps are
 second-resolution, and a fast producer legitimately stamps two of them

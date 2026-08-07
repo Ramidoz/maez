@@ -3020,7 +3020,15 @@ def _stage2_assembly_handler(
     receipt_ref = f"receipts/stage2-{args.window_id}.json"
     driver.write_private_file(receipt_ref, receipt_bytes, root=root)
     completion_at = clock.now_utc()
-    if cm._compare_utc_z(completion_at, authorization.expires_at) >= 0:
+    # The MIDDLE joins, checked BEFORE anything durable is published.
+    # Without them: admission 20:31 / bundle 20:30 / completion 20:32
+    # returned exit 0, and a regressing clock minted a durable completed
+    # completion before failing.
+    if (
+        cm._compare_utc_z(admission_at, bundle.timestamp) > 0
+        or cm._compare_utc_z(bundle.timestamp, completion_at) > 0
+        or cm._compare_utc_z(completion_at, authorization.expires_at) >= 0
+    ):
         raise driver.BenchRefusal("assembly_refused")
     completion = cm.CommandCompletionDoc(
         command=attempt.command,
