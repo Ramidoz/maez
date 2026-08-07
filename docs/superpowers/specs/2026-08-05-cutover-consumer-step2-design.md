@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v26
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v27
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -34,7 +34,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v23 | the identity recheck must be anchored and NO-FOLLOW |
 | v24 | the production identity is PROJECTED from the persisted bench identity |
 | v25 | chronology corrected: admission precedes the boot witness; middle joins enforced |
-| **v26** | **S7 does not bind the action — the tap is scoped by a compensating control, stated as such** |
+| v26 | S7 does not bind the action — compensating control, stated as such |
+| **v27** | **R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -998,19 +999,23 @@ own consumer, and the design must not describe this as S7 enforcement:
 5. the consumer executes **only** `CUTOVER_ACTION` — there is no
    parameter through which another action can be reached.
 
-**The limit, named:** this binds the action *for this consumer*. It does
-not stop a different caller holding the same grant from consuming it for
-a sibling action. That residual is bounded by the grant being single-use
-and consumed by this consumer at its own edge, and by the marker's
-durable single-use — but it is a bounded residual, not zero, and it is
-S7's to close properly.
+**R6 RULED: fix S7 directly.** The owner ruled that the compensating
+control is useful defence-in-depth but **not sufficient authority for
+changing Maez's brain**. The substrate change is specified separately in
+[2026-08-07-s7-action-binding-design.md](2026-08-07-s7-action-binding-design.md)
+and lands **before** 2B continues.
 
-**Binding RED:** a cutover grant accepts the exact action and **refuses a
-sibling `model_routing.*` action with identical params**.
+**A contradiction in v26, repaired here.** v26 admitted another caller
+could consume the same grant for a sibling action, and then demanded a
+RED asserting the grant refuses that sibling. Both cannot hold: a
+consumer-local check cannot make a *generic* grant refuse anything. Under
+the ruling that RED moves to the **generic S7 execution edge**, where it
+becomes genuinely enforceable rather than aspirational.
 
-**Carried (R6):** should S7's authority material bind the action
-directly? That is the real fix and it is an authority-substrate change,
-so it is the owner's call, not this slice's.
+**What survives here:** the cutover-local `cutover_action` params check
+remains as a **second rail**, explicitly not the source of authority. S7
+is. After the substrate lands, 2B's receipt projection updates from the
+final grant shape.
 
 #### The action edge, exact — and MEASURED (v15)
 

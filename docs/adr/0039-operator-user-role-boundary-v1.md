@@ -157,6 +157,26 @@ S7 v1 requires:
 
 S7 v1's RED contract contains 161 tests and a 77-step implementation order.
 
+## Amendment 2026-08-07 — exact action binding (S7 v2)
+
+v1 shipped an execution edge that compares only the derived work class
+and `canonical_hash(params)`. **Neither carries the action**, so a single
+grant authorizes every sibling operation of the same class with the same
+parameters — reproduced with `model_routing.cutover_cuda` and
+`model_routing.wipe_and_replace`.
+
+This does not meet the exact-request authorization grammar this ADR and
+BAD promise. The exact action will travel through the envelope, the
+rendered *visible* signed text, the artifact, the durable row, the grant,
+the source-bundle binding and the grant projection, and the edge will
+require exact action equality in addition to the existing two checks.
+
+Versioned explicitly: `action_params_hash` keeps its meaning, historical
+rows are never overwritten or backfilled, a missing action is never
+inferred, and a v1 row cannot authorize new guarded execution.
+
+Design: `docs/superpowers/specs/2026-08-07-s7-action-binding-design.md`.
+
 ## Consequences
 
 S7 makes several shortcuts invalid:
