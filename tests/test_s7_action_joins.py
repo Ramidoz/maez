@@ -189,20 +189,43 @@ def _columns(db_path, table: str) -> set[str]:
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def _table_shape(db_path, table: str) -> tuple:
-    """The COMPLETE table_info plus the frozen DDL.
+# The migration is REQUIRED to add three freeze triggers to v1. An
+# invariance guard that swept every sqlite_master object for the table
+# would therefore REJECT the correct migration -- so triggers are excluded
+# here and asserted separately and exactly.
+V1_FREEZE_TRIGGERS = (
+    "s7_v1_frozen_delete",
+    "s7_v1_frozen_insert",
+    "s7_v1_frozen_update",
+)
 
-    Checking only that no `action` column appeared would miss a widened
-    type, a dropped NOT NULL, a changed default, a reordered column or a
-    rewritten primary key -- all of which alter v1 while leaving the column
-    NAMES identical.
+
+def _triggers_on(db_path, table: str) -> dict:
+    with closing(sqlite3.connect(db_path)) as conn:
+        return dict(
+            conn.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE tbl_name = ? AND type = 'trigger'",
+                (table,),
+            )
+        )
+
+
+def _table_shape(db_path, table: str) -> tuple:
+    """v1's own shape: columns, plus its CREATE TABLE and indexes.
+
+    Triggers EXCLUDED -- see V1_FREEZE_TRIGGERS. Everything else must be
+    untouched: checking only that no `action` column appeared would miss a
+    widened type, a dropped NOT NULL, a changed default, a reordered column
+    or a rewritten primary key, all of which leave the column NAMES
+    identical.
     """
     with closing(sqlite3.connect(db_path)) as conn:
         info = tuple(conn.execute(f"PRAGMA table_info({table})"))
         ddl = tuple(
             conn.execute(
                 "SELECT type, name, sql FROM sqlite_master "
-                "WHERE tbl_name = ? ORDER BY type, name",
+                "WHERE tbl_name = ? AND type != 'trigger' ORDER BY type, name",
                 (table,),
             )
         )
@@ -285,6 +308,30 @@ class TestLinkArtifactToRow:
             os.close(fd)
 
         assert _table_shape(store.db_path, V1_TABLE) == before
+
+    def test_v1_gains_exactly_the_three_freeze_triggers(
+        self, tmp_path: Path
+    ) -> None:
+        """The one v1 change the design DOES require, asserted exactly, so
+        excluding triggers from the invariance guard above leaves no hole."""
+        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        assert not _triggers_on(store.db_path, V1_TABLE), (
+            "v1 already carries triggers before migration; the assertion "
+            "below would not measure what the migration added"
+        )
+
+        import os
+
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+
+        assert (
+            tuple(sorted(_triggers_on(store.db_path, V1_TABLE)))
+            == V1_FREEZE_TRIGGERS
+        )
 
 
 class TestLinkRowToGrant:
@@ -430,15 +477,66 @@ def _action_uses(func) -> tuple[set[str], set[str]]:
     return compared, passed
 
 
-def _binds_exactly(func, expression: str) -> bool:
-    """Is THIS expression compared, or passed as `action=`?
+# The calls that actually consume an action. An `action=` keyword handed
+# to anything else -- a logger, a metric, an audit line -- binds nothing.
+_CONSUMING_CALLS = frozenset(
+    {
+        "consume_execution_grant_for_action",
+        "execution_grant_authorizes_action",
+        "execution_grant_authorizes_card_transition",
+    }
+)
 
-    A substring test on "action" is not enough: every one of these
-    consumers already mentions `action_params_hash`, which greened both
-    caller-join tests while neither bound an action at all.
+
+def _joins_action_in_source(source: str, expression: str) -> bool:
+    """Does this SOURCE equate `expression` with an action, or hand it to a
+    consuming call?
+
+    Three shapes short of this were accepted by earlier versions and none
+    is a join:
+
+    * any mention of "action" -- every consumer already says
+      `action_params_hash`, which greened both caller joins;
+    * `if card.action in ALLOWED:` -- a membership test, whose sides both
+      land in a set of "compared" expressions;
+    * `log_event(action=card.action)` -- an `action=` keyword to a call
+      that consumes nothing.
+
+    So an equality must be an EQUALITY and must name an action on BOTH
+    sides, and a keyword must go to a call that actually consumes it.
+
+    Takes source rather than a function so the helper can be attacked with
+    synthetic cases instead of only exercised on production code.
     """
-    compared, passed = _action_uses(func)
-    return expression in (compared | passed)
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(source))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
+                continue
+            sides = {ast.unparse(node.left), ast.unparse(node.comparators[0])}
+            if expression in sides and all("action" in side for side in sides):
+                return True
+        if isinstance(node, ast.Call):
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", None)
+            )
+            if name not in _CONSUMING_CALLS:
+                continue
+            for kw in node.keywords:
+                if kw.arg == "action" and ast.unparse(kw.value) == expression:
+                    return True
+    return False
+
+
+def _joins_action(func, expression: str) -> bool:
+    import inspect
+
+    return _joins_action_in_source(inspect.getsource(func), expression)
 
 
 class TestTheFourCallerJoins:
@@ -486,18 +584,18 @@ class TestTheFourCallerJoins:
         by substring."""
         from core.decision.decision_pipeline import DecisionPipeline
 
-        assert _binds_exactly(
+        assert _joins_action(
             DecisionPipeline._consume_s7_execution_authorization, "card.action"
-        ), "the decision pipeline consumer never binds card.action"
+        ), "the decision pipeline consumer never joins card.action"
 
     def test_the_dream_state_consumer_binds_envelope_action(self) -> None:
         """Its authoritative action is the reconstructed `envelope.action`."""
         from core.evolution.dream_state import DreamState
 
-        assert _binds_exactly(
+        assert _joins_action(
             DreamState._consume_s7_execution_authorization_for_envelope,
             "envelope.action",
-        ), "the dream-state consumer never binds envelope.action"
+        ), "the dream-state consumer never joins envelope.action"
 
     def test_the_backup_ceremony_binds_its_fixed_literal(self) -> None:
         from core.governance import s7_webauthn_ceremony as ceremony
@@ -520,4 +618,45 @@ class TestTheFourCallerJoins:
         )
         assert "'disable_founder_webauthn_credential'" in passed, (
             "the disable consumer never passes the action to the edge"
+        )
+
+
+class TestTheJoinHelperIsItselfAttacked:
+    """This helper decides whether every caller join passes, and two earlier
+    versions were wrong in opposite directions -- one accepted any mention
+    of "action", the next accepted any comparison side or any `action=`
+    keyword. So it is attacked directly rather than trusted because
+    production happens to be red."""
+
+    def test_a_membership_test_is_not_a_join(self) -> None:
+        assert not _joins_action_in_source(
+            "def f(card):\n    if card.action in ALLOWED: pass\n", "card.action"
+        )
+
+    def test_an_action_kwarg_to_a_non_consumer_is_not_a_join(self) -> None:
+        assert not _joins_action_in_source(
+            "def f(card):\n    log_event(action=card.action)\n", "card.action"
+        )
+
+    def test_equality_against_a_non_action_is_not_a_join(self) -> None:
+        assert not _joins_action_in_source(
+            "def f(card):\n    return card.action == mode\n", "card.action"
+        )
+
+    def test_an_inequality_is_not_a_join(self) -> None:
+        assert not _joins_action_in_source(
+            "def f(card, r):\n    return card.action != r.action\n", "card.action"
+        )
+
+    def test_equality_against_the_rendered_action_is_a_join(self) -> None:
+        assert _joins_action_in_source(
+            "def f(card, r):\n    return card.action == r.action\n", "card.action"
+        )
+
+    def test_handing_it_to_a_consuming_call_is_a_join(self) -> None:
+        assert _joins_action_in_source(
+            "def f(card, g):\n"
+            "    return execution_grant_authorizes_action("
+            "g, action=card.action, params={})\n",
+            "card.action",
         )
