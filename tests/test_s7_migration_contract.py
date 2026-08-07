@@ -39,6 +39,20 @@ import pytest
 
 from core.governance import operator_user_boundary as s7
 
+
+def _anchored():
+    """The receipt readers live in core/governance/anchored_io.py.
+
+    Reaching for them on operator_user_boundary made every receipt test red
+    on the wrong module -- a shape this review chain has caught before.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module("core.governance.anchored_io")
+    except ImportError as exc:  # pragma: no cover
+        pytest.fail(f"core/governance/anchored_io.py does not exist yet: {exc}")
+
 V1_AUTH = "s7_authorization_artifacts"
 V2_AUTH = "s7_authorization_artifacts_v2"
 V1_VOICE = "s7_voice_consultation_bundles"
@@ -55,6 +69,14 @@ V2_VOICE_EXCLUSION = ("s7_vb_v2_no_v1",)
 
 RECEIPT_NAME = "s7_migration_receipt.json"
 RECEIPT_SCHEMA = "s7.migration_receipt.v1"
+# Ratified v1 literals, computed read-only from the live store with the
+# v6/v7 recipe. The voice value is the hash of an EMPTY preimage.
+V1_SOURCE_FINGERPRINT_AUTH = (
+    "b8946c79c8edf9386ce73522aac8b18b6181212a949570cf9c01c01e3ac1af00"
+)
+V1_SOURCE_FINGERPRINT_VOICE = (
+    "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+)
 # The FROZEN field set. An earlier version invented v2_auth_rows_at_migration;
 # the design says row_count_v2_auth_at_migration. A receipt validator keyed on
 # invented names cannot verify the receipt the migration actually writes.
@@ -118,6 +140,18 @@ def _refuses():
     raise AssertionError("expected a refusal; nothing was raised")
 
 
+def _utc_now() -> str:
+    """A clock reading in the receipt's own format, used as a FLOOR.
+
+    Comparing a recovery's started_at against the original's would be
+    satisfied by reusing the original stamp -- the very laundering
+    activation_path exists to prevent.
+    """
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _store(tmp: Path):
     return s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
 
@@ -142,7 +176,7 @@ def _receipt(tmp: Path) -> dict:
     Never `read_migration_receipt()`: that opens the canonical live store.
     """
     with _dir_fd(tmp) as fd:
-        return json.loads(s7._read_migration_receipt(store_dir_fd=fd))
+        return json.loads(_anchored()._read_migration_receipt(store_dir_fd=fd))
 
 
 def _drop_receipt(tmp: Path) -> None:
@@ -245,6 +279,46 @@ def _triggers(db_path, table: str) -> tuple[str, ...]:
                 )
             )
         )
+
+
+def _trigger_sql(tmp: Path, name: str) -> str:
+    store_path = tmp / "ceremony.sqlite3"
+    with closing(sqlite3.connect(store_path)) as conn:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+            (name,),
+        ).fetchone()
+    assert row is not None, f"{name} does not exist"
+    return row[0]
+
+
+def _fingerprint(db_path, table_names) -> str:
+    """The FROZEN recipe: normalized sqlite_master.sql over tables, indexes
+    and triggers, explicitly sorted -- not raw row order.
+
+    Recomputed here independently. Comparing the receipt's own value to a
+    constant proves only that the migration copied a constant into the
+    receipt; it never checks the SCHEMA the migration actually built.
+    """
+    import hashlib
+    import re
+
+    def canon(sql):
+        return None if sql is None else re.sub(r"\s+", " ", sql).strip().rstrip(";")
+
+    rows = []
+    with closing(sqlite3.connect(db_path)) as conn:
+        for name in sorted(table_names):
+            for t, n, tbl, sql in conn.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE tbl_name=? ORDER BY type,name",
+                (name,),
+            ):
+                rows.append([t, n, tbl, canon(sql)])
+    payload = json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _count(db_path, table: str) -> int:
@@ -456,15 +530,45 @@ class TestNormalOpeningIsVerificationOnly:
         store = _store(tmp_path)
         assert _triggers(store.db_path, V1_AUTH) == ()
 
-    def test_opening_a_migrated_store_does_not_alter_it(
+    def test_opening_a_migrated_store_changes_no_byte(
         self, tmp_path: Path
     ) -> None:
+        """Table and trigger NAMES are the weakest possible observation: an
+        ALTER, an inserted row, or a stray COMMIT leaves every name intact.
+        The whole file is hashed instead."""
+        import hashlib
+
         store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
-        before = _tables(store.db_path), _triggers(store.db_path, V1_AUTH)
+        before = hashlib.sha256(Path(store.db_path).read_bytes()).hexdigest()
         _store(tmp_path)
-        assert (_tables(store.db_path), _triggers(store.db_path, V1_AUTH)) == before
+        assert (
+            hashlib.sha256(Path(store.db_path).read_bytes()).hexdigest() == before
+        )
+
+    def test_opening_a_store_issues_no_write(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Fail-closed even if a future change makes an open idempotent-
+        looking: no DDL, no INSERT/UPDATE/DELETE and no COMMIT may run."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        events, _state = _record(monkeypatch)
+        _store(tmp_path)
+        # executescript is recorded under its own kind; checking only "sql"
+        # let the store's CREATE TABLE pass unnoticed.
+        statements = _kinds(events, "sql") + _kinds(events, "script")
+        written = [
+            x
+            for x in statements
+            if any(
+                verb in x.upper()
+                for verb in ("CREATE ", "ALTER ", "INSERT ", "UPDATE ", "DELETE ", "DROP ")
+            )
+        ]
+        assert not written, written
+        assert not _kinds(events, "commit"), events
 
 
 class TestTheOrderedProcedure:
@@ -650,15 +754,22 @@ class TestJournalAndDurabilityPosture:
         with closing(sqlite3.connect(store.db_path)) as conn:
             assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2
 
-    def test_a_store_without_full_synchronous_refuses(
-        self, tmp_path: Path
+    def test_the_migration_verifies_synchronous_on_its_own_connection(
+        self, tmp_path: Path, monkeypatch
     ) -> None:
-        store = _store(tmp_path)
+        """NOT a refusal test. PRAGMA synchronous is CONNECTION-LOCAL, so
+        setting NORMAL on a connection and closing it leaves the store at
+        FULL when migration reopens -- correct code could never refuse and
+        the test would be unimplementable. What IS checkable is that the
+        migration verifies the pragma on the connection it actually uses.
+        """
+        _store(tmp_path)
         _seed_legacy_row(tmp_path)
-        with closing(sqlite3.connect(store.db_path)) as conn:
-            conn.execute("PRAGMA synchronous=NORMAL")
-        with _refuses():
-            _migrate(tmp_path)
+        events, _state = _record(monkeypatch)
+        _migrate(tmp_path)
+        assert any(
+            "PRAGMA SYNCHRONOUS" in x.upper() for x in _kinds(events, "sql")
+        ), _kinds(events, "sql")
 
     def test_a_wal_store_refuses_to_migrate(self, tmp_path: Path) -> None:
         store = _store(tmp_path)
@@ -710,25 +821,31 @@ class TestLockAndDurabilityOrdering:
         """Named, not counted: two arbitrary fsyncs -- the receipt writer
         syncing its own temp file twice, say -- would satisfy a bare count
         while the database was never durable."""
-        store = _store(tmp_path)
+        _store(tmp_path)
         _seed_legacy_row(tmp_path)
         events, _state = _record(monkeypatch)
         _migrate(tmp_path)
         targets = _fsync_targets(events)
-        assert any(str(store.db_path) in t for t in targets), targets
-        assert any(t.endswith(str(tmp_path)) for t in targets), targets
+        # Anchored openat("ceremony.sqlite3", dir_fd=...) records a RELATIVE
+        # leaf, so demanding the absolute path would fail correct code.
+        assert any(
+            t.endswith("ceremony.sqlite3") for t in targets
+        ), targets
+        assert any(
+            t.endswith(str(tmp_path)) or t.endswith(":.") for t in targets
+        ), targets
 
     def test_the_database_fsync_precedes_the_receipt_link(
         self, tmp_path: Path, monkeypatch
     ) -> None:
         """The receipt's OWN fsync must not be what satisfies this: the
         database has to be durable before the linearization point."""
-        store = _store(tmp_path)
+        _store(tmp_path)
         _seed_legacy_row(tmp_path)
         events, _state = _record(monkeypatch)
         _migrate(tmp_path)
         db_fsync = _first_index(
-            events, lambda e: e[0] == "fsync" and str(store.db_path) in e[1]
+            events, lambda e: e[0] == "fsync" and e[1].endswith("ceremony.sqlite3")
         )
         link = _first_index(events, lambda e: e[0] == "link")
         assert db_fsync != -1, "the database itself was never fsynced"
@@ -913,16 +1030,9 @@ class TestClassificationMatrix:
         store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
-        row = _legacy_row(store.db_path)
-        row["artifact_id"] = "fresh"
-        row["nonce"] = "f" * 64
-        columns = ", ".join(row)
-        marks = ", ".join("?" for _ in row)
+        row = _v2_row(store.db_path, artifact_id="fresh-1", nonce="f" * 64)
         with closing(sqlite3.connect(store.db_path)) as conn:
-            conn.execute(
-                f"INSERT INTO {V2_AUTH} ({columns}) VALUES ({marks})",
-                tuple(row.values()),
-            )
+            _insert(conn, V2_AUTH, row)
             conn.commit()
         _drop_receipt(tmp_path)
         with _refuses():
@@ -952,13 +1062,17 @@ class TestClassificationMatrix:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         original = _receipt(tmp_path)
+        floor = _utc_now()
+        assert floor >= original["started_at"]
         _drop_receipt(tmp_path)
         _migrate(tmp_path)
         recovered = _receipt(tmp_path)
         assert recovered["activation_path"] == "committed_recovery"
-        # Monotonic, not inequality: two runs inside the same second are a
-        # legitimate outcome, and asserting difference would flake.
-        assert recovered["started_at"] >= original["started_at"]
+        # `>= original` would be satisfied by REUSING the original stamp,
+        # which is exactly the laundering the field exists to prevent. The
+        # floor is a clock reading taken AFTER the original was published,
+        # so only a genuinely new attempt can clear it.
+        assert recovered["started_at"] >= floor, (recovered["started_at"], floor)
         assert recovered["completed_at"] >= recovered["started_at"]
 
 
@@ -1056,12 +1170,12 @@ class TestReceiptIdentity:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         with _dir_fd(tmp_path) as fd:
-            raw = s7._read_migration_receipt(store_dir_fd=fd)
+            raw = _anchored()._read_migration_receipt(store_dir_fd=fd)
         assert isinstance(raw, bytes)
         reencoded = json.dumps(
             json.loads(raw), sort_keys=True, separators=(",", ":")
         ).encode()
-        assert raw.rstrip(b"\n") == reencoded
+        assert raw == reencoded, "receipt bytes are not canonical"
 
     def test_no_row_contents_appear_in_the_receipt(self, tmp_path: Path) -> None:
         """Content-light: the receipt binds counts and fingerprints, never
@@ -1070,7 +1184,7 @@ class TestReceiptIdentity:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         with _dir_fd(tmp_path) as fd:
-            raw = s7._read_migration_receipt(store_dir_fd=fd)
+            raw = _anchored()._read_migration_receipt(store_dir_fd=fd)
         assert b"legacy-1" not in raw
         assert b"cred-1" not in raw
 
@@ -1133,6 +1247,21 @@ class TestTriggerBodiesNotJustNames:
                 _insert(conn, V1_VOICE, row)
 
     @pytest.mark.parametrize("name", V1_VOICE_FREEZE + V1_AUTH_FREEZE)
+    def test_no_freeze_trigger_is_conditional(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        """`RAISE` and `ABORT` both appear in a trigger that never fires:
+        `... WHEN 0 BEGIN SELECT RAISE(ABORT, ...); END` passes a
+        keyword check and stops nothing. The frozen bodies are
+        unconditional, so a WHEN clause is by construction wrong."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        sql = _trigger_sql(tmp_path, name)
+        head = sql.upper().split("BEGIN", 1)[0]
+        assert " WHEN " not in head, sql
+
+    @pytest.mark.parametrize("name", V1_VOICE_FREEZE + V1_AUTH_FREEZE)
     def test_every_freeze_trigger_body_raises_abort(
         self, tmp_path: Path, name: str
     ) -> None:
@@ -1146,6 +1275,20 @@ class TestTriggerBodiesNotJustNames:
             ).fetchone()
         assert sql is not None, f"{name} does not exist"
         assert "RAISE" in sql[0].upper() and "ABORT" in sql[0].upper(), sql[0]
+
+    @pytest.mark.parametrize("name", V2_AUTH_EXCLUSION + V2_VOICE_EXCLUSION)
+    def test_every_exclusion_trigger_consults_the_v1_table(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        """These ARE conditional by design -- they fire only on collision --
+        so the check is that the condition reads v1. `WHEN 0` references no
+        table and can never fire. The behavioural proof that they abort is
+        TestCrossVersionCollisionsRefuse."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        sql = _trigger_sql(tmp_path, name).lower()
+        assert V1_AUTH in sql or V1_VOICE in sql, sql
 
     @pytest.mark.parametrize("name", V2_AUTH_EXCLUSION + V2_VOICE_EXCLUSION)
     def test_every_exclusion_trigger_body_raises_abort(
@@ -1211,48 +1354,63 @@ class TestSchemasMatchTheFrozenDDL:
             }
         assert "s7_v2_nonce" in names, names
 
-    def test_both_target_fingerprints_recompute_to_the_committed_constants(
+    def test_the_built_schema_hashes_to_the_committed_target_constants(
         self, tmp_path: Path
     ) -> None:
-        """The guard RECOMPUTES from the frozen DDL and compares; it never
-        emits. If the constants were derived from the schema under test,
-        any schema would be its own authority."""
+        """Recomputed INDEPENDENTLY from the schema the migration built.
+
+        Comparing the receipt's own value to the constant would pass on a
+        migration that copied the constant into the receipt while building
+        a different schema.
+        """
         from core.governance import s7_schema_identity as identity
 
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        assert (
+            _fingerprint(store.db_path, [V2_AUTH])
+            == identity.S7_TARGET_FINGERPRINT_AUTH
+        )
+        assert (
+            _fingerprint(store.db_path, [V2_VOICE])
+            == identity.S7_TARGET_FINGERPRINT_VOICE
+        )
+
+    def test_the_receipt_target_matches_the_independently_recomputed_value(
+        self, tmp_path: Path
+    ) -> None:
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        assert _receipt(tmp_path)["to_fingerprint_auth"] == _fingerprint(
+            store.db_path, [V2_AUTH]
+        )
+
+    def test_the_source_fingerprints_match_the_frozen_v1_literals(
+        self, tmp_path: Path
+    ) -> None:
+        """from_fingerprint_* were self-chosen in v5 -- the receipt asserted
+        whatever it found. These are the ratified literals; the voice one is
+        the hash of an EMPTY preimage, so the absent plane has a defined
+        identity rather than a gap described in prose."""
         _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         receipt = _receipt(tmp_path)
-        assert receipt["to_fingerprint_auth"] == identity.S7_TARGET_FINGERPRINT_AUTH
-        assert receipt["to_fingerprint_bundle"] == identity.S7_TARGET_FINGERPRINT_VOICE
+        assert receipt["from_fingerprint_auth"] == V1_SOURCE_FINGERPRINT_AUTH
+        assert receipt["from_fingerprint_bundle"] == V1_SOURCE_FINGERPRINT_VOICE
 
 
-class TestTheAnchoredReceiptPredicates:
-    """Publication is a governance primitive, not a file write."""
+class TestReceiptIdentityIsBoundToThisStore:
+    """Primitive mechanics -- mode, links, exclusive create, size caps,
+    no-follow, short reads -- now live in tests/test_s7_anchored_io.py.
+    What remains here is what only MIGRATION can decide: that a receipt
+    belongs to the store it claims."""
 
-    def test_the_receipt_is_owned_by_this_user_and_private(
+    def test_publication_does_not_replace_an_existing_receipt(
         self, tmp_path: Path
     ) -> None:
-        _store(tmp_path)
-        _seed_legacy_row(tmp_path)
-        _migrate(tmp_path)
-        stat = os.stat(tmp_path / RECEIPT_NAME)
-        assert stat.st_uid == os.getuid()
-        assert stat.st_mode & 0o077 == 0, oct(stat.st_mode)
-
-    def test_the_receipt_has_exactly_one_link(self, tmp_path: Path) -> None:
-        """More than one name for the receipt means another path can
-        replace its contents."""
-        _store(tmp_path)
-        _seed_legacy_row(tmp_path)
-        _migrate(tmp_path)
-        assert os.stat(tmp_path / RECEIPT_NAME).st_nlink == 1
-
-    def test_publication_refuses_when_a_receipt_already_exists(
-        self, tmp_path: Path
-    ) -> None:
-        """Exclusive create: the link must fail rather than replace, so two
-        concurrent migrations cannot both believe they won."""
         _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
@@ -1265,14 +1423,15 @@ class TestTheAnchoredReceiptPredicates:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         (tmp_path / RECEIPT_NAME).write_bytes(b"{ not json")
+        os.chmod(tmp_path / RECEIPT_NAME, 0o600)
         with _refuses():
             _migrate(tmp_path)
 
-    def test_a_receipt_from_a_foreign_store_refuses(
-        self, tmp_path: Path
-    ) -> None:
-        """dev/ino pin the receipt to its own store; carrying one across
-        must not activate the other."""
+    def test_a_receipt_from_a_foreign_store_refuses(self, tmp_path: Path) -> None:
+        """dev/ino pin the receipt to its own store. The planted file is
+        chmod 0600 deliberately: at the default 0644 the read refuses on
+        MODE before ever reaching the identity check, and the test would
+        pass for the wrong reason."""
         first = tmp_path / "a"
         second = tmp_path / "b"
         first.mkdir()
@@ -1282,32 +1441,6 @@ class TestTheAnchoredReceiptPredicates:
             _seed_legacy_row(directory)
         _migrate(first)
         (second / RECEIPT_NAME).write_bytes((first / RECEIPT_NAME).read_bytes())
+        os.chmod(second / RECEIPT_NAME, 0o600)
         with _refuses():
             _migrate(second)
-
-    def test_an_oversized_receipt_refuses(self, tmp_path: Path) -> None:
-        """A size cap bounds the read; without it a hostile receipt can
-        exhaust memory before any validation runs."""
-        _store(tmp_path)
-        _seed_legacy_row(tmp_path)
-        _migrate(tmp_path)
-        (tmp_path / RECEIPT_NAME).write_bytes(b"{}" + b" " * (2 * 1024 * 1024))
-        with _refuses():
-            with _dir_fd(tmp_path) as fd:
-                s7._read_migration_receipt(store_dir_fd=fd)
-
-    def test_the_reader_refuses_a_symlinked_receipt(
-        self, tmp_path: Path
-    ) -> None:
-        """O_NOFOLLOW on the component: a symlink lets another directory
-        supply the receipt for this store."""
-        _store(tmp_path)
-        _seed_legacy_row(tmp_path)
-        _migrate(tmp_path)
-        elsewhere = tmp_path / "elsewhere.json"
-        elsewhere.write_bytes((tmp_path / RECEIPT_NAME).read_bytes())
-        (tmp_path / RECEIPT_NAME).unlink()
-        (tmp_path / RECEIPT_NAME).symlink_to(elsewhere)
-        with _refuses():
-            with _dir_fd(tmp_path) as fd:
-                s7._read_migration_receipt(store_dir_fd=fd)
