@@ -1,4 +1,4 @@
-# S7 action binding — design v12
+# S7 action binding — design v13
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -1059,6 +1059,7 @@ rather than a gap it must describe in prose.
 
 ```
 1.  BEGIN IMMEDIATE                    <- LOCK FIRST (v9)
+2a. classify the store (v13)           <- INSIDE the lock
 2.  verify journal_mode=delete and synchronous=FULL      (refuse otherwise)
 3.  verify from_fingerprint_auth   == S7_SOURCE_FINGERPRINT_AUTH   (in lock)
 4.  verify from_fingerprint_bundle == S7_SOURCE_FINGERPRINT_VOICE  (absent plane)
@@ -1111,7 +1112,8 @@ from_fingerprint_bundle, to_fingerprint_bundle,
 row_count_v1_auth,       row_count_v1_bundle,
 row_count_v2_auth_at_migration,
 row_count_v2_bundle_at_migration,
-started_at, completed_at, store_dev, store_ino
+started_at, completed_at, store_dev, store_ino,
+activation_path
 ```
 
 **Two corrections v6 needed here.** Its field list carried only the two
@@ -1145,21 +1147,36 @@ def write_private_file(relative, data, *, root, on_link=None) -> Path
 def read_private_file(relative, *, root, expected_uid) -> bytes
 
 # ACTIVATION ONLY — no root parameter exists
-def read_migration_receipt(*, store_fd: int) -> bytes
+def read_migration_receipt(*, store_dir_fd: int, store_fd: int) -> bytes
 ```
 
 **Activation must not take a caller-supplied root (v12).** A generic
 reader with a `root` argument lets a caller point activation at a receipt
-beside a *different* store. `read_migration_receipt` derives the path
-from the **already-held canonical store descriptor**; there is no
-argument through which another root could arrive.
+beside a *different* store.
+
+**v12's signature was unimplementable (v13).** I wrote
+`read_migration_receipt(*, store_fd)` and described opening the sibling
+receipt "relative to the held store descriptor". A **database fd is not a
+directory fd** — verified: `openat` through it raises
+`NotADirectoryError`. And resolving `/proc/self/fd/<store_fd>` back to a
+pathname to find the sibling would reintroduce exactly the path race the
+anchoring exists to remove.
+
+**Two descriptors, each with one job:**
+
+| descriptor | used for |
+|---|---|
+| `store_dir_fd` | the **anchored directory**; the fixed receipt leaf is opened relative to it with `O_NOFOLLOW` |
+| `store_fd` | **identity only** — its `st_dev`/`st_ino` are what the receipt's `store_dev`/`store_ino` must match |
+
+Neither is a path, and no path is ever re-resolved.
 
 **File predicates it enforces**, which v11 omitted entirely:
 
 * **regular file** — not symlink, fifo or directory;
 * owner uid matches, mode `0600`, `st_nlink == 1`;
-* **bounded size** — refuse above a fixed cap rather than reading
-  unbounded bytes;
+* **bounded size** — `S7_MIGRATION_RECEIPT_MAX_BYTES = 8192`, an exact
+  constant; "a fixed cap" named no number and so fixed nothing;
 * **short reads refuse** — `len(data) == st_size`, never "read what came";
 * **pre/post stat stability** — `dev`, `ino`, `size`, `mtime_ns`,
   `ctime_ns` identical before and after.
@@ -1174,8 +1191,11 @@ copy is **refactored to import this**, never the reverse — the dependency
 points from bench tooling to governance, not from governance to bench
 tooling.
 
-The receipt is read back through `read_private_file` by every activation
-consumer.
+The receipt is read back **only** through
+`read_migration_receipt(store_dir_fd=…, store_fd=…)`. The generic
+`read_private_file` is for bench callers and is **not** an activation
+route — v12 said it was, three sections after freezing the wrapper that
+replaced it.
 
 **Journal and synchronous posture, frozen (v6).** Under WAL, fsyncing
 only the database file does **not** establish the commit durability v5
@@ -1193,9 +1213,11 @@ deactivate itself on its first real artifact.
 
 **Every activation consumer revalidates** before treating v2 as live:
 
-* the receipt is read through **`read_migration_receipt(store_fd=…)`** —
-  no caller-supplied root — enforcing regular-file, uid, `0600`,
-  single-link, bounded-size, short-read and pre/post-stat stability;
+* the receipt is read **only** through
+  `read_migration_receipt(store_dir_fd=…, store_fd=…)` — the sole
+  activation route, never the generic `read_private_file` — enforcing
+  regular-file, uid, `0600`, single-link, `<= 8192` bytes, short-read
+  refusal and pre/post-stat stability;
 * its bytes **decode canonically** and round-trip byte-identical;
 * **both** activation fingerprints match the live planes — which now
   includes every trigger;
@@ -1221,7 +1243,10 @@ source planes are no longer pre-migration. v11's idempotence claim was
 false in precisely the window my own two-step ordering creates. I opened
 that window deliberately and never said what lives in it.
 
-**Frozen classification**, performed before anything else:
+**Frozen classification, performed INSIDE the write lock (v13).** v12
+said "before anything else", which reads as *before* `BEGIN IMMEDIATE` —
+restoring the very TOCTOU the source-verification move had just removed.
+The lock is taken first; classification is step 2a, inside it:
 
 | observed | classification | action |
 |---|---|---|
@@ -1238,6 +1263,31 @@ only honest response.
 
 Recovery stays **owner-invoked** — a branch of the same command, never an
 automatic self-heal on open.
+
+**A receipt may appear after the absence check.** Classification runs
+under the database lock, but the receipt lives on the filesystem, outside
+it. Frozen: publication is an **exclusive create** (`O_EXCL` via the
+anchored writer). If a concurrent run published first, **this run loses
+the race**, and must then **re-read and verify the winner** rather than
+treating its own loss as failure — if the winning receipt verifies, the
+store is activated and this run reports `complete`; if it does not, this
+run refuses. Losing a race is not the same as an invalid store, and
+conflating them would turn a benign double-invocation into an
+unexplained refusal.
+
+**The recovered receipt must disclose that it is recovered.** After a
+crash the original `started_at` is **unknowable**, and stamping the retry
+would make an interrupted migration look uninterrupted. Frozen field:
+
+```
+activation_path: "fresh_migration" | "committed_recovery"
+```
+
+with `started_at` and `completed_at` **defined as belonging to the
+activation attempt that published the receipt**, not to the original DDL
+transaction. On `committed_recovery` the document therefore says plainly
+that the DDL happened at an unrecorded earlier time. An audit trail that
+cannot distinguish these two is one that quietly launders a crash.
 
 **Crash-after-COMMIT RED:** interrupt between commit and publication;
 rerun; assert it classifies committed-not-published, publishes, and
