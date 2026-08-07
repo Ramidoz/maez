@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import stat as stat_module
 from contextlib import closing
 from pathlib import Path
 
@@ -326,7 +327,7 @@ def _count(db_path, table: str) -> int:
         return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
 
 
-def _record(monkeypatch, *, fail_on_create: int | None = None, on_begin=None):
+def _record(monkeypatch, *, fail_on_create=None, on_begin=None, on_link=None):
     """An ordered event log of SQL, commits, fsyncs, opens and links.
 
     fds are resolved to (path, flags) so an fsync can be NAMED. Counting
@@ -392,9 +393,20 @@ def _record(monkeypatch, *, fail_on_create: int | None = None, on_begin=None):
     real_fsync = os.fsync
 
     def fsync(fd):
+        # Identify the HELD DESCRIPTOR, not the string the caller passed in.
+        # A path string can be relative, absolute, or a symlink; the inode
+        # is what actually got synced.
         path, flags = fds.get(fd, ("<unknown>", 0))
-        kind = "tmpfile" if flags & getattr(os, "O_TMPFILE", 0) else "path"
-        events.append(("fsync", f"{kind}:{path}"))
+        try:
+            st = os.fstat(fd)
+            ident = f"{st.st_dev}:{st.st_ino}"
+            isdir = stat_module.S_ISDIR(st.st_mode)
+        except OSError:  # pragma: no cover
+            ident, isdir = "?", False
+        kind = "tmpfile" if flags & getattr(os, "O_TMPFILE", 0) else (
+            "dir" if isdir else "file"
+        )
+        events.append(("fsync", f"{kind}:{ident}:{path}"))
         return real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", fsync)
@@ -403,6 +415,8 @@ def _record(monkeypatch, *, fail_on_create: int | None = None, on_begin=None):
 
     def link(src, dst, **kw):
         events.append(("link", str(dst)))
+        if on_link is not None:
+            on_link(dst)
         return real_link(src, dst, **kw)
 
     monkeypatch.setattr(os, "link", link)
@@ -439,19 +453,17 @@ class TestTheEntrypointShape:
             inspect.signature(s7._migrate_authorization_store_to_v2_at).parameters
         ) == {"store_dir_fd"}
 
-    def test_the_private_reader_takes_a_directory_fd(self) -> None:
-        import inspect
-
-        assert set(
-            inspect.signature(s7._read_migration_receipt).parameters
-        ) == {"store_dir_fd"}
-
     def test_the_private_reader_has_one_production_callsite(self) -> None:
         """Allowlist of exactly one: read_migration_receipt. Any other
-        production caller can aim the private reader at a chosen root."""
+        production caller can aim the private reader at a chosen root.
+
+        Scanned in anchored_io, which OWNS both readers. Scanning
+        operator_user_boundary found nothing and passed vacuously; the
+        reader's signature is pinned in tests/test_s7_anchored_io.py.
+        """
         import ast
 
-        import core.governance.operator_user_boundary as module
+        module = _anchored()
 
         tree = ast.parse(Path(module.__file__).read_text())
         callers = []
@@ -754,6 +766,41 @@ class TestJournalAndDurabilityPosture:
         with closing(sqlite3.connect(store.db_path)) as conn:
             assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2
 
+    def test_a_non_full_synchronous_refuses(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Querying the pragma is not verifying it.
+
+        synchronous is connection-local, so it cannot be staged from
+        outside; the value the migration SEES is injected instead, and a
+        NORMAL store must refuse rather than proceed.
+        """
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        real_connect = sqlite3.connect
+
+        class Lying(sqlite3.Connection):
+            def execute(self, sql, *a, **k):
+                cursor = super().execute(sql, *a, **k)
+                if "PRAGMA SYNCHRONOUS" in " ".join(str(sql).split()).upper():
+                    class _Normal:
+                        def fetchone(self_inner):
+                            return (1,)  # NORMAL
+
+                        def fetchall(self_inner):
+                            return [(1,)]
+
+                    return _Normal()
+                return cursor
+
+        monkeypatch.setattr(
+            sqlite3,
+            "connect",
+            lambda *a, **k: real_connect(*a, **{**k, "factory": Lying}),
+        )
+        with _refuses():
+            _migrate(tmp_path)
+
     def test_the_migration_verifies_synchronous_on_its_own_connection(
         self, tmp_path: Path, monkeypatch
     ) -> None:
@@ -821,18 +868,16 @@ class TestLockAndDurabilityOrdering:
         """Named, not counted: two arbitrary fsyncs -- the receipt writer
         syncing its own temp file twice, say -- would satisfy a bare count
         while the database was never durable."""
-        _store(tmp_path)
+        store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         events, _state = _record(monkeypatch)
         _migrate(tmp_path)
         targets = _fsync_targets(events)
-        # Anchored openat("ceremony.sqlite3", dir_fd=...) records a RELATIVE
-        # leaf, so demanding the absolute path would fail correct code.
+        db = os.stat(store.db_path)
+        parent = os.stat(tmp_path)
+        assert any(f"{db.st_dev}:{db.st_ino}" in t for t in targets), targets
         assert any(
-            t.endswith("ceremony.sqlite3") for t in targets
-        ), targets
-        assert any(
-            t.endswith(str(tmp_path)) or t.endswith(":.") for t in targets
+            f"{parent.st_dev}:{parent.st_ino}" in t for t in targets
         ), targets
 
     def test_the_database_fsync_precedes_the_receipt_link(
@@ -840,12 +885,14 @@ class TestLockAndDurabilityOrdering:
     ) -> None:
         """The receipt's OWN fsync must not be what satisfies this: the
         database has to be durable before the linearization point."""
-        _store(tmp_path)
+        store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         events, _state = _record(monkeypatch)
         _migrate(tmp_path)
+        db = os.stat(store.db_path)
         db_fsync = _first_index(
-            events, lambda e: e[0] == "fsync" and e[1].endswith("ceremony.sqlite3")
+            events,
+            lambda e: e[0] == "fsync" and f"{db.st_dev}:{db.st_ino}" in e[1],
         )
         link = _first_index(events, lambda e: e[0] == "link")
         assert db_fsync != -1, "the database itself was never fsynced"
@@ -932,13 +979,30 @@ class TestLockAndDurabilityOrdering:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         _drop_receipt(tmp_path)
-        events, _state = _record(monkeypatch)
+        lock_free: dict[str, bool] = {}
+
+        def probe_the_lock(_dst):
+            with closing(sqlite3.connect(store_path, timeout=0.1)) as other:
+                try:
+                    other.execute("BEGIN IMMEDIATE")
+                    other.rollback()
+                    lock_free["at_publication"] = True
+                except sqlite3.OperationalError:
+                    lock_free["at_publication"] = False
+
+        store_path = tmp_path / "ceremony.sqlite3"
+        events, _state = _record(monkeypatch, on_link=probe_the_lock)
         _migrate(tmp_path)
         commit = _first_index(events, lambda e: e[0] == "commit")
         link = _first_index(events, lambda e: e[0] == "link")
         assert commit != -1, "recovery never committed; it held the lock"
         assert link != -1, "recovery never published"
         assert commit < link, events
+        assert lock_free.get("at_publication") is True, (
+            "another connection could NOT take the write lock before "
+            "publication, so recovery still held it across the fsync -- "
+            "commit < link alone does not prove release"
+        )
 
 
 class TestAtomicity:
@@ -1368,12 +1432,16 @@ class TestSchemasMatchTheFrozenDDL:
         store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
+        # The auth plane's identity must authenticate the WALL: v1 and its
+        # freeze triggers are what stops an old daemon writing. Hashing only
+        # v2 leaves the wall outside the identity that vouches for it --
+        # exactly the v5 defect where DROP TRIGGER left the hash unchanged.
         assert (
-            _fingerprint(store.db_path, [V2_AUTH])
+            _fingerprint(store.db_path, [V1_AUTH, V2_AUTH])
             == identity.S7_TARGET_FINGERPRINT_AUTH
         )
         assert (
-            _fingerprint(store.db_path, [V2_VOICE])
+            _fingerprint(store.db_path, [V1_VOICE, V2_VOICE])
             == identity.S7_TARGET_FINGERPRINT_VOICE
         )
 
@@ -1383,8 +1451,12 @@ class TestSchemasMatchTheFrozenDDL:
         store = _store(tmp_path)
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
-        assert _receipt(tmp_path)["to_fingerprint_auth"] == _fingerprint(
-            store.db_path, [V2_AUTH]
+        receipt = _receipt(tmp_path)
+        assert receipt["to_fingerprint_auth"] == _fingerprint(
+            store.db_path, [V1_AUTH, V2_AUTH]
+        )
+        assert receipt["to_fingerprint_bundle"] == _fingerprint(
+            store.db_path, [V1_VOICE, V2_VOICE]
         )
 
     def test_the_source_fingerprints_match_the_frozen_v1_literals(
@@ -1444,3 +1516,72 @@ class TestReceiptIdentityIsBoundToThisStore:
         os.chmod(second / RECEIPT_NAME, 0o600)
         with _refuses():
             _migrate(second)
+
+
+class TestPublicationLoserVerifiesTheWinner:
+    """Losing the exclusive create is not an error to swallow."""
+
+    def test_the_loser_verifies_rather_than_failing_blind(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A competitor publishes between this run's fsync and its link.
+        The loser must READ the winner's receipt and confirm it describes
+        the same store, not merely give up -- and must not replace it."""
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        winner = (tmp_path / RECEIPT_NAME).read_bytes()
+        _drop_receipt(tmp_path)
+
+        def competitor_publishes(_dst):
+            (tmp_path / RECEIPT_NAME).write_bytes(winner)
+            os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+
+        _events, _state = _record(monkeypatch, on_link=competitor_publishes)
+        _migrate(tmp_path)
+        assert (tmp_path / RECEIPT_NAME).read_bytes() == winner
+        assert _receipt(tmp_path)["store_ino"] == os.stat(store.db_path).st_ino
+
+
+class TestPartialAndFutureSchemasRefuse:
+    def test_a_partial_target_refuses(self, tmp_path: Path) -> None:
+        """v2 auth present, v2 voice absent: neither source nor target, so
+        indeterminate -- refuse, never complete it."""
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            conn.execute(f"DROP TABLE {V2_VOICE}")
+            conn.commit()
+        _drop_receipt(tmp_path)
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_future_target_refuses(self, tmp_path: Path) -> None:
+        """A column beyond the frozen twenty-two is a schema this migration
+        does not know; completing it would launder an unknown store."""
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            conn.execute(f"ALTER TABLE {V2_AUTH} ADD COLUMN from_the_future TEXT")
+            conn.commit()
+        _drop_receipt(tmp_path)
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_non_empty_v2_voice_plane_refuses(self, tmp_path: Path) -> None:
+        """The auth plane's non-empty case was covered; the voice plane's
+        was not, and 'both v2 tables hold 0 rows' names BOTH."""
+        store = _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            columns = [r[1] for r in conn.execute(f"PRAGMA table_info({V2_VOICE})")]
+            assert columns, "voice v2 has no columns"
+            conn.execute("PRAGMA ignore_check_constraints=ON")
+            _insert(conn, V2_VOICE, {name: "x" for name in columns})
+            conn.commit()
+        _drop_receipt(tmp_path)
+        with _refuses():
+            _migrate(tmp_path)

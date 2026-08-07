@@ -249,3 +249,146 @@ class TestNoFollowAndStatStability:
         }
         assert "os.fstat" in calls, calls
         assert "os.stat" not in calls, calls
+
+
+class TestWriteOrderingAndCompleteness:
+    """O_TMPFILE -> write ALL -> fsync file -> link -> fsync parent."""
+
+    def _events(self, monkeypatch):
+        log: list[tuple[str, str]] = []
+        real_fsync, real_link, real_write = os.fsync, os.link, os.write
+
+        def fsync(fd):
+            st = os.fstat(fd)
+            kind = "dir" if stat_module.S_ISDIR(st.st_mode) else "file"
+            log.append(("fsync", kind))
+            return real_fsync(fd)
+
+        def link(src, dst, **kw):
+            log.append(("link", str(dst)))
+            return real_link(src, dst, **kw)
+
+        def write(fd, data):
+            log.append(("write", str(len(data))))
+            return real_write(fd, data)
+
+        monkeypatch.setattr(os, "fsync", fsync)
+        monkeypatch.setattr(os, "link", link)
+        monkeypatch.setattr(os, "write", write)
+        return log
+
+    def test_the_file_is_fsynced_before_the_link(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        log = self._events(monkeypatch)
+        _write(anchored, tmp_path, data=b'{"a":1}')
+        kinds = [f"{k}:{v}" for k, v in log]
+        assert "fsync:file" in kinds, kinds
+        assert kinds.index("fsync:file") < next(
+            i for i, x in enumerate(kinds) if x.startswith("link:")
+        ), kinds
+
+    def test_the_parent_is_fsynced_after_the_link(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Without it the directory entry itself is not durable, so a crash
+        can lose a receipt whose bytes were safely on disk."""
+        log = self._events(monkeypatch)
+        _write(anchored, tmp_path, data=b'{"a":1}')
+        kinds = [f"{k}:{v}" for k, v in log]
+        link_at = next(i for i, x in enumerate(kinds) if x.startswith("link:"))
+        assert any(
+            x == "fsync:dir" for x in kinds[link_at:]
+        ), kinds
+
+    def test_a_partial_write_is_completed(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """os.write may accept fewer bytes than offered. Writing once and
+        assuming completion truncates the receipt silently."""
+        real_write = os.write
+        monkeypatch.setattr(
+            os, "write", lambda fd, data: real_write(fd, data[:13])
+        )
+        payload = b"z" * 500
+        _write(anchored, tmp_path, data=payload)
+        assert (tmp_path / RECEIPT_NAME).read_bytes() == payload
+
+
+class TestReaderSideInvariants:
+    def test_the_reader_refuses_a_group_readable_file(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        _write(anchored, tmp_path)
+        os.chmod(tmp_path / RECEIPT_NAME, 0o640)
+        with pytest.raises(PermissionError):
+            anchored.read_private_file(
+                RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
+            )
+
+    def test_the_reader_refuses_a_multiply_linked_file(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """A second name is a second way to replace the bytes after the
+        reader has checked them."""
+        _write(anchored, tmp_path)
+        os.link(tmp_path / RECEIPT_NAME, tmp_path / "second_name.json")
+        with pytest.raises(OSError):
+            anchored.read_private_file(
+                RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
+            )
+
+    def test_a_truncated_read_refuses(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """EOF before the stat-declared size means the file changed under
+        the reader; returning the short bytes would be silent corruption."""
+        _write(anchored, tmp_path, data=b"w" * 400)
+        real_read = os.read
+        state = {"n": 0}
+
+        def truncating(fd, size):
+            state["n"] += 1
+            return b"" if state["n"] > 1 else real_read(fd, min(size, 40))
+
+        monkeypatch.setattr(os, "read", truncating)
+        with pytest.raises(OSError):
+            anchored.read_private_file(
+                RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
+            )
+
+    def test_the_stat_is_stable_across_the_read(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """Size and identity are re-checked after reading; otherwise a file
+        swapped mid-read is returned as if it were the one that was
+        validated."""
+        import ast
+        import inspect
+
+        tree = ast.parse(inspect.getsource(anchored.read_private_file))
+        fstats = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and ast.unparse(node.func) == "os.fstat"
+        ]
+        assert len(fstats) >= 2, "the descriptor is stat'd only once"
+
+    def test_a_fifo_is_opened_without_blocking(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """A FIFO with no writer blocks open() forever unless O_NONBLOCK is
+        set, so this must refuse rather than hang."""
+        import ast
+        import inspect
+
+        os.mkfifo(tmp_path / RECEIPT_NAME, 0o600)
+        source = inspect.getsource(anchored.read_private_file)
+        assert "O_NONBLOCK" in source, (
+            "no O_NONBLOCK: opening a FIFO receipt would hang the reader"
+        )
+        tree = ast.parse(source)
+        assert any(
+            isinstance(node, ast.Attribute) and node.attr == "O_NOFOLLOW"
+            for node in ast.walk(tree)
+        )
