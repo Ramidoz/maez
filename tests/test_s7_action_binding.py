@@ -21,12 +21,14 @@ here claims to.
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_guarded_execution as guarded
 
 NOW = "2026-08-07T12:00:00Z"
 FUTURE = "2026-08-07T16:00:00Z"
@@ -147,14 +149,21 @@ def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
     # removed -- a public-looking signature taking a root.
     # Production exposes migrate_authorization_store_to_v2() with NO
     # arguments; only this private-copy helper accepts a directory.
-    s7._migrate_authorization_store_to_v2_at(store_dir_fd=_dir_fd(tmp))
+    with _dir_fd(tmp) as fd:
+        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
     return store
 
 
-def _dir_fd(path: Path) -> int:
+@contextlib.contextmanager
+def _dir_fd(path: Path):
+    """Context-managed: my first version leaked every descriptor it opened."""
     import os
 
-    return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
 
 
 class TestTheBypassExistsToday:
@@ -285,36 +294,122 @@ class TestActionGrammarAtTheCARRIERS:
             _bundle(action)
 
 
+def _voice_bundle(action: str):
+    """A REAL S7VoiceConsultationBundle. make_test_voice_bundle was mine."""
+    return guarded.S7VoiceConsultationBundle(
+        source_ref_hash="s" * 64,
+        request_id="req-action-binding-1",
+        consultation_id="voice-action-binding-1",
+        request_envelope_hash="e" * 64,
+        rendered_text_hash="r" * 64,
+        action_params_hash=s7.canonical_hash(dict(PARAMS)),
+        precondition_hash="p" * 64,
+        authority_context_hash="c" * 64,
+        maez_voice_consultation_hash="m" * 64,
+        rendered_prompt_ref="prompts/1",
+        rendered_prompt_hash="q" * 64,
+        mutation_preview_hash="v" * 64,
+        rollback_plan_ref="rollback/1",
+        context_manifest_hash="x" * 64,
+        runtime_identity_hash="y" * 64,
+        model_routing_identity_hash="z" * 64,
+        model_config_hash="w" * 64,
+        raw_response_ref="responses/1",
+        raw_response_hash="t" * 64,
+        semantic_reader_attempt_hash="u" * 64,
+        expires_at=FUTURE,
+        authority_class="self_modification",
+        has_grounded_semantic_blocking_signal=False,
+        context_manifest_ref="manifests/1",
+        source_bundle_hash="b" * 64,
+        action=action,
+    )
+
+
 class TestTheProductionMintJoin:
-    """The mint takes NO action argument; it comes from the validation."""
+    """The FROZEN seam, in s7_guarded_execution -- not operator_user_boundary.
+
+    My first version put mint_from_validated_bundle, a v2-suffixed
+    validator, and a make_test_voice_bundle helper on the wrong module.
+    Code could have added three convenience functions there and turned
+    these green while the real mint route stayed untouched.
+    """
+
+    def test_the_frozen_validator_lives_on_the_voice_plane(self) -> None:
+        assert hasattr(guarded, "validate_voice_source_bundle")
+
+    def test_the_validator_takes_version_and_purpose(self) -> None:
+        import inspect
+
+        params = inspect.signature(guarded.validate_voice_source_bundle).parameters
+        assert {"bundle", "version", "purpose"} <= set(params), list(params)
 
     def test_mint_takes_no_action_argument(self) -> None:
         import inspect
 
-        params = inspect.signature(s7.mint_from_validated_bundle).parameters
+        params = inspect.signature(guarded.mint_from_validated_bundle).parameters
         assert "action" not in params, list(params)
         assert {"bundle", "validation"} <= set(params)
 
-    def test_the_minted_artifact_declares_the_v2_schema_identity(self) -> None:
-        from dataclasses import fields
-
-        names = {f.name for f in fields(s7.S7AuthorizationArtifact)}
-        assert "schema_version" in names
+    def test_a_real_mint_declares_the_v2_schema_and_the_validated_action(
+        self, tmp_path: Path
+    ) -> None:
+        """MINT, then assert the artifact -- not dataclass field presence."""
+        bundle = _voice_bundle(ACTION)
+        validation = guarded.validate_voice_source_bundle(
+            bundle=bundle, version="s7.voice_source_bundle.v2",
+            purpose="execution",
+        )
+        with sqlite3.connect(tmp_path / "x.sqlite3") as conn:
+            artifact = guarded.mint_from_validated_bundle(
+                bundle=bundle, validation=validation, conn=conn
+            )
+        assert artifact.schema_version == "s7.authorization_artifact.v2"
+        assert artifact.action == ACTION
 
     def test_a_bundle_validated_for_A_cannot_mint_for_B(
         self, tmp_path: Path
     ) -> None:
-        """The join the storage fixture cannot prove."""
-        validated_for_a = s7.validate_voice_source_bundle_v2(
-            bundle=s7.make_test_voice_bundle(action=ACTION),
+        validated_for_a = guarded.validate_voice_source_bundle(
+            bundle=_voice_bundle(ACTION),
+            version="s7.voice_source_bundle.v2",
             purpose="execution",
         )
-        with pytest.raises(ValueError):
-            s7.mint_from_validated_bundle(
-                bundle=s7.make_test_voice_bundle(action=SIBLING),
-                validation=validated_for_a,
-                conn=sqlite3.connect(tmp_path / "x.sqlite3"),
-            )
+        with sqlite3.connect(tmp_path / "y.sqlite3") as conn:
+            with pytest.raises(ValueError):
+                guarded.mint_from_validated_bundle(
+                    bundle=_voice_bundle(SIBLING),
+                    validation=validated_for_a,
+                    conn=conn,
+                )
+
+
+class TestPrivateHelperHasOneCallsite:
+    """The private migration helper must not spread into production."""
+
+    def test_no_production_module_calls_the_private_helper(self) -> None:
+        import ast
+
+        repo = Path(__file__).resolve().parents[1]
+        offenders = []
+        for root in ("core", "scripts", "daemon", "api"):
+            base = repo / root
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*.py"):
+                tree = ast.parse(path.read_text(errors="strict"))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        f = node.func
+                        name = (
+                            f.attr if isinstance(f, ast.Attribute)
+                            else getattr(f, "id", None)
+                        )
+                        if name == "_migrate_authorization_store_to_v2_at":
+                            offenders.append(
+                                (str(path.relative_to(repo)), node.lineno)
+                            )
+        assert offenders == [], offenders
 
 
 class TestHistoricalV1CannotAuthorize:
@@ -370,7 +465,8 @@ class TestHistoricalV1CannotAuthorize:
         assert unexpired == 1
 
         # 2. migrate that PRIVATE store through the real seam.
-        s7._migrate_authorization_store_to_v2_at(store_dir_fd=_dir_fd(tmp_path))
+        with _dir_fd(tmp_path) as fd:
+            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
 
         # 3. the v1 row must not authorize anything.
         grant, _ = store.consume_for_execution(
