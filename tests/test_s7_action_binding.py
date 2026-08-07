@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,7 @@ def _bundle(action: str = ACTION):
         request_envelope_hash=s7.work_request_envelope_hash(env),
         producer="self_mod_dialog_terminal_state",
         source_ref_kind="self_mod_dialog_exchange",
-        source_ref_hash="c" * 64,
+        source_ref_hash=_hex("authority_context"),
         maez_voice_consulted=True,
         maez_objection_state="absent",
         maez_withdrew_request=False,
@@ -294,35 +295,56 @@ class TestActionGrammarAtTheCARRIERS:
             _bundle(action)
 
 
+def _hex(seed: str) -> str:
+    """A real lowercase-hex digest. My first fixture used 's'*64 and 'z'*64,
+    which the existing validator refuses before the mint is ever reached."""
+    import hashlib
+
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
 def _voice_bundle(action: str):
-    """A REAL S7VoiceConsultationBundle. make_test_voice_bundle was mine."""
-    return guarded.S7VoiceConsultationBundle(
-        source_ref_hash="s" * 64,
+    """A REAL S7VoiceConsultationBundle that can actually validate.
+
+    Three defects in my first version: non-hex hash fields, an
+    authority_class outside the closed vocabulary (none | operational |
+    authoritative), and a caller-chosen source_bundle_hash instead of the
+    recomputed one. Any of them refuses before the mint, so the mint join
+    would never have been exercised.
+    """
+    bundle = guarded.S7VoiceConsultationBundle(
+        source_ref_hash=_hex("source_ref"),
         request_id="req-action-binding-1",
         consultation_id="voice-action-binding-1",
-        request_envelope_hash="e" * 64,
-        rendered_text_hash="r" * 64,
+        request_envelope_hash=_hex("request_envelope"),
+        rendered_text_hash=_hex("rendered_text"),
         action_params_hash=s7.canonical_hash(dict(PARAMS)),
-        precondition_hash="p" * 64,
-        authority_context_hash="c" * 64,
-        maez_voice_consultation_hash="m" * 64,
+        precondition_hash=_hex("precondition"),
+        authority_context_hash=_hex("authority_context"),
+        maez_voice_consultation_hash=_hex("maez_voice"),
         rendered_prompt_ref="prompts/1",
-        rendered_prompt_hash="q" * 64,
-        mutation_preview_hash="v" * 64,
+        rendered_prompt_hash=_hex("rendered_prompt"),
+        mutation_preview_hash=_hex("mutation_preview"),
         rollback_plan_ref="rollback/1",
-        context_manifest_hash="x" * 64,
-        runtime_identity_hash="y" * 64,
-        model_routing_identity_hash="z" * 64,
-        model_config_hash="w" * 64,
+        context_manifest_hash=_hex("context_manifest"),
+        runtime_identity_hash=_hex("runtime_identity"),
+        model_routing_identity_hash=_hex("model_routing"),
+        model_config_hash=_hex("model_config"),
         raw_response_ref="responses/1",
-        raw_response_hash="t" * 64,
-        semantic_reader_attempt_hash="u" * 64,
+        raw_response_hash=_hex("raw_response"),
+        semantic_reader_attempt_hash=_hex("semantic_reader"),
         expires_at=FUTURE,
-        authority_class="self_modification",
+        authority_class="authoritative",
         has_grounded_semantic_blocking_signal=False,
         context_manifest_ref="manifests/1",
-        source_bundle_hash="b" * 64,
+        source_bundle_hash=_hex("placeholder"),
         action=action,
+    )
+    # source_bundle_hash is DERIVED, not chosen: recompute it from the
+    # bundle and rebuild with the real value.
+    return replace(
+        bundle,
+        source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(bundle),
     )
 
 
@@ -384,32 +406,70 @@ class TestTheProductionMintJoin:
                 )
 
 
-class TestPrivateHelperHasOneCallsite:
-    """The private migration helper must not spread into production."""
+class TestPrivateHelperHasExactlyOneProductionCallsite:
+    """The public entrypoint calls it once. Nothing else may reference it.
 
-    def test_no_production_module_calls_the_private_helper(self) -> None:
+    My first version forbade EVERY production caller -- which would reject
+    the correct implementation, since the R7-gated public entrypoint must
+    open the canonical directory and call this helper exactly once. A
+    zero-call rule forces duplicated migration logic instead.
+    """
+
+    HELPER = "_migrate_authorization_store_to_v2_at"
+    ALLOWED = ("core/governance/operator_user_boundary.py",
+               "migrate_authorization_store_to_v2")
+
+    @classmethod
+    def _references(cls):
         import ast
 
         repo = Path(__file__).resolve().parents[1]
-        offenders = []
+        calls, other = [], []
         for root in ("core", "scripts", "daemon", "api"):
             base = repo / root
             if not base.is_dir():
                 continue
             for path in base.rglob("*.py"):
                 tree = ast.parse(path.read_text(errors="strict"))
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Call):
-                        f = node.func
-                        name = (
-                            f.attr if isinstance(f, ast.Attribute)
-                            else getattr(f, "id", None)
-                        )
-                        if name == "_migrate_authorization_store_to_v2_at":
-                            offenders.append(
-                                (str(path.relative_to(repo)), node.lineno)
-                            )
-        assert offenders == [], offenders
+                scope = {}
+                for n in ast.walk(tree):
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        for c in ast.walk(n):
+                            scope.setdefault(id(c), n.name)
+                called = set()
+                for n in ast.walk(tree):
+                    if isinstance(n, ast.Call):
+                        f = n.func
+                        name = (f.attr if isinstance(f, ast.Attribute)
+                                else getattr(f, "id", None))
+                        if name == cls.HELPER:
+                            called.add(id(f))
+                            calls.append((str(path.relative_to(repo)),
+                                          scope.get(id(n), "<module>")))
+                # ANY other mention -- alias, getattr string, import-as --
+                # is rejected without interpretation.
+                for n in ast.walk(tree):
+                    label = None
+                    if isinstance(n, ast.Name):
+                        label = n.id
+                    elif isinstance(n, ast.Attribute):
+                        label = n.attr
+                    elif isinstance(n, ast.Constant):
+                        label = n.value
+                    elif isinstance(n, ast.alias):
+                        label = n.name
+                    if label == cls.HELPER and id(n) not in called:
+                        other.append((str(path.relative_to(repo)),
+                                      getattr(n, "lineno", 0)))
+        return calls, other
+
+    def test_exactly_one_production_callsite(self) -> None:
+        calls, _ = self._references()
+        assert calls == [self.ALLOWED], calls
+
+    def test_no_alias_or_indirect_reference_exists(self) -> None:
+        _, other = self._references()
+        assert other == [], other
 
 
 class TestHistoricalV1CannotAuthorize:
