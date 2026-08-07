@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v25
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v26
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -33,7 +33,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v22 | journal posture: the header proves NOT-WAL, not `delete` — two-stage check |
 | v23 | the identity recheck must be anchored and NO-FOLLOW |
 | v24 | the production identity is PROJECTED from the persisted bench identity |
-| **v25** | **chronology corrected: admission precedes the boot witness; middle joins enforced at runtime** |
+| v25 | chronology corrected: admission precedes the boot witness; middle joins enforced |
+| **v26** | **S7 does not bind the action — the tap is scoped by a compensating control, stated as such** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -949,6 +950,67 @@ This **widens** the safe failure window "tap spent, cutover nonce
 reusable" — everything from receipt encoding to the eligibility recheck
 now sits inside it. R4 already accepted that cost, and it remains the
 right side to fail on.
+
+#### S7 DOES NOT BIND THE ACTION (v26)
+
+R5 gave the action an honest name. It did **not** make the name
+enforceable, and v15-v25 quietly assumed it had.
+
+`execution_grant_authorizes_action`
+([operator_user_boundary.py:2695](/home/rohit/maez/core/governance/operator_user_boundary.py#L2695))
+compares exactly two things:
+
+```python
+grant.derived_work_class == derived
+and grant.action_params_hash == canonical_hash(params or {})
+```
+
+**Neither carries the action string.** Reproduced:
+
+| action | derived class |
+|---|---|
+| `model_routing.cutover_cuda` | `self_modification` |
+| `model_routing.wipe_and_replace` | `self_modification` |
+
+Same class, same params, same hash — so **one grant minted for the
+cutover satisfies any sibling `model_routing.*` operation**. Neither
+`S7AuthorizationArtifact` nor `S7ExecutionGrant` nor the rendered
+statement carries an action field, so there is nothing in the durable
+authority material to compare against.
+
+Stated plainly, because it bears on what the owner's tap means: **a tap
+for "switch to CUDA" is, at the S7 layer, a tap for "some
+self_modification with these params".**
+
+#### The compensating control, and its honest limit
+
+Fixing S7's grant shape is a change to the authority substrate with
+blast radius far beyond this slice. Step 2 instead scopes the tap in its
+own consumer, and the design must not describe this as S7 enforcement:
+
+1. `CUTOVER_ACTION_PARAMS` carries the exact action literal as a member,
+   so `canonical_hash(params)` — which S7 *does* bind — covers it;
+2. the consumer requires `params["cutover_action"] == CUTOVER_ACTION`;
+3. the consumer requires
+   `grant.action_params_hash == canonical_hash(CUTOVER_ACTION_PARAMS)`;
+4. the consumer passes **byte-identical** action and params at guarded
+   minting, store consumption, and action-edge consumption;
+5. the consumer executes **only** `CUTOVER_ACTION` — there is no
+   parameter through which another action can be reached.
+
+**The limit, named:** this binds the action *for this consumer*. It does
+not stop a different caller holding the same grant from consuming it for
+a sibling action. That residual is bounded by the grant being single-use
+and consumed by this consumer at its own edge, and by the marker's
+durable single-use — but it is a bounded residual, not zero, and it is
+S7's to close properly.
+
+**Binding RED:** a cutover grant accepts the exact action and **refuses a
+sibling `model_routing.*` action with identical params**.
+
+**Carried (R6):** should S7's authority material bind the action
+directly? That is the real fix and it is an authority-substrate change,
+so it is the owner's call, not this slice's.
 
 #### The action edge, exact — and MEASURED (v15)
 
