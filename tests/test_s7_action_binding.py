@@ -101,13 +101,13 @@ def _bundle(action: str = ACTION):
     return env, authority, params_hash, rendered
 
 
-def _artifact(env, authority, params_hash, rendered):
-    """Construct the REAL carrier.
+def _stored_artifact(env, authority, params_hash, rendered):
+    """A STORAGE fixture. NOT the mint join.
 
-    My first version called mint_artifact_for_envelope, which exists
-    nowhere in the design or the allowlist -- adding it would have created
-    a NEW mint route purely to satisfy a test. S7AuthorizationArtifact is
-    the frozen carrier; constructing it is not a new route.
+    It constructs the carrier directly with a caller-chosen action, so it
+    proves nothing about how authority is minted -- a mutation in the real
+    mint seam would not disturb it. Named for what it is; the mint join is
+    proven separately in TestTheProductionMintJoin.
     """
     return s7.S7AuthorizationArtifact(
         artifact_id="artifact-action-binding-1",
@@ -141,8 +141,20 @@ def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
     which is the intended red.
     """
     store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
-    s7.migrate_authorization_store_to_v2(store_dir_fd=None, _private_root=tmp)
+    # PRIVATE helper, separately named. My first version froze
+    # migrate_authorization_store_to_v2(store_dir_fd=…, _private_root=…),
+    # which recreates the alternate-root capability the final design
+    # removed -- a public-looking signature taking a root.
+    # Production exposes migrate_authorization_store_to_v2() with NO
+    # arguments; only this private-copy helper accepts a directory.
+    s7._migrate_authorization_store_to_v2_at(store_dir_fd=_dir_fd(tmp))
     return store
+
+
+def _dir_fd(path: Path) -> int:
+    import os
+
+    return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 
 
 class TestTheBypassExistsToday:
@@ -160,7 +172,7 @@ class TestTheGenericEdgeRefusesSiblings:
     def test_a_real_grant_refuses_a_sibling_action(self, tmp_path: Path) -> None:
         env, authority, params_hash, rendered = _bundle()
         store = _migrated_store(tmp_path)
-        artifact = _artifact(env, authority, params_hash, rendered)
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
         store.put(artifact)
         grant, _ = store.consume_for_execution(
             artifact.artifact_id,
@@ -193,7 +205,7 @@ class TestActionSurvivesEveryJoin:
         assert rendered.action == ACTION
 
         store = _migrated_store(tmp_path)
-        artifact = _artifact(env, authority, params_hash, rendered)
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
         assert artifact.action == ACTION
         store.put(artifact)
 
@@ -273,6 +285,38 @@ class TestActionGrammarAtTheCARRIERS:
             _bundle(action)
 
 
+class TestTheProductionMintJoin:
+    """The mint takes NO action argument; it comes from the validation."""
+
+    def test_mint_takes_no_action_argument(self) -> None:
+        import inspect
+
+        params = inspect.signature(s7.mint_from_validated_bundle).parameters
+        assert "action" not in params, list(params)
+        assert {"bundle", "validation"} <= set(params)
+
+    def test_the_minted_artifact_declares_the_v2_schema_identity(self) -> None:
+        from dataclasses import fields
+
+        names = {f.name for f in fields(s7.S7AuthorizationArtifact)}
+        assert "schema_version" in names
+
+    def test_a_bundle_validated_for_A_cannot_mint_for_B(
+        self, tmp_path: Path
+    ) -> None:
+        """The join the storage fixture cannot prove."""
+        validated_for_a = s7.validate_voice_source_bundle_v2(
+            bundle=s7.make_test_voice_bundle(action=ACTION),
+            purpose="execution",
+        )
+        with pytest.raises(ValueError):
+            s7.mint_from_validated_bundle(
+                bundle=s7.make_test_voice_bundle(action=SIBLING),
+                validation=validated_for_a,
+                conn=sqlite3.connect(tmp_path / "x.sqlite3"),
+            )
+
+
 class TestHistoricalV1CannotAuthorize:
     """An UNEXPIRED v1 row, seeded BEFORE migration, through the public edge."""
 
@@ -293,9 +337,31 @@ class TestHistoricalV1CannotAuthorize:
         # 1. seed an UNEXPIRED v1 row while v1 is still writable.
         #    An expired row would refuse for the wrong reason -- all four
         #    live rows are expired.
-        legacy = _artifact(env, authority, params_hash, rendered)
-        store.put(legacy)
+        # A GENUINE v1 record: the unversioned shape, with NO action
+        # column. Seeding it through the action-bearing carrier would make
+        # it a v2 row wearing a v1 label -- not a historical record at all.
+        legacy = _stored_artifact(env, authority, params_hash, rendered)
         with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "INSERT INTO s7_authorization_artifacts ("
+                "artifact_id, request_id, request_envelope_hash,"
+                "rendered_text_hash, action_params_hash, precondition_hash,"
+                "authority_context_hash, derived_work_class,"
+                "derived_aggregation_group, nonce, credential_ref,"
+                "auth_method, grant_source, user_presence, user_verification,"
+                "created_at, expires_at, consumed_at, consumed_by_request_id,"
+                "ceremony_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    legacy.artifact_id, legacy.request_id,
+                    legacy.request_envelope_hash, legacy.rendered_text_hash,
+                    legacy.action_params_hash, legacy.precondition_hash,
+                    legacy.authority_context_hash, legacy.derived_work_class,
+                    legacy.derived_aggregation_group, legacy.nonce,
+                    legacy.credential_ref, legacy.auth_method,
+                    legacy.grant_source, 1, 1, NOW, FUTURE, None, None,
+                    "founder_local_webauthn",
+                ),
+            )
             unexpired = conn.execute(
                 "select count(*) from s7_authorization_artifacts "
                 "where artifact_id = ? and expires_at > ?",
@@ -304,9 +370,7 @@ class TestHistoricalV1CannotAuthorize:
         assert unexpired == 1
 
         # 2. migrate that PRIVATE store through the real seam.
-        s7.migrate_authorization_store_to_v2(
-            store_dir_fd=None, _private_root=tmp_path
-        )
+        s7._migrate_authorization_store_to_v2_at(store_dir_fd=_dir_fd(tmp_path))
 
         # 3. the v1 row must not authorize anything.
         grant, _ = store.consume_for_execution(
