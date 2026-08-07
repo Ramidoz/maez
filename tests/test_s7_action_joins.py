@@ -488,6 +488,21 @@ _CONSUMING_CALLS = frozenset(
 )
 
 
+def _is_action_expr(expr: str) -> bool:
+    """Is this expression an ACTION, rather than merely action-flavoured?
+
+    `authorization.action_params_hash` contains the substring "action" and
+    was accepted as the counterpart of a join, so
+    `card.action == authorization.action_params_hash` counted as binding
+    the action. It binds a hash. An action is a string literal, or an
+    expression whose FINAL attribute is exactly `action`.
+    """
+    stripped = expr.strip()
+    if stripped[:1] in {"'", '"'}:
+        return True
+    return stripped.split(".")[-1] == "action"
+
+
 def _joins_action_in_source(source: str, expression: str) -> bool:
     """Does this SOURCE equate `expression` with an action, or hand it to a
     consuming call?
@@ -517,7 +532,7 @@ def _joins_action_in_source(source: str, expression: str) -> bool:
             if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
                 continue
             sides = {ast.unparse(node.left), ast.unparse(node.comparators[0])}
-            if expression in sides and all("action" in side for side in sides):
+            if expression in sides and all(_is_action_expr(s) for s in sides):
                 return True
         if isinstance(node, ast.Call):
             name = (
@@ -597,28 +612,23 @@ class TestTheFourCallerJoins:
             "envelope.action",
         ), "the dream-state consumer never joins envelope.action"
 
-    def test_the_backup_ceremony_binds_its_fixed_literal(self) -> None:
+    def test_the_backup_ceremony_joins_its_fixed_literal(self) -> None:
+        """Same strict helper as the other two: membership in a loose set of
+        "compared or passed" expressions is not a join."""
         from core.governance import s7_webauthn_ceremony as ceremony
 
-        compared, passed = _action_uses(
-            ceremony._consume_backup_registration_authorization
-        )
-        assert "'register_backup_webauthn_credential'" in (compared | passed), (
-            "the backup consumer never binds the action it is for"
-        )
+        assert _joins_action(
+            ceremony._consume_backup_registration_authorization,
+            "'register_backup_webauthn_credential'",
+        ), "the backup consumer never joins the action it is for"
 
-    def test_the_disable_ceremony_binds_its_fixed_literal(self) -> None:
-        """Passes today: the literal is the `action=` argument handed to the
-        edge. A substring check would ALSO have passed on a comment, which
-        is why this looks at the argument specifically."""
+    def test_the_disable_ceremony_joins_its_fixed_literal(self) -> None:
         from daemon import maez_daemon
 
-        compared, passed = _action_uses(
-            maez_daemon._s7_disable_credential_for_proof
-        )
-        assert "'disable_founder_webauthn_credential'" in passed, (
-            "the disable consumer never passes the action to the edge"
-        )
+        assert _joins_action(
+            maez_daemon._s7_disable_credential_for_proof,
+            "'disable_founder_webauthn_credential'",
+        ), "the disable consumer never joins the action it is for"
 
 
 class TestTheJoinHelperIsItselfAttacked:
@@ -659,4 +669,20 @@ class TestTheJoinHelperIsItselfAttacked:
             "    return execution_grant_authorizes_action("
             "g, action=card.action, params={})\n",
             "card.action",
+        )
+
+    def test_a_params_hash_counterpart_is_not_a_join(self) -> None:
+        """The false join that survived the previous repair: both sides
+        contain "action", but one is a HASH."""
+        assert not _joins_action_in_source(
+            "def f(card, a):\n"
+            "    return card.action == a.action_params_hash\n",
+            "card.action",
+        )
+
+    def test_a_string_literal_counterpart_is_a_join(self) -> None:
+        assert _joins_action_in_source(
+            "def f(a):\n"
+            "    return a.action == 'register_backup_webauthn_credential'\n",
+            "'register_backup_webauthn_credential'",
         )
