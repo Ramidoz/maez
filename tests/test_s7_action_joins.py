@@ -38,6 +38,9 @@ NOW = "2026-08-07T12:00:00Z"
 FUTURE = "2026-08-07T16:00:00Z"
 ACTION = "model_routing.cutover_cuda"
 SIBLING = "model_routing.wipe_and_replace"
+# Same derived class as ACTION, deliberately NOT the cutover: a mint that
+# hardcodes the cutover action must not be able to pass the row->grant join.
+OTHER_ACTION = "model_routing.rollback_vulkan"
 PARAMS = {"cutover_action": ACTION, "window_id": "cutover-20260713-1202"}
 
 
@@ -186,6 +189,26 @@ def _columns(db_path, table: str) -> set[str]:
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _table_shape(db_path, table: str) -> tuple:
+    """The COMPLETE table_info plus the frozen DDL.
+
+    Checking only that no `action` column appeared would miss a widened
+    type, a dropped NOT NULL, a changed default, a reordered column or a
+    rewritten primary key -- all of which alter v1 while leaving the column
+    NAMES identical.
+    """
+    with closing(sqlite3.connect(db_path)) as conn:
+        info = tuple(conn.execute(f"PRAGMA table_info({table})"))
+        ddl = tuple(
+            conn.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE tbl_name = ? ORDER BY type, name",
+                (table,),
+            )
+        )
+    return info, ddl
+
+
 class TestLinkEnvelopeToRendered:
     def test_the_link_holds(self) -> None:
         env, _a, _p, rendered = _chain()
@@ -242,10 +265,26 @@ class TestLinkArtifactToRow:
         store = _migrated_store(tmp_path)
         assert "action" in _columns(store.db_path, V2_TABLE)
 
-    def test_v1_is_left_untouched(self, tmp_path: Path) -> None:
-        """The migration adds a table; it must not alter the old one."""
-        store = _migrated_store(tmp_path)
-        assert "action" not in _columns(store.db_path, V1_TABLE)
+    def test_v1_is_left_byte_identical(self, tmp_path: Path) -> None:
+        """The migration adds a table; it must not alter the old one.
+
+        Captured BEFORE and compared AFTER, over the complete table_info and
+        the frozen DDL -- not merely "no action column appeared", which a
+        widened type or a dropped NOT NULL would slip past.
+        """
+        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        before = _table_shape(store.db_path, V1_TABLE)
+        assert before[0], "v1 table absent; the comparison would be vacuous"
+
+        import os
+
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+
+        assert _table_shape(store.db_path, V1_TABLE) == before
 
 
 class TestLinkRowToGrant:
@@ -255,8 +294,13 @@ class TestLinkRowToGrant:
         """Behavioural, not source-text: hardcoded or unrelated `action`
         text in the mint would green a source check while establishing no
         join at all. This stores a row, consumes it, and reads the grant.
+
+        A mint that hardcodes the cutover action would pass a test built on
+        the cutover action, so this stores a DIFFERENT one and requires the
+        grant to carry it.
         """
-        env, authority, params_hash, rendered = _chain()
+        env, authority, params_hash, rendered = _chain(action=OTHER_ACTION)
+        assert OTHER_ACTION != ACTION
         store = _migrated_store(tmp_path)
         store.put(_artifact(env, authority, params_hash, rendered))
         grant, _result = store.consume_for_execution(
@@ -270,7 +314,7 @@ class TestLinkRowToGrant:
             now=NOW,
         )
         assert grant is not None, "consumption produced no grant"
-        assert grant.action == ACTION
+        assert grant.action == OTHER_ACTION
 
     def test_the_mint_does_not_take_the_action_from_the_caller(self) -> None:
         """The one structural check that IS the point: the action must not
@@ -386,10 +430,15 @@ def _action_uses(func) -> tuple[set[str], set[str]]:
     return compared, passed
 
 
-def _binds_an_action(func) -> bool:
-    """Any comparison or `action=` argument that mentions an action."""
+def _binds_exactly(func, expression: str) -> bool:
+    """Is THIS expression compared, or passed as `action=`?
+
+    A substring test on "action" is not enough: every one of these
+    consumers already mentions `action_params_hash`, which greened both
+    caller-join tests while neither bound an action at all.
+    """
     compared, passed = _action_uses(func)
-    return any("action" in expr for expr in compared | passed) or bool(passed)
+    return expression in (compared | passed)
 
 
 class TestTheFourCallerJoins:
@@ -418,22 +467,37 @@ class TestTheFourCallerJoins:
         assert callable(DecisionPipeline._consume_s7_execution_authorization)
         assert callable(DreamState._consume_s7_execution_authorization_for_envelope)
 
-    def test_the_decision_pipeline_consumer_binds_an_action(self) -> None:
-        """Its authoritative action is `card.action` -- an attribute, not a
-        literal, so this must accept a dynamic expression."""
+    def test_action_params_hash_does_not_count_as_binding_an_action(self) -> None:
+        """CONTROL, and the reason the two tests below name an exact
+        expression. Every consumer already mentions `action_params_hash`;
+        a substring test on "action" greened both caller joins while
+        neither bound an action at all."""
         from core.decision.decision_pipeline import DecisionPipeline
 
-        assert _binds_an_action(
+        compared, passed = _action_uses(
             DecisionPipeline._consume_s7_execution_authorization
-        ), "the decision pipeline consumer neither compares nor passes an action"
+        )
+        mentions = {e for e in compared | passed if "action" in e}
+        assert mentions, "expected the params-hash mentions that caused the defect"
+        assert all("action_params_hash" in e for e in mentions), mentions
 
-    def test_the_dream_state_consumer_binds_an_action(self) -> None:
+    def test_the_decision_pipeline_consumer_binds_card_action(self) -> None:
+        """Its authoritative action is `card.action` -- pinned exactly, not
+        by substring."""
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        assert _binds_exactly(
+            DecisionPipeline._consume_s7_execution_authorization, "card.action"
+        ), "the decision pipeline consumer never binds card.action"
+
+    def test_the_dream_state_consumer_binds_envelope_action(self) -> None:
         """Its authoritative action is the reconstructed `envelope.action`."""
         from core.evolution.dream_state import DreamState
 
-        assert _binds_an_action(
-            DreamState._consume_s7_execution_authorization_for_envelope
-        ), "the dream-state consumer neither compares nor passes an action"
+        assert _binds_exactly(
+            DreamState._consume_s7_execution_authorization_for_envelope,
+            "envelope.action",
+        ), "the dream-state consumer never binds envelope.action"
 
     def test_the_backup_ceremony_binds_its_fixed_literal(self) -> None:
         from core.governance import s7_webauthn_ceremony as ceremony

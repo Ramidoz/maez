@@ -293,91 +293,150 @@ class TestLineLevelIdentity:
         )
 
 
-def _production_files() -> list[str]:
-    import subprocess
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "tests",
+        "docs",
+        "logs",
+    }
+)
 
-    out = subprocess.run(
-        ["git", "ls-files", "*.py"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
-    return [f for f in out if not f.startswith("tests/")]
+
+def _production_files() -> list[str]:
+    """Every production .py, walked in-process.
+
+    Deliberately NOT `git ls-files`: spawning a subprocess from a test
+    recreates the airlock spawn-debt that already blocks two tests from
+    certifying. A walk also sees UNTRACKED files, which is the right
+    behaviour for a discovery guard -- a new road is a new road whether or
+    not it has been committed yet.
+    """
+    import os
+
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        dirnames[:] = [
+            d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")
+        ]
+        for name in filenames:
+            if name.endswith(".py"):
+                found.append(str(Path(dirpath, name).relative_to(REPO)))
+    return sorted(found)
+
+
+def _discover_source(path, source, *, bare, dotted):
+    """All tracked reachability shapes in ONE source string.
+
+    Split out so the scanner can be attacked directly with synthetic code
+    rather than only exercised on a repo that happens to be clean.
+    """
+    dotted_tails = {t.split(".")[-1] for t in dotted}
+    sites, module_level, via_getattr, via_alias = [], [], [], []
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return sites, module_level, via_getattr, via_alias
+
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        # import aliases: from x import build_work_request_envelope as b
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if a.asname and a.name.split(".")[-1] in bare:
+                    aliases[a.asname] = a.name.split(".")[-1]
+        # ASSIGNMENT aliases: b = build_work_request_envelope
+        if isinstance(node, ast.Assign):
+            value = node.value
+            tail = (
+                value.attr
+                if isinstance(value, ast.Attribute)
+                else (value.id if isinstance(value, ast.Name) else None)
+            )
+            if tail in bare or tail in dotted_tails:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = tail
+
+    def walk(node, fn):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(child, child.name)
+                continue
+            if isinstance(child, ast.ClassDef):
+                walk(child, fn)
+                continue
+            if isinstance(child, ast.Call):
+                name = (
+                    child.func.attr
+                    if isinstance(child.func, ast.Attribute)
+                    else getattr(child.func, "id", None)
+                )
+                if name in aliases:
+                    via_alias.append((path, aliases[name], child.lineno))
+                    name = aliases[name]
+                unparsed = ast.unparse(child.func)
+                hit = (
+                    unparsed
+                    if unparsed in dotted
+                    else (name if name in bare else None)
+                )
+                if hit:
+                    sites.append((path, fn or "<module>", hit, child.lineno))
+                    if fn is None:
+                        module_level.append((path, hit, child.lineno))
+                # getattr(store, "put") -- reaches a DOTTED target by its
+                # tail, which no call-graph check in this file can see.
+                if (
+                    name == "getattr"
+                    and len(child.args) > 1
+                    and isinstance(child.args[1], ast.Constant)
+                    and child.args[1].value in (bare | dotted | dotted_tails)
+                ):
+                    via_getattr.append((path, child.args[1].value, child.lineno))
+            walk(child, fn)
+
+    walk(tree, None)
+    return sites, module_level, via_getattr, via_alias
+
+
+def _targets(table):
+    call_targets = {r[3][5:] for r in table if r[3].startswith("call:")}
+    return (
+        {t for t in call_targets if "." not in t},
+        {t for t in call_targets if "." in t},
+    )
 
 
 def _discover(table):
     """Repo-wide sweep for tracked call targets, in ANY production file.
 
     The pinned inventory can only see roads it already lists. This sweep is
-    the discovery half: it looks everywhere, and additionally at the shapes
-    a file-scoped scan misses -- module-level calls, aliased imports, and
-    getattr-by-string.
+    the discovery half.
 
     Definition names are deliberately NOT swept as call targets. Reducing
     `S7AuthorizationStore.put` to bare `put` matched a terminal-UI buffer
     write and reported a new S7 road that did not exist.
     """
-    call_targets = {r[3][5:] for r in table if r[3].startswith("call:")}
-    bare = {t for t in call_targets if "." not in t}
-    dotted = {t for t in call_targets if "." in t}
-
-    sites: list[tuple[str, str, str, int]] = []
-    module_level: list[tuple[str, str, int]] = []
-    via_getattr: list[tuple[str, str, int]] = []
-    via_alias: list[tuple[str, str, int]] = []
-
+    bare, dotted = _targets(table)
+    sites, module_level, via_getattr, via_alias = [], [], [], []
     for path in _production_files():
         try:
-            tree = ast.parse((REPO / path).read_text())
-        except (SyntaxError, UnicodeDecodeError):
+            source = (REPO / path).read_text()
+        except (OSError, UnicodeDecodeError):
             continue
-        aliases = {
-            a.asname: a.name.split(".")[-1]
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.Import, ast.ImportFrom))
-            for a in node.names
-            if a.asname and a.name.split(".")[-1] in bare
-        }
-
-        def walk(node, fn, *, path=path, aliases=aliases):
-            for child in ast.iter_child_nodes(node):
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    walk(child, child.name, path=path, aliases=aliases)
-                    continue
-                if isinstance(child, ast.ClassDef):
-                    walk(child, fn, path=path, aliases=aliases)
-                    continue
-                if isinstance(child, ast.Call):
-                    name = (
-                        child.func.attr
-                        if isinstance(child.func, ast.Attribute)
-                        else getattr(child.func, "id", None)
-                    )
-                    if name in aliases:
-                        via_alias.append((path, aliases[name], child.lineno))
-                        name = aliases[name]
-                    hit = (
-                        ast.unparse(child.func)
-                        if ast.unparse(child.func) in dotted
-                        else (name if name in bare else None)
-                    )
-                    if hit:
-                        sites.append((path, fn or "<module>", hit, child.lineno))
-                        if fn is None:
-                            module_level.append((path, hit, child.lineno))
-                    if (
-                        name == "getattr"
-                        and len(child.args) > 1
-                        and isinstance(child.args[1], ast.Constant)
-                        and child.args[1].value in (bare | dotted)
-                    ):
-                        via_getattr.append(
-                            (path, child.args[1].value, child.lineno)
-                        )
-                walk(child, fn, path=path, aliases=aliases)
-
-        walk(tree, None, path=path, aliases=aliases)
+        s, m, g, a = _discover_source(path, source, bare=bare, dotted=dotted)
+        sites += s
+        module_level += m
+        via_getattr += g
+        via_alias += a
     return sites, module_level, via_getattr, via_alias
 
 
@@ -422,3 +481,79 @@ class TestRepoWideDiscoveryGuard:
     def test_no_tracked_target_is_reached_through_an_alias(self, table) -> None:
         _s, _m, _g, via_alias = _discover(table)
         assert not via_alias, via_alias
+
+
+class TestTheDiscoveryScannerIsItselfAttacked:
+    """A guard that only ever runs against a clean repo proves nothing.
+
+    Each case below is a way to reach a tracked target that the earlier
+    file-scoped scanner could not see. They are fed as synthetic source so
+    the scanner is tested, not the repo's current cleanliness.
+    """
+
+    def _run(self, table, source: str):
+        bare, dotted = _targets(table)
+        return _discover_source("synthetic.py", source, bare=bare, dotted=dotted)
+
+    def test_a_plain_call_is_seen(self, table) -> None:
+        """CONTROL: if this missed, every negative below would be vacuous."""
+        sites, _m, _g, _a = self._run(
+            table, "def f():\n    build_work_request_envelope()\n"
+        )
+        assert [s[2] for s in sites] == ["build_work_request_envelope"]
+
+    def test_an_import_alias_is_seen(self, table) -> None:
+        sites, _m, _g, via_alias = self._run(
+            table,
+            "from x import build_work_request_envelope as mk\n"
+            "def f():\n    mk()\n",
+        )
+        assert via_alias, "aliased import reached a tracked target unseen"
+        assert [s[2] for s in sites] == ["build_work_request_envelope"]
+
+    def test_an_assignment_alias_is_seen(self, table) -> None:
+        """`mk = build_work_request_envelope` then `mk()` -- the shape an
+        import-only alias check misses entirely."""
+        sites, _m, _g, via_alias = self._run(
+            table,
+            "mk = build_work_request_envelope\ndef f():\n    mk()\n",
+        )
+        assert via_alias, "assignment alias reached a tracked target unseen"
+        assert [s[2] for s in sites] == ["build_work_request_envelope"]
+
+    def test_getattr_by_string_is_seen(self, table) -> None:
+        sites, _m, via_getattr, _a = self._run(
+            table, 'def f():\n    getattr(s7, "consume_for_execution")()\n'
+        )
+        assert via_getattr, "getattr-by-string reached a tracked target unseen"
+
+    def test_getattr_reaching_a_dotted_target_by_its_tail_is_seen(
+        self, table
+    ) -> None:
+        """`getattr(store, "put")` reaches authorization_store.put without
+        ever naming it. Matching only the full dotted form misses it."""
+        _s, _m, via_getattr, _a = self._run(
+            table, 'def f():\n    getattr(store, "put")(artifact)\n'
+        )
+        assert via_getattr, "getattr reached a dotted target by tail, unseen"
+
+    def test_a_module_level_call_is_seen(self, table) -> None:
+        """Runs at import time, before any authority exists."""
+        _s, module_level, _g, _a = self._run(
+            table, "build_work_request_envelope()\n"
+        )
+        assert module_level
+
+    def test_an_unrelated_put_is_not_flagged(self, table) -> None:
+        """The false positive that reported a terminal-UI buffer write as a
+        new S7 road. Dotted targets must stay dotted."""
+        sites, _m, _g, _a = self._run(
+            table, "def f():\n    self.buf.put(1, 2, 'x')\n"
+        )
+        assert not sites, sites
+
+    def test_an_unrelated_getattr_is_not_flagged(self, table) -> None:
+        _s, _m, via_getattr, _a = self._run(
+            table, 'def f():\n    getattr(obj, "render")()\n'
+        )
+        assert not via_getattr, via_getattr
