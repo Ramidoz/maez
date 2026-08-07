@@ -1,4 +1,4 @@
-# S7 action binding — design v11
+# S7 action binding — design v12
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -816,20 +816,52 @@ constrained the field I had just been shown and left its neighbours free.
 
 **The exact successful tuple, frozen. The mint requires ALL of it:**
 
+**I invented a vocabulary that does not exist.** `"validated"` and
+`_MINTABLE_AUTHORITY_PROJECTIONS` are mine; production uses the literal
+`"valid_absent"` for **both** `status` and `authority_projection`
+([s7_guarded_execution.py:17](/home/rohit/maez/core/governance/s7_guarded_execution.py#L17)).
+Same error as the action grammar that closed six existing roads: I froze
+a vocabulary from my own head without reading the one in use.
+
+**Worse — the check already exists.** `s7_guarded_execution.py:2236`
+already requires exactly:
+
 ```python
-validation.status              == "validated"
-validation.source_bundle_valid is True
-validation.mint_eligible       is True
-validation.failure_reason_code is None          # a success carries no failure
-validation.authority_projection in _MINTABLE_AUTHORITY_PROJECTIONS
-validation.schema_version      == "s7.voice_source_bundle.v2"
-validation.action              is not None      # and matches the grammar
+status              == "valid_absent"
+source_bundle_valid is True
+mint_eligible       is True
+authority_projection == "valid_absent"
+failure_reason_code is None
 ```
+
+That is the complete five-field tuple I spent three revisions converging
+on, in production, unread. v2 does not replace it — it **extends** it.
+
+**The v2 successful tuple, frozen:**
+
+```python
+# the five existing checks, literals unchanged:
+validation.status               == "valid_absent"
+validation.source_bundle_valid  is True
+validation.mint_eligible        is True
+validation.authority_projection == "valid_absent"
+validation.failure_reason_code  is None
+# plus what v2 adds:
+validation.schema_version       == "s7.voice_source_bundle.v2"
+validation.action               is not None      # and matches the grammar
+validation.source_bundle_hash   == bundle.source_bundle_hash
+validation.binding_hash         == recompute_binding_hash(bundle, action)
+```
+
+The vocabulary is **not** changed. Changing `"valid_absent"` would touch
+every route that produces or consumes it, which is a separate slice with
+its own review.
 
 **Constructor invariants** — these combinations cannot be built at all:
 
-* `status == "validated"` with a non-`None` `failure_reason_code`;
-* `status != "validated"` with `mint_eligible is True`;
+* `status == "valid_absent"` with a non-`None` `failure_reason_code`;
+* `status != "valid_absent"` with `mint_eligible is True`;
+* `authority_projection != "valid_absent"` with `mint_eligible is True`;
 * `failure_reason_code` set with `mint_eligible is True`;
 * `mint_eligible is True` with `source_bundle_valid is False`;
 * `schema_version == "…v1"` with `action` not `None`, or with
@@ -1111,7 +1143,29 @@ primitive:
 ```python
 def write_private_file(relative, data, *, root, on_link=None) -> Path
 def read_private_file(relative, *, root, expected_uid) -> bytes
+
+# ACTIVATION ONLY — no root parameter exists
+def read_migration_receipt(*, store_fd: int) -> bytes
 ```
+
+**Activation must not take a caller-supplied root (v12).** A generic
+reader with a `root` argument lets a caller point activation at a receipt
+beside a *different* store. `read_migration_receipt` derives the path
+from the **already-held canonical store descriptor**; there is no
+argument through which another root could arrive.
+
+**File predicates it enforces**, which v11 omitted entirely:
+
+* **regular file** — not symlink, fifo or directory;
+* owner uid matches, mode `0600`, `st_nlink == 1`;
+* **bounded size** — refuse above a fixed cap rather than reading
+  unbounded bytes;
+* **short reads refuse** — `len(data) == st_size`, never "read what came";
+* **pre/post stat stability** — `dev`, `ino`, `size`, `mtime_ns`,
+  `ctime_ns` identical before and after.
+
+The generic helper stays for bench callers; activation uses only the
+wrapper.
 
 Anchored component walk, `O_NOFOLLOW` at every component, `O_TMPFILE`,
 `write_all`, `fsync(file)`, exclusive `link`, `fsync(parent)`, `0600`,
@@ -1139,8 +1193,9 @@ deactivate itself on its first real artifact.
 
 **Every activation consumer revalidates** before treating v2 as live:
 
-* the receipt is read through **`core.governance.anchored_io.read_private_file`**
-  (component walk, no-follow, `0600`, single link, uid);
+* the receipt is read through **`read_migration_receipt(store_fd=…)`** —
+  no caller-supplied root — enforcing regular-file, uid, `0600`,
+  single-link, bounded-size, short-read and pre/post-stat stability;
 * its bytes **decode canonically** and round-trip byte-identical;
 * **both** activation fingerprints match the live planes — which now
   includes every trigger;
@@ -1156,6 +1211,37 @@ identity **mismatch** refuses and activates nothing. **Idempotence:**
 re-running `s7-migrate-v2` when a valid receipt already exists is a
 verified no-op that republishes nothing — it re-verifies and reports, so
 a second run cannot mint a second receipt.
+
+### Crash between COMMIT and receipt publication (v12)
+
+The database commits at step 14; the receipt publishes at step 16. **A
+crash between leaves exact target tables and no receipt** — and a rerun
+would then fail the *source* fingerprint checks at steps 3–4, because the
+source planes are no longer pre-migration. v11's idempotence claim was
+false in precisely the window my own two-step ordering creates. I opened
+that window deliberately and never said what lives in it.
+
+**Frozen classification**, performed before anything else:
+
+| observed | classification | action |
+|---|---|---|
+| receipt absent, **source** fingerprints match | not started | migrate normally |
+| receipt absent, **target** fingerprints match, both v2 tables hold **0** rows | committed-not-published | **resume** at step 15: fsync, publish |
+| receipt present and valid | complete | verified no-op |
+| receipt absent, neither source nor target matches | indeterminate | **refuse** — never repair |
+| receipt absent, target matches, any v2 table **non-empty** | indeterminate | **refuse** |
+
+The non-empty check is what makes resumption safe: v2 is inert without a
+receipt, so v2 rows cannot legitimately exist yet. A non-zero count means
+something happened this procedure cannot explain, and refusing is the
+only honest response.
+
+Recovery stays **owner-invoked** — a branch of the same command, never an
+automatic self-heal on open.
+
+**Crash-after-COMMIT RED:** interrupt between commit and publication;
+rerun; assert it classifies committed-not-published, publishes, and
+activates — and that the same rerun **refuses** if any v2 row exists.
 
 **Normal store opening is verification-only.** It may read and verify a
 fingerprint; it may **never** create, alter, migrate or commit. Enforced
