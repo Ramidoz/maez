@@ -554,3 +554,133 @@ class TestOpeningTheStoreDoesNotMigrate:
                 )
             }
         assert "s7_authorization_artifacts_v2" not in names, names
+
+
+class TestTheRecordCannotBeRelabelled:
+    """The signed TEXT and the action field must agree, always.
+
+    Reproduced before this test existed: replace(rendered, action=SIBLING)
+    succeeded while rendered_text still read the original action. The
+    owner reads the text; the machine reads the field. If they can differ,
+    the tap does not mean what the owner saw.
+    """
+
+    def test_relabelling_a_rendered_statement_refuses(self) -> None:
+        _e, _a, _p, rendered = _bundle()
+        with pytest.raises(ValueError):
+            replace(rendered, action=SIBLING)
+
+    def test_the_field_always_equals_the_rendered_line(self) -> None:
+        _e, _a, _p, rendered = _bundle()
+        line = next(
+            l for l in rendered.rendered_text.splitlines()
+            if l.startswith("Action: ")
+        )
+        assert line == f"Action: {rendered.action}"
+
+
+class TestArtifactMustMatchTheRenderedAction:
+    """authorization_artifact_matches accepted a differing action."""
+
+    def test_an_artifact_whose_action_differs_from_rendered_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
+        mismatched = replace(artifact, action=SIBLING)
+        assert not s7.authorization_artifact_matches(
+            mismatched,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+        )
+
+    def test_an_arbitrary_schema_version_refuses(self, tmp_path: Path) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
+        forged = replace(artifact, schema_version="s7.something.v9")
+        assert not s7.authorization_artifact_matches(
+            forged,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+        )
+
+
+class TestFrozenV2Identities:
+    """A v2 identity, not a silently-changed v1 shape."""
+
+    def test_the_envelope_declares_the_v2_schema(self) -> None:
+        _e, _a, _p, _r = _bundle()
+        assert _e.schema_version == "s7.work_request_envelope.v2"
+
+    def test_the_grant_declares_the_v2_schema(self, tmp_path: Path) -> None:
+        from dataclasses import fields
+
+        names = {f.name for f in fields(s7.S7ExecutionGrant)}
+        assert "schema_version" in names
+
+
+class TestARealGrantCanBeMinted:
+    """_mint_s7_execution_grant must pass the now-required action."""
+
+    def test_minting_a_grant_carries_the_action(self, tmp_path: Path) -> None:
+        env, authority, params_hash, rendered = _bundle()
+        store = _migrated_store(tmp_path)
+        artifact = _stored_artifact(env, authority, params_hash, rendered)
+        store.put(artifact)
+        grant, _ = store.consume_for_execution(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+        # A swallowed TypeError would surface here as a None grant.
+        assert grant is not None, "mint raised and the error was swallowed"
+        assert grant.action == ACTION
+
+
+class TestFixedActionConsumersCheckTheirAction:
+    """Backup registration consumed by params hash and class only."""
+
+    def test_backup_registration_checks_its_fixed_action(self) -> None:
+        import inspect
+
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        source = inspect.getsource(
+            ceremony._consume_backup_registration_authorization
+        )
+        assert "register_backup_webauthn_credential" in source, source
+
+
+class TestActionsAreExactStrings:
+    """A hostile str subclass defeats ordinary equality."""
+
+    def test_a_str_subclass_is_refused_by_the_grammar(self) -> None:
+        class Sneaky(str):
+            def __eq__(self, other):  # noqa: D105
+                return True
+
+            def __hash__(self):  # noqa: D105
+                return hash(str(self))
+
+        with pytest.raises(ValueError):
+            s7.validate_action_literal(Sneaky(ACTION))
+
+    def test_the_envelope_refuses_a_str_subclass_action(self) -> None:
+        class Sneaky(str):
+            pass
+
+        with pytest.raises(ValueError):
+            _bundle(Sneaky(ACTION))
