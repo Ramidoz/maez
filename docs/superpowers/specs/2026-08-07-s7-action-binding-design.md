@@ -1,6 +1,7 @@
 # S7 action binding — design v16 (R7 RULED — implementing)
 
-Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
+Status: **RATIFIED 2026-08-07. R7 and scope both RULED by the owner.
+REDs written; implementation cleared.**
 
 Origin: the CUDA cutover slice needed a tap that authorizes *this exact
 operation*. It discovered that S7 does not bind the action at all. The
@@ -1520,14 +1521,13 @@ Under **(a)**, the command has:
   creates tables and triggers and nothing else.
 
 That is weaker than the ceremonies it enables, and it is named as such
-rather than dressed up. **This requires the owner's explicit ratification
-(R7)**, because "procedural, not authenticated" is the same class of
-statement he already ruled on for the cutover itself.
+rather than dressed up. ~~This requires the owner's explicit ratification
+(R7)~~ — **RULED 2026-08-07**: procedural, because the birth event has not
+happened. See the R7 section above for the ruling and its narrow scope.
 
 ## Carried
 
-* **R7 — owner's choice, two real options:** (a) owner-typed procedural
-  command, with unauthenticated presence stated — a **new exception**,
-  since procedural fallback was withdrawn for the cutover; or (b) a
-  separate founder-key bootstrap ceremony independent of S7 v2. **Review
-  recommends (b).** I do not choose between them.
+**Nothing.** R7 is ruled (procedural, pre-birth only) and scope is ruled
+(finish S7 first). The former "two real options" bullet is deleted rather
+than struck through — a live question that has been answered, left
+readable, is one somebody re-opens.
