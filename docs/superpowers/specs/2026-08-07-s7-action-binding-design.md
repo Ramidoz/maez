@@ -1,4 +1,4 @@
-# S7 action binding — design v14
+# S7 action binding — design v15 (FINAL — REDs next)
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -1170,11 +1170,37 @@ would pass: the receipt is genuine, the store fd is genuine, and they
 have nothing to do with each other. I split a single trust root into two
 arguments and never rejoined them.
 
-**Frozen: one descriptor.**
+**One descriptor was still one too many (v15).** Collapsing to
+`store_dir_fd` stopped directory A being paired with store B — but
+`store_dir_fd` **is itself a caller-supplied root capability**. A caller
+can hand it directory C containing *both* an alternate database *and* a
+matching receipt, and every internal join is satisfied. "No
+caller-supplied root" was still false at the public boundary; I removed
+one capability and left the other, which is the same defect one argument
+over.
+
+**Frozen: the production entrypoint takes NOTHING.**
 
 ```python
-def read_migration_receipt(*, store_dir_fd: int) -> bytes
+# PRODUCTION — no path, no root, no descriptor
+def read_migration_receipt() -> bytes:
+    with _open_canonical_s7_dir() as store_dir_fd:      # opens the ONE
+        return _read_migration_receipt(store_dir_fd=store_dir_fd)
+
+# PRIVATE — descriptor injection, for private-copy tests only
+def _read_migration_receipt(*, store_dir_fd: int) -> bytes
 ```
+
+`_open_canonical_s7_dir()` walks the frozen canonical path itself,
+component by component with `O_NOFOLLOW`. There is no argument anywhere
+on the public route.
+
+**Structural pin:** `_read_migration_receipt` has a **production-callsite
+allowlist of exactly one** — `read_migration_receipt`. Any other
+production caller fails.
+
+**Binding RED:** no public or production route accepts a path, a root or
+a descriptor — asserted from the signatures, not from prose.
 
 The wrapper opens **both leaves itself**, relative to that one anchored
 directory, each with `O_NOFOLLOW`:
@@ -1186,9 +1212,10 @@ directory, each with `O_NOFOLLOW`:
 There is no argument through which a foreign store could arrive, because
 the caller supplies no store at all. No path is re-resolved.
 
-**Binding RED:** directory A's receipt with store B — impossible to
-express through this signature, and a wrapper that reintroduces a store
-argument fails the structural pin.
+**Binding REDs:** directory A's receipt with store B is inexpressible;
+directory C carrying both an alternate database and its matching receipt
+is inexpressible; and any production route that grows a path, root or fd
+parameter fails the structural pin.
 
 **File predicates it enforces**, which v11 omitted entirely:
 
