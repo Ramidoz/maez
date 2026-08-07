@@ -402,7 +402,7 @@ MAEZ_UNAVAILABLE_REASON_CODES = frozenset({
     "none",
 })
 
-RENDERER_VERSION = "s7.rendered_request.v1"
+RENDERER_VERSION = "s7.rendered_request.v2"
 FOUNDER_WEBAUTHN_RP_ID = "localhost"
 FOUNDER_WEBAUTHN_ORIGIN = "http://localhost:11437"
 FOUNDER_WEBAUTHN_HOST = "localhost:11437"
@@ -856,6 +856,30 @@ def _touches_self_mod_substrate(material: str) -> bool:
     return any(marker in material for marker in _SELF_MOD_PATH_MARKERS)
 
 
+_ACTION_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
+_ACTION_MAX_BYTES = 128
+
+
+def validate_action_literal(action: object) -> str:
+    """The action is an IDENTIFIER, bounded and renderable.
+
+    Dotted segments are OPTIONAL: an earlier draft required them and would
+    have refused write_soul_note, edit_soul_section, run_shell,
+    backup_status and both credential actions -- six literals already in
+    use. Malformed values REFUSE rather than being escaped: an escaped
+    action is still one the human must decode, and "what you see is what
+    you sign" requires that they not have to.
+    """
+
+    if type(action) is not str or not action:
+        raise ValueError("s7_action_invalid")
+    if len(action.encode("utf-8")) > _ACTION_MAX_BYTES:
+        raise ValueError("s7_action_invalid")
+    if _ACTION_RE.fullmatch(action) is None:
+        raise ValueError("s7_action_invalid")
+    return action
+
+
 def derive_work_class(
     *,
     action: str,
@@ -1079,6 +1103,7 @@ class WorkRequestEnvelope:
     request_id: str
     schema_version: str
     claimed_work_class: str
+    action: str
     derived_work_class: str
     requesting_subsystem: str
     closed_symptom_code: str
@@ -1398,6 +1423,7 @@ def build_work_request_envelope(
     return WorkRequestEnvelope(
         request_id=request_id,
         schema_version=SCHEMA_VERSION,
+        action=validate_action_literal(action),
         claimed_work_class=claimed_work_class,
         derived_work_class=resolved,
         requesting_subsystem=requesting_subsystem,
@@ -2125,6 +2151,7 @@ class S7AuthorizationArtifact:
     action_params_hash: str
     precondition_hash: str
     authority_context_hash: str
+    action: str
     derived_work_class: str
     derived_aggregation_group: str
     nonce: str
@@ -2136,6 +2163,7 @@ class S7AuthorizationArtifact:
     created_at: str
     expires_at: str
     consumed_at: str | None
+    schema_version: str = "s7.authorization_artifact.v2"
     ceremony_kind: str = "founder_local_webauthn"
 
     def __post_init__(self) -> None:
@@ -2339,6 +2367,7 @@ class S7ExecutionGrant:
     action_params_hash: str
     precondition_hash: str
     authority_context_hash: str
+    action: str
     derived_work_class: str
     derived_aggregation_group: str
     nonce: str
@@ -2707,8 +2736,12 @@ def execution_grant_authorizes_action(
         derived = "undeterminable_work_class"
     if derived not in GUARDED_WORK_CLASSES:
         return False
+    # EXACT action equality, added to -- never replacing -- the two
+    # existing checks. Without it one grant authorized every sibling
+    # operation of the same class with identical params.
     return (
-        grant.derived_work_class == derived
+        grant.action == action
+        and grant.derived_work_class == derived
         and grant.action_params_hash == canonical_hash(params or {})
     )
 
@@ -3945,6 +3978,7 @@ class RenderedRequestStatement:
     renderer_version: str
     surface: str
     origin: str
+    action: str
     rendered_text: str
     rendered_text_hash: str
     request_envelope_hash: str
@@ -4115,6 +4149,9 @@ def render_request_statement(
         f"Surface: {surface}",
         f"Origin: {origin}",
         f"Request id: {envelope.request_id}",
+        # VISIBLE, between Request id and Work class. "What you see is
+        # what you sign" cannot be met by a hash the human never reads.
+        f"Action: {envelope.action}",
         f"Work class: {envelope.derived_work_class}",
         f"Change class: {envelope.proposed_change_class}",
         f"Predicted effect class: {envelope.predicted_effect_class}",
@@ -4135,6 +4172,7 @@ def render_request_statement(
     ]
     rendered_text = "\n".join(lines)
     return RenderedRequestStatement(
+        action=envelope.action,
         request_id=envelope.request_id,
         renderer_version=renderer_version,
         surface=surface,
