@@ -1,4 +1,4 @@
-# S7 action binding — design v9
+# S7 action binding — design v10
 
 Status: **DRAFT — awaiting ratification. No REDs, no code until ratified.**
 
@@ -419,19 +419,87 @@ number that appeared nowhere.
 
 **Counts, derived mechanically:** constructor 6, durable_writer 12, execution_edge 9, hash 20, producer 8, renderer 3, source_bundle 6, validator 3 — **total 67**.
 
-**Two definitions the narrowing dropped (v9).** Filtering by call-site
-receiver removed the two writers' own **definitions**:
+**One table, one count (v10).** v9 published 67 sites and then appended
+two writer definitions *outside* the table, so the enforceable union was
+69 and no mechanically checked artefact said so. The two class-qualified
+definitions — `S7AuthorizationStore.put` and
+`S7VoiceConsultationBundleStore.put_bundle`, which are precisely the
+functions that write the tables the freeze triggers make unwritable — are
+now emitted by the same generator and counted with everything else.
 
-| file | class-qualified definition | role |
-|---|---|---|
-| `core/governance/operator_user_boundary.py:2430` | `S7AuthorizationStore.put` | durable_writer |
-| `core/governance/s7_guarded_execution.py:1288` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer |
+| file | function | role | syntactic role | line |
+|---|---|---|---|---|
+| `core/actions/action_engine.py` | `_s7_invocation_gate` | execution_edge | call:consume_execution_grant_for_action | 616 |
+| `core/decision/decision_pipeline.py` | `_consume_s7_execution_authorization` | durable_writer | call:consume_for_execution | 1566 |
+| `core/decision/decision_pipeline.py` | `_on_approve` | execution_edge | call:execution_grant_authorizes_card_transition | 1875 |
+| `core/decision/decision_pipeline.py` | `_s7_request_envelope_for_card` | producer | call:build_work_request_envelope | 1069 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1152 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1178 |
+| `core/decision/decision_pipeline.py` | `handle_action` | hash | call:work_request_envelope_hash | 677 |
+| `core/decision/pending_cards.py` | `approve_and_mark_running` | execution_edge | call:execution_grant_authorizes_card_transition | 851 |
+| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | durable_writer | call:consume_for_execution | 1182 |
+| `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | hash | call:work_request_envelope_hash | 1175 |
+| `core/evolution/dream_state.py` | `build_apply_s7_envelope` | producer | call:build_work_request_envelope | 1054 |
+| `core/evolution/dream_state.py` | `build_section_edit_s7_envelope` | producer | call:build_work_request_envelope | 1132 |
+| `core/governance/operator_user_boundary.py` | `S7AuthorizationStore.put` | durable_writer | definition | 2430 |
+| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | call:S7ExecutionGrant | 2393 |
+| `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | definition | 2378 |
+| `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition | 2253 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 2983 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 2999 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 2882 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 2929 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 2933 |
+| `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash | 1240 |
+| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope | 1398 |
+| `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition | 1360 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 2733 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 2726 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | constructor | call:_mint_s7_execution_grant | 2637 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition | 2541 |
+| `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution | 2524 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 2695 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 2760 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 2744 |
+| `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition | 1475 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4100 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4111 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4137 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4071 |
+| `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1493 |
+| `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1155 |
+| `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 1288 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 1866 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 1839 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 588 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 587 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 604 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 568 |
+| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 1389 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 2291 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:authorization_store.put | 2324 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 2316 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:attempt_store.put | 678 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:bundle_store.put_bundle | 702 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 703 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 666 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 2287 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 2258 |
+| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1294 |
+| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 821 |
+| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2090 |
+| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 886 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 659 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 682 |
+| `core/governance/s7_webauthn_ceremony.py` | `build_backup_registration_envelope` | producer | call:build_work_request_envelope | 61 |
+| `core/governance/s7_webauthn_ceremony.py` | `build_disable_credential_envelope` | producer | call:build_work_request_envelope | 101 |
+| `daemon/maez_daemon.py` | `_s7_authorization_route_material` | renderer | call:render_request_statement | 580 |
+| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | durable_writer | call:consume_for_execution | 1056 |
+| `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | execution_edge | call:consume_execution_grant_for_action | 1070 |
+| `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 628 |
+| `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-Both **must be changed or retired** by this migration — they are the
-functions that write the v1 tables the freeze triggers are about to make
-unwritable. Narrowing by receiver is correct for *calls* and wrong for
-*definitions*; the allowlist now carries both, keyed by class-qualified
-name.
+**Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 20, producer 8, renderer 3, source_bundle 6, validator 3 — **total 69**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a
@@ -794,14 +862,45 @@ class S7VoiceSourceBundleValidationResultV2:
 | `…v2` | non-`None` | `False` | validated, refused for another reason |
 | `…v1` | **must be `None`** | **must be `False`** | audit-only |
 
+**Complete state matrix — `source_bundle_valid` participates.** v9's
+matrix constrained only schema, action and mint-eligibility, so a
+token-produced result with `source_bundle_valid=False` and
+`mint_eligible=True` was still admissible to every mint check. Frozen:
+
+| `source_bundle_valid` | `mint_eligible` | admissible? |
+|---|---|---|
+| `True` | `True` | **the only mintable state** |
+| `True` | `False` | valid, refused for another reason |
+| `False` | `False` | invalid |
+| `False` | `True` | **cannot construct** — the constructor refuses |
+
+**The mint requires the exact validated-success state:**
+`source_bundle_valid is True` **and** `mint_eligible is True`. Anything
+else refuses.
+
 `_VALIDATOR_TOKEN` is a module-private sentinel. The **only** producers
 are `validate_voice_source_bundle()` and its v1 audit counterpart; both
 are module-private factories. Nothing else may pass the token.
 
-**`binding_hash` recipe:** the project canonical encoder over
-`{"schema": "s7.voice_source_bundle.v2", "fields": {…bundle fields…,
-"action": action}}`, SHA-256 of those exact bytes — the same encoder and
-newline-bearing form as every other binding in this design.
+**`binding_hash` recipe, exact fields** — the project canonical encoder
+over `{"schema": "s7.voice_source_bundle.v2", "fields": {…}}` where the
+fields are precisely the 25 v1 bundle columns plus `action`, in the DDL's
+column order:
+
+```
+source_ref_hash, request_id, consultation_id, request_envelope_hash,
+rendered_text_hash, action_params_hash, precondition_hash,
+authority_context_hash, maez_voice_consultation_hash, rendered_prompt_ref,
+rendered_prompt_hash, mutation_preview_hash, rollback_plan_ref,
+context_manifest_ref, context_manifest_hash, runtime_identity_hash,
+model_routing_identity_hash, model_config_hash, raw_response_ref,
+raw_response_hash, semantic_reader_attempt_hash, expires_at,
+authority_class, has_grounded_semantic_blocking_signal,
+source_bundle_hash, action
+```
+
+SHA-256 of those exact bytes, same newline-bearing encoder as every other
+binding here. `{…bundle fields…}` was a placeholder, not a recipe.
 
 **Mint signature, exact:**
 
@@ -818,7 +917,8 @@ def mint_from_validated_bundle(
 
 1. `validation._token_verified` — constructed by a factory, not a caller;
 2. `validation.schema_version == "s7.voice_source_bundle.v2"`;
-3. `validation.mint_eligible is True`;
+3. `validation.source_bundle_valid is True` **and**
+   `validation.mint_eligible is True`;
 4. `validation.action` is non-`None` and matches the action grammar;
 5. `bundle.source_bundle_hash == validation.source_bundle_hash`;
 6. `recompute_binding_hash(bundle, validation.action) == validation.binding_hash`;
@@ -917,29 +1017,35 @@ verified by reading.** Whitespace, `IF NOT EXISTS`, trailing commas and
 column-text extraction all move it invisibly, and every party believed
 they were applying the same canonicalizer.
 
-**Frozen instead: the canonicalizer is executable code, committed, and
-the literals are MINTED BY RUNNING IT — never transcribed.**
+**v9's guard was self-authenticating.** It emitted the expected literal
+and then checked its own output — which proves the canonicalizer is
+*deterministic*, not that the schema is *correct*. A truth meter that
+calibrates itself and then declares itself accurate.
 
-* `scripts/s7_schema_fingerprint.py` holds `canon_sql()` and
-  `fingerprint(conn, tables)`, and is the single definition;
-* the migration, the activation consumers and the guard **all import
-  it** — no second implementation exists to drift;
-* the guard builds both planes from the frozen DDL in a scratch database,
-  computes the pair, and asserts them against a literal **it emitted**;
-* minting the literals is an explicit, reviewable step at implementation
-  time, not a value in a document.
+**Frozen: generation and verification are separate programs.**
 
-Until that guard exists and has run, **there are no target literals**,
-and the design says so rather than printing a number that looks
-authoritative.
+| | who | when | what |
+|---|---|---|---|
+| **generator** | `core/governance/s7_schema_identity.py --emit` | **one shot**, at implementation time | builds both planes from the frozen DDL in a scratch database and **writes committed constants** |
+| **constants** | `core/governance/s7_schema_identity.py` | committed source | `S7_TARGET_FINGERPRINT_AUTH`, `S7_TARGET_FINGERPRINT_VOICE` |
+| **guard** | a test | every run | **recomputes** from the frozen DDL and compares **against the committed constants** — it never emits them |
+
+**Migration and activation import the CONSTANT.** Neither may derive its
+expected value from the live schema it is validating; deriving the
+expected value from the thing under test is the same circularity in a
+different costume.
+
+**Location:** `core/governance/`, not `scripts/`. Production governance
+code must not import from the bench-tooling tree — v9 put the shared
+canonicalizer in `scripts/` and would have forced exactly that.
 
 The **source** literals stand — `b8946c79…` and `4f53cda1…` — because
 they were computed read-only from the live store and reproduced
 independently by review.
 
-**The guard is now the source of the literals, not their checker.** A
-design literal nobody recomputes drifts; a design literal three parties
-compute differently was never a literal at all.
+A design literal nobody recomputes drifts; a design literal three parties
+compute differently was never a literal at all; and a guard that emits
+what it checks proves only that it is repeatable.
 
 **Verified:** dropping any freeze trigger changes the fingerprint.
 
@@ -963,8 +1069,8 @@ rather than a gap it must describe in prose.
 ```
 1.  BEGIN IMMEDIATE                    <- LOCK FIRST (v9)
 2.  verify journal_mode=delete and synchronous=FULL      (refuse otherwise)
-3.  verify from_fingerprint_auth   == b8946c79…          INSIDE the lock
-4.  verify from_fingerprint_bundle == 4f53cda1…          (the ABSENT plane)
+3.  verify from_fingerprint_auth   == S7_SOURCE_FINGERPRINT_AUTH   (in lock)
+4.  verify from_fingerprint_bundle == S7_SOURCE_FINGERPRINT_VOICE  (absent plane)
 4a. verify v1 row counts match the receipt's claim       INSIDE the lock
 5.  CREATE the empty legacy voice table                  <- v7 omitted this
 6.  create the three v1 voice freeze triggers
@@ -972,8 +1078,8 @@ rather than a gap it must describe in prose.
 8.  create both v2 tables + their unique indexes
 9.  create the v2 cross-version exclusion triggers
 10. copy nothing                                          (no backfill)
-11. verify to_fingerprint_auth   == ffee1bcb…
-12. verify to_fingerprint_bundle == b93735fe…
+11. verify to_fingerprint_auth   == S7_TARGET_FINGERPRINT_AUTH
+12. verify to_fingerprint_bundle == S7_TARGET_FINGERPRINT_VOICE
 13. verify both v2 row counts are 0
 14. COMMIT
 15. fsync the database AND its parent directory
@@ -987,8 +1093,22 @@ verification and lock acquisition — the migration would then build on a
 foundation it had checked and no longer had. Source verification, row
 counts and target verification are all now inside.
 
-**Race RED:** a writer mutates the source plane between the verification
-point and the lock; the migration must refuse rather than proceed.
+**v9's race RED was unreachable.** With `BEGIN IMMEDIATE` first, nothing
+can mutate "between verification and lock" — there is no such window any
+more. I moved the check and kept the RED that only made sense before the
+move. Two **real** cases replace it:
+
+* **pre-lock mutation is observed:** a writer commits a change to the
+  source plane *before* the migration acquires the lock; the in-lock
+  fingerprint check sees the changed source and **refuses**;
+* **post-acquisition writers are excluded:** a competing writer attempting
+  to mutate after the lock is held **cannot**, and the migration completes
+  or rolls back without interleaving.
+
+**Also corrected:** steps after `COMMIT` — fsync and receipt publication —
+are **not** inside the write lock, and v9 implied the whole sequence was.
+They are ordered but unlocked, which is why the receipt, not the commit,
+is the linearization point.
 
 v7's sequence also created triggers on a table it had not created.
 
@@ -1086,8 +1206,8 @@ hand-counts in one document is what produced this rule.
 **v7/v8 rules** — each with its own mutation-killing RED:
 * an **absent** voice plane migrates to **empty and frozen**, exactly:
   the table exists, is empty, and all three freeze triggers abort;
-* **every** target fingerprint literal is recomputed from the frozen DDL
-  in a scratch database and asserted;
+* the guard **recomputes** both fingerprints from the frozen DDL and
+  compares them to the **committed constants** — it never emits them;
 * **dropping or altering any trigger refuses activation** — the property
   v5's fingerprint could not see;
 * a **forged** validation result (constructed without the validator
@@ -1100,8 +1220,10 @@ hand-counts in one document is what produced this rule.
   so a second call in the same function cannot hide.
 
 **v9 rules**
-* the fingerprint guard **emits** the target literals and asserts its own
-  output; no literal is transcribed;
+* generation and verification are **separate programs**: the one-shot
+  generator writes the constants, the guard only ever compares against
+  them, and migration and activation import the constant rather than
+  deriving it from the schema under test;
 * the migration **acquires the write lock before** verifying anything,
   and a source mutated between verification and lock refuses;
 * a validation result constructed **without the token** refuses;
