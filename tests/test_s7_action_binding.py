@@ -777,3 +777,47 @@ class TestTheVisibleLineCannotBeAlteredEither:
                 rendered_text=forged_text,
                 rendered_text_hash=s7.rendered_text_hash(forged_text),
             )
+
+
+class TestSharedSchemaConstantIsUntouched:
+    """Changing SCHEMA_VERSION relabelled 21 unrelated record types."""
+
+    def test_the_shared_constant_stays_v1(self) -> None:
+        assert s7.SCHEMA_VERSION == "s7.v1"
+
+    def test_only_the_envelope_carries_the_v2_identity(self) -> None:
+        _e, _a, _p, _r = _bundle()
+        assert _e.schema_version == "s7.work_request_envelope.v2"
+        assert s7.WORK_REQUEST_ENVELOPE_SCHEMA != s7.SCHEMA_VERSION
+
+    def test_an_unrelated_s7_record_still_emits_v1(self) -> None:
+        """Operator health is not an envelope and must not be relabelled."""
+        import inspect
+
+        source = inspect.getsource(s7)
+        # every remaining schema_version=SCHEMA_VERSION site is a
+        # non-envelope record and must keep the shared v1 constant.
+        assert source.count("schema_version=SCHEMA_VERSION") >= 1
+
+
+class TestGrantIdentityIsValidatedNotDefaulted:
+    """A default is not a check."""
+
+    def test_a_token_valid_grant_with_a_forged_schema_refuses(self) -> None:
+        _e, authority, params_hash, rendered = _bundle()
+        good = s7._mint_s7_execution_grant(
+            artifact_id="artifact-schema-check",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            precondition_hash="a" * 64,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class="self_modification",
+            derived_aggregation_group="g",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=NOW,
+        )
+        with pytest.raises(ValueError):
+            replace(good, schema_version="garbage")

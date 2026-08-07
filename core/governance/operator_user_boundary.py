@@ -26,7 +26,11 @@ from typing import Any, Callable, Mapping
 from core.governance import successor_governance as s6
 
 
-SCHEMA_VERSION = "s7.work_request_envelope.v2"
+SCHEMA_VERSION = "s7.v1"
+# The ENVELOPE's own identity. Changing the shared SCHEMA_VERSION
+# relabelled 21 unrelated S7 record types -- operator health, aggregation,
+# maintenance, brain-swap, recovery -- because they share this constant.
+WORK_REQUEST_ENVELOPE_SCHEMA = "s7.work_request_envelope.v2"
 S7_LIVE_WEBAUTHN_CEREMONY_ENV = "S7_LIVE_WEBAUTHN_CEREMONY"
 S7_CEREMONY_DEFERRED_REASON = "s7_ceremony_deferred"
 GUARDED_SELF_MODIFICATION_PAUSED_MODE = "guarded_self_modification_paused_pending_s7.1"
@@ -1123,7 +1127,7 @@ class WorkRequestEnvelope:
     def __post_init__(self) -> None:
         if not self.request_id:
             raise ValueError("S7 request_id is required")
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version != WORK_REQUEST_ENVELOPE_SCHEMA:
             raise ValueError("invalid S7 schema_version")
         validate_work_class(self.claimed_work_class)
         validate_work_class(self.derived_work_class)
@@ -1422,7 +1426,7 @@ def build_work_request_envelope(
     )
     return WorkRequestEnvelope(
         request_id=request_id,
-        schema_version=SCHEMA_VERSION,
+        schema_version=WORK_REQUEST_ENVELOPE_SCHEMA,
         action=validate_action_literal(action),
         claimed_work_class=claimed_work_class,
         derived_work_class=resolved,
@@ -2382,6 +2386,10 @@ class S7ExecutionGrant:
     def __post_init__(self, _mint_token: object) -> None:
         if _mint_token is not _EXECUTION_GRANT_TOKEN:
             raise ValueError("S7ExecutionGrant can only be minted by S7AuthorizationStore")
+        # A default is not a check: a token-valid grant could otherwise
+        # carry schema_version="garbage".
+        if self.schema_version != "s7.execution_grant.v2":
+            raise ValueError("S7ExecutionGrant schema_version must be v2")
         if not self.artifact_id:
             raise ValueError("S7 execution grant requires artifact_id")
         if not self.request_id:
@@ -2422,7 +2430,13 @@ def _mint_s7_execution_grant(
 ) -> S7ExecutionGrant:
     return S7ExecutionGrant(
         artifact_id=artifact_id,
-        action=rendered.action,
+        # NO action yet. The frozen rule is that consumption matches the
+        # STORED row atomically and mints from row.action -- never from
+        # the caller-carried rendered value. Until the v2 row exists there
+        # is no honest source, so this seam stays unbuilt and its RED
+        # stays red. Supplying rendered.action would enshrine the wrong
+        # authority source; adding a required parameter would break every
+        # production caller before the row exists.
         request_id=rendered.request_id,
         request_envelope_hash=rendered.request_envelope_hash,
         rendered_text_hash=rendered.rendered_text_hash,
