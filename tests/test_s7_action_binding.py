@@ -790,34 +790,133 @@ class TestSharedSchemaConstantIsUntouched:
         assert _e.schema_version == "s7.work_request_envelope.v2"
         assert s7.WORK_REQUEST_ENVELOPE_SCHEMA != s7.SCHEMA_VERSION
 
-    def test_an_unrelated_s7_record_still_emits_v1(self) -> None:
-        """Operator health is not an envelope and must not be relabelled."""
-        import inspect
+    def test_unrelated_records_still_emit_v1(self) -> None:
+        """Counting source text proves nothing: a record could reference the
+        constant and still be relabelled by a changed constant. Drive real
+        record types and read the schema_version they actually emit."""
+        env, _a, _p, _r = _bundle()
 
-        source = inspect.getsource(s7)
-        # every remaining schema_version=SCHEMA_VERSION site is a
-        # non-envelope record and must keep the shared v1 constant.
-        assert source.count("schema_version=SCHEMA_VERSION") >= 1
+        emitted: dict[str, str] = {}
+
+        emitted["aggregation_risk"] = s7.assess_aggregation_risk(
+            current_envelope=env, history=()
+        ).schema_version
+        emitted["self_remaking_history"] = s7.build_self_remaking_history_record(
+            record_id="rec-1",
+            source_ref_kind="self_mod_dialog",
+            source_ref_hash="b" * 64,
+            role_names=("operator",),
+            authority_context_hash="c" * 64,
+            work_request_envelope_hash="d" * 64,
+            created_at=NOW,
+        ).schema_version
+        emitted["service_maintenance"] = s7.build_service_maintenance_request(
+            request_id="s7maint_" + "0" * 32,
+            verb="health_probe",
+            service_name=None,
+            created_at=NOW,
+        ).schema_version
+        emitted["credential_recovery"] = s7.CredentialRecoveryState(
+            mode="ready",
+            active_credential_count=2,
+            primary_credential_count=1,
+            backup_credential_count=1,
+            manual_recovery_required=False,
+        ).schema_version
+
+        assert emitted, "no unrelated record was actually driven"
+        for name, version in emitted.items():
+            assert version == "s7.v1", (name, version)
+
+        # ...and the envelope, built from the SAME fixture, does not.
+        assert env.schema_version == "s7.work_request_envelope.v2"
+
+
+def _direct_grant(**overrides: object) -> s7.S7ExecutionGrant:
+    """A token-valid grant built WITHOUT the mint.
+
+    The mint deliberately has no action source until the v2 row exists, so
+    minting here would raise before any assertion could be reached.
+    """
+    fields: dict[str, object] = {
+        "artifact_id": "artifact-schema-check",
+        "request_id": "req-action-binding-1",
+        "request_envelope_hash": "b" * 64,
+        "rendered_text_hash": "c" * 64,
+        "action_params_hash": "d" * 64,
+        "precondition_hash": "a" * 64,
+        "authority_context_hash": "e" * 64,
+        "action": ACTION,
+        "derived_work_class": "self_modification",
+        "derived_aggregation_group": "g",
+        "nonce": "f" * 32,
+        "credential_ref": "cred-1",
+        "auth_method": "founder_webauthn",
+        "grant_source": "founder_webauthn",
+        "consumed_at": NOW,
+        "ceremony_kind": "founder_local_webauthn",
+    }
+    fields.update(overrides)
+    return s7.S7ExecutionGrant(_mint_token=s7._EXECUTION_GRANT_TOKEN, **fields)
 
 
 class TestGrantIdentityIsValidatedNotDefaulted:
     """A default is not a check."""
 
+    def test_the_positive_control_constructs(self) -> None:
+        """Without this, a refusal below could come from the fixture rather
+        than from the schema check it claims to prove."""
+        assert _direct_grant().schema_version == "s7.execution_grant.v2"
+
     def test_a_token_valid_grant_with_a_forged_schema_refuses(self) -> None:
-        _e, authority, params_hash, rendered = _bundle()
-        good = s7._mint_s7_execution_grant(
-            artifact_id="artifact-schema-check",
-            rendered=rendered,
-            action_params_hash=params_hash,
-            precondition_hash="a" * 64,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class="self_modification",
-            derived_aggregation_group="g",
-            credential_ref="cred-1",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            ceremony_kind="founder_local_webauthn",
-            consumed_at=NOW,
+        with pytest.raises(ValueError, match="schema_version must be v2"):
+            _direct_grant(schema_version="garbage")
+
+    def test_replace_cannot_relabel_a_minted_grant(self) -> None:
+        """replace() on a dataclass with an InitVar raises ValueError for the
+        MISSING InitVar -- which a bare pytest.raises(ValueError) would score
+        as a pass. Supply the token so the schema check is what refuses."""
+        good = _direct_grant()
+        with pytest.raises(ValueError, match="schema_version must be v2"):
+            replace(
+                good,
+                schema_version="garbage",
+                _mint_token=s7._EXECUTION_GRANT_TOKEN,
+            )
+
+    def test_replace_with_the_true_schema_succeeds(self) -> None:
+        """The control for the control: replace() itself is not what fails."""
+        good = _direct_grant()
+        again = replace(
+            good,
+            action_params_hash="9" * 64,
+            _mint_token=s7._EXECUTION_GRANT_TOKEN,
         )
-        with pytest.raises(ValueError):
-            replace(good, schema_version="garbage")
+        assert again.schema_version == "s7.execution_grant.v2"
+
+    def test_the_mint_token_is_still_required(self) -> None:
+        with pytest.raises(ValueError, match="can only be minted"):
+            s7.S7ExecutionGrant(
+                _mint_token=object(),
+                **{
+                    k: v
+                    for k, v in (
+                        ("artifact_id", "a"),
+                        ("request_id", "r"),
+                        ("request_envelope_hash", "b" * 64),
+                        ("rendered_text_hash", "c" * 64),
+                        ("action_params_hash", "d" * 64),
+                        ("precondition_hash", "a" * 64),
+                        ("authority_context_hash", "e" * 64),
+                        ("action", ACTION),
+                        ("derived_work_class", "self_modification"),
+                        ("derived_aggregation_group", "g"),
+                        ("nonce", "f" * 32),
+                        ("credential_ref", "cred-1"),
+                        ("auth_method", "founder_webauthn"),
+                        ("grant_source", "founder_webauthn"),
+                        ("consumed_at", NOW),
+                        ("ceremony_kind", "founder_local_webauthn"),
+                    )
+                },
+            )
