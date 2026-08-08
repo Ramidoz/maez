@@ -2245,6 +2245,9 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 return Result()
 
         with tempfile.TemporaryDirectory() as tmp:
+            # The daemon builds its own bootstrap store at this root and
+            # must NOT be taught to initialise. Setup runs here instead.
+            bootstrap_with_authorization(f"{tmp}/memory/s7_1_webauthn")
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
                 "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",

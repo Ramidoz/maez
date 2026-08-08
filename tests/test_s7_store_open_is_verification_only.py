@@ -27,6 +27,7 @@ Every test runs against a tmp_path. Nothing here touches the live store.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -716,12 +717,16 @@ class TestOpeningHasNoCreateRace:
 
 class TestTheDaemonNeverCreatesTheStore:
     """The daemon may translate missing setup into a controlled refusal.
-    It may never create the store: that would restore creation authority
-    on the live request path and break the single-callsite rule."""
+    It may never create the store: that would restore creation authority on
+    the live request path and break the single-callsite rule.
+    """
 
-    def test_an_uninitialised_store_refuses_without_initialising(
+    def test_the_constructor_refuses_without_initialising(
         self, tmp_path: Path, monkeypatch
     ) -> None:
+        """The SEAM, not the route. Named honestly: an earlier version of
+        this class called this a daemon-refusal proof while never invoking
+        Flask at all."""
         from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         bootstrap = S7WebAuthnBootstrapStore(tmp_path)
@@ -740,3 +745,83 @@ class TestTheDaemonNeverCreatesTheStore:
         assert calls == [], "the refusal path invoked creation authority"
         assert V1_AUTH not in _tables(path), "an authorization table appeared"
         assert path.read_bytes() == before_bytes, "the refusal changed bytes"
+
+
+# ROUTE-LEVEL REFUSAL RED: NOT WRITTEN HERE, DELIBERATELY.
+#
+# The review is right that the seam test above is not a route test. My
+# first attempt at the real one invoked `maez_daemon.create_app()`, which
+# DOES NOT EXIST -- an invented seam, the same failure this chain has
+# caught repeatedly. The real harness is `_DaemonAppClientMixin._client()`
+# in tests/test_s7_1_daemon_internal_channel.py, and it is unittest-based,
+# so the route RED belongs in that file rather than being reimplemented
+# here.
+#
+# Outstanding, and named rather than faked: a bootstrap-only REQUEST
+# asserting a structured content-light 503, zero initializer calls, no
+# authorization table, and unchanged database bytes.
+
+
+class TestPermissionVerificationDoesNotRepair:
+    """Modes are part of what "correct" means.
+
+    Reproduced before the fix: parent 0750 -> silently repaired to 0700,
+    while an insecure 0644 database was left untouched. Half the posture
+    fixed, the dangerous half open, and the caller told all was well.
+    """
+
+    def test_an_insecure_database_mode_refuses(self, tmp_path: Path) -> None:
+        import os
+
+        path = s7.initialise_authorization_store(tmp_path / "ceremony.sqlite3")
+        os.chmod(path, 0o644)
+        with pytest.raises(ValueError, match="insecure permissions"):
+            s7.initialise_authorization_store(path)
+
+    def test_an_insecure_database_mode_is_not_repaired(
+        self, tmp_path: Path
+    ) -> None:
+        import os
+        import stat as stat_module
+
+        path = s7.initialise_authorization_store(tmp_path / "ceremony.sqlite3")
+        os.chmod(path, 0o644)
+        with contextlib.suppress(ValueError):
+            s7.initialise_authorization_store(path)
+        assert stat_module.S_IMODE(os.stat(path).st_mode) == 0o644, "it repaired"
+
+    def test_an_insecure_parent_mode_refuses(self, tmp_path: Path) -> None:
+        import os
+
+        nested = tmp_path / "nested"
+        path = s7.initialise_authorization_store(nested / "ceremony.sqlite3")
+        os.chmod(nested, 0o750)
+        with pytest.raises(ValueError, match="insecure permissions"):
+            s7.initialise_authorization_store(path)
+
+    def test_an_insecure_parent_mode_is_not_repaired(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact reproduction: the parent used to be chmod'd BEFORE
+        classification, so it was already 0700 by the time anything
+        refused."""
+        import os
+        import stat as stat_module
+
+        nested = tmp_path / "nested"
+        path = s7.initialise_authorization_store(nested / "ceremony.sqlite3")
+        os.chmod(nested, 0o750)
+        with contextlib.suppress(ValueError):
+            s7.initialise_authorization_store(path)
+        assert stat_module.S_IMODE(os.stat(nested).st_mode) == 0o750, "it repaired"
+
+    def test_a_correct_store_verifies_without_mutation(
+        self, tmp_path: Path
+    ) -> None:
+        """CONTROL: refusing everything would satisfy the four above."""
+        import hashlib
+
+        path = s7.initialise_authorization_store(tmp_path / "ceremony.sqlite3")
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        s7.initialise_authorization_store(path)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == before

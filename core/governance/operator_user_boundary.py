@@ -2512,23 +2512,42 @@ def initialise_authorization_store(db_path: str | Path) -> Path:
     match -- an added column, a stray index, an altered trigger. Repairing
     such a store would rebuild, unfrozen, a table the migration froze.
     """
+    import stat as _stat
+
     path = Path(db_path)
-    # The store holds founder credentials. A default-umask directory
-    # (0775) and database (0644) are world-readable.
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
     reference = _reference_auth_fingerprint()
 
-    with closing(sqlite3.connect(path)) as conn:
-        if _auth_table_present(conn):
-            actual = _auth_schema_fingerprint(conn)
-            if actual != reference:
-                raise ValueError(
-                    "S7 authorization schema does not match the expected "
-                    "definition; refusing to repair it"
-                )
-            return path
+    # EXISTING store: verify, never repair.
+    #
+    # An earlier version chmod'd the parent to 0700 BEFORE classifying,
+    # which silently repaired directory metadata while leaving an insecure
+    # 0644 database untouched -- half the posture fixed, the dangerous half
+    # left open, and a caller told everything was fine. Modes are part of
+    # what "correct" means, so a wrong mode refuses exactly like a wrong
+    # schema.
+    if path.exists():
+        parent_mode = _stat.S_IMODE(os.stat(path.parent).st_mode)
+        db_mode = _stat.S_IMODE(os.stat(path).st_mode)
+        if parent_mode != 0o700 or db_mode != 0o600:
+            raise ValueError(
+                "S7 authorization store has insecure permissions "
+                f"(directory {oct(parent_mode)}, database {oct(db_mode)}); "
+                "refusing to repair it"
+            )
+        with closing(sqlite3.connect(path)) as conn:
+            if _auth_table_present(conn):
+                if _auth_schema_fingerprint(conn) != reference:
+                    raise ValueError(
+                        "S7 authorization schema does not match the expected "
+                        "definition; refusing to repair it"
+                    )
+                return path
 
+    # FRESH creation: build it private from the start.
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+
+    with closing(sqlite3.connect(path)) as conn:
         conn.executescript(_AUTH_SCHEMA)
         cols = {
             str(row[1]) for row in conn.execute(f"PRAGMA table_info({_AUTH_TABLE})")
