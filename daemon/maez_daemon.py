@@ -796,9 +796,16 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
     )
     if material.ok is not True:
         return material
+    try:
+        authorization_store = s7.S7AuthorizationStore(store.db_path)
+    except (FileNotFoundError, ValueError):
+        # Setup has not run. The daemon says so cleanly; it must NEVER
+        # initialise here -- creation authority on the live request path is
+        # exactly what the single-callsite rule forbids.
+        return _s7_route_error("s7_authorization_store_uninitialised", 503)
     return _s7_route_material(
         s7_execution_authorization=s7.S7ExecutionAuthorization(
-            store=s7.S7AuthorizationStore(store.db_path),
+            store=authorization_store,
             artifact_id=artifact_id,
             rendered=material.kwargs["rendered_statement"],
             action_params_hash=material.kwargs["action_params_hash"],
