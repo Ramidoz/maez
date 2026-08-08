@@ -662,3 +662,81 @@ class TestTheCallsiteScannerIsItselfAttacked:
         assert find_initialiser_callsites(
             "def main():\n    something_else()\n"
         ) == []
+
+
+class TestPrivateFileModes:
+    """The store holds founder credentials."""
+
+    def test_the_directory_is_0700(self, tmp_path: Path) -> None:
+        import os
+        import stat as stat_module
+
+        nested = tmp_path / "nested"
+        s7.initialise_authorization_store(nested / "ceremony.sqlite3")
+        mode = stat_module.S_IMODE(os.stat(nested).st_mode)
+        assert mode == 0o700, oct(mode)
+
+    def test_the_database_is_0600(self, tmp_path: Path) -> None:
+        """Default umask produced 0644 -- world-readable credentials."""
+        import os
+        import stat as stat_module
+
+        path = s7.initialise_authorization_store(tmp_path / "ceremony.sqlite3")
+        mode = stat_module.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600, oct(mode)
+
+
+class TestOpeningHasNoCreateRace:
+    """is_file() then connect() is a TOCTOU window."""
+
+    def test_a_file_vanishing_after_the_check_does_not_recreate_it(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The window made deterministic: the existence check reports True
+        while the file is gone. A plain sqlite3.connect() recreates an
+        EMPTY database here and the caller believes it opened the store.
+        """
+        path = s7.initialise_authorization_store(tmp_path / "ceremony.sqlite3")
+        path.unlink()
+        monkeypatch.setattr(Path, "is_file", lambda self: True)
+        with pytest.raises((FileNotFoundError, ValueError, sqlite3.DatabaseError)):
+            s7.S7AuthorizationStore(path)
+        monkeypatch.undo()
+        assert not path.exists(), "opening recreated the database"
+
+    def test_an_empty_database_is_not_accepted_as_a_store(
+        self, tmp_path: Path
+    ) -> None:
+        """The state the race would leave behind must also refuse."""
+        path = tmp_path / "ceremony.sqlite3"
+        sqlite3.connect(path).close()
+        with pytest.raises((ValueError, sqlite3.DatabaseError)):
+            s7.S7AuthorizationStore(path)
+
+
+class TestTheDaemonNeverCreatesTheStore:
+    """The daemon may translate missing setup into a controlled refusal.
+    It may never create the store: that would restore creation authority
+    on the live request path and break the single-callsite rule."""
+
+    def test_an_uninitialised_store_refuses_without_initialising(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        bootstrap = S7WebAuthnBootstrapStore(tmp_path)
+        path = bootstrap.db_path
+        before_bytes = path.read_bytes()
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            s7,
+            "initialise_authorization_store",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        with pytest.raises((FileNotFoundError, ValueError)):
+            s7.S7AuthorizationStore(path)
+
+        assert calls == [], "the refusal path invoked creation authority"
+        assert V1_AUTH not in _tables(path), "an authorization table appeared"
+        assert path.read_bytes() == before_bytes, "the refusal changed bytes"

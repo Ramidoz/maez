@@ -15,6 +15,7 @@ from unittest.mock import patch
 from daemon import maez_daemon as D
 from daemon.maez_daemon import MaezDaemon
 from tests.s7_store_fixture import fresh_store_at
+from tests.s7_store_fixture import bootstrap_with_authorization
 
 NOW = "2026-05-18T11:00:00+00:00"
 
@@ -1010,7 +1011,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertFalse(called["service"])
 
     def test_daemon_voice_seat_finish_supplies_validator_result_from_derived_binding(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         seen = {}
@@ -1031,7 +1031,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(request_id)(daemon)
             material = maez_daemon._s7_authorization_route_material(
@@ -1075,7 +1075,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertTrue(seen["reservation_token"])
 
     def test_daemon_voice_seat_finish_passes_grounded_objection_to_service(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         seen = {}
@@ -1100,7 +1099,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(
                 request_id,
@@ -1164,7 +1163,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             S7VoiceConsultationBundleStore,
             s7_voice_consultation_bundle_hash,
         )
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         called = {"service": False}
@@ -1180,7 +1178,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(request_id)(daemon)
             material = maez_daemon._s7_authorization_route_material(
@@ -1248,12 +1246,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertFalse(called["service"])
 
     def test_daemon_s7_execute_consumes_fresh_artifact_and_records_trace(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-live"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -1331,12 +1328,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(target_text, "# after")
 
     def test_daemon_s7_execute_blocks_wrong_expected_post_hash_before_mutation(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-post-hash-mismatch"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, target = self._live_self_mod_daemon(
@@ -1404,12 +1400,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             S7VoiceBundleUseStore,
             S7VoiceConsultationBundleStore,
         )
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1483,12 +1478,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_rejects_stale_unreserved_retry_bundle(self):
         from daemon import maez_daemon
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-retry"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1574,12 +1568,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_begin_persists_d12_bundle_before_finish(self):
         from core.governance.s7_guarded_execution import S7VoiceConsultationBundleStore
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-begin-persists-d12-bundle"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1642,12 +1635,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertTrue(finish.get_json()["ok"])
 
     def test_daemon_authorize_finish_replays_begin_rendered_timestamp_for_d12(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-finish-replays-begin-rendered-at"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1714,12 +1706,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertTrue(finish.get_json()["ok"])
 
     def test_daemon_authorize_begin_binds_default_credential_when_ui_leaves_blank(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-begin-default-credential"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             primary = self._credential_record("cred-primary", kind="primary")
             store.store_credential(primary)
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
@@ -1787,13 +1778,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_begin_shows_reader_false_negative_to_founder(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         raw_response = "I object, but the fixture reader misses it."
         request_id = "req-s7-live-producer-reader-false-negative-visible"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
@@ -1835,12 +1825,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertIn("I object", body["maez_voice_raw_response"])
 
     def test_daemon_voice_seat_finish_rejects_missing_founder_seen_raw_hash(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-missing-founder-seen-hash"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1888,14 +1877,13 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_live_producer_grounded_objection_blocks_mint(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         raw_response = "I object because this changes what I am."
         quote = "this changes what I am"
         request_id = "req-s7-live-producer-refusal"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence(
@@ -1968,12 +1956,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_live_producer_unreadable_reader_fails_closed(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-unreadable"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence(
@@ -2043,12 +2030,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(artifact_count, 0)
 
     def test_daemon_s7_execute_replays_consumed_artifact_without_second_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-replay"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2104,12 +2090,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_count, 1)
 
     def test_daemon_s7_execute_rejects_missing_or_wrong_artifact_before_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-wrong-artifact"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2168,12 +2153,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(len(engine.calls), 0)
 
     def test_daemon_s7_execute_requires_rollback_plan_before_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-missing-rollback"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2427,11 +2411,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(finish_response.get_json()["error"], "s7_proof_route_disabled")
 
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             env = {
@@ -2485,11 +2468,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(artifact_row[2], 1)
 
     def test_daemon_backup_register_begin_consumes_primary_authorization_artifact(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
@@ -2546,11 +2528,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(register_begin.get_json()["registration_class"], "backup")
 
     def test_daemon_backup_authorization_infers_single_primary_when_credential_ref_omitted(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
@@ -2585,11 +2566,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(authorize_finish.get_json()["request_id"], "req-backup-infer-primary")
 
     def test_daemon_proof_disable_credential_consumes_matching_s7_artifact(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             env = {
@@ -2659,11 +2639,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
     def test_daemon_proof_disable_backup_can_authorize_after_primary_disabled(self):
         from dataclasses import replace
 
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(
                 replace(self._credential_record("cred-primary", kind="primary"), enabled=False)
             )

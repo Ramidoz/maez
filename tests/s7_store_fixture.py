@@ -93,3 +93,19 @@ def fresh_store_at(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     s7.initialise_authorization_store(path)
     return s7.S7AuthorizationStore(path)
+
+
+def bootstrap_with_authorization(root: Path):
+    """A bootstrap store whose authorization table has been initialised.
+
+    TEST SETUP ONLY. The daemon and S7WebAuthnBootstrapStore are
+    deliberately NOT taught to initialise: that would put creation
+    authority back on the live request path and break the single-callsite
+    rule. What these suites actually need is a store that setup has
+    already run against, which is what this provides.
+    """
+    from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+    store = S7WebAuthnBootstrapStore(root)
+    s7.initialise_authorization_store(store.db_path)
+    return store

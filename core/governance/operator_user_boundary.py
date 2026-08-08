@@ -2513,7 +2513,10 @@ def initialise_authorization_store(db_path: str | Path) -> Path:
     such a store would rebuild, unfrozen, a table the migration froze.
     """
     path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # The store holds founder credentials. A default-umask directory
+    # (0775) and database (0644) are world-readable.
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
     reference = _reference_auth_fingerprint()
 
     with closing(sqlite3.connect(path)) as conn:
@@ -2537,6 +2540,7 @@ def initialise_authorization_store(db_path: str | Path) -> Path:
                 "DEFAULT 'founder_local_webauthn'"
             )
         conn.commit()
+    os.chmod(path, 0o600)
     return path
 
 
@@ -2554,11 +2558,17 @@ class S7AuthorizationStore:
         bootstrap/setup.
         """
         self.db_path = Path(db_path)
-        if not self.db_path.is_file():
+        # mode=rw NEVER creates. A plain sqlite3.connect() after an
+        # is_file() check is a TOCTOU: if the file disappears in the window
+        # between them, connect() silently recreates an EMPTY database and
+        # the caller believes it opened the real store.
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)
+        except sqlite3.OperationalError as exc:
             raise FileNotFoundError(
                 f"S7 authorization store is not initialised: {self.db_path.name}"
-            )
-        with closing(sqlite3.connect(self.db_path)) as conn:
+            ) from exc
+        with closing(conn):
             if not _auth_table_present(conn):
                 raise ValueError(
                     "S7 authorization store is missing its artifact table; "
