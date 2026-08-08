@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import threading
 from types import SimpleNamespace
+from tests.s7_store_fixture import fresh_store_at
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -1683,10 +1684,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             )
 
     def test_057_artifact_store_consumes_once(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         first = store.consume_verified(
@@ -1714,10 +1714,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         self.assertFalse(second)
 
     def test_057a_artifact_store_rejects_duck_typed_rendered_statement(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
         fake_rendered = SimpleNamespace(**rendered.__dict__)
 
@@ -1786,7 +1785,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
                 "rendered_text_hash": split_rendered.rendered_text_hash,
             },
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(forged_artifact)
 
         self.assertFalse(
@@ -1803,10 +1802,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_058_artifact_store_replay_across_request_ids_rejected(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         tampered_rendered = _with_rendered_statement_fields(
@@ -1846,7 +1844,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         expired = s7.S7AuthorizationArtifact(
             **{**artifact.__dict__, "expires_at": "2026-05-17T23:30:00+14:00"},
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(expired)
 
         self.assertFalse(
@@ -1863,10 +1861,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_060_store_consume_rechecks_hashes_atomically(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertFalse(
@@ -1901,7 +1898,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         swapped_credential = s7.S7AuthorizationArtifact(
             **{**artifact.__dict__, "credential_ref": "cred-other"},
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(swapped_credential)
 
         self.assertFalse(
@@ -1918,10 +1915,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_060b_store_consume_rejects_non_bool_persisted_user_verification(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
         with sqlite3.connect(store.db_path) as conn:
             conn.execute(
@@ -1943,10 +1939,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_060c_store_consume_rejects_non_webauthn_ceremony_kind(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
         with closing(sqlite3.connect(store.db_path)) as conn:
             conn.execute(
@@ -1969,10 +1964,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         self.assertIsNone(grant)
 
     def test_061_superseded_request_rejects_old_artifact(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertFalse(
@@ -2002,10 +1996,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_062_concurrent_double_consume_executes_once(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
         results: list[bool] = []
 
@@ -2046,7 +2039,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         artifact_for_expired_authority = s7.S7AuthorizationArtifact(
             **{**artifact.__dict__, "authority_context_hash": expired_authority_hash},
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact_for_expired_authority)
 
         self.assertFalse(
@@ -2063,12 +2056,11 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_064_operator_only_context_cannot_consume_self_modification_artifact(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, authority, params_hash, rendered, artifact = self._self_mod_bundle(
             role_names=("operator",),
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertFalse(
@@ -2085,12 +2077,11 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_065_bonded_user_context_can_consume_self_modification_artifact(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, authority, params_hash, rendered, artifact = self._self_mod_bundle(
             role_names=("bonded_user", "operator"),
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertTrue(
@@ -2132,7 +2123,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
                 "grant_source": "service_local",
             },
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(service_artifact)
 
         self.assertFalse(
@@ -2149,10 +2140,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
     def test_065b_covenant_touching_artifact_requires_distinct_ceremony(self):
-        from core.governance import operator_user_boundary as s7
 
         _env, authority, params_hash, rendered, artifact = self._covenant_touching_bundle()
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertFalse(
@@ -2181,7 +2171,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             second_confirmation_ref_hash="e" * 64,
             reviewed_equivalent_ref_hash=None,
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertTrue(
@@ -2211,7 +2201,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             second_confirmation_ref_hash="e" * 64,
             reviewed_equivalent_ref_hash=None,
         )
-        store = s7.S7AuthorizationStore(self._path())
+        store = fresh_store_at(self._path())
         store.put(artifact)
 
         self.assertFalse(
@@ -2729,7 +2719,7 @@ class S7WebAuthnMechanismTests(unittest.TestCase):
         presence_only = s7.S7AuthorizationArtifact(
             **{**artifact.__dict__, "user_verification": False},
         )
-        store = s7.S7AuthorizationStore(artifact_tests._path())
+        store = fresh_store_at(artifact_tests._path())
         store.put(presence_only)
 
         self.assertTrue(
@@ -3284,7 +3274,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             expires_at=FUTURE,
             consumed_at=None,
         )
-        store = s7.S7AuthorizationStore(Path(self._tmp.name) / f"{artifact_id}.db")
+        store = fresh_store_at(Path(self._tmp.name) / f"{artifact_id}.db")
         store.put(artifact)
         return s7.S7ExecutionAuthorization(
             store=store,

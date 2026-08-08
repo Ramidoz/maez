@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from tests.s7_store_fixture import bootstrap_shaped, open_only
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -109,7 +110,7 @@ class TestOpeningPerformsNoWrite:
     ) -> None:
         _initialise(tmp_path)
         events = _record(monkeypatch)
-        s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        open_only(tmp_path / "ceremony.sqlite3")
         assert not _writes(events), _writes(events)
 
     def test_opening_issues_no_commit(
@@ -117,16 +118,17 @@ class TestOpeningPerformsNoWrite:
     ) -> None:
         _initialise(tmp_path)
         events = _record(monkeypatch)
-        s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        open_only(tmp_path / "ceremony.sqlite3")
         assert not [k for k, _ in events if k == "commit"], events
 
     def test_opening_changes_no_byte(self, tmp_path: Path) -> None:
         """The strongest available observation: names and counts survive an
         ALTER or a stray commit, bytes do not."""
-        _initialise(tmp_path)
+        bootstrap_shaped(tmp_path)
+        path = _initialise(tmp_path) or (tmp_path / "ceremony.sqlite3")
         path = tmp_path / "ceremony.sqlite3"
         before = hashlib.sha256(path.read_bytes()).hexdigest()
-        s7.S7AuthorizationStore(path)
+        open_only(path)
         assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
     def test_opening_creates_no_directory(self, tmp_path: Path) -> None:
@@ -243,8 +245,11 @@ class TestTheInitialiserContract:
     def test_it_creates_no_v2_tables(self, tmp_path: Path) -> None:
         """Initialization is not migration. Creating v2 here would activate
         a plane no receipt vouches for."""
+        bootstrap_shaped(tmp_path)
         _initialise(tmp_path)
-        assert V2_AUTH not in _tables(tmp_path / "ceremony.sqlite3")
+        tables = _tables(tmp_path / "ceremony.sqlite3")
+        assert V2_AUTH not in tables
+        assert "s7_voice_source_bundles_v2" not in tables
 
     def test_it_publishes_no_receipt(self, tmp_path: Path) -> None:
         _initialise(tmp_path)
@@ -252,9 +257,15 @@ class TestTheInitialiserContract:
 
     def test_it_installs_no_freeze_triggers(self, tmp_path: Path) -> None:
         """The wall belongs to migration; a freshly initialized store is
-        writable v1."""
-        with sqlite3.connect(tmp_path / "ceremony.sqlite3") as _c:
-            pass
+        writable v1.
+
+        Run against a BOOTSTRAP-shaped database, not a pre-created empty
+        file. An empty file has zero tables -- and so does a store whose
+        only table was dropped -- so the two states were observationally
+        identical and no implementation could satisfy both this test and
+        the damaged-store refusal below.
+        """
+        bootstrap_shaped(tmp_path)
         _initialise(tmp_path)
         with sqlite3.connect(tmp_path / "ceremony.sqlite3") as conn:
             triggers = list(
@@ -273,86 +284,217 @@ class TestTheInitialiserContract:
         _initialise(tmp_path)
         assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
+    def test_re_initialising_preserves_the_bootstrap_tables(
+        self, tmp_path: Path
+    ) -> None:
+        """The live store is bootstrap's five tables PLUS the auth table.
+        Initialization may not disturb the credentials that already live
+        there."""
+        bootstrap_shaped(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        before_tables = _tables(path)
+        assert before_tables, "bootstrap created nothing; the check is vacuous"
+
+        # Table NAMES survive a destructive initialization that empties
+        # them. The credentials and metadata are what must be preserved,
+        # so the rows themselves are captured and compared.
+        def rows():
+            snapshot = {}
+            with sqlite3.connect(path) as conn:
+                for table in sorted(before_tables):
+                    snapshot[table] = conn.execute(
+                        f"SELECT * FROM {table}"
+                    ).fetchall()
+            return snapshot
+
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "INSERT INTO s7_ceremony_metadata (key, value) VALUES (?, ?)",
+                ("witness", "must-survive"),
+            )
+            conn.commit()
+        before_rows = rows()
+        assert any(before_rows.values()), "no bootstrap rows to preserve"
+
+        _initialise(tmp_path)
+        _initialise(tmp_path)
+        assert before_tables <= _tables(path)
+        assert rows() == before_rows
+
     def test_re_initialising_preserves_every_existing_row(
         self, tmp_path: Path
     ) -> None:
-        """The live store holds real records; initialization may never be a
-        data event."""
-        store = _initialise(tmp_path)
+        """A COMPLETE artifact, written through store.put.
+
+        Inserting two columns into the twenty-column v1 table fails on
+        request_envelope_hash NOT NULL before the preservation claim is ever
+        reached.
+        """
+        bootstrap_shaped(tmp_path)
+        _initialise(tmp_path)
         path = tmp_path / "ceremony.sqlite3"
-        with sqlite3.connect(path) as conn:
-            conn.execute(
-                f"INSERT INTO {V1_AUTH} (artifact_id, request_id) VALUES (?, ?)",
-                ("kept-1", "req-1"),
+        open_only(path).put(
+            s7.S7AuthorizationArtifact(
+                artifact_id="kept-1",
+                request_id="req-1",
+                request_envelope_hash="b" * 64,
+                rendered_text_hash="c" * 64,
+                action_params_hash="d" * 64,
+                precondition_hash="a" * 64,
+                authority_context_hash="e" * 64,
+                derived_work_class="self_modification",
+                derived_aggregation_group="s7agg_kept",
+                nonce="n" * 64,
+                credential_ref="cred-1",
+                auth_method="founder_webauthn",
+                grant_source="founder_webauthn",
+                user_presence=True,
+                user_verification=True,
+                created_at="2026-08-07T12:00:00Z",
+                expires_at="2026-08-07T16:00:00Z",
+                consumed_at=None,
+                action="model_routing.cutover_cuda",
             )
-            conn.commit()
+        )
         _initialise(tmp_path)
         with sqlite3.connect(path) as conn:
-            kept = conn.execute(
-                f"SELECT artifact_id FROM {V1_AUTH}"
-            ).fetchall()
-        assert ("kept-1",) in kept, (kept, store)
+            kept = conn.execute(f"SELECT artifact_id FROM {V1_AUTH}").fetchall()
+        assert ("kept-1",) in kept, kept
 
-    def test_a_damaged_store_refuses_rather_than_being_repaired(
+    def test_an_altered_schema_refuses_rather_than_being_repaired(
         self, tmp_path: Path
     ) -> None:
-        """IDEMPOTENT-VERIFY, third branch, and the whole point: a dropped
-        table is tampering, not an invitation to rebuild. Rebuilding would
-        restore an UNFROZEN v1 after migration installed the wall."""
+        """IDEMPOTENT-VERIFY, third branch: the table is PRESENT and WRONG.
+
+        A DROPPED table cannot be the damaged case -- it leaves exactly the
+        state a never-initialized store is in, so refusing it would also
+        refuse legitimate first initialization. Damage that is actually
+        observable is a schema that exists and does not match.
+        """
+        bootstrap_shaped(tmp_path)
+        _initialise(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        with sqlite3.connect(path) as conn:
+            conn.execute(f"ALTER TABLE {V1_AUTH} ADD COLUMN stray TEXT")
+            conn.commit()
+        before = _fingerprint(path, [V1_AUTH])
+        with pytest.raises((ValueError, sqlite3.DatabaseError)):
+            _initialise(tmp_path)
+        assert _fingerprint(path, [V1_AUTH]) == before, "it repaired instead"
+
+    def test_a_stray_index_refuses(self, tmp_path: Path) -> None:
+        """The fingerprint covers indexes and triggers, not just columns."""
+        bootstrap_shaped(tmp_path)
+        _initialise(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        with sqlite3.connect(path) as conn:
+            conn.execute(f"CREATE INDEX stray_ix ON {V1_AUTH}(artifact_id)")
+            conn.commit()
+        with pytest.raises((ValueError, sqlite3.DatabaseError)):
+            _initialise(tmp_path)
+
+    def test_a_dropped_table_is_not_treated_as_damage(
+        self, tmp_path: Path
+    ) -> None:
+        """The contradiction, pinned so it cannot return: a store whose
+        auth table is gone is indistinguishable from one never initialized,
+        so the INITIALIZER must create it. Refusing here would make first
+        initialization impossible. The resurrection risk is closed on the
+        OPEN side, which never creates.
+        """
+        bootstrap_shaped(tmp_path)
         _initialise(tmp_path)
         path = tmp_path / "ceremony.sqlite3"
         with sqlite3.connect(path) as conn:
             conn.execute(f"DROP TABLE {V1_AUTH}")
             conn.commit()
-        with pytest.raises((ValueError, sqlite3.DatabaseError)):
-            _initialise(tmp_path)
-        assert V1_AUTH not in _tables(path)
+        _initialise(tmp_path)
+        assert V1_AUTH in _tables(path)
 
     def test_the_initialiser_has_a_bootstrap_only_callsite_allowlist(
         self,
     ) -> None:
         """Creation authority must not be reachable from the request path.
+
         daemon/maez_daemon.py constructs the store on live requests; if it
-        could also initialise, the constructor's power simply moved."""
+        could also initialise, the constructor's power simply moved.
+
+        The previous version dereferenced `node.name` on an ast.Call, which
+        has no such attribute -- the FIRST correct call would have crashed
+        it rather than judged it. Callers are attributed by walking
+        function definitions, and alias imports and getattr-by-string are
+        treated as calls too, since either reaches the seam without naming
+        it.
+        """
         import ast
         import os
 
-        allowed_prefixes = ("scripts/", "cli", "core/governance/")
+        target = "initialise_authorization_store"
+        allowed_files = {"scripts/s7_initialise_store.py"}
+        allowed: list[str] = []
         offenders: list[str] = []
-        allowed_callers: list[str] = []
         skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
+
         files = []
         for dirpath, dirnames, filenames in os.walk(REPO):
             dirnames[:] = [
                 d for d in dirnames if d not in skip and not d.startswith(".")
             ]
-            files += [
-                Path(dirpath, n) for n in filenames if n.endswith(".py")
-            ]
+            files += [Path(dirpath, n) for n in filenames if n.endswith(".py")]
+
         for path in files:
             rel = str(path.relative_to(REPO))
             try:
                 tree = ast.parse(path.read_text())
             except (SyntaxError, UnicodeDecodeError):
                 continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    name = (
-                        node.func.attr
-                        if isinstance(node.func, ast.Attribute)
-                        else getattr(node.func, "id", None)
-                    )
-                    if name != "initialise_authorization_store":
+
+            aliases = {
+                a.asname
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.Import, ast.ImportFrom))
+                for a in node.names
+                if a.asname and a.name.split(".")[-1] == target
+            }
+
+            def record(where: str, *, _rel=rel) -> None:
+                (allowed if _rel in allowed_files else offenders).append(
+                    f"{_rel}::{where}"
+                )
+
+            def walk(node, enclosing: str, *, _aliases=aliases) -> None:
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(
+                        child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                    ):
+                        walk(child, child.name, _aliases=_aliases)
                         continue
-                    if rel.startswith(allowed_prefixes):
-                        allowed_callers.append(rel)
-                    else:
-                        offenders.append(rel)
+                    if isinstance(child, ast.Call):
+                        name = (
+                            child.func.attr
+                            if isinstance(child.func, ast.Attribute)
+                            else getattr(child.func, "id", None)
+                        )
+                        if name == target or name in _aliases:
+                            record(enclosing)
+                        elif (
+                            name == "getattr"
+                            and len(child.args) > 1
+                            and isinstance(child.args[1], ast.Constant)
+                            and child.args[1].value == target
+                        ):
+                            record(f"{enclosing} (via getattr)")
+                    walk(child, enclosing, _aliases=_aliases)
+
+            walk(tree, "<module>")
+
         # CONTROL: with no initializer there are NO callers, so "no
-        # offenders" is true of a seam that does not exist. The allowlist
-        # only means something once bootstrap actually calls it.
-        assert allowed_callers, (
+        # offenders" is true of a seam that does not exist.
+        assert allowed, (
             "no bootstrap/setup caller invokes the initializer; the "
-            "allowlist below is vacuous until one does"
+            "allowlist is vacuous until one does"
         )
         assert not offenders, offenders
+        # Exact multiplicity: a second call inside the same allowed file is
+        # a second creation authority hiding behind the first.
+        assert len(allowed) == 1, allowed

@@ -7,6 +7,7 @@ import unittest
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from tests.s7_store_fixture import fresh_store_at
 
 NOW = "2026-05-18T12:00:00+00:00"
 FUTURE = "2026-05-18T12:05:00+00:00"
@@ -189,7 +190,7 @@ class S71DreamExecutionTests(unittest.TestCase):
             validate_s7_voice_source_bundle,
         )
 
-        auth_store = s7.S7AuthorizationStore(store.db_path)
+        auth_store = fresh_store_at(store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(store.db_path)

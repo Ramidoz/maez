@@ -13,6 +13,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from tests.s7_store_fixture import fresh_store_at
 
 
 class ClassifyDestructiveCommands(unittest.TestCase):
@@ -325,7 +326,7 @@ class ActionEngineHooksSnapshot(unittest.TestCase):
                 expires_at="2026-05-17T17:00:00+00:00",
                 consumed_at=None,
             )
-            store = s7.S7AuthorizationStore(Path(td) / "s7_authorization.db")
+            store = fresh_store_at(Path(td) / "s7_authorization.db")
             store.put(artifact)
             execution_grant, _ = store.consume_for_execution(
                 artifact.artifact_id,

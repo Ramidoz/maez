@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from daemon import maez_daemon as D
 from daemon.maez_daemon import MaezDaemon
+from tests.s7_store_fixture import fresh_store_at
 
 NOW = "2026-05-18T11:00:00+00:00"
 
@@ -2426,7 +2427,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(finish_response.get_json()["error"], "s7_proof_route_disabled")
 
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2463,7 +2463,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                         },
                         headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                     )
-            s7.S7AuthorizationStore(store.db_path)
+            fresh_store_at(store.db_path)
             with sqlite3.connect(store.db_path) as conn:
                 artifact_row = conn.execute(
                     """

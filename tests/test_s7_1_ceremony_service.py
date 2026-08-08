@@ -7,6 +7,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 import sqlite3
+from tests.s7_store_fixture import fresh_store_at
 
 
 NOW = "2026-05-18T11:00:00+00:00"
@@ -296,7 +297,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             expires_at="2026-05-18T11:05:00+00:00",
             consumed_at=None,
         )
-        store = s7.S7AuthorizationStore(db_path)
+        store = fresh_store_at(db_path)
         store.put(artifact)
         return s7.S7ExecutionAuthorization(
             store=store,
@@ -1392,7 +1393,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             store, _intent = self._store_with_bootstrap(tmp)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
-            auth_store = s7.S7AuthorizationStore(store.db_path)
+            auth_store = fresh_store_at(store.db_path)
             bundle_store = S7VoiceConsultationBundleStore(store.db_path)
             bundle_use_store = S7VoiceBundleUseStore(store.db_path)
             attempt_store = S7SemanticReaderAttemptStore(store.db_path)
@@ -1533,7 +1534,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             store, _intent = self._store_with_bootstrap(tmp)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
-            auth_store = s7.S7AuthorizationStore(store.db_path)
+            auth_store = fresh_store_at(store.db_path)
             bundle_store = S7VoiceConsultationBundleStore(store.db_path)
             bundle_use_store = S7VoiceBundleUseStore(store.db_path)
             attempt_store = S7SemanticReaderAttemptStore(store.db_path)
@@ -1702,7 +1703,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             store, _intent = self._store_with_bootstrap(tmp)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
-            auth_store = s7.S7AuthorizationStore(store.db_path)
+            auth_store = fresh_store_at(store.db_path)
             bundle_store = S7VoiceConsultationBundleStore(store.db_path)
             bundle_use_store = S7VoiceBundleUseStore(store.db_path)
             attempt_store = S7SemanticReaderAttemptStore(store.db_path)

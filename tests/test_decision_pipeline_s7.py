@@ -16,6 +16,7 @@ from core.action_classifier import ClassificationResult, IntentCategory
 from core import decision_pipeline as _dp
 from core.decision_pipeline import DecisionPipeline
 from core.decision.pending_cards import CardStatus, CardStoreError, PendingCardStore
+from tests.s7_store_fixture import fresh_store_at
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -393,7 +394,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             validate_s7_voice_source_bundle,
         )
 
-        auth_store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+        auth_store = fresh_store_at(bootstrap_store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(bootstrap_store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(bootstrap_store.db_path)
@@ -1377,7 +1378,7 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                     "authentication_response": {"clientDataJSON": "valid-auth"},
                 },
             )
-            store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+            store = fresh_store_at(bootstrap_store.db_path)
             grant, _ = store.consume_for_execution(
                 finish.body["artifact_id"],
                 rendered=rendered,

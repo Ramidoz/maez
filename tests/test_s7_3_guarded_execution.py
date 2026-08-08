@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from tests.s7_store_fixture import fresh_store_at
 
 
 NOW = "2026-05-21T16:00:00+00:00"
@@ -391,10 +392,9 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
     def test_mint_refuses_to_skip_voice_source_bundle_validation(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import S7GuardedStateStore
 
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
         guarded_store = S7GuardedStateStore(authorization_store=auth_store)
 
         with self.assertRaisesRegex(ValueError, "source-bundle validation"):
@@ -406,13 +406,12 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         self.assertEqual(self._artifact_count(), 0)
 
     def test_mint_refuses_invalid_voice_source_bundle_validation(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
             S7GuardedStateStore,
             S7VoiceSourceBundleValidationResult,
         )
 
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
         guarded_store = S7GuardedStateStore(authorization_store=auth_store)
         invalid_validation = S7VoiceSourceBundleValidationResult(
             status="raw_response_hash_mismatch",
@@ -439,7 +438,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
         artifact = self._artifact()
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
@@ -490,7 +489,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
 
         first_artifact = self._artifact(artifact_id="artifact-s7-3-first")
         second_artifact = self._artifact(artifact_id="artifact-s7-3-second")
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
@@ -530,7 +529,6 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         self.assertEqual(reserved.reservation_token_hash, s7.canonical_hash("first-token"))
 
     def test_mint_rolls_back_reservation_when_artifact_write_fails(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
             S7GuardedStateStore,
             S7VoiceBundleUse,
@@ -538,7 +536,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
         artifact = self._artifact()
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
         auth_store.put(artifact)
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
@@ -1318,7 +1316,7 @@ class S73MintRouteStoreHygieneTests(unittest.TestCase):
 
         artifact = self._artifact(work_class="self_modification")
         self.assertIn(artifact.derived_work_class, s7.VOICE_SEAT_WORK_CLASSES)
-        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store = fresh_store_at(self._db_path())
 
         # Wired with ONLY the raw authorization store (no guarded state store):
         # a guarded work-class artifact must fail closed before any persistence.
