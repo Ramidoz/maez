@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from tests.s7_store_fixture import fresh_store
 
 NOW = "2026-08-07T12:00:00Z"
 FUTURE = "2026-08-07T16:00:00Z"
@@ -175,7 +176,7 @@ def _migrated_store(tmp: Path):
     """
     import os
 
-    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    store = fresh_store(tmp)
     fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
@@ -295,7 +296,7 @@ class TestLinkArtifactToRow:
         the frozen DDL -- not merely "no action column appeared", which a
         widened type or a dropped NOT NULL would slip past.
         """
-        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        store = fresh_store(tmp_path)
         before = _table_shape(store.db_path, V1_TABLE)
         assert before[0], "v1 table absent; the comparison would be vacuous"
 
@@ -314,7 +315,7 @@ class TestLinkArtifactToRow:
     ) -> None:
         """The one v1 change the design DOES require, asserted exactly, so
         excluding triggers from the invariance guard above leaves no hole."""
-        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        store = fresh_store(tmp_path)
         assert not _triggers_on(store.db_path, V1_TABLE), (
             "v1 already carries triggers before migration; the assertion "
             "below would not measure what the migration added"

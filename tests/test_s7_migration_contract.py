@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from tests.s7_store_fixture import fresh_store
 
 
 def _anchored():
@@ -141,20 +142,32 @@ def _refuses():
     raise AssertionError("expected a refusal; nothing was raised")
 
 
-def _utc_now() -> str:
-    """A clock reading in the receipt's own format, used as a FLOOR.
+def _frozen_clock(monkeypatch, stamps):
+    """An INJECTED deterministic clock.
 
-    Comparing a recovery's started_at against the original's would be
-    satisfied by reusing the original stamp -- the very laundering
-    activation_path exists to prevent.
+    A wall-clock floor is not enough: two consecutive readings inside the
+    same second are identical -- reproduced -- so a recovery that simply
+    REUSED the original stamp would still clear `>= floor`. Feeding known,
+    strictly increasing stamps makes reuse detectable.
     """
-    from datetime import datetime, timezone
+    remaining = list(stamps)
 
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def next_stamp(*_a, **_k):
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    for name in ("_s7_utc_now", "utc_now", "_utc_now"):
+        if hasattr(s7, name):
+            monkeypatch.setattr(s7, name, next_stamp)
+            return next_stamp
+    pytest.fail(
+        "no injectable clock seam on operator_user_boundary; recovery "
+        "timestamps cannot be made deterministic and the reuse check "
+        "below would be vulnerable to same-second collisions"
+    )
 
 
 def _store(tmp: Path):
-    return s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    return fresh_store(tmp)
 
 
 @contextlib.contextmanager
@@ -1118,17 +1131,18 @@ class TestClassificationMatrix:
         assert _receipt(tmp_path)["activation_path"] == "committed_recovery"
 
     def test_recovery_does_not_stamp_the_original_start(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch
     ) -> None:
         """started_at and completed_at belong to the attempt that PUBLISHED
         the receipt, so a recovery must not present the original timing."""
         _store(tmp_path)
         _seed_legacy_row(tmp_path)
+        _frozen_clock(monkeypatch, ["2026-08-07T10:00:00Z"])
         _migrate(tmp_path)
         original = _receipt(tmp_path)
-        floor = _utc_now()
-        assert floor >= original["started_at"]
+        assert original["started_at"] == "2026-08-07T10:00:00Z"
         _drop_receipt(tmp_path)
+        _frozen_clock(monkeypatch, ["2026-08-07T11:00:00Z"])
         _migrate(tmp_path)
         recovered = _receipt(tmp_path)
         assert recovered["activation_path"] == "committed_recovery"
@@ -1136,8 +1150,11 @@ class TestClassificationMatrix:
         # which is exactly the laundering the field exists to prevent. The
         # floor is a clock reading taken AFTER the original was published,
         # so only a genuinely new attempt can clear it.
-        assert recovered["started_at"] >= floor, (recovered["started_at"], floor)
-        assert recovered["completed_at"] >= recovered["started_at"]
+        assert recovered["started_at"] == "2026-08-07T11:00:00Z", (
+            "the recovery reused the original stamp instead of recording "
+            "its own publishing attempt"
+        )
+        assert recovered["started_at"] > original["started_at"]
 
 
 class TestReceiptIdentity:
@@ -1541,6 +1558,36 @@ class TestPublicationLoserVerifiesTheWinner:
         _migrate(tmp_path)
         assert (tmp_path / RECEIPT_NAME).read_bytes() == winner
         assert _receipt(tmp_path)["store_ino"] == os.stat(store.db_path).st_ino
+
+    def test_the_loser_refuses_when_the_winner_is_invalid(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Reading the winner afterwards proves nothing about the loser:
+        blindly swallowing FileExistsError passes that test because the
+        VALID winner is still on disk. Here the competitor publishes a
+        receipt for a DIFFERENT store, so a loser that merely gives up
+        cannot be distinguished from one that verified -- unless it
+        refuses."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        valid = json.loads((tmp_path / RECEIPT_NAME).read_bytes())
+        _drop_receipt(tmp_path)
+        foreign = dict(valid, store_ino=valid["store_ino"] + 1)
+
+        def competitor_publishes_a_foreign_receipt(_dst):
+            (tmp_path / RECEIPT_NAME).write_bytes(
+                json.dumps(
+                    foreign, sort_keys=True, separators=(",", ":")
+                ).encode()
+            )
+            os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+
+        _events, _state = _record(
+            monkeypatch, on_link=competitor_publishes_a_foreign_receipt
+        )
+        with _refuses():
+            _migrate(tmp_path)
 
 
 class TestPartialAndFutureSchemasRefuse:

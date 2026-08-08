@@ -35,6 +35,8 @@ import pytest
 
 from core.governance import operator_user_boundary as s7
 
+REPO = Path(__file__).resolve().parents[1]
+
 WRITE_VERBS = ("CREATE ", "ALTER ", "DROP ", "INSERT ", "UPDATE ", "DELETE ")
 
 
@@ -156,7 +158,7 @@ class TestOpeningCannotResurrectAFrozenTable:
         with sqlite3.connect(path) as conn:
             conn.execute("DROP TABLE s7_authorization_artifacts")
             conn.commit()
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, sqlite3.DatabaseError, FileNotFoundError)):
             s7.S7AuthorizationStore(path)
         with sqlite3.connect(path) as conn:
             names = {
@@ -166,3 +168,191 @@ class TestOpeningCannotResurrectAFrozenTable:
                 )
             }
         assert "s7_authorization_artifacts" not in names
+
+
+V1_SOURCE_FINGERPRINT_AUTH = (
+    "b8946c79c8edf9386ce73522aac8b18b6181212a949570cf9c01c01e3ac1af00"
+)
+V1_AUTH = "s7_authorization_artifacts"
+V2_AUTH = "s7_authorization_artifacts_v2"
+RECEIPT_NAME = "s7_migration_receipt.json"
+
+# FROZEN CHOICE, made here rather than left open.
+#
+# "Idempotent" and "one-shot refusal" are both defensible, and the review
+# asked for one. One-shot-refuse-if-exists cannot work: the live store
+# already exists, so bootstrap could never run against it. Plain
+# idempotence is worse -- CREATE TABLE IF NOT EXISTS would rebuild a table
+# that migration froze and something dropped, which is the exact
+# resurrection this prerequisite exists to prevent.
+#
+# Frozen: IDEMPOTENT-VERIFY.
+#   absent            -> create
+#   present, correct  -> verify, change nothing
+#   present, damaged  -> REFUSE, never repair
+IDEMPOTENT_VERIFY = "absent creates; correct verifies; damaged refuses"
+
+
+def _tables(path: Path) -> set[str]:
+    with sqlite3.connect(path) as conn:
+        return {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+
+
+def _fingerprint(path: Path, table_names) -> str:
+    import json
+    import re
+
+    def canon(sql):
+        return None if sql is None else re.sub(r"\s+", " ", sql).strip().rstrip(";")
+
+    rows = []
+    with sqlite3.connect(path) as conn:
+        for name in sorted(table_names):
+            for t, n, tbl, sql in conn.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE tbl_name=? ORDER BY type,name",
+                (name,),
+            ):
+                rows.append([t, n, tbl, canon(sql)])
+    payload = json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+class TestTheInitialiserContract:
+    """Without these, a request-path caller could invoke creation authority
+    and resurrect v1 while every open-side test still passed."""
+
+    def test_it_builds_the_exact_v1_authorization_schema(
+        self, tmp_path: Path
+    ) -> None:
+        """Pinned to the ratified v1 source fingerprint, so the initializer
+        cannot build something merely similar."""
+        _initialise(tmp_path)
+        assert (
+            _fingerprint(tmp_path / "ceremony.sqlite3", [V1_AUTH])
+            == V1_SOURCE_FINGERPRINT_AUTH
+        )
+
+    def test_it_creates_no_v2_tables(self, tmp_path: Path) -> None:
+        """Initialization is not migration. Creating v2 here would activate
+        a plane no receipt vouches for."""
+        _initialise(tmp_path)
+        assert V2_AUTH not in _tables(tmp_path / "ceremony.sqlite3")
+
+    def test_it_publishes_no_receipt(self, tmp_path: Path) -> None:
+        _initialise(tmp_path)
+        assert not (tmp_path / RECEIPT_NAME).exists()
+
+    def test_it_installs_no_freeze_triggers(self, tmp_path: Path) -> None:
+        """The wall belongs to migration; a freshly initialized store is
+        writable v1."""
+        with sqlite3.connect(tmp_path / "ceremony.sqlite3") as _c:
+            pass
+        _initialise(tmp_path)
+        with sqlite3.connect(tmp_path / "ceremony.sqlite3") as conn:
+            triggers = list(
+                conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+            )
+        assert not triggers, triggers
+
+    def test_re_initialising_a_correct_store_changes_no_byte(
+        self, tmp_path: Path
+    ) -> None:
+        """IDEMPOTENT-VERIFY, first branch: bootstrap must be re-runnable
+        against the store that already exists."""
+        _initialise(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        _initialise(tmp_path)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+    def test_re_initialising_preserves_every_existing_row(
+        self, tmp_path: Path
+    ) -> None:
+        """The live store holds real records; initialization may never be a
+        data event."""
+        store = _initialise(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                f"INSERT INTO {V1_AUTH} (artifact_id, request_id) VALUES (?, ?)",
+                ("kept-1", "req-1"),
+            )
+            conn.commit()
+        _initialise(tmp_path)
+        with sqlite3.connect(path) as conn:
+            kept = conn.execute(
+                f"SELECT artifact_id FROM {V1_AUTH}"
+            ).fetchall()
+        assert ("kept-1",) in kept, (kept, store)
+
+    def test_a_damaged_store_refuses_rather_than_being_repaired(
+        self, tmp_path: Path
+    ) -> None:
+        """IDEMPOTENT-VERIFY, third branch, and the whole point: a dropped
+        table is tampering, not an invitation to rebuild. Rebuilding would
+        restore an UNFROZEN v1 after migration installed the wall."""
+        _initialise(tmp_path)
+        path = tmp_path / "ceremony.sqlite3"
+        with sqlite3.connect(path) as conn:
+            conn.execute(f"DROP TABLE {V1_AUTH}")
+            conn.commit()
+        with pytest.raises((ValueError, sqlite3.DatabaseError)):
+            _initialise(tmp_path)
+        assert V1_AUTH not in _tables(path)
+
+    def test_the_initialiser_has_a_bootstrap_only_callsite_allowlist(
+        self,
+    ) -> None:
+        """Creation authority must not be reachable from the request path.
+        daemon/maez_daemon.py constructs the store on live requests; if it
+        could also initialise, the constructor's power simply moved."""
+        import ast
+        import os
+
+        allowed_prefixes = ("scripts/", "cli", "core/governance/")
+        offenders: list[str] = []
+        allowed_callers: list[str] = []
+        skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
+        files = []
+        for dirpath, dirnames, filenames in os.walk(REPO):
+            dirnames[:] = [
+                d for d in dirnames if d not in skip and not d.startswith(".")
+            ]
+            files += [
+                Path(dirpath, n) for n in filenames if n.endswith(".py")
+            ]
+        for path in files:
+            rel = str(path.relative_to(REPO))
+            try:
+                tree = ast.parse(path.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    name = (
+                        node.func.attr
+                        if isinstance(node.func, ast.Attribute)
+                        else getattr(node.func, "id", None)
+                    )
+                    if name != "initialise_authorization_store":
+                        continue
+                    if rel.startswith(allowed_prefixes):
+                        allowed_callers.append(rel)
+                    else:
+                        offenders.append(rel)
+        # CONTROL: with no initializer there are NO callers, so "no
+        # offenders" is true of a seam that does not exist. The allowlist
+        # only means something once bootstrap actually calls it.
+        assert allowed_callers, (
+            "no bootstrap/setup caller invokes the initializer; the "
+            "allowlist below is vacuous until one does"
+        )
+        assert not offenders, offenders

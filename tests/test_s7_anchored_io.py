@@ -227,6 +227,18 @@ class TestNoFollowAndStatStability:
                 RECEIPT_NAME, root=link, expected_uid=os.getuid()
             )
 
+    def test_the_writer_refuses_a_symlinked_root(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """The reader's no-follow is only half of it: a writer that resolves
+        a symlinked root publishes the receipt into another directory."""
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "via_link"
+        link.symlink_to(real)
+        with pytest.raises(OSError):
+            anchored.write_private_file(RECEIPT_NAME, b"{}", root=link)
+
     def test_a_fifo_refuses(self, anchored, tmp_path: Path) -> None:
         """A non-regular file can block the reader forever."""
         os.mkfifo(tmp_path / RECEIPT_NAME, 0o600)
@@ -316,12 +328,16 @@ class TestWriteOrderingAndCompleteness:
 
 
 class TestReaderSideInvariants:
-    def test_the_reader_refuses_a_group_readable_file(
-        self, anchored, tmp_path: Path
+    @pytest.mark.parametrize("mode", [0o640, 0o644, 0o400, 0o000, 0o700])
+    def test_the_reader_requires_exactly_0600(
+        self, anchored, tmp_path: Path, mode: int
     ) -> None:
+        """Not merely "no group or other bits": 0400 and 0000 also satisfy
+        that and are not the mode the writer produces. Anything but 0600
+        means something else has touched the file."""
         _write(anchored, tmp_path)
-        os.chmod(tmp_path / RECEIPT_NAME, 0o640)
-        with pytest.raises(PermissionError):
+        os.chmod(tmp_path / RECEIPT_NAME, mode)
+        with pytest.raises((PermissionError, OSError)):
             anchored.read_private_file(
                 RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
             )
@@ -357,22 +373,44 @@ class TestReaderSideInvariants:
                 RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
             )
 
-    def test_the_stat_is_stable_across_the_read(
-        self, anchored, tmp_path: Path
+    @pytest.mark.parametrize(
+        "field", ["st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"]
+    )
+    def test_a_stat_change_across_the_read_refuses(
+        self, anchored, tmp_path: Path, monkeypatch, field: str
     ) -> None:
-        """Size and identity are re-checked after reading; otherwise a file
-        swapped mid-read is returned as if it were the one that was
-        validated."""
-        import ast
-        import inspect
+        """BEHAVIOURAL, not shape. Counting two adjacent os.fstat calls
+        passes on an implementation that makes both and compares neither.
+        Each field is mutated between the pre- and post-read stat, and the
+        read must refuse."""
+        _write(anchored, tmp_path, data=b"m" * 200)
+        real_fstat = os.fstat
+        calls = {"n": 0}
 
-        tree = ast.parse(inspect.getsource(anchored.read_private_file))
-        fstats = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and ast.unparse(node.func) == "os.fstat"
-        ]
-        assert len(fstats) >= 2, "the descriptor is stat'd only once"
+        class Shifted:
+            def __init__(self, base):
+                self._base = base
+
+            def __getattr__(self, name):
+                value = getattr(self._base, name)
+                if name == field:
+                    return value + 1
+                return value
+
+        def shifting_fstat(fd):
+            calls["n"] += 1
+            base = real_fstat(fd)
+            return Shifted(base) if calls["n"] > 1 else base
+
+        monkeypatch.setattr(os, "fstat", shifting_fstat)
+        with pytest.raises((OSError, ValueError)):
+            anchored.read_private_file(
+                RECEIPT_NAME, root=tmp_path, expected_uid=os.getuid()
+            )
+        assert calls["n"] >= 2, (
+            "the descriptor was stat'd only once, so no comparison is "
+            "possible and the refusal above cannot have come from one"
+        )
 
     def test_a_fifo_is_opened_without_blocking(
         self, anchored, tmp_path: Path

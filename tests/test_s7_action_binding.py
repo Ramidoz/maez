@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from tests.s7_store_fixture import fresh_store
 from core.governance import s7_guarded_execution as guarded
 
 NOW = "2026-08-07T12:00:00Z"
@@ -180,7 +181,7 @@ def _backup_authorization(tmp: Path, *, action: str):
         expires_at=FUTURE,
         rendered_at=NOW,
     )
-    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    store = fresh_store(tmp)
     store.put(
         s7.S7AuthorizationArtifact(
             artifact_id="artifact-backup-1",
@@ -256,7 +257,7 @@ def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
     migration entrypoint explicitly. That entrypoint does not exist yet,
     which is the intended red.
     """
-    store = s7.S7AuthorizationStore(tmp / "ceremony.sqlite3")
+    store = fresh_store(tmp)
     # PRIVATE helper, separately named. My first version froze
     # migrate_authorization_store_to_v2(store_dir_fd=…, _private_root=…),
     # which recreates the alternate-root capability the final design
@@ -600,7 +601,7 @@ class TestHistoricalV1CannotAuthorize:
         something to place rather than something that was already there.
         """
         env, authority, params_hash, rendered = _bundle()
-        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        store = fresh_store(tmp_path)
 
         # 1. seed an UNEXPIRED v1 row while v1 is still writable.
         #    An expired row would refuse for the wrong reason -- all four
@@ -659,7 +660,7 @@ class TestOpeningTheStoreDoesNotMigrate:
     """Open-time migration is forbidden by the design."""
 
     def test_v2_does_not_appear_merely_by_opening(self, tmp_path: Path) -> None:
-        store = s7.S7AuthorizationStore(tmp_path / "ceremony.sqlite3")
+        store = fresh_store(tmp_path)
         with sqlite3.connect(store.db_path) as conn:
             names = {
                 n for (n,) in conn.execute(
