@@ -127,8 +127,11 @@ def find_initialiser_callsites(source: str) -> list[str]:
             return value.id
         return None
 
-    # Both Assign and AnnAssign, to a fixed point so chains resolve.
-    for _ in range(3):
+    # A TRUE fixed point. Three passes resolved only three links, so a
+    # reverse-ordered four-link chain stayed invisible.
+    changed = True
+    while changed:
+        before = set(aliases)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 targets, value = node.targets, node.value
@@ -141,6 +144,7 @@ def find_initialiser_callsites(source: str) -> list[str]:
             tail = alias_tail(value)
             if tail == TARGET or tail in aliases:
                 aliases |= {t.id for t in targets if isinstance(t, ast.Name)}
+        changed = aliases != before
 
     found: list[str] = []
 
@@ -559,18 +563,34 @@ class TestTheInitialiserContract:
         script = REPO / "scripts" / "s7_initialise_store.py"
         assert script.is_file(), f"{script} does not exist yet"
 
-        spec = importlib.util.spec_from_file_location("s7_init_script", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        from core.governance.s7_webauthn_bootstrap import DEFAULT_STORE_ROOT
 
         calls: list[tuple] = []
+        # Stub BEFORE exec_module. Loading the script first lets a
+        # top-level `from ... import initialise_authorization_store` keep
+        # the REAL callable -- and a module-level call would then touch the
+        # canonical store during this test.
         monkeypatch.setattr(
             s7,
             "initialise_authorization_store",
             lambda *a, **k: calls.append((a, k)),
         )
+        spec = importlib.util.spec_from_file_location("s7_init_script", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert calls == [], (
+            "importing the script initialised something; creation must "
+            "happen only when main() is invoked"
+        )
+
         module.main()
         assert len(calls) == 1, calls
+
+        # The RIGHT store. "exactly one call" is satisfied by a script that
+        # initialises /tmp/not-the-canonical-store.
+        args, kwargs = calls[0]
+        target = args[0] if args else kwargs.get("path")
+        assert Path(target) == DEFAULT_STORE_ROOT / "ceremony.sqlite3", target
 
 
 class TestTheCallsiteScannerIsItselfAttacked:
@@ -624,6 +644,18 @@ class TestTheCallsiteScannerIsItselfAttacked:
         assert find_initialiser_callsites(
             'def main():\n'
             '    getattr(s7, "initialise_authorization_store")()\n'
+        ) == ["main"]
+
+    def test_a_reverse_ordered_alias_chain_is_seen(self) -> None:
+        """Bounded iteration resolved only as many links as it had passes.
+        Written in reverse, a four-link chain outran three passes."""
+        assert find_initialiser_callsites(
+            "def main():\n"
+            "    d = c\n"
+            "    c = b\n"
+            "    b = a\n"
+            "    a = s7.initialise_authorization_store\n"
+            "    d()\n"
         ) == ["main"]
 
     def test_an_unrelated_call_is_not_seen(self) -> None:
