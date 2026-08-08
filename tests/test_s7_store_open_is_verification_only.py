@@ -88,6 +88,97 @@ def _writes(events) -> list[str]:
     ]
 
 
+TARGET = "initialise_authorization_store"
+ALLOWED_CALLSITE = "scripts/s7_initialise_store.py::main"
+
+
+def find_initialiser_callsites(source: str) -> list[str]:
+    """Fully qualified callers of the initializer in one source string.
+
+    Three shapes defeated earlier versions:
+
+    * `Hidden.main` and `helper.<locals>.main` both recorded as `::main`,
+      so a call inside a class or a nested function satisfied an allowlist
+      written for the module-level one;
+    * `init: object = s7.initialise_authorization_store` -- an ANNOTATED
+      assignment -- aliased the seam invisibly;
+    * a call is only syntax. `if False: initialise_authorization_store()`
+      appears here and never runs, which is why a behavioural witness
+      accompanies this scanner rather than replacing it.
+
+    Returns qualified names, so scope is part of the identity.
+    """
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(source))
+    aliases: set[str] = {
+        a.asname
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for a in node.names
+        if a.asname and a.name.split(".")[-1] == TARGET
+    }
+
+    def alias_tail(value):
+        if isinstance(value, ast.Attribute):
+            return value.attr
+        if isinstance(value, ast.Name):
+            return value.id
+        return None
+
+    # Both Assign and AnnAssign, to a fixed point so chains resolve.
+    for _ in range(3):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if value is None:
+                continue
+            tail = alias_tail(value)
+            if tail == TARGET or tail in aliases:
+                aliases |= {t.id for t in targets if isinstance(t, ast.Name)}
+
+    found: list[str] = []
+
+    def walk(node, scope: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                walk(child, f"{scope}.{child.name}" if scope else child.name)
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = (
+                    f"{scope}.<locals>.{child.name}"
+                    if scope and not scope[0].isupper()
+                    else (f"{scope}.{child.name}" if scope else child.name)
+                )
+                walk(child, inner)
+                continue
+            if isinstance(child, ast.Call):
+                name = (
+                    child.func.attr
+                    if isinstance(child.func, ast.Attribute)
+                    else getattr(child.func, "id", None)
+                )
+                if name == TARGET or name in aliases:
+                    found.append(scope or "<module>")
+                elif (
+                    name == "getattr"
+                    and len(child.args) > 1
+                    and isinstance(child.args[1], ast.Constant)
+                    and child.args[1].value == TARGET
+                ):
+                    found.append(scope or "<module>")
+            walk(child, scope)
+
+    walk(tree, "")
+    return found
+
+
+
 class TestTheInitialisationSeamExists:
     def test_there_is_an_explicit_initialiser(self, tmp_path: Path) -> None:
         _initialise(tmp_path)
@@ -411,33 +502,18 @@ class TestTheInitialiserContract:
         _initialise(tmp_path)
         assert V1_AUTH in _tables(path)
 
-    def test_the_initialiser_has_a_bootstrap_only_callsite_allowlist(
-        self,
-    ) -> None:
+    def test_the_initialiser_has_one_exact_qualified_callsite(self) -> None:
         """Creation authority must not be reachable from the request path.
 
-        daemon/maez_daemon.py constructs the store on live requests; if it
-        could also initialise, the constructor's power simply moved.
-
-        The previous version dereferenced `node.name` on an ast.Call, which
-        has no such attribute -- the FIRST correct call would have crashed
-        it rather than judged it. Callers are attributed by walking
-        function definitions, and alias imports and getattr-by-string are
-        treated as calls too, since either reaches the seam without naming
-        it.
+        The callsite is FULLY QUALIFIED: `Hidden.main` and
+        `helper.<locals>.main` are not `main`, so a call tucked into a
+        class or a closure inside the allowed script does not satisfy this.
         """
-        import ast
         import os
 
-        target = "initialise_authorization_store"
-        # EXACT QUALIFIED callsite, not a file. Allowing the whole file
-        # lets the call move from main() into any other function there and
-        # still pass -- creation authority hiding inside an allowed script.
-        allowed_callsites = {"scripts/s7_initialise_store.py::main"}
         allowed: list[str] = []
         offenders: list[str] = []
         skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
-
         files = []
         for dirpath, dirnames, filenames in os.walk(REPO):
             dirnames[:] = [
@@ -448,71 +524,109 @@ class TestTheInitialiserContract:
         for path in files:
             rel = str(path.relative_to(REPO))
             try:
-                tree = ast.parse(path.read_text())
-            except (SyntaxError, UnicodeDecodeError):
+                source = path.read_text()
+            except (OSError, UnicodeDecodeError):
                 continue
+            try:
+                scopes = find_initialiser_callsites(source)
+            except SyntaxError:
+                continue
+            for scope in scopes:
+                site = f"{rel}::{scope}"
+                (allowed if site == ALLOWED_CALLSITE else offenders).append(site)
 
-            aliases = {
-                a.asname
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.Import, ast.ImportFrom))
-                for a in node.names
-                if a.asname and a.name.split(".")[-1] == target
-            }
-            # ASSIGNMENT aliasing: `init = s7.initialise_authorization_store`
-            # then `init()` reaches the seam without ever naming it at the
-            # call. An import-only alias check cannot see this.
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                value = node.value
-                tail = (
-                    value.attr
-                    if isinstance(value, ast.Attribute)
-                    else (value.id if isinstance(value, ast.Name) else None)
-                )
-                if tail == target or tail in aliases:
-                    aliases |= {
-                        t.id for t in node.targets if isinstance(t, ast.Name)
-                    }
-
-            def record(where: str, *, _rel=rel) -> None:
-                site = f"{_rel}::{where}"
-                (allowed if site in allowed_callsites else offenders).append(site)
-
-            def walk(node, enclosing: str, *, _aliases=aliases) -> None:
-                for child in ast.iter_child_nodes(node):
-                    if isinstance(
-                        child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                    ):
-                        walk(child, child.name, _aliases=_aliases)
-                        continue
-                    if isinstance(child, ast.Call):
-                        name = (
-                            child.func.attr
-                            if isinstance(child.func, ast.Attribute)
-                            else getattr(child.func, "id", None)
-                        )
-                        if name == target or name in _aliases:
-                            record(enclosing)
-                        elif (
-                            name == "getattr"
-                            and len(child.args) > 1
-                            and isinstance(child.args[1], ast.Constant)
-                            and child.args[1].value == target
-                        ):
-                            record(f"{enclosing} (via getattr)")
-                    walk(child, enclosing, _aliases=_aliases)
-
-            walk(tree, "<module>")
-
-        # CONTROL: with no initializer there are NO callers, so "no
-        # offenders" is true of a seam that does not exist.
         assert allowed, (
-            "no bootstrap/setup caller invokes the initializer; the "
-            "allowlist is vacuous until one does"
+            "no bootstrap caller invokes the initializer; the allowlist is "
+            "vacuous until one does"
         )
         assert not offenders, offenders
-        # Exact multiplicity: a second call at the same allowed callsite is
-        # a second creation authority hiding behind the first.
-        assert allowed == ["scripts/s7_initialise_store.py::main"], allowed
+        assert allowed == [ALLOWED_CALLSITE], allowed
+
+    def test_the_allowed_callsite_actually_runs(self, monkeypatch) -> None:
+        """BEHAVIOURAL. The scanner proves a call APPEARS; it cannot prove
+        it executes.
+
+            def main():
+                if False:
+                    initialise_authorization_store()
+
+        satisfies every syntactic check above and never initialises
+        anything. This invokes main() and requires the seam to be reached
+        exactly once.
+        """
+        import importlib.util
+
+        script = REPO / "scripts" / "s7_initialise_store.py"
+        assert script.is_file(), f"{script} does not exist yet"
+
+        spec = importlib.util.spec_from_file_location("s7_init_script", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            s7,
+            "initialise_authorization_store",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        module.main()
+        assert len(calls) == 1, calls
+
+
+class TestTheCallsiteScannerIsItselfAttacked:
+    """Three shapes defeated earlier versions of this scanner, so it is
+    attacked directly rather than trusted because the repo happens to be
+    clean."""
+
+    def test_module_level_main_is_recorded_bare(self) -> None:
+        assert find_initialiser_callsites(
+            "def main():\n    initialise_authorization_store()\n"
+        ) == ["main"]
+
+    def test_a_class_method_is_not_module_level_main(self) -> None:
+        assert find_initialiser_callsites(
+            "class Hidden:\n"
+            "    def main(self):\n"
+            "        initialise_authorization_store()\n"
+        ) == ["Hidden.main"]
+
+    def test_a_nested_function_is_not_module_level_main(self) -> None:
+        assert find_initialiser_callsites(
+            "def helper():\n"
+            "    def main():\n"
+            "        initialise_authorization_store()\n"
+            "    return main\n"
+        ) == ["helper.<locals>.main"]
+
+    def test_a_plain_assignment_alias_is_seen(self) -> None:
+        assert find_initialiser_callsites(
+            "def main():\n"
+            "    init = s7.initialise_authorization_store\n"
+            "    init()\n"
+        ) == ["main"]
+
+    def test_an_annotated_assignment_alias_is_seen(self) -> None:
+        assert find_initialiser_callsites(
+            "def main():\n"
+            "    init: object = s7.initialise_authorization_store\n"
+            "    init()\n"
+        ) == ["main"]
+
+    def test_an_import_alias_is_seen(self) -> None:
+        assert find_initialiser_callsites(
+            "from core.governance.operator_user_boundary import (\n"
+            "    initialise_authorization_store as boot,\n"
+            ")\n"
+            "def main():\n    boot()\n"
+        ) == ["main"]
+
+    def test_getattr_by_string_is_seen(self) -> None:
+        assert find_initialiser_callsites(
+            'def main():\n'
+            '    getattr(s7, "initialise_authorization_store")()\n'
+        ) == ["main"]
+
+    def test_an_unrelated_call_is_not_seen(self) -> None:
+        assert find_initialiser_callsites(
+            "def main():\n    something_else()\n"
+        ) == []
