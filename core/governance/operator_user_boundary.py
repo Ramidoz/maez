@@ -2455,22 +2455,115 @@ def _mint_s7_execution_grant(
     )
 
 
+_AUTH_TABLE = "s7_authorization_artifacts"
+
+
+def _auth_table_present(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (_AUTH_TABLE,),
+    ).fetchone()
+    return row is not None
+
+
+def _auth_schema_fingerprint(conn: sqlite3.Connection) -> str:
+    """Normalized sqlite_master.sql for the auth table, hashed.
+
+    Covers the table, its indexes AND its triggers, because it hashes the
+    SQL text rather than enumerating PRAGMA fields.
+    """
+    import hashlib
+    import re
+
+    rows = []
+    for kind, name, tbl, sql in conn.execute(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE tbl_name=? ORDER BY type,name",
+        (_AUTH_TABLE,),
+    ):
+        canonical = None if sql is None else re.sub(r"\s+", " ", sql).strip().rstrip(";")
+        rows.append([kind, name, tbl, canonical])
+    payload = json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _reference_auth_fingerprint() -> str:
+    """The fingerprint the canonical schema produces, built in memory."""
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.executescript(_AUTH_SCHEMA)
+        return _auth_schema_fingerprint(conn)
+
+
+def initialise_authorization_store(db_path: str | Path) -> Path:
+    """Create the S7 authorization store. Bootstrap/setup only.
+
+    The single creation authority, deliberately separate from opening.
+
+    IDEMPOTENT-VERIFY:
+      absent           -> create
+      present, correct -> verify, change nothing
+      present, damaged -> REFUSE, never repair
+
+    A dropped table is NOT damage: it leaves exactly the state a
+    never-initialised store is in, so refusing it would make first
+    initialisation impossible. Damage is a schema that EXISTS and does not
+    match -- an added column, a stray index, an altered trigger. Repairing
+    such a store would rebuild, unfrozen, a table the migration froze.
+    """
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    reference = _reference_auth_fingerprint()
+
+    with closing(sqlite3.connect(path)) as conn:
+        if _auth_table_present(conn):
+            actual = _auth_schema_fingerprint(conn)
+            if actual != reference:
+                raise ValueError(
+                    "S7 authorization schema does not match the expected "
+                    "definition; refusing to repair it"
+                )
+            return path
+
+        conn.executescript(_AUTH_SCHEMA)
+        cols = {
+            str(row[1]) for row in conn.execute(f"PRAGMA table_info({_AUTH_TABLE})")
+        }
+        if "ceremony_kind" not in cols:
+            conn.execute(
+                f"ALTER TABLE {_AUTH_TABLE} "
+                "ADD COLUMN ceremony_kind TEXT NOT NULL "
+                "DEFAULT 'founder_local_webauthn'"
+            )
+        conn.commit()
+    return path
+
+
 class S7AuthorizationStore:
     def __init__(self, db_path: str | Path):
+        """Open an EXISTING store. Verification only -- never creation.
+
+        This constructor used to mkdir, executescript, ALTER and commit on
+        every open, and `daemon/maez_daemon.py` builds it on the live
+        request path. That made "the schema I verified" and "the schema I
+        created" the same act, and it could resurrect -- unfrozen -- a
+        table the v2 migration had deliberately frozen.
+
+        Creation now lives in `initialise_authorization_store`, owned by
+        bootstrap/setup.
+        """
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.db_path.is_file():
+            raise FileNotFoundError(
+                f"S7 authorization store is not initialised: {self.db_path.name}"
+            )
         with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.executescript(_AUTH_SCHEMA)
-            cols = {
-                str(row[1])
-                for row in conn.execute("PRAGMA table_info(s7_authorization_artifacts)")
-            }
-            if "ceremony_kind" not in cols:
-                conn.execute(
-                    "ALTER TABLE s7_authorization_artifacts "
-                    "ADD COLUMN ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn'"
+            if not _auth_table_present(conn):
+                raise ValueError(
+                    "S7 authorization store is missing its artifact table; "
+                    "opening does not create one"
                 )
-            conn.commit()
 
     def put(
         self,
