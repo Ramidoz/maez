@@ -430,7 +430,10 @@ class TestTheInitialiserContract:
         import os
 
         target = "initialise_authorization_store"
-        allowed_files = {"scripts/s7_initialise_store.py"}
+        # EXACT QUALIFIED callsite, not a file. Allowing the whole file
+        # lets the call move from main() into any other function there and
+        # still pass -- creation authority hiding inside an allowed script.
+        allowed_callsites = {"scripts/s7_initialise_store.py::main"}
         allowed: list[str] = []
         offenders: list[str] = []
         skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
@@ -456,11 +459,26 @@ class TestTheInitialiserContract:
                 for a in node.names
                 if a.asname and a.name.split(".")[-1] == target
             }
+            # ASSIGNMENT aliasing: `init = s7.initialise_authorization_store`
+            # then `init()` reaches the seam without ever naming it at the
+            # call. An import-only alias check cannot see this.
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign):
+                    continue
+                value = node.value
+                tail = (
+                    value.attr
+                    if isinstance(value, ast.Attribute)
+                    else (value.id if isinstance(value, ast.Name) else None)
+                )
+                if tail == target or tail in aliases:
+                    aliases |= {
+                        t.id for t in node.targets if isinstance(t, ast.Name)
+                    }
 
             def record(where: str, *, _rel=rel) -> None:
-                (allowed if _rel in allowed_files else offenders).append(
-                    f"{_rel}::{where}"
-                )
+                site = f"{_rel}::{where}"
+                (allowed if site in allowed_callsites else offenders).append(site)
 
             def walk(node, enclosing: str, *, _aliases=aliases) -> None:
                 for child in ast.iter_child_nodes(node):
@@ -495,6 +513,6 @@ class TestTheInitialiserContract:
             "allowlist is vacuous until one does"
         )
         assert not offenders, offenders
-        # Exact multiplicity: a second call inside the same allowed file is
+        # Exact multiplicity: a second call at the same allowed callsite is
         # a second creation authority hiding behind the first.
-        assert len(allowed) == 1, allowed
+        assert allowed == ["scripts/s7_initialise_store.py::main"], allowed

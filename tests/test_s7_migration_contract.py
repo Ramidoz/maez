@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
-from tests.s7_store_fixture import fresh_store
+from tests.s7_store_fixture import fresh_store, open_only
 
 
 def _anchored():
@@ -567,7 +567,10 @@ class TestNormalOpeningIsVerificationOnly:
         _seed_legacy_row(tmp_path)
         _migrate(tmp_path)
         before = hashlib.sha256(Path(store.db_path).read_bytes()).hexdigest()
-        _store(tmp_path)
+        # open_only, NOT _store: _store routes through the initializer, so
+        # reopening that way exercises create-then-open and proves nothing
+        # about opening alone.
+        open_only(store.db_path)
         assert (
             hashlib.sha256(Path(store.db_path).read_bytes()).hexdigest() == before
         )
@@ -580,7 +583,7 @@ class TestNormalOpeningIsVerificationOnly:
         _store(tmp_path)
         _seed_legacy_row(tmp_path)
         events, _state = _record(monkeypatch)
-        _store(tmp_path)
+        open_only(tmp_path / "ceremony.sqlite3")
         # executescript is recorded under its own kind; checking only "sql"
         # let the store's CREATE TABLE pass unnoticed.
         statements = _kinds(events, "sql") + _kinds(events, "script")
