@@ -430,3 +430,230 @@ class TestReaderSideInvariants:
             isinstance(node, ast.Attribute) and node.attr == "O_NOFOLLOW"
             for node in ast.walk(tree)
         )
+
+
+class TestTheRootIsInescapable:
+    """`relative` is a LEAF NAME, not a path the caller may steer.
+
+    Reproduced before these existed: an absolute `relative` made the
+    directory fd irrelevant -- openat ignores it entirely -- and `../`
+    walked straight out of the anchored root. Both wrote outside it.
+    """
+
+    @pytest.mark.parametrize("escape", ["/tmp/escaped.json", "../sibling.json"])
+    def test_the_writer_refuses_an_escaping_name(
+        self, anchored, tmp_path: Path, escape: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file(escape, b"{}", root=root)
+
+    @pytest.mark.parametrize("escape", ["/tmp/escaped.json", "../sibling.json"])
+    def test_the_reader_refuses_an_escaping_name(
+        self, anchored, tmp_path: Path, escape: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        with pytest.raises((ValueError, OSError)):
+            anchored.read_private_file(
+                escape, root=root, expected_uid=os.getuid()
+            )
+
+    def test_nothing_is_written_outside_the_root(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """The refusal must also not have created the file on its way out."""
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside.json"
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file(str(outside), b"{}", root=root)
+        assert not outside.exists()
+
+    def test_an_intermediate_symlink_component_refuses(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """O_NOFOLLOW on the final component is not enough: a symlinked
+        DIRECTORY partway along redirects the whole walk."""
+        root = tmp_path / "root"
+        (root / "real").mkdir(parents=True)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (root / "hop").symlink_to(elsewhere)
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file("hop/x.json", b"{}", root=root)
+
+    def test_a_plain_leaf_name_still_works(self, anchored, tmp_path: Path) -> None:
+        """CONTROL: refusing everything would satisfy every test above."""
+        root = tmp_path / "root"
+        root.mkdir()
+        anchored.write_private_file("plain.json", b'{"a":1}', root=root)
+        assert (root / "plain.json").is_file()
+
+
+class TestZeroProgressWriteFailsFast:
+    def test_a_write_returning_zero_raises_instead_of_looping(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Reproduced as a HANG before this test existed: the write-all loop
+        never checked for zero progress, so a device accepting nothing spun
+        forever holding an open descriptor."""
+        monkeypatch.setattr(os, "write", lambda fd, data: 0)
+        with pytest.raises(OSError):
+            anchored.write_private_file("x.json", b"abc", root=tmp_path)
+
+
+class TestActivationBindsTheReceiptToItsStore:
+    """The ratified contract: the wrapper opens BOTH leaves under the one
+    held directory -- ceremony.sqlite3 for its st_dev/st_ino, and the
+    receipt for its bytes -- and the receipt's store_dev/store_ino must
+    match. A signature-only test cannot show any of that.
+
+    Exercised through the PRIVATE reader against a tmpdir, never the public
+    one, which opens the canonical store.
+    """
+
+    def _publish(self, anchored, root: Path, *, dev, ino) -> None:
+        import json
+
+        (root / "ceremony.sqlite3").write_bytes(b"")
+        os.chmod(root / "ceremony.sqlite3", 0o600)
+        anchored.write_private_file(
+            RECEIPT_NAME,
+            json.dumps({"store_dev": dev, "store_ino": ino}).encode(),
+            root=root,
+        )
+
+    def _read(self, anchored, root: Path) -> bytes:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            return anchored._read_migration_receipt(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+
+    def test_a_matching_receipt_is_returned(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """CONTROL: without it, refusing everything would pass the rest."""
+        store = tmp_path / "ceremony.sqlite3"
+        store.write_bytes(b"")
+        stat = os.stat(store)
+        self._publish(anchored, tmp_path, dev=stat.st_dev, ino=stat.st_ino)
+        assert self._read(anchored, tmp_path)
+
+    def test_a_foreign_store_ino_refuses(self, anchored, tmp_path: Path) -> None:
+        store = tmp_path / "ceremony.sqlite3"
+        store.write_bytes(b"")
+        stat = os.stat(store)
+        self._publish(anchored, tmp_path, dev=stat.st_dev, ino=stat.st_ino + 1)
+        with pytest.raises((ValueError, OSError)):
+            self._read(anchored, tmp_path)
+
+    def test_a_foreign_store_dev_refuses(self, anchored, tmp_path: Path) -> None:
+        store = tmp_path / "ceremony.sqlite3"
+        store.write_bytes(b"")
+        stat = os.stat(store)
+        self._publish(anchored, tmp_path, dev=stat.st_dev + 1, ino=stat.st_ino)
+        with pytest.raises((ValueError, OSError)):
+            self._read(anchored, tmp_path)
+
+    def test_a_missing_store_refuses(self, anchored, tmp_path: Path) -> None:
+        """A receipt with no store beside it binds nothing."""
+        anchored.write_private_file(
+            RECEIPT_NAME, b'{"store_dev": 1, "store_ino": 1}', root=tmp_path
+        )
+        with pytest.raises(OSError):
+            self._read(anchored, tmp_path)
+
+
+STORE_NAME = "ceremony.sqlite3"
+
+
+class TestTheAnchorCannotBeEscaped:
+    """`root` is the anchor. A relative that leaves it is not relative.
+
+    Reproduced before these were written: an absolute path wrote outside
+    the root entirely, and `../sibling.json` landed beside it. Both reads
+    and writes escaped, so the anchor was decorative.
+    """
+
+    @pytest.mark.parametrize(
+        "escape", ["../sibling.json", "a/../../sibling.json", "./../sibling.json"]
+    )
+    def test_a_parent_traversal_write_refuses(
+        self, anchored, tmp_path: Path, escape: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file(escape, b"{}", root=root)
+        assert not (tmp_path / "sibling.json").exists(), "escaped the anchor"
+
+    def test_an_absolute_write_refuses(self, anchored, tmp_path: Path) -> None:
+        """os.open(abs, dir_fd=...) IGNORES the descriptor -- the anchor is
+        silently discarded."""
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside.json"
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file(str(outside), b"{}", root=root)
+        assert not outside.exists(), "escaped the anchor"
+
+    @pytest.mark.parametrize("escape", ["../sibling.json", "a/../../sibling.json"])
+    def test_a_parent_traversal_read_refuses(
+        self, anchored, tmp_path: Path, escape: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        (tmp_path / "sibling.json").write_bytes(b'{"outside":1}')
+        os.chmod(tmp_path / "sibling.json", 0o600)
+        with pytest.raises((ValueError, OSError)):
+            anchored.read_private_file(escape, root=root, expected_uid=os.getuid())
+
+    def test_an_absolute_read_refuses(self, anchored, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside.json"
+        outside.write_bytes(b'{"outside":1}')
+        os.chmod(outside, 0o600)
+        with pytest.raises((ValueError, OSError)):
+            anchored.read_private_file(
+                str(outside), root=root, expected_uid=os.getuid()
+            )
+
+    def test_an_intermediate_symlink_component_refuses(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """Every component is walked with O_NOFOLLOW, not just the leaf: a
+        symlinked DIRECTORY in the middle redirects the whole tail."""
+        root = tmp_path / "root"
+        root.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (root / "sub").symlink_to(elsewhere)
+        with pytest.raises((ValueError, OSError)):
+            anchored.write_private_file("sub/receipt.json", b"{}", root=root)
+        assert not (elsewhere / "receipt.json").exists(), "followed a symlink"
+
+    def test_a_plain_nested_path_still_works(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """CONTROL: rejecting every multi-component path would satisfy the
+        escapes above while breaking legitimate nesting."""
+        root = tmp_path / "root"
+        (root / "sub").mkdir(parents=True)
+        written = anchored.write_private_file("sub/receipt.json", b"{}", root=root)
+        assert Path(written).read_bytes() == b"{}"
+
+
+class TestWriteMakesProgress:
+    def test_a_zero_progress_write_raises_instead_of_spinning(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """os.write returning 0 means no progress. Looping on it hangs the
+        caller forever -- reproduced, it spun past a one-second timeout.
+        """
+        monkeypatch.setattr(os, "write", lambda fd, data: 0)
+        with pytest.raises(OSError):
+            anchored.write_private_file("x.json", b"abc", root=tmp_path)

@@ -30,9 +30,10 @@ could aim activation at a receipt beside a different store.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import stat as stat_module
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 __all__ = [
     "read_migration_receipt",
@@ -44,6 +45,7 @@ __all__ = [
 # hostile file cannot exhaust memory before any validation runs.
 MAX_PRIVATE_FILE_BYTES = 8192
 
+STORE_NAME = "ceremony.sqlite3"
 RECEIPT_NAME = "s7_migration_receipt.json"
 PRIVATE_FILE_MODE = 0o600
 
@@ -113,6 +115,45 @@ def _verify_and_read(fd: int, before, relative: str, expected_uid: int) -> bytes
     return b"".join(chunks)
 
 
+def _anchored_leaf(dir_fd: int, relative: str):
+    """Walk `relative` component by component beneath `dir_fd`.
+
+    Returns (parent_fd, leaf_name, owned) where `owned` says whether the
+    caller must close parent_fd.
+
+    The anchor was decorative before this: `os.open(absolute, dir_fd=...)`
+    IGNORES the descriptor entirely, and `../sibling.json` walked straight
+    out of the root. Both were reproduced writing and reading outside the
+    supplied root. Intermediate components are opened O_NOFOLLOW too, so a
+    symlinked DIRECTORY in the middle cannot redirect the tail.
+    """
+    if os.path.isabs(relative):
+        raise ValueError("anchored path must be relative, not absolute")
+
+    parts = [p for p in PurePosixPath(relative).parts if p not in (".",)]
+    if not parts:
+        raise ValueError("anchored path is empty")
+    if any(p == ".." for p in parts):
+        raise ValueError("anchored path may not traverse upwards")
+
+    parent_fd, owned = dir_fd, False
+    try:
+        for component in parts[:-1]:
+            nxt = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+            if owned:
+                os.close(parent_fd)
+            parent_fd, owned = nxt, True
+    except Exception:
+        if owned:
+            os.close(parent_fd)
+        raise
+    return parent_fd, parts[-1], owned
+
+
 def read_private_file(
     relative: str, *, root: str | os.PathLike[str], expected_uid: int
 ) -> bytes:
@@ -125,15 +166,20 @@ def read_private_file(
     can be replaced between the check and the open.
     """
     with _open_directory(root) as dir_fd:
-        fd = os.open(
-            relative,
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-            dir_fd=dir_fd,
-        )
+        parent_fd, leaf, owned = _anchored_leaf(dir_fd, relative)
         try:
-            return _verify_and_read(fd, os.fstat(fd), relative, expected_uid)
+            fd = os.open(
+                leaf,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=parent_fd,
+            )
+            try:
+                return _verify_and_read(fd, os.fstat(fd), relative, expected_uid)
+            finally:
+                os.close(fd)
         finally:
-            os.close(fd)
+            if owned:
+                os.close(parent_fd)
 
 
 def write_private_file(
@@ -150,13 +196,19 @@ def write_private_file(
     window must make this link FAIL rather than silently win.
     """
     with _open_directory(root) as dir_fd:
-        fd = os.open(".", os.O_TMPFILE | os.O_RDWR, PRIVATE_FILE_MODE, dir_fd=dir_fd)
+        parent_fd, leaf, owned = _anchored_leaf(dir_fd, relative)
+        fd = os.open(".", os.O_TMPFILE | os.O_RDWR, PRIVATE_FILE_MODE, dir_fd=parent_fd)
         try:
             # os.write may accept fewer bytes than offered; writing once and
             # assuming completion truncates the file silently.
             written = 0
             while written < len(data):
-                written += os.write(fd, data[written:])
+                sent = os.write(fd, data[written:])
+                if sent <= 0:
+                    # No progress. Looping on this spins forever --
+                    # reproduced, it ran past a one-second timeout.
+                    raise OSError("anchored write made no progress")
+                written += sent
 
             os.fsync(fd)
 
@@ -167,12 +219,14 @@ def write_private_file(
             # loser of a race cannot replace the winner.
             os.link(
                 f"/proc/self/fd/{fd}",
-                relative,
-                dst_dir_fd=dir_fd,
+                leaf,
+                dst_dir_fd=parent_fd,
                 follow_symlinks=True,
             )
         finally:
             os.close(fd)
+            if owned:
+                os.close(parent_fd)
 
         # The directory entry is not durable until its parent is synced.
         os.fsync(dir_fd)
@@ -215,15 +269,44 @@ def _read_migration_receipt(*, store_dir_fd: int) -> bytes:
     Production callsite allowlist of exactly one: `read_migration_receipt`.
     Any other production caller could aim activation at a chosen directory.
     """
+    # BOTH leaves, beneath the ONE held directory. Reading only the
+    # receipt binds nothing: a receipt describing a different store would
+    # activate this one. The store's identity comes from THIS fd's
+    # st_dev/st_ino, never from a re-resolved pathname, which would
+    # reintroduce the race the anchoring exists to remove.
+    store_fd = os.open(
+        STORE_NAME,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        dir_fd=store_dir_fd,
+    )
+    try:
+        store_stat = os.fstat(store_fd)
+    finally:
+        os.close(store_fd)
+
     fd = os.open(
         RECEIPT_NAME,
         os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
         dir_fd=store_dir_fd,
     )
     try:
-        return _verify_and_read(fd, os.fstat(fd), RECEIPT_NAME, os.getuid())
+        raw = _verify_and_read(fd, os.fstat(fd), RECEIPT_NAME, os.getuid())
     finally:
         os.close(fd)
+
+    try:
+        document = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError("migration receipt is not valid JSON") from exc
+
+    if (
+        document.get("store_dev") != store_stat.st_dev
+        or document.get("store_ino") != store_stat.st_ino
+    ):
+        raise ValueError(
+            "migration receipt does not describe the store beside it"
+        )
+    return raw
 
 
 def read_migration_receipt() -> bytes:
