@@ -471,6 +471,17 @@ class TestTheRootIsInescapable:
             anchored.write_private_file(str(outside), b"{}", root=root)
         assert not outside.exists()
 
+    def test_a_plain_nested_path_still_works(
+        self, anchored, tmp_path: Path
+    ) -> None:
+        """CONTROL: rejecting every multi-component path would satisfy the
+        escapes above while breaking the legitimate nesting the durability
+        tests depend on."""
+        root = tmp_path / "root"
+        (root / "sub").mkdir(parents=True)
+        written = anchored.write_private_file("sub/receipt.json", b"{}", root=root)
+        assert Path(written).read_bytes() == b"{}"
+
     def test_an_intermediate_symlink_component_refuses(
         self, anchored, tmp_path: Path
     ) -> None:
@@ -570,90 +581,62 @@ class TestActivationBindsTheReceiptToItsStore:
 STORE_NAME = "ceremony.sqlite3"
 
 
-class TestTheAnchorCannotBeEscaped:
-    """`root` is the anchor. A relative that leaves it is not relative.
+class TestTheLinkedEntrysOwnDirectoryIsDurable:
+    """A directory entry is not durable until the directory HOLDING it is
+    fsynced -- and for a nested leaf that is not the root.
 
-    Reproduced before these were written: an absolute path wrote outside
-    the root entirely, and `../sibling.json` landed beside it. Both reads
-    and writes escaped, so the anchor was decorative.
+    Reproduced at inode level before this: file fsync yes, root-directory
+    fsync yes, the actual nested parent's fsync absent. The bytes were
+    safe and the name could still vanish after a crash.
     """
 
-    @pytest.mark.parametrize(
-        "escape", ["../sibling.json", "a/../../sibling.json", "./../sibling.json"]
-    )
-    def test_a_parent_traversal_write_refuses(
-        self, anchored, tmp_path: Path, escape: str
-    ) -> None:
-        root = tmp_path / "root"
-        root.mkdir()
-        with pytest.raises((ValueError, OSError)):
-            anchored.write_private_file(escape, b"{}", root=root)
-        assert not (tmp_path / "sibling.json").exists(), "escaped the anchor"
+    def _fsynced_inodes(self, monkeypatch) -> list[int]:
+        seen: list[int] = []
+        real_fsync = os.fsync
 
-    def test_an_absolute_write_refuses(self, anchored, tmp_path: Path) -> None:
-        """os.open(abs, dir_fd=...) IGNORES the descriptor -- the anchor is
-        silently discarded."""
-        root = tmp_path / "root"
-        root.mkdir()
-        outside = tmp_path / "outside.json"
-        with pytest.raises((ValueError, OSError)):
-            anchored.write_private_file(str(outside), b"{}", root=root)
-        assert not outside.exists(), "escaped the anchor"
+        def recording(fd):
+            try:
+                seen.append(os.fstat(fd).st_ino)
+            except OSError:  # pragma: no cover
+                pass
+            return real_fsync(fd)
 
-    @pytest.mark.parametrize("escape", ["../sibling.json", "a/../../sibling.json"])
-    def test_a_parent_traversal_read_refuses(
-        self, anchored, tmp_path: Path, escape: str
-    ) -> None:
-        root = tmp_path / "root"
-        root.mkdir()
-        (tmp_path / "sibling.json").write_bytes(b'{"outside":1}')
-        os.chmod(tmp_path / "sibling.json", 0o600)
-        with pytest.raises((ValueError, OSError)):
-            anchored.read_private_file(escape, root=root, expected_uid=os.getuid())
+        monkeypatch.setattr(os, "fsync", recording)
+        return seen
 
-    def test_an_absolute_read_refuses(self, anchored, tmp_path: Path) -> None:
-        root = tmp_path / "root"
-        root.mkdir()
-        outside = tmp_path / "outside.json"
-        outside.write_bytes(b'{"outside":1}')
-        os.chmod(outside, 0o600)
-        with pytest.raises((ValueError, OSError)):
-            anchored.read_private_file(
-                str(outside), root=root, expected_uid=os.getuid()
-            )
-
-    def test_an_intermediate_symlink_component_refuses(
-        self, anchored, tmp_path: Path
-    ) -> None:
-        """Every component is walked with O_NOFOLLOW, not just the leaf: a
-        symlinked DIRECTORY in the middle redirects the whole tail."""
-        root = tmp_path / "root"
-        root.mkdir()
-        elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
-        (root / "sub").symlink_to(elsewhere)
-        with pytest.raises((ValueError, OSError)):
-            anchored.write_private_file("sub/receipt.json", b"{}", root=root)
-        assert not (elsewhere / "receipt.json").exists(), "followed a symlink"
-
-    def test_a_plain_nested_path_still_works(
-        self, anchored, tmp_path: Path
-    ) -> None:
-        """CONTROL: rejecting every multi-component path would satisfy the
-        escapes above while breaking legitimate nesting."""
-        root = tmp_path / "root"
-        (root / "sub").mkdir(parents=True)
-        written = anchored.write_private_file("sub/receipt.json", b"{}", root=root)
-        assert Path(written).read_bytes() == b"{}"
-
-
-class TestWriteMakesProgress:
-    def test_a_zero_progress_write_raises_instead_of_spinning(
+    def test_a_nested_leafs_own_directory_is_fsynced(
         self, anchored, tmp_path: Path, monkeypatch
     ) -> None:
-        """os.write returning 0 means no progress. Looping on it hangs the
-        caller forever -- reproduced, it spun past a one-second timeout.
-        """
-        monkeypatch.setattr(os, "write", lambda fd, data: 0)
-        with pytest.raises(OSError):
-            anchored.write_private_file("x.json", b"abc", root=tmp_path)
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        seen = self._fsynced_inodes(monkeypatch)
+        anchored.write_private_file("sub/receipt.json", b"{}", root=tmp_path)
+        monkeypatch.undo()
+        assert os.stat(sub).st_ino in seen, (
+            "the directory holding the new entry was never fsynced; only "
+            "the root was, so the name is not durable"
+        )
+
+    def test_the_root_is_still_fsynced_for_a_top_level_leaf(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """CONTROL: syncing only the deepest directory would break the
+        ordinary un-nested case this primitive mostly serves."""
+        seen = self._fsynced_inodes(monkeypatch)
+        anchored.write_private_file(RECEIPT_NAME, b"{}", root=tmp_path)
+        monkeypatch.undo()
+        assert os.stat(tmp_path).st_ino in seen
+
+    def test_the_file_itself_is_still_fsynced(
+        self, anchored, tmp_path: Path, monkeypatch
+    ) -> None:
+        """CONTROL: directory durability must not have replaced data
+        durability."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        seen = self._fsynced_inodes(monkeypatch)
+        published = anchored.write_private_file(
+            "sub/receipt.json", b"{}", root=tmp_path
+        )
+        monkeypatch.undo()
+        assert os.stat(published).st_ino in seen

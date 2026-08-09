@@ -223,13 +223,15 @@ def write_private_file(
                 dst_dir_fd=parent_fd,
                 follow_symlinks=True,
             )
+            # The entry is not durable until the directory HOLDING it is
+            # synced -- and for a nested leaf that is `parent_fd`, not the
+            # root. Syncing only the root left the bytes safe while the
+            # name could still vanish after a crash.
+            os.fsync(parent_fd)
         finally:
             os.close(fd)
             if owned:
                 os.close(parent_fd)
-
-        # The directory entry is not durable until its parent is synced.
-        os.fsync(dir_fd)
 
     return Path(root) / relative
 
