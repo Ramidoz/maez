@@ -2693,6 +2693,116 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
 
+    # ---- ROUTE-LEVEL refusal, through Flask -------------------------
+    #
+    # These live in THIS class, not a sibling one: the backup
+    # register/begin route needs _daemon_with_card_pipeline and the
+    # helpers it chains into, none of which are on the mixin.
+
+    def _bootstrap_only(self, tmp):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        root = f"{tmp}/memory/s7_1_webauthn"
+        # Bootstrap ONLY -- deliberately NOT bootstrap_with_authorization.
+        return S7WebAuthnBootstrapStore(root), root
+
+    def _post_register_begin(self, root):
+        """The BACKUP register/begin request, exactly as the sibling test
+        makes it.
+
+        Two things kept this refused at 403 before it ever reached the
+        store: the header is X-Maez-S7-Internal-Channel (not
+        X-S7-Internal-Token), and the route needs the card pipeline plus a
+        real backup-registration payload rather than {}.
+        """
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+            "S7_WEBAUTHN_STORE_ROOT": root,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            return self._client(
+                configure_daemon=self._daemon_with_card_pipeline(
+                    "req-backup-register"
+                )
+            ).post(
+                "/internal/s7/webauthn/register/begin",
+                json={
+                    "registration_class": "backup",
+                    "session_binding": "session-backup",
+                    "backup_authorization_request_id": "req-backup-register",
+                    "s7_authorization_artifact_id": "artifact-backup-register",
+                },
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+    def test_the_request_actually_reaches_the_store_open(self):
+        """CONTROL, and currently RED at 403.
+
+        The request is being refused before it reaches the authorization
+        store at all, which means every assertion below it -- no
+        initializer, no table, no byte change -- is passing VACUOUSLY: a
+        403 never touches the store. Until this reaches the seam, this
+        class proves nothing about the refusal path.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertNotEqual(
+                response.status_code, 403, "refused before reaching the store"
+            )
+
+    def test_uninitialised_store_returns_structured_503(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                response.get_json(),
+                {"ok": False, "error": "s7_authorization_store_uninitialised"},
+            )
+
+    def test_the_refusal_leaks_no_path(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertNotIn(root, json.dumps(response.get_json()))
+
+    def test_the_route_invokes_no_initializer(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            calls = []
+            with patch.object(
+                s7,
+                "initialise_authorization_store",
+                side_effect=lambda *a, **k: calls.append((a, k)),
+            ):
+                self._post_register_begin(root)
+            self.assertEqual(calls, [])
+
+    def test_the_route_creates_no_authorization_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, root = self._bootstrap_only(tmp)
+            self._post_register_begin(root)
+            with sqlite3.connect(store.db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            self.assertNotIn("s7_authorization_artifacts", names)
+
+    def test_the_route_changes_no_byte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, root = self._bootstrap_only(tmp)
+            before = Path(store.db_path).read_bytes()
+            self._post_register_begin(root)
+            self.assertEqual(Path(store.db_path).read_bytes(), before)
+
 
 class CockpitStateS7Gate(_DaemonAppClientMixin, unittest.TestCase):
     """The fast real-state nerve /internal/cockpit/state must require the S7
@@ -2801,102 +2911,3 @@ class MessageRouteS7Gate(_DaemonAppClientMixin, unittest.TestCase):
             )
 
         self.assertEqual(r.status_code, 403)
-
-
-class S71DaemonUninitialisedStoreRouteTests(_DaemonAppClientMixin, unittest.TestCase):
-    """The ROUTE, through Flask.
-
-    A constructor test cannot show what an HTTP caller receives, nor that
-    the request path left the store alone. The daemon may translate
-    missing setup into a controlled refusal; it may never create the store,
-    which would restore creation authority on the live request path and
-    break the single-callsite rule.
-    """
-
-    def _bootstrap_only(self, tmp):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
-
-        root = f"{tmp}/memory/s7_1_webauthn"
-        # Bootstrap ONLY -- deliberately NOT bootstrap_with_authorization.
-        return S7WebAuthnBootstrapStore(root), root
-
-    def _post_register_begin(self, root):
-        env = {
-            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
-            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
-            "S7_WEBAUTHN_STORE_ROOT": root,
-        }
-        with patch.dict(os.environ, env, clear=False):
-            client = self._client()
-            return client.post(
-                "/internal/s7/webauthn/register/begin",
-                headers={"X-S7-Internal-Token": "test-channel-secret"},
-                json={},
-            )
-
-    def test_the_request_actually_reaches_the_store_open(self):
-        """CONTROL, and currently RED at 403.
-
-        The request is being refused before it reaches the authorization
-        store at all, which means every assertion below it -- no
-        initializer, no table, no byte change -- is passing VACUOUSLY: a
-        403 never touches the store. Until this reaches the seam, this
-        class proves nothing about the refusal path.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            _store, root = self._bootstrap_only(tmp)
-            response = self._post_register_begin(root)
-            self.assertNotEqual(
-                response.status_code, 403, "refused before reaching the store"
-            )
-
-    def test_uninitialised_store_returns_structured_503(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _store, root = self._bootstrap_only(tmp)
-            response = self._post_register_begin(root)
-            self.assertEqual(response.status_code, 503)
-            self.assertEqual(
-                response.get_json(),
-                {"ok": False, "error": "s7_authorization_store_uninitialised"},
-            )
-
-    def test_the_refusal_leaks_no_path(self):
-        import json
-        with tempfile.TemporaryDirectory() as tmp:
-            _store, root = self._bootstrap_only(tmp)
-            response = self._post_register_begin(root)
-            self.assertNotIn(root, json.dumps(response.get_json()))
-
-    def test_the_route_invokes_no_initializer(self):
-        from core.governance import operator_user_boundary as s7
-
-        with tempfile.TemporaryDirectory() as tmp:
-            _store, root = self._bootstrap_only(tmp)
-            calls = []
-            with patch.object(
-                s7,
-                "initialise_authorization_store",
-                side_effect=lambda *a, **k: calls.append((a, k)),
-            ):
-                self._post_register_begin(root)
-            self.assertEqual(calls, [])
-
-    def test_the_route_creates_no_authorization_table(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store, root = self._bootstrap_only(tmp)
-            self._post_register_begin(root)
-            with sqlite3.connect(store.db_path) as conn:
-                names = {
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    )
-                }
-            self.assertNotIn("s7_authorization_artifacts", names)
-
-    def test_the_route_changes_no_byte(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store, root = self._bootstrap_only(tmp)
-            before = Path(store.db_path).read_bytes()
-            self._post_register_begin(root)
-            self.assertEqual(Path(store.db_path).read_bytes(), before)
