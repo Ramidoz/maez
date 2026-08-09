@@ -4390,3 +4390,23 @@ def authorizes_work(
     # Guarded work requires the later exact-request authorization artifact
     # path. A role-bearing context alone must not become the ceremony.
     return False
+
+
+# --- v2 migration, re-exported ------------------------------------------
+#
+# The procedure lives in core/governance/s7_v2_migration.py. It is exposed
+# here because this module is the S7 façade every caller already imports;
+# the implementation stays separate so migration cannot quietly acquire
+# the store's other authorities.
+from core.governance.s7_v2_migration import (  # noqa: E402,F401
+    S7MigrationRefused,
+    _utc_now,
+    _migrate_authorization_store_to_v2_at,
+    migrate_authorization_store_to_v2,
+)
+
+__all__ = [
+    *globals().get("__all__", []),
+    "S7MigrationRefused",
+    "migrate_authorization_store_to_v2",
+]
