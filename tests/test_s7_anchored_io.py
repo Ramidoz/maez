@@ -640,3 +640,28 @@ class TestTheLinkedEntrysOwnDirectoryIsDurable:
         )
         monkeypatch.undo()
         assert os.stat(published).st_ino in seen
+
+
+class TestANonObjectReceiptRefuses:
+    """Valid JSON is not a valid receipt.
+
+    `null`, `[]`, `1` and `"x"` all parse, then crash with a raw
+    AttributeError at `document.get(...)`. A corrupt receipt must REFUSE;
+    a crash is not a refusal, and callers that catch refusals would not
+    catch this.
+    """
+
+    @pytest.mark.parametrize("raw", [b"null", b"[]", b"1", b'"x"', b"true"])
+    def test_a_non_object_top_level_refuses(
+        self, anchored, tmp_path: Path, raw: bytes
+    ) -> None:
+        (tmp_path / STORE_NAME).write_bytes(b"sqlite-ish")
+        os.chmod(tmp_path / STORE_NAME, 0o600)
+        (tmp_path / RECEIPT_NAME).write_bytes(raw)
+        os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with pytest.raises((ValueError, OSError)):
+                anchored._read_migration_receipt(store_dir_fd=fd)
+        finally:
+            os.close(fd)

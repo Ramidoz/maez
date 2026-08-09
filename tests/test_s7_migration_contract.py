@@ -1834,3 +1834,30 @@ class TestThePublicationLoserValidatesTheWinner:
         _events, _state = _record(monkeypatch, on_link=competitor_publishes)
         with _refuses():
             _migrate(tmp_path)
+
+
+class TestJournalPostureIsCheckedOnEveryRun:
+    def test_a_completed_store_switched_to_wal_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        """The complete branch returned before step 2 ran, so a migrated
+        store flipped to WAL was accepted. The frozen posture is required
+        on EVERY run, not only the one that migrates -- WAL is exactly the
+        mode the durability ordering was designed against."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        with closing(sqlite3.connect(tmp_path / "ceremony.sqlite3")) as conn:
+            conn.execute("PRAGMA journal_mode=WAL").fetchone()
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_completed_store_in_delete_mode_still_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """CONTROL: refusing every completed store would satisfy the test
+        above while breaking idempotence."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        _migrate(tmp_path)

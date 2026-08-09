@@ -419,18 +419,23 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
                         "store matches neither the source nor the target identity"
                     )
 
+                # Step 2, on EVERY run. This sat below the complete
+                # branch's early return, so a migrated store flipped to
+                # WAL was accepted -- and WAL is precisely the mode the
+                # fsync ordering was designed against.
+                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+                if str(mode).lower() != "delete":
+                    raise S7MigrationRefused(
+                        f"journal_mode is {mode}, not delete"
+                    )
+                synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
+                if int(synchronous) != 2:
+                    raise S7MigrationRefused("synchronous is not FULL")
+
                 if state == "complete":
                     _validate_receipt(existing, conn)
                     conn.commit()
                     return
-
-                # 2. journal and durability posture
-                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-                if str(mode).lower() != "delete":
-                    raise S7MigrationRefused(f"journal_mode is {mode}, not delete")
-                synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
-                if int(synchronous) != 2:
-                    raise S7MigrationRefused("synchronous is not FULL")
 
                 counts = {
                     "row_count_v1_auth": _count(conn, V1_AUTH),

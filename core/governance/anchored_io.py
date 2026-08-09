@@ -335,6 +335,12 @@ def _read_migration_receipt(*, store_dir_fd: int) -> bytes:
     except ValueError as exc:
         raise ValueError("migration receipt is not valid JSON") from exc
 
+    # Valid JSON is not a valid receipt. `null`, `[]`, `1` and `"x"` all
+    # parse and then crash at .get(); a crash is not a refusal, and a
+    # caller catching refusals would not catch it.
+    if not isinstance(document, dict):
+        raise ValueError("migration receipt is not a JSON object")
+
     if (
         document.get("store_dev") != store_stat.st_dev
         or document.get("store_ino") != store_stat.st_ino
