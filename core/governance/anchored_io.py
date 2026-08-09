@@ -182,6 +182,40 @@ def read_private_file(
                 os.close(parent_fd)
 
 
+def _write_private_file_at(
+    dir_fd: int, relative: str, data: bytes, *, on_link=None
+) -> None:
+    """Publish beneath an ALREADY-HELD directory descriptor.
+
+    `write_private_file` takes a root PATH, which it re-walks. If the
+    directory has been moved or replaced since the caller opened it, the
+    bytes land beside a different store -- reproduced: migration returned
+    success while the receipt was written into a newly created foreign
+    directory and the migrated directory had none. When the caller already
+    holds the directory, the descriptor is the anchor.
+    """
+    parent_fd, leaf, owned = _anchored_leaf(dir_fd, relative)
+    fd = os.open(".", os.O_TMPFILE | os.O_RDWR, PRIVATE_FILE_MODE, dir_fd=parent_fd)
+    try:
+        written = 0
+        while written < len(data):
+            sent = os.write(fd, data[written:])
+            if sent <= 0:
+                raise OSError("anchored write made no progress")
+            written += sent
+        os.fsync(fd)
+        if on_link is not None:
+            on_link()
+        os.link(
+            f"/proc/self/fd/{fd}", leaf, dst_dir_fd=parent_fd, follow_symlinks=True
+        )
+        os.fsync(parent_fd)
+    finally:
+        os.close(fd)
+        if owned:
+            os.close(parent_fd)
+
+
 def write_private_file(
     relative: str,
     data: bytes,

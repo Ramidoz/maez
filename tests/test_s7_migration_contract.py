@@ -1769,3 +1769,68 @@ class TestRecoveryRecordsTheRealSource:
         assert receipt["from_fingerprint_auth"] == V1_SOURCE_FINGERPRINT_AUTH
         assert receipt["from_fingerprint_bundle"] == V1_SOURCE_FINGERPRINT_VOICE
         assert receipt["from_fingerprint_auth"] != receipt["to_fingerprint_auth"]
+
+
+class TestReceiptSemanticsAreValidated:
+    """Byte-canonicity and the v1 counts are part of "valid", not decoration."""
+
+    def _swap(self, tmp_path: Path, raw: bytes) -> None:
+        (tmp_path / RECEIPT_NAME).unlink()
+        (tmp_path / RECEIPT_NAME).write_bytes(raw)
+        os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+
+    def test_a_noncanonical_receipt_refuses(self, tmp_path: Path) -> None:
+        """Pretty-printed bytes parse to the same document but are not the
+        bytes that were published; two readers could disagree about what
+        was signed."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        self._swap(tmp_path, json.dumps(_receipt(tmp_path), indent=2).encode())
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_receipt_whose_v1_counts_are_wrong_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        """The frozen procedure verifies v1 row counts against the receipt's
+        claim INSIDE the lock. A receipt claiming 999 rows describes a
+        different store than the one present."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        body = dict(_receipt(tmp_path), row_count_v1_auth=999)
+        self._swap(
+            tmp_path,
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode(),
+        )
+        with _refuses():
+            _migrate(tmp_path)
+
+
+class TestThePublicationLoserValidatesTheWinner:
+    def test_a_two_field_winner_is_not_accepted(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Losing the exclusive create is fine. Accepting whatever the
+        winner published is not: a competitor's two-field document carrying
+        only the right store_dev/store_ino was taken as proof of a
+        completed migration."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        stat = os.stat(tmp_path / "ceremony.sqlite3")
+        winner = json.dumps(
+            {"store_dev": stat.st_dev, "store_ino": stat.st_ino},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        _drop_receipt(tmp_path)
+
+        def competitor_publishes(_dst=None):
+            (tmp_path / RECEIPT_NAME).write_bytes(winner)
+            os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+
+        _events, _state = _record(monkeypatch, on_link=competitor_publishes)
+        with _refuses():
+            _migrate(tmp_path)

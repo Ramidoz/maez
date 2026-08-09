@@ -296,6 +296,12 @@ def _validate_receipt(receipt: dict, conn: sqlite3.Connection) -> None:
         raise S7MigrationRefused("receipt claims a non-zero v2 auth count")
     if receipt["row_count_v2_bundle_at_migration"] != 0:
         raise S7MigrationRefused("receipt claims a non-zero v2 bundle count")
+    # Step 4a: the v1 counts the receipt CLAIMS must be the counts present.
+    # A receipt claiming 999 rows describes a different store.
+    if receipt["row_count_v1_auth"] != _count(conn, V1_AUTH):
+        raise S7MigrationRefused("receipt v1 auth count does not match the store")
+    if receipt["row_count_v1_bundle"] != _count(conn, V1_VOICE):
+        raise S7MigrationRefused("receipt v1 bundle count does not match the store")
     # The schema the receipt vouches for must still be the schema present.
     if schema_fingerprint(conn, AUTH_PLANE) != S7_TARGET_FINGERPRINT_AUTH:
         raise S7MigrationRefused("auth plane no longer matches the receipt")
@@ -333,18 +339,32 @@ def _read_receipt(store_dir_fd: int) -> dict | None:
         return None
     except (OSError, ValueError) as exc:
         raise S7MigrationRefused(f"existing receipt is unusable: {exc}") from exc
-    return json.loads(raw)
+
+    document = json.loads(raw)
+    # Canonical BYTES, not merely equivalent JSON. Pretty-printed content
+    # parses the same and is not what was published; two readers could
+    # disagree about what the receipt says.
+    canonical = json.dumps(
+        document, sort_keys=True, separators=(",", ":")
+    ).encode()
+    if raw != canonical:
+        raise S7MigrationRefused("receipt bytes are not canonical")
+    return document
 
 
 def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
     """PRIVATE — descriptor injection, for private-copy tests only."""
-    store_fd = os.open(
-        STORE_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store_dir_fd
-    )
+    # Held OPEN for the whole procedure. Closing it and handing SQLite a
+    # pathname loses the anchor: the name can be repointed at another
+    # inode and the migration modifies the WRONG database before any
+    # refusal. Connecting through the descriptor makes that impossible
+    # rather than merely detectable afterwards.
+    store_fd = os.open(STORE_NAME, os.O_RDWR | os.O_NOFOLLOW, dir_fd=store_dir_fd)
     try:
         store_stat = os.fstat(store_fd)
-    finally:
+    except Exception:
         os.close(store_fd)
+        raise
 
     from core.governance import operator_user_boundary as _facade
 
@@ -354,150 +374,148 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
     # stamp would be indistinguishable from one that recorded its own.
     now = getattr(_facade, "_utc_now", _utc_now)
 
-    existing = _read_receipt(store_dir_fd)
-    # SQLite needs a pathname; it cannot take a descriptor. The directory
-    # is resolved ONCE from the already-held fd rather than re-walked from
-    # a caller-supplied string, so the anchor still decides which directory
-    # this is. `/proc/self/fd/N` itself cannot be reopened with O_NOFOLLOW
-    # -- it IS a symlink -- so the target is read out of it instead.
-    store_root = os.readlink(f"/proc/self/fd/{store_dir_fd}")
-    db_path = os.path.join(store_root, STORE_NAME)
+    try:
+        existing = _read_receipt(store_dir_fd)
+        # SQLite needs a pathname; it cannot take a descriptor. The directory
+        # is resolved ONCE from the already-held fd rather than re-walked from
+        # a caller-supplied string, so the anchor still decides which directory
+        # this is. `/proc/self/fd/N` itself cannot be reopened with O_NOFOLLOW
+        # -- it IS a symlink -- so the target is read out of it instead.
+        db_path = f"file:/proc/self/fd/{store_fd}?mode=rw"
 
-    def _assert_still_the_held_store() -> None:
-        """The pathname must never become the authority.
+        def _assert_still_the_held_store() -> None:
+            """The pathname must never become the authority.
 
-        SQLite re-walks `db_path`, so between resolving it and opening it
-        the name can be pointed at a DIFFERENT inode -- reproduced: the
-        migration ran happily against a substituted database and published
-        a receipt for the wrong inode while the held one sat untouched.
-        The held descriptor's identity is the arbiter, checked either side
-        of the work.
-        """
-        probe = os.open(STORE_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store_dir_fd)
-        try:
-            current = os.fstat(probe)
-        finally:
-            os.close(probe)
-        if (current.st_dev, current.st_ino) != (
-            store_stat.st_dev,
-            store_stat.st_ino,
-        ):
-            raise S7MigrationRefused(
-                "the store beneath the held descriptor changed identity"
-            )
-
-    _assert_still_the_held_store()
-    started_at = now()
-
-    with closing(sqlite3.connect(db_path)) as conn:
-        try:
-            conn.execute("BEGIN IMMEDIATE")  # 1. LOCK FIRST
-        except sqlite3.OperationalError as exc:
-            raise S7MigrationRefused(f"store is busy: {exc}") from exc
-
-        try:
-            state = _classify(conn, existing)  # 2a. inside the lock
-
-            if state == "indeterminate":
+            SQLite re-walks `db_path`, so between resolving it and opening it
+            the name can be pointed at a DIFFERENT inode -- reproduced: the
+            migration ran happily against a substituted database and published
+            a receipt for the wrong inode while the held one sat untouched.
+            The held descriptor's identity is the arbiter, checked either side
+            of the work.
+            """
+            current = os.fstat(store_fd)
+            if (current.st_dev, current.st_ino) != (
+                store_stat.st_dev,
+                store_stat.st_ino,
+            ):
                 raise S7MigrationRefused(
-                    "store matches neither the source nor the target identity"
+                    "the store beneath the held descriptor changed identity"
                 )
 
-            if state == "complete":
-                _validate_receipt(existing, conn)
-                conn.commit()
-                return
+        _assert_still_the_held_store()
+        started_at = now()
 
-            # 2. journal and durability posture
-            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-            if str(mode).lower() != "delete":
-                raise S7MigrationRefused(f"journal_mode is {mode}, not delete")
-            synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
-            if int(synchronous) != 2:
-                raise S7MigrationRefused("synchronous is not FULL")
+        with closing(sqlite3.connect(db_path, uri=True)) as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")  # 1. LOCK FIRST
+            except sqlite3.OperationalError as exc:
+                raise S7MigrationRefused(f"store is busy: {exc}") from exc
 
-            counts = {
-                "row_count_v1_auth": _count(conn, V1_AUTH),
-                "row_count_v1_bundle": _count(conn, V1_VOICE),
-            }
-            if state == "not_started":
-                from_auth = schema_fingerprint(conn, AUTH_PLANE)
-                from_voice = schema_fingerprint(conn, VOICE_PLANE)
-            else:
-                # committed_not_published: the schema is ALREADY migrated,
-                # so reading it here would record the TARGET as the source
-                # and the receipt would claim the migration started where
-                # it ended. The source is the identity classification
-                # already proved this store had.
-                from_auth = S7_SOURCE_FINGERPRINT_AUTH
-                from_voice = S7_SOURCE_FINGERPRINT_VOICE
+            try:
+                state = _classify(conn, existing)  # 2a. inside the lock
 
-            if state == "not_started":
-                _run(conn, _V1_VOICE_DDL)      # 5
-                _run(conn, _V1_VOICE_FREEZE)   # 6
-                _run(conn, _V1_AUTH_FREEZE)    # 7
-                _run(conn, _V2_AUTH_DDL)       # 8
-                _run(conn, _V2_VOICE_DDL)      # 8
-                _run(conn, _V2_EXCLUSION)      # 9
-                # 10. copy nothing.
+                if state == "indeterminate":
+                    raise S7MigrationRefused(
+                        "store matches neither the source nor the target identity"
+                    )
 
-                # 11-12. the built schema must hash to the COMMITTED
-                # constants -- never to whatever it happens to be.
-                if schema_fingerprint(conn, AUTH_PLANE) != S7_TARGET_FINGERPRINT_AUTH:
-                    raise S7MigrationRefused("auth plane target fingerprint mismatch")
-                if schema_fingerprint(conn, VOICE_PLANE) != S7_TARGET_FINGERPRINT_VOICE:
-                    raise S7MigrationRefused("voice plane target fingerprint mismatch")
+                if state == "complete":
+                    _validate_receipt(existing, conn)
+                    conn.commit()
+                    return
 
-                # 13. both v2 tables must be empty
-                if _count(conn, V2_AUTH) or _count(conn, V2_VOICE):
-                    raise S7MigrationRefused("v2 tables are not empty")
+                # 2. journal and durability posture
+                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+                if str(mode).lower() != "delete":
+                    raise S7MigrationRefused(f"journal_mode is {mode}, not delete")
+                synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
+                if int(synchronous) != 2:
+                    raise S7MigrationRefused("synchronous is not FULL")
 
-            conn.commit()  # 14. lock RELEASED
-        except Exception:
-            conn.rollback()
-            raise
+                counts = {
+                    "row_count_v1_auth": _count(conn, V1_AUTH),
+                    "row_count_v1_bundle": _count(conn, V1_VOICE),
+                }
+                if state == "not_started":
+                    from_auth = schema_fingerprint(conn, AUTH_PLANE)
+                    from_voice = schema_fingerprint(conn, VOICE_PLANE)
+                else:
+                    # committed_not_published: the schema is ALREADY migrated,
+                    # so reading it here would record the TARGET as the source
+                    # and the receipt would claim the migration started where
+                    # it ended. The source is the identity classification
+                    # already proved this store had.
+                    from_auth = S7_SOURCE_FINGERPRINT_AUTH
+                    from_voice = S7_SOURCE_FINGERPRINT_VOICE
 
-        to_auth = schema_fingerprint(conn, AUTH_PLANE)
-        to_voice = schema_fingerprint(conn, VOICE_PLANE)
+                if state == "not_started":
+                    _run(conn, _V1_VOICE_DDL)      # 5
+                    _run(conn, _V1_VOICE_FREEZE)   # 6
+                    _run(conn, _V1_AUTH_FREEZE)    # 7
+                    _run(conn, _V2_AUTH_DDL)       # 8
+                    _run(conn, _V2_VOICE_DDL)      # 8
+                    _run(conn, _V2_EXCLUSION)      # 9
+                    # 10. copy nothing.
 
-    # Either side of the work: what we migrated is what we held.
-    _assert_still_the_held_store()
+                    # 11-12. the built schema must hash to the COMMITTED
+                    # constants -- never to whatever it happens to be.
+                    if schema_fingerprint(conn, AUTH_PLANE) != S7_TARGET_FINGERPRINT_AUTH:
+                        raise S7MigrationRefused("auth plane target fingerprint mismatch")
+                    if schema_fingerprint(conn, VOICE_PLANE) != S7_TARGET_FINGERPRINT_VOICE:
+                        raise S7MigrationRefused("voice plane target fingerprint mismatch")
 
-    # 15. fsync the database AND its parent -- outside the lock
-    fd = os.open(STORE_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store_dir_fd)
-    try:
-        os.fsync(fd)
+                    # 13. both v2 tables must be empty
+                    if _count(conn, V2_AUTH) or _count(conn, V2_VOICE):
+                        raise S7MigrationRefused("v2 tables are not empty")
+
+                conn.commit()  # 14. lock RELEASED
+            except Exception:
+                conn.rollback()
+                raise
+
+            to_auth = schema_fingerprint(conn, AUTH_PLANE)
+            to_voice = schema_fingerprint(conn, VOICE_PLANE)
+
+        # Either side of the work: what we migrated is what we held.
+        _assert_still_the_held_store()
+
+        # 15. fsync the database AND its parent -- outside the lock
+        os.fsync(store_fd)
+        os.fsync(store_dir_fd)
+
+        # 16. publish the receipt -- THE linearization point
+        receipt = {
+            "activation_path": (
+                "fresh_migration" if state == "not_started" else "committed_recovery"
+            ),
+            "completed_at": now(),
+            "from_fingerprint_auth": from_auth,
+            "from_fingerprint_bundle": from_voice,
+            "row_count_v1_auth": counts["row_count_v1_auth"],
+            "row_count_v1_bundle": counts["row_count_v1_bundle"],
+            "row_count_v2_auth_at_migration": 0,
+            "row_count_v2_bundle_at_migration": 0,
+            "started_at": started_at,
+            "store_dev": store_stat.st_dev,
+            "store_ino": store_stat.st_ino,
+            "to_fingerprint_auth": to_auth,
+            "to_fingerprint_bundle": to_voice,
+        }
+        payload = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            anchored_io._write_private_file_at(store_dir_fd, RECEIPT_NAME, payload)
+        except FileExistsError:
+            # A competitor published while we were syncing. Losing is fine;
+            # accepting whatever they wrote is not -- a two-field document
+            # carrying only the right dev/ino was taken as proof of a
+            # completed migration. Re-open and run the SAME validator.
+            winner = _read_receipt(store_dir_fd)
+            if winner is None:
+                raise S7MigrationRefused("lost the publication race to nothing")
+            with closing(sqlite3.connect(db_path, uri=True)) as conn:
+                _validate_receipt(winner, conn)
     finally:
-        os.close(fd)
-    os.fsync(store_dir_fd)
-
-    # 16. publish the receipt -- THE linearization point
-    receipt = {
-        "activation_path": (
-            "fresh_migration" if state == "not_started" else "committed_recovery"
-        ),
-        "completed_at": now(),
-        "from_fingerprint_auth": from_auth,
-        "from_fingerprint_bundle": from_voice,
-        "row_count_v1_auth": counts["row_count_v1_auth"],
-        "row_count_v1_bundle": counts["row_count_v1_bundle"],
-        "row_count_v2_auth_at_migration": 0,
-        "row_count_v2_bundle_at_migration": 0,
-        "started_at": started_at,
-        "store_dev": store_stat.st_dev,
-        "store_ino": store_stat.st_ino,
-        "to_fingerprint_auth": to_auth,
-        "to_fingerprint_bundle": to_voice,
-    }
-    payload = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
-    try:
-        anchored_io.write_private_file(
-            RECEIPT_NAME, payload, root=store_root
-        )
-    except FileExistsError:
-        # A competitor published while we were syncing. Losing is fine;
-        # believing a receipt that describes a DIFFERENT store is not.
-        _read_receipt(store_dir_fd)
+        os.close(store_fd)
 
 
 def migrate_authorization_store_to_v2() -> None:
