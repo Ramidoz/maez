@@ -254,6 +254,55 @@ def _count(conn: sqlite3.Connection, name: str) -> int:
     return conn.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
 
 
+RECEIPT_FIELDS = (
+    "activation_path",
+    "completed_at",
+    "from_fingerprint_auth",
+    "from_fingerprint_bundle",
+    "row_count_v1_auth",
+    "row_count_v1_bundle",
+    "row_count_v2_auth_at_migration",
+    "row_count_v2_bundle_at_migration",
+    "started_at",
+    "store_dev",
+    "store_ino",
+    "to_fingerprint_auth",
+    "to_fingerprint_bundle",
+)
+ACTIVATION_PATHS = frozenset({"fresh_migration", "committed_recovery"})
+
+
+def _validate_receipt(receipt: dict, conn: sqlite3.Connection) -> None:
+    """"Present and valid" is not "a JSON object exists".
+
+    A document carrying only store_dev and store_ino was accepted as
+    complete. Every frozen field, the fingerprints it vouches for, the
+    migration-time zero counts and the closed activation path are checked
+    here, or the receipt asserts nothing it can be held to.
+    """
+    if tuple(sorted(receipt)) != RECEIPT_FIELDS:
+        raise S7MigrationRefused("receipt does not carry exactly its frozen fields")
+    if receipt["activation_path"] not in ACTIVATION_PATHS:
+        raise S7MigrationRefused("receipt activation_path is not a closed value")
+    if receipt["from_fingerprint_auth"] != S7_SOURCE_FINGERPRINT_AUTH:
+        raise S7MigrationRefused("receipt source auth fingerprint mismatch")
+    if receipt["from_fingerprint_bundle"] != S7_SOURCE_FINGERPRINT_VOICE:
+        raise S7MigrationRefused("receipt source voice fingerprint mismatch")
+    if receipt["to_fingerprint_auth"] != S7_TARGET_FINGERPRINT_AUTH:
+        raise S7MigrationRefused("receipt target auth fingerprint mismatch")
+    if receipt["to_fingerprint_bundle"] != S7_TARGET_FINGERPRINT_VOICE:
+        raise S7MigrationRefused("receipt target voice fingerprint mismatch")
+    if receipt["row_count_v2_auth_at_migration"] != 0:
+        raise S7MigrationRefused("receipt claims a non-zero v2 auth count")
+    if receipt["row_count_v2_bundle_at_migration"] != 0:
+        raise S7MigrationRefused("receipt claims a non-zero v2 bundle count")
+    # The schema the receipt vouches for must still be the schema present.
+    if schema_fingerprint(conn, AUTH_PLANE) != S7_TARGET_FINGERPRINT_AUTH:
+        raise S7MigrationRefused("auth plane no longer matches the receipt")
+    if schema_fingerprint(conn, VOICE_PLANE) != S7_TARGET_FINGERPRINT_VOICE:
+        raise S7MigrationRefused("voice plane no longer matches the receipt")
+
+
 def _classify(conn: sqlite3.Connection, receipt: dict | None) -> str:
     """Step 2a, INSIDE the lock.
 
@@ -278,10 +327,11 @@ def _read_receipt(store_dir_fd: int) -> dict | None:
     try:
         raw = anchored_io._read_migration_receipt(store_dir_fd=store_dir_fd)
     except FileNotFoundError:
+        # The ONLY posture that means "no receipt". Swallowing every
+        # OSError let a 0644 receipt read as absent: the store migrated,
+        # the invalid receipt stayed, and the call returned success.
         return None
-    except OSError:
-        return None
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         raise S7MigrationRefused(f"existing receipt is unusable: {exc}") from exc
     return json.loads(raw)
 
@@ -312,6 +362,31 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
     # -- it IS a symlink -- so the target is read out of it instead.
     store_root = os.readlink(f"/proc/self/fd/{store_dir_fd}")
     db_path = os.path.join(store_root, STORE_NAME)
+
+    def _assert_still_the_held_store() -> None:
+        """The pathname must never become the authority.
+
+        SQLite re-walks `db_path`, so between resolving it and opening it
+        the name can be pointed at a DIFFERENT inode -- reproduced: the
+        migration ran happily against a substituted database and published
+        a receipt for the wrong inode while the held one sat untouched.
+        The held descriptor's identity is the arbiter, checked either side
+        of the work.
+        """
+        probe = os.open(STORE_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store_dir_fd)
+        try:
+            current = os.fstat(probe)
+        finally:
+            os.close(probe)
+        if (current.st_dev, current.st_ino) != (
+            store_stat.st_dev,
+            store_stat.st_ino,
+        ):
+            raise S7MigrationRefused(
+                "the store beneath the held descriptor changed identity"
+            )
+
+    _assert_still_the_held_store()
     started_at = now()
 
     with closing(sqlite3.connect(db_path)) as conn:
@@ -329,19 +404,7 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
                 )
 
             if state == "complete":
-                # Verify, THEN return. Trusting the receipt's existence
-                # alone would let a store whose freeze triggers had been
-                # dropped continue to present itself as migrated.
-                if (
-                    schema_fingerprint(conn, AUTH_PLANE)
-                    != S7_TARGET_FINGERPRINT_AUTH
-                    or schema_fingerprint(conn, VOICE_PLANE)
-                    != S7_TARGET_FINGERPRINT_VOICE
-                ):
-                    raise S7MigrationRefused(
-                        "a receipt exists but the schema no longer matches "
-                        "the identity it vouches for"
-                    )
+                _validate_receipt(existing, conn)
                 conn.commit()
                 return
 
@@ -357,8 +420,17 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
                 "row_count_v1_auth": _count(conn, V1_AUTH),
                 "row_count_v1_bundle": _count(conn, V1_VOICE),
             }
-            from_auth = schema_fingerprint(conn, AUTH_PLANE)
-            from_voice = schema_fingerprint(conn, VOICE_PLANE)
+            if state == "not_started":
+                from_auth = schema_fingerprint(conn, AUTH_PLANE)
+                from_voice = schema_fingerprint(conn, VOICE_PLANE)
+            else:
+                # committed_not_published: the schema is ALREADY migrated,
+                # so reading it here would record the TARGET as the source
+                # and the receipt would claim the migration started where
+                # it ended. The source is the identity classification
+                # already proved this store had.
+                from_auth = S7_SOURCE_FINGERPRINT_AUTH
+                from_voice = S7_SOURCE_FINGERPRINT_VOICE
 
             if state == "not_started":
                 _run(conn, _V1_VOICE_DDL)      # 5
@@ -387,6 +459,9 @@ def _migrate_authorization_store_to_v2_at(*, store_dir_fd: int) -> None:
 
         to_auth = schema_fingerprint(conn, AUTH_PLANE)
         to_voice = schema_fingerprint(conn, VOICE_PLANE)
+
+    # Either side of the work: what we migrated is what we held.
+    _assert_still_the_held_store()
 
     # 15. fsync the database AND its parent -- outside the lock
     fd = os.open(STORE_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store_dir_fd)

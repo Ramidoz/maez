@@ -1635,3 +1635,137 @@ class TestPartialAndFutureSchemasRefuse:
         _drop_receipt(tmp_path)
         with _refuses():
             _migrate(tmp_path)
+
+
+class TestTheHeldDescriptorStillDecidesWhichStore:
+    """SQLite needs a pathname, but the pathname must not become the
+    authority. Resolving the held fd to a path and letting SQLite re-walk
+    it reopens the very race the anchoring exists to remove.
+    """
+
+    def test_a_store_substituted_mid_run_refuses(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The swap must happen INSIDE the window, between resolving the
+        held fd to a pathname and SQLite walking that pathname. Swapping
+        beforehand tests nothing: the function would simply open whatever
+        is there, which by then IS the current store.
+        """
+        real = tmp_path / "real"
+        real.mkdir()
+        _store(real)
+        _seed_legacy_row(real)
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        _store(decoy)
+        _seed_legacy_row(decoy)
+
+        original_ino = os.stat(real / "ceremony.sqlite3").st_ino
+        real_connect = sqlite3.connect
+        swapped = {"done": False}
+
+        def connect_after_substituting(*args, **kwargs):
+            if not swapped["done"]:
+                swapped["done"] = True
+                (real / "ceremony.sqlite3").unlink()
+                os.link(decoy / "ceremony.sqlite3", real / "ceremony.sqlite3")
+            return real_connect(*args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", connect_after_substituting)
+        with _refuses():
+            _migrate(real)
+        assert swapped["done"], "the substitution never happened"
+        assert os.stat(real / "ceremony.sqlite3").st_ino != original_ino
+
+
+class TestReceiptPostureIsNotAbsence:
+    def test_an_unreadable_receipt_refuses_rather_than_looking_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """Only FileNotFoundError may mean 'no receipt'. Swallowing every
+        OSError let a 0644 receipt read as absent: the store migrated, the
+        invalid receipt stayed, and the call returned success."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        (tmp_path / RECEIPT_NAME).write_bytes(b"{}")
+        os.chmod(tmp_path / RECEIPT_NAME, 0o644)
+        with _refuses():
+            _migrate(tmp_path)
+
+
+class TestCompleteMeansValidated:
+    """'Receipt present and valid' is not 'a JSON object exists'."""
+
+    def _replace_receipt(self, tmp_path: Path, body: dict) -> None:
+        """Swap ONLY the receipt. Re-running _store here would re-enter the
+        initializer against an already-migrated schema, which correctly
+        refuses -- red for the wrong reason."""
+        (tmp_path / RECEIPT_NAME).unlink()
+        (tmp_path / RECEIPT_NAME).write_bytes(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        )
+        os.chmod(tmp_path / RECEIPT_NAME, 0o600)
+
+    def test_a_two_field_receipt_is_not_complete(self, tmp_path: Path) -> None:
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        stat = os.stat(tmp_path / "ceremony.sqlite3")
+        self._replace_receipt(
+            tmp_path, {"store_dev": stat.st_dev, "store_ino": stat.st_ino}
+        )
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_receipt_missing_one_frozen_field_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        body = _receipt(tmp_path)
+        body.pop("to_fingerprint_auth")
+        self._replace_receipt(tmp_path, body)
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_receipt_with_a_bogus_activation_path_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        body = dict(_receipt(tmp_path), activation_path="whatever")
+        self._replace_receipt(tmp_path, body)
+        with _refuses():
+            _migrate(tmp_path)
+
+    def test_a_receipt_with_a_nonzero_migration_count_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        body = dict(_receipt(tmp_path), row_count_v2_auth_at_migration=1)
+        self._replace_receipt(tmp_path, body)
+        with _refuses():
+            _migrate(tmp_path)
+
+
+class TestRecoveryRecordsTheRealSource:
+    def test_recovery_binds_the_ratified_source_fingerprints(
+        self, tmp_path: Path
+    ) -> None:
+        """In committed recovery the schema is ALREADY migrated, so reading
+        from_fingerprint_* off it records the TARGET as the source -- the
+        receipt would claim the migration started from where it ended."""
+        _store(tmp_path)
+        _seed_legacy_row(tmp_path)
+        _migrate(tmp_path)
+        _drop_receipt(tmp_path)
+        _migrate(tmp_path)
+        receipt = _receipt(tmp_path)
+        assert receipt["activation_path"] == "committed_recovery"
+        assert receipt["from_fingerprint_auth"] == V1_SOURCE_FINGERPRINT_AUTH
+        assert receipt["from_fingerprint_bundle"] == V1_SOURCE_FINGERPRINT_VOICE
+        assert receipt["from_fingerprint_auth"] != receipt["to_fingerprint_auth"]
