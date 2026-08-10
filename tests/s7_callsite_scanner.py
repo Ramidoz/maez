@@ -70,18 +70,29 @@ def find_callsites(source: str, target: str) -> list[str]:
 
     found: list[str] = []
 
-    def walk(node, scope: str) -> None:
+    def render(scope) -> str:
+        """Qualify by LEXICAL KIND, never by capitalization.
+
+        Guessing class-versus-function from a leading capital is
+        bypassable: `def S7AuthorizationStore(): def anchored_transaction()`
+        rendered identically to the real class method, so a dead call in a
+        decoy function certified an allowlist while the live transaction
+        no longer verified anything.
+        """
+        parts: list[str] = []
+        for index, (kind, name) in enumerate(scope):
+            if index and kind == "function" and scope[index - 1][0] == "function":
+                parts.append("<locals>")
+            parts.append(name)
+        return ".".join(parts)
+
+    def walk(node, scope) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
-                walk(child, f"{scope}.{child.name}" if scope else child.name)
+                walk(child, scope + [("class", child.name)])
                 continue
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                inner = (
-                    f"{scope}.<locals>.{child.name}"
-                    if scope and not scope[0].isupper()
-                    else (f"{scope}.{child.name}" if scope else child.name)
-                )
-                walk(child, inner)
+                walk(child, scope + [("function", child.name)])
                 continue
             if isinstance(child, ast.Call):
                 name = (
@@ -90,15 +101,15 @@ def find_callsites(source: str, target: str) -> list[str]:
                     else getattr(child.func, "id", None)
                 )
                 if name == target or name in aliases:
-                    found.append(scope or "<module>")
+                    found.append(render(scope) or "<module>")
                 elif (
                     name == "getattr"
                     and len(child.args) > 1
                     and isinstance(child.args[1], ast.Constant)
                     and child.args[1].value == target
                 ):
-                    found.append(scope or "<module>")
+                    found.append(render(scope) or "<module>")
             walk(child, scope)
 
-    walk(tree, "")
+    walk(tree, [])
     return found

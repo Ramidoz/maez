@@ -1418,3 +1418,61 @@ class TestTheCallsiteScannerIsItselfAttacked:
             "class S:\n    def f(self):\n        something_else()\n",
             self.TARGET,
         ) == []
+
+    def test_a_decoy_function_cannot_impersonate_the_class_method(self) -> None:
+        """THE bypass. Capitalization-guessing rendered a nested function
+        named like a class identically to the real class method, so a dead
+        call in a decoy certified the allowlist while the live transaction
+        verified nothing."""
+        decoy = find_callsites(
+            "def S7AuthorizationStore():\n"
+            "    def anchored_transaction():\n"
+            "        _verify_held_store_activation()\n",
+            self.TARGET,
+        )
+        real = find_callsites(
+            "class S7AuthorizationStore:\n"
+            "    def anchored_transaction(self):\n"
+            "        _verify_held_store_activation()\n",
+            self.TARGET,
+        )
+        assert decoy != real, "a decoy function impersonated the class method"
+        assert real == ["S7AuthorizationStore.anchored_transaction"]
+
+    def test_a_lowercase_class_is_still_a_class(self) -> None:
+        assert find_callsites(
+            "class helper:\n"
+            "    def f(self):\n"
+            "        _verify_held_store_activation()\n",
+            self.TARGET,
+        ) == ["helper.f"]
+
+    def test_an_uppercase_function_is_still_a_function(self) -> None:
+        assert find_callsites(
+            "def Helper():\n"
+            "    def f():\n"
+            "        _verify_held_store_activation()\n",
+            self.TARGET,
+        ) == ["Helper.<locals>.f"]
+
+    def test_mixed_nesting_qualifies_by_kind(self) -> None:
+        assert find_callsites(
+            "class A:\n"
+            "    def m(self):\n"
+            "        class B:\n"
+            "            def n(self):\n"
+            "                _verify_held_store_activation()\n",
+            self.TARGET,
+        ) == ["A.m.B.n"]
+
+    def test_a_reverse_ordered_alias_chain_is_seen(self) -> None:
+        assert find_callsites(
+            "class S:\n"
+            "    def f(self):\n"
+            "        d = c\n"
+            "        c = b\n"
+            "        b = a\n"
+            "        a = _verify_held_store_activation\n"
+            "        d()\n",
+            self.TARGET,
+        ) == ["S.f"]
