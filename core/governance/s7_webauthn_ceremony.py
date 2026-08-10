@@ -661,6 +661,7 @@ class S7LocalWebAuthnCeremonyService:
             request_id=rendered_statement.request_id,
             request_envelope_hash=rendered_statement.request_envelope_hash,
             rendered_text_hash=rendered_statement.rendered_text_hash,
+            action=rendered_statement.action,
             action_params_hash=rendered_statement.action_params_hash,
             precondition_hash=precondition_hash,
             authority_context_hash=rendered_statement.authority_context_hash,

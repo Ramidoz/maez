@@ -311,6 +311,7 @@ class ActionEngineHooksSnapshot(unittest.TestCase):
                 request_id=env.request_id,
                 request_envelope_hash=s7.work_request_envelope_hash(env),
                 rendered_text_hash=rendered.rendered_text_hash,
+                action=rendered.action,
                 action_params_hash=params_hash,
                 precondition_hash=env.precondition_hash,
                 authority_context_hash=s7.authority_context_hash(authority),

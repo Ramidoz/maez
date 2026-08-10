@@ -282,6 +282,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             request_id=rendered.request_id,
             request_envelope_hash=rendered.request_envelope_hash,
             rendered_text_hash=rendered.rendered_text_hash,
+            action=rendered.action,
             action_params_hash=rendered.action_params_hash,
             precondition_hash=envelope.precondition_hash,
             authority_context_hash=s7.authority_context_hash(authority),

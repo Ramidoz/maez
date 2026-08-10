@@ -537,8 +537,9 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s7.WorkRequestEnvelope(
                 request_id="",
-                schema_version=s7.SCHEMA_VERSION,
+                schema_version=s7.WORK_REQUEST_ENVELOPE_SCHEMA,
                 claimed_work_class="routine_custody",
+                action="run_shell",
                 derived_work_class="routine_custody",
                 requesting_subsystem="unit",
                 closed_symptom_code="service_unhealthy",
@@ -562,8 +563,9 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s7.WorkRequestEnvelope(
                 request_id="req-1",
-                schema_version=s7.SCHEMA_VERSION,
+                schema_version=s7.WORK_REQUEST_ENVELOPE_SCHEMA,
                 claimed_work_class="routine_custody",
+                action="run_shell",
                 derived_work_class="routine_custody",
                 requesting_subsystem="unit",
                 closed_symptom_code="service_unhealthy",
@@ -587,8 +589,9 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s7.WorkRequestEnvelope(
                 request_id="req-1",
-                schema_version=s7.SCHEMA_VERSION,
+                schema_version=s7.WORK_REQUEST_ENVELOPE_SCHEMA,
                 claimed_work_class="routine_custody",
+                action="write_any_file",
                 derived_work_class="routine_custody",
                 requesting_subsystem="unit",
                 closed_symptom_code="self_mod_requested",
@@ -733,8 +736,9 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s7.WorkRequestEnvelope(
                 request_id="req-1",
-                schema_version=s7.SCHEMA_VERSION,
+                schema_version=s7.WORK_REQUEST_ENVELOPE_SCHEMA,
                 claimed_work_class="self_modification",
+                action="write_any_file",
                 derived_work_class="self_modification",
                 requesting_subsystem="unit",
                 closed_symptom_code="self_mod_requested",
@@ -829,8 +833,9 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
 
         return s7.WorkRequestEnvelope(
             request_id="req-backup-1",
-            schema_version=s7.SCHEMA_VERSION,
+            schema_version=s7.WORK_REQUEST_ENVELOPE_SCHEMA,
             claimed_work_class="routine_custody",
+            action="backup_run",
             derived_work_class="routine_custody",
             requesting_subsystem="unit",
             closed_symptom_code="backup_stale",
@@ -1125,13 +1130,38 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
 
         env = self._self_mod_envelope()
         consultation_hash = "c" * 64
+        rendered_text = "\n".join(
+            [
+                "S7 work-on-Maez authorization",
+                f"Renderer version: {s7.RENDERER_VERSION}",
+                "Surface: cockpit",
+                "Origin: http://localhost:11437",
+                f"Request id: {env.request_id}",
+                f"Action: {env.action}",
+                f"Work class: {env.derived_work_class}",
+                f"Change class: {env.proposed_change_class}",
+                f"Predicted effect class: {env.predicted_effect_class}",
+                f"Rollback path class: {env.rollback_path_class}",
+                f"Aggregation group: {env.derived_aggregation_group}",
+                "Maez consulted: yes",
+                "Maez objection present: yes",
+                "Maez unavailable: no",
+                f"Request envelope hash: {s7.work_request_envelope_hash(env)}",
+                "Action params hash: " + ("d" * 64),
+                "Authority context hash: " + ("e" * 64),
+                "Nonce: nonce-1",
+                f"Expires at: {FUTURE}",
+                f"Maez voice consultation hash: {consultation_hash}",
+            ]
+        )
         base = dict(
             request_id=env.request_id,
             renderer_version=s7.RENDERER_VERSION,
             surface="cockpit",
             origin="http://localhost:11437",
-            rendered_text="rendered",
-            rendered_text_hash=s7.rendered_text_hash("rendered"),
+            action=env.action,
+            rendered_text=rendered_text,
+            rendered_text_hash=s7.rendered_text_hash(rendered_text),
             request_envelope_hash=s7.work_request_envelope_hash(env),
             action_params_hash="d" * 64,
             authority_context_hash="e" * 64,
@@ -1234,6 +1264,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
                 "Surface: cockpit",
                 "Origin: http://localhost:11437",
                 f"Request id: {env.request_id}",
+                f"Action: {env.action}",
                 f"Work class: {env.derived_work_class}",
                 f"Change class: {env.proposed_change_class}",
                 f"Predicted effect class: {env.predicted_effect_class}",
@@ -1256,6 +1287,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             renderer_version=s7.RENDERER_VERSION,
             surface="cockpit",
             origin="http://localhost:11437",
+            action=env.action,
             rendered_text=rendered_text,
             rendered_text_hash=s7.rendered_text_hash(rendered_text),
             request_envelope_hash=s7.work_request_envelope_hash(env),
@@ -1373,6 +1405,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             request_id=env.request_id,
             request_envelope_hash=s7.work_request_envelope_hash(env),
             rendered_text_hash=rendered.rendered_text_hash,
+            action=rendered.action,
             action_params_hash=params_hash,
             precondition_hash=env.precondition_hash,
             authority_context_hash=s7.authority_context_hash(authority),
@@ -1455,6 +1488,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             request_id=env.request_id,
             request_envelope_hash=s7.work_request_envelope_hash(env),
             rendered_text_hash=rendered.rendered_text_hash,
+            action=rendered.action,
             action_params_hash=params_hash,
             precondition_hash=env.precondition_hash,
             authority_context_hash=s7.authority_context_hash(authority),
@@ -1543,6 +1577,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             request_id=env.request_id,
             request_envelope_hash=s7.work_request_envelope_hash(env),
             rendered_text_hash=rendered.rendered_text_hash,
+            action=rendered.action,
             action_params_hash=params_hash,
             precondition_hash=env.precondition_hash,
             authority_context_hash=s7.authority_context_hash(authority),
@@ -1635,52 +1670,20 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
     def test_056_truthy_non_bool_verifier_result_rejected(self):
         from core.governance import operator_user_boundary as s7
 
+        _env, _authority, _params_hash, _rendered, artifact = self._routine_bundle()
         for field in ("user_presence", "user_verification"):
             with self.subTest(field=field):
-                kwargs = {
-                    "artifact_id": "artifact-1",
-                    "request_id": "req-1",
-                    "request_envelope_hash": "a" * 64,
-                    "rendered_text_hash": "b" * 64,
-                    "action_params_hash": "c" * 64,
-                    "precondition_hash": "d" * 64,
-                    "authority_context_hash": "e" * 64,
-                    "derived_work_class": "routine_custody",
-                    "derived_aggregation_group": "s7agg_test",
-                    "nonce": "nonce-1",
-                    "credential_ref": "cred-1",
-                    "auth_method": "founder_webauthn",
-                    "grant_source": "founder_webauthn",
-                    "user_presence": True,
-                    "user_verification": True,
-                    "created_at": NOW,
-                    "expires_at": FUTURE,
-                    "consumed_at": None,
-                }
+                kwargs = dict(artifact.__dict__)
                 kwargs[field] = 1
                 with self.assertRaises(ValueError):
                     s7.S7AuthorizationArtifact(**kwargs)
 
         with self.assertRaises(ValueError):
             s7.S7AuthorizationArtifact(
-                artifact_id="artifact-2",
-                request_id="req-2",
-                request_envelope_hash="a" * 64,
-                rendered_text_hash="b" * 64,
-                action_params_hash="c" * 64,
-                precondition_hash="d" * 64,
-                authority_context_hash="e" * 64,
-                derived_work_class="routine_custody",
-                derived_aggregation_group="s7agg_test",
-                nonce="nonce-2",
-                credential_ref="cred-1",
-                auth_method="founder_webauthn",
-                grant_source="founder_webauthn",
-                user_presence=True,
-                user_verification=True,
-                created_at=NOW,
-                expires_at=FUTURE,
-                consumed_at=["truthy"],  # type: ignore[arg-type]
+                **{
+                    **artifact.__dict__,
+                    "consumed_at": ["truthy"],  # type: ignore[dict-item]
+                },
             )
 
     def test_057_artifact_store_consumes_once(self):
@@ -3259,6 +3262,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             request_id=envelope.request_id,
             request_envelope_hash=s7.work_request_envelope_hash(envelope),
             rendered_text_hash=rendered.rendered_text_hash,
+            action=rendered.action,
             action_params_hash=action_params_hash,
             precondition_hash=envelope.precondition_hash,
             authority_context_hash=s7.authority_context_hash(authority),
