@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from tests.s7_callsite_scanner import find_callsites
 from tests.s7_store_fixture import fresh_store
 
 NOW = "2026-08-07T12:00:00Z"
@@ -1297,26 +1298,29 @@ class TestTheStorePathIsWalkedComponentwise:
 
 
 class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
-    """The amended canon names a second authority; it needs the same
-    repo-wide qualified guard the initializer has, or the amendment just
-    widens the surface."""
+    """The amended canon names a second authority, so it needs the same
+    guard the initializer has -- built from the SAME hardened scanner
+    rather than a fresh weaker copy.
 
-    ALLOWED = {
+    My first version collapsed duplicates into a set, and missed
+    assignment aliases and getattr entirely. It was neither
+    occurrence-exact nor route-exhaustive.
+    """
+
+    TARGET = "_verify_held_store_activation"
+    ALLOWED = [
         "core/governance/operator_user_boundary.py::"
         "S7AuthorizationStore.anchored_transaction",
         "core/governance/operator_user_boundary.py::"
         "S7AuthorizationStore.consume_for_execution",
-    }
+    ]
 
-    def test_only_the_allowed_callsites_verify_held_activation(self) -> None:
-        import ast
+    def _callsites(self) -> list[str]:
         import os
 
-        target = "_verify_held_store_activation"
         repo = Path(__file__).resolve().parents[1]
         skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
-        found: set[str] = set()
-
+        found: list[str] = []
         for dirpath, dirnames, filenames in os.walk(repo):
             dirnames[:] = [
                 d for d in dirnames if d not in skip and not d.startswith(".")
@@ -1325,36 +1329,92 @@ class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
                 if not name.endswith(".py"):
                     continue
                 path = Path(dirpath, name)
-                rel = str(path.relative_to(repo))
                 try:
-                    tree = ast.parse(path.read_text())
-                except (SyntaxError, UnicodeDecodeError):
+                    source = path.read_text()
+                except (OSError, UnicodeDecodeError):
                     continue
+                try:
+                    scopes = find_callsites(source, self.TARGET)
+                except SyntaxError:
+                    continue
+                rel = str(path.relative_to(repo))
+                found += [f"{rel}::{scope}" for scope in scopes]
+        return sorted(found)
 
-                def walk(node, scope, _rel=rel):
-                    for child in ast.iter_child_nodes(node):
-                        if isinstance(child, ast.ClassDef):
-                            walk(child, child.name, _rel=_rel)
-                            continue
-                        if isinstance(
-                            child, (ast.FunctionDef, ast.AsyncFunctionDef)
-                        ):
-                            inner = (
-                                f"{scope}.{child.name}" if scope else child.name
-                            )
-                            walk(child, inner, _rel=_rel)
-                            continue
-                        if isinstance(child, ast.Call):
-                            called = (
-                                child.func.attr
-                                if isinstance(child.func, ast.Attribute)
-                                else getattr(child.func, "id", None)
-                            )
-                            if called == target:
-                                found.add(f"{_rel}::{scope or '<module>'}")
-                        walk(child, scope, _rel=_rel)
+    def test_something_verifies_at_all(self) -> None:
+        """CONTROL: an empty sweep makes the allowlist vacuous."""
+        assert self._callsites(), "nothing verifies held-store activation"
 
-                walk(tree, "")
+    def test_the_callsites_are_exactly_the_allowlist(self) -> None:
+        """OCCURRENCE-exact: a list, not a set, so a second call inside an
+        allowed method cannot hide behind the first."""
+        assert self._callsites() == sorted(self.ALLOWED)
 
-        assert found, "nothing verifies held-store activation; the guard is vacuous"
-        assert found == self.ALLOWED, found
+
+class TestTheCallsiteScannerIsItselfAttacked:
+    """Five bypasses, each of which defeated an earlier scanner."""
+
+    TARGET = "_verify_held_store_activation"
+
+    def test_a_direct_call_is_seen(self) -> None:
+        assert find_callsites(
+            "class S:\n    def f(self):\n"
+            "        _verify_held_store_activation(1, 2, 3)\n",
+            self.TARGET,
+        ) == ["S.f"]
+
+    def test_multiplicity_is_preserved(self) -> None:
+        """A set collapsed two calls into one entry."""
+        assert find_callsites(
+            "class S:\n    def f(self):\n"
+            "        _verify_held_store_activation(1, 2, 3)\n"
+            "        _verify_held_store_activation(4, 5, 6)\n",
+            self.TARGET,
+        ) == ["S.f", "S.f"]
+
+    def test_an_assignment_alias_is_seen(self) -> None:
+        assert find_callsites(
+            "class S:\n    def f(self):\n"
+            "        v = _verify_held_store_activation\n"
+            "        v(1, 2, 3)\n",
+            self.TARGET,
+        ) == ["S.f"]
+
+    def test_an_annotated_alias_is_seen(self) -> None:
+        assert find_callsites(
+            "class S:\n    def f(self):\n"
+            "        v: object = _verify_held_store_activation\n"
+            "        v(1, 2, 3)\n",
+            self.TARGET,
+        ) == ["S.f"]
+
+    def test_getattr_by_string_is_seen(self) -> None:
+        assert find_callsites(
+            'class S:\n    def f(self):\n'
+            '        getattr(m, "_verify_held_store_activation")(1, 2, 3)\n',
+            self.TARGET,
+        ) == ["S.f"]
+
+    def test_a_nested_scope_is_not_the_method(self) -> None:
+        """Lexical qualification: a closure is NOT its enclosing method, so
+        a call hidden in one cannot satisfy an allowlist written for the
+        method.
+
+        Asserted as the PROPERTY, not a label. The scanner's nested naming
+        is diagnostically imprecise -- a known, accepted wart -- but every
+        nested scope stays prefixed, which is what the guard relies on.
+        """
+        found = find_callsites(
+            "class S:\n    def f(self):\n        def inner():\n"
+            "            _verify_held_store_activation(1, 2, 3)\n",
+            self.TARGET,
+        )
+        assert found, "the nested call was not seen at all"
+        assert found != ["S.f"], "a closure was reported as its method"
+        assert all(scope.startswith("S.f") for scope in found), found
+
+    def test_an_unrelated_call_is_not_seen(self) -> None:
+        assert find_callsites(
+            "class S:\n    def f(self):\n        something_else()\n",
+            self.TARGET,
+        ) == []

@@ -1286,8 +1286,10 @@ copy is **refactored to import this**, never the reverse — the dependency
 points from bench tooling to governance, not from governance to bench
 tooling.
 
-The receipt is read back **only** through
-`read_migration_receipt()`. The generic
+The receipt is read back through exactly two routes, and no others
+(**amended v17**): `read_migration_receipt()` for CANONICAL DISCOVERY,
+and `_verify_held_store_activation()` for HELD-STORE VERIFICATION of a
+store already opened for mutation. The generic
 `read_private_file` is for bench callers and is **not** an activation
 route — v12 said it was, three sections after freezing the wrapper that
 replaced it.
@@ -1308,8 +1310,8 @@ deactivate itself on its first real artifact.
 
 **Every activation consumer revalidates** before treating v2 as live:
 
-* the receipt is read **only** through
-  `read_migration_receipt()` — the sole
+* the receipt is read through the canonical-discovery route,
+  `read_migration_receipt()` — the sole *discovery*
   activation route, never the generic `read_private_file` — opening both
   leaves under one anchored directory and enforcing
   regular-file, uid, `0600`, single-link, `<= 8192` bytes, short-read
