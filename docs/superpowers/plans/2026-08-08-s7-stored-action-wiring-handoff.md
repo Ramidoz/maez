@@ -1,11 +1,16 @@
 # S7 stored-action wiring — resumption note
 
-**Current head:** `57d2efe`.
 **Resume with: the V2 VOICE PLANE.** Not v2 storage — that shipped.
 
+*(No head hash recorded on purpose: a note that names its own commit is
+self-invalidating the moment it is amended.)*
+
 Focused baseline **29 failed / 135 passed**; collateral **87 failed / 427
-passed**; guarded **3 failed / 25 passed**, all three stopping at the
-missing v2 voice evidence route.
+passed**; guarded **3 failed / 25 passed** — and their cause is more mundane than
+"the voice plane": all three stop at *"S7 v2 table exists but no migration
+receipt activates it"*, because those tests migrate nothing. They never
+reach the absent voice APIs at all. Verified by reading the failure text,
+not inferred from what is missing.
 
 **Live migration has never been run against the live store**, which
 remains byte-identical at `5384bce8…`, mode `0600`, with no receipt or
@@ -29,7 +34,7 @@ repairs moved it, fixing three pre-existing failures and breaking none.
 
 ## What remains — ordered
 
-The 28 reds are NOT independent; this order avoids each piece being red
+The 29 reds are NOT independent; this order avoids each piece being red
 for another's reason.
 
 1. ~~**v2 storage.**~~ **SHIPPED.** Writes and reads both follow the
@@ -117,8 +122,9 @@ implemented, which is its own slice.
 
 Ordered:
 
-1. repair `_artifact()` with `action=env.action` and audit what that
-   exposes;
+1. ~~repair `_artifact()` with `action=env.action`~~ **DONE** — BOTH
+   guarded-suite fixtures carry it; the repair fixed three pre-existing
+   failures and broke none;
 2. use the frozen `ceremony.sqlite3` fixture name;
 3. migrate the private store while voice is absent;
 4. REDs for v2 voice write -> read -> execution validation *(needs the
