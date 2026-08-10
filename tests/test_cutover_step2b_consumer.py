@@ -70,19 +70,41 @@ class TestActionContract:
         for key in ("path", "file", "target", "cmd"):
             assert key not in cm.CUTOVER_ACTION_PARAMS, key
 
-    def test_affected_refs_name_the_real_mutation_targets(self) -> None:
-        refs = set(
+    def test_derivation_is_empty_so_the_real_refs_survive(self) -> None:
+        """I wrote this test against the wrong seam, and it could never pass.
+
+        It called `derive_affected_refs` directly and demanded the two real
+        refs back. That function takes no supplied refs at all -- it derives
+        from signed action material and has no branch for this action, so it
+        returns `()`. It also returns at most ONE ref from the
+        path/file/target keys, so it could not have produced two even with a
+        key present, and those keys are forbidden here anyway.
+
+        Empty is the CORRECT and intended result. `build_work_request_envelope`
+        reads `trusted_refs if trusted_refs else canonical(supplied)`, so an
+        empty derivation is exactly what lets the frozen refs through. A
+        non-empty derivation would DISCARD them, which is the hazard the
+        no-discarding-key pin exists to prevent.
+        """
+        assert (
             s7.derive_affected_refs(
                 action=cm.CUTOVER_ACTION, params=dict(cm.CUTOVER_ACTION_PARAMS)
             )
+            == ()
         )
+
+    def test_the_envelope_carries_the_real_mutation_targets(self) -> None:
+        """The refs the design freezes, checked where they actually live.
+
+        POSITIVE CONTROL for the test above: empty derivation is only good
+        news if the supplied refs genuinely survive into the envelope. This
+        asserts they do, so 'derivation is empty' cannot be mistaken for
+        'no refs anywhere'.
+        """
+        env = cm.build_cutover_work_request_envelope()
+        refs = set(env.affected_refs)
         assert "service:llama-server.service" in refs, refs
         assert any(r.startswith("file:") and "zz-b9596-cuda" in r for r in refs), refs
-
-    def test_no_synthetic_classifier_ref_is_derived(self) -> None:
-        refs = s7.derive_affected_refs(
-            action=cm.CUTOVER_ACTION, params=dict(cm.CUTOVER_ACTION_PARAMS)
-        )
         assert "file:model_routing" not in refs, refs
 
 
