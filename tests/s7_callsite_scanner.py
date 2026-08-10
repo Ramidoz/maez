@@ -80,8 +80,12 @@ def find_callsites(source: str, target: str) -> list[str]:
         no longer verified anything.
         """
         parts: list[str] = []
-        for index, (kind, name) in enumerate(scope):
-            if index and kind == "function" and scope[index - 1][0] == "function":
+        for index, (_kind, name) in enumerate(scope):
+            # <locals> whenever the ENCLOSING scope is a function, whatever
+            # the nested definition is. Restricting it to function-in-
+            # function let `def X(): class Y:` collide with a real `X.Y`
+            # method, which is how Python itself qualifies it.
+            if index and scope[index - 1][0] == "function":
                 parts.append("<locals>")
             parts.append(name)
         return ".".join(parts)
@@ -93,6 +97,19 @@ def find_callsites(source: str, target: str) -> list[str]:
                 continue
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 walk(child, scope + [("function", child.name)])
+                continue
+            # A lambda or comprehension body is its OWN scope and does not
+            # run where it is written. Both produced the exact allowlist
+            # while never executing the verifier.
+            if isinstance(child, ast.Lambda):
+                walk(child, scope + [("function", "<lambda>")])
+                continue
+            if isinstance(
+                child,
+                (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp),
+            ):
+                kind = type(child).__name__
+                walk(child, scope + [("function", f"<{kind}>")])
                 continue
             if isinstance(child, ast.Call):
                 name = (

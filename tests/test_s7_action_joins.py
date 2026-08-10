@@ -1476,3 +1476,114 @@ class TestTheCallsiteScannerIsItselfAttacked:
             "        d()\n",
             self.TARGET,
         ) == ["S.f"]
+
+
+class TestScannerScopeCollisionsAreClosed:
+    """Every shape that once rendered identically to the real class method
+    while never executing the verifier."""
+
+    TARGET = "_verify_held_store_activation"
+    REAL = (
+        "class S7AuthorizationStore:\n"
+        "    def anchored_transaction(self):\n"
+        "        _verify_held_store_activation()\n"
+    )
+
+    def _real(self) -> list[str]:
+        return find_callsites(self.REAL, self.TARGET)
+
+    def test_the_real_method_is_the_baseline(self) -> None:
+        assert self._real() == ["S7AuthorizationStore.anchored_transaction"]
+
+    def test_a_class_nested_in_a_function_does_not_collide(self) -> None:
+        """`<locals>` must appear whenever the ENCLOSING scope is a
+        function, whatever the nested definition is -- which is how Python
+        itself qualifies it."""
+        assert find_callsites(
+            "def S7AuthorizationStore():\n"
+            "    class anchored_transaction:\n"
+            "        _verify_held_store_activation()\n",
+            self.TARGET,
+        ) != self._real()
+
+    def test_a_lambda_body_does_not_collide(self) -> None:
+        """A lambda does not run where it is written."""
+        assert find_callsites(
+            "class S7AuthorizationStore:\n"
+            "    def anchored_transaction(self):\n"
+            "        _u = lambda: _verify_held_store_activation()\n",
+            self.TARGET,
+        ) != self._real()
+
+    def test_a_generator_body_does_not_collide(self) -> None:
+        assert find_callsites(
+            "class S7AuthorizationStore:\n"
+            "    def anchored_transaction(self):\n"
+            "        _u = (_verify_held_store_activation() for _ in ())\n",
+            self.TARGET,
+        ) != self._real()
+
+
+class TestActivationIsActuallyVerifiedAtRuntime:
+    """BEHAVIOURAL, because structure can always be gamed.
+
+    A structural allowlist proves a call APPEARS in an allowed scope. It
+    cannot prove the call RUNS -- a lambda, a comprehension, or a dead
+    branch all satisfy it. These drive both allowed methods and require
+    the verifier to fire exactly once.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def _counting(self, monkeypatch) -> list[object]:
+        calls: list[object] = []
+        real = s7._verify_held_store_activation
+
+        def counting(dir_fd, store_fd, conn):
+            calls.append(object())
+            return real(dir_fd, store_fd, conn)
+
+        monkeypatch.setattr(s7, "_verify_held_store_activation", counting)
+        return calls
+
+    def test_anchored_transaction_verifies_exactly_once(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        store = self._migrated(tmp_path)
+        calls = self._counting(monkeypatch)
+        with store.anchored_transaction():
+            pass
+        assert len(calls) == 1, calls
+
+    def test_consume_for_execution_verifies_exactly_once(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        calls = self._counting(monkeypatch)
+        monkeypatch.setattr(
+            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
+        )
+        store.consume_for_execution(
+            "artifact-join-1",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=env.precondition_hash,
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            now=NOW,
+        )
+        assert len(calls) == 1, calls
