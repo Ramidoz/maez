@@ -727,3 +727,75 @@ class TestTheJoinHelperIsItselfAttacked:
             "'register_backup_webauthn_credential'",
             counterpart=self.RENDERED,
         )
+
+
+class TestStorageFollowsTheMigratedPlane:
+    """After migration v1 is FROZEN, so storage has nowhere to go unless it
+    moves to v2. Reproduced before this existed: put() aborted with
+    s7_v1_frozen and both tables stayed empty.
+
+    Scope note: this slice routes STORAGE. Receipt-gated activation of
+    guarded EXECUTION -- "absent is not permission" -- belongs to the mint
+    and consume seams, not here.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def _rows(self, db_path, table):
+        with closing(sqlite3.connect(db_path)) as conn:
+            return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+    def test_a_put_after_migration_lands_in_v2(self, tmp_path: Path) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._rows(store.db_path, V2_TABLE) == 1
+
+    def test_a_put_after_migration_writes_nothing_to_frozen_v1(
+        self, tmp_path: Path
+    ) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._rows(store.db_path, V1_TABLE) == 0
+
+    def test_the_stored_row_carries_the_action(self, tmp_path: Path) -> None:
+        """The whole point of v2. A row without it cannot bind anything."""
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain(action=OTHER_ACTION)
+        store.put(_artifact(env, authority, params_hash, rendered))
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            stored = conn.execute(
+                f"SELECT action FROM {V2_TABLE}"
+            ).fetchone()[0]
+        assert stored == OTHER_ACTION
+
+    def test_the_stored_row_declares_the_v2_schema(self, tmp_path: Path) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            version = conn.execute(
+                f"SELECT schema_version FROM {V2_TABLE}"
+            ).fetchone()[0]
+        assert version == "s7.authorization_artifact.v2"
+
+    def test_an_unmigrated_store_still_uses_v1(self, tmp_path: Path) -> None:
+        """CONTROL. Routing everything to v2 would break every store that
+        has not migrated yet, and pre-activation behaviour is not this
+        slice's to change."""
+        store = fresh_store(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._rows(store.db_path, V1_TABLE) == 1

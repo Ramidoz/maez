@@ -2456,6 +2456,17 @@ def _mint_s7_execution_grant(
 
 
 _AUTH_TABLE = "s7_authorization_artifacts"
+_V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
+S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
+
+
+def _table_present(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def _auth_table_present(conn: sqlite3.Connection) -> bool:
@@ -2635,6 +2646,57 @@ class S7AuthorizationStore:
         expires_at: str,
         consumed_at: str | None,
     ) -> None:
+        # After migration v1 is FROZEN, so a v1 insert aborts with
+        # s7_v1_frozen and the artifact has nowhere to go. Storage follows
+        # the migrated plane: v2 when it exists, v1 otherwise. The v2 row
+        # carries the ACTION, which is the whole reason the plane exists.
+        #
+        # Scope: this routes STORAGE only. Receipt-gated activation of
+        # guarded EXECUTION -- "absent is not permission" -- belongs to the
+        # mint and consume seams.
+        if _table_present(conn, _V2_AUTH_TABLE):
+            conn.execute(
+                f"""
+                INSERT INTO {_V2_AUTH_TABLE} (
+                    artifact_id, request_id, request_envelope_hash,
+                    rendered_text_hash, action_params_hash, precondition_hash,
+                    authority_context_hash, derived_work_class,
+                    derived_aggregation_group, nonce, credential_ref,
+                    auth_method, grant_source, user_presence,
+                    user_verification, created_at, expires_at, consumed_at,
+                    consumed_by_request_id, ceremony_kind, action,
+                    schema_version
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    NULL, ?, ?, ?
+                )
+                """,
+                (
+                    artifact.artifact_id,
+                    artifact.request_id,
+                    artifact.request_envelope_hash,
+                    artifact.rendered_text_hash,
+                    artifact.action_params_hash,
+                    artifact.precondition_hash,
+                    artifact.authority_context_hash,
+                    artifact.derived_work_class,
+                    artifact.derived_aggregation_group,
+                    artifact.nonce,
+                    artifact.credential_ref,
+                    artifact.auth_method,
+                    artifact.grant_source,
+                    1 if artifact.user_presence else 0,
+                    1 if artifact.user_verification else 0,
+                    created_at,
+                    expires_at,
+                    consumed_at,
+                    artifact.ceremony_kind,
+                    artifact.action,
+                    S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA,
+                ),
+            )
+            return
+
         conn.execute(
             """
             INSERT INTO s7_authorization_artifacts (
