@@ -541,10 +541,37 @@ PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v2"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 CUTOVER_AUTHORIZATION_SCHEMA = "cuda_migration.cutover_authorization.v1"
 CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v1"
+S7_GRANT_PROJECTION_SCHEMA = "cuda_migration.s7_execution_grant_projection.v2"
+S7_GRANT_PROJECTION_FIELDS = (
+    "artifact_id",
+    "request_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "action",
+    "derived_work_class",
+    "derived_aggregation_group",
+    "nonce",
+    "credential_ref",
+    "auth_method",
+    "grant_source",
+    "consumed_at",
+    "ceremony_kind",
+    "schema_version",
+)
 ASSEMBLE_RECEIPT_SCHEMA = "cuda_bench_assemble.receipt.v1"
 CUTOVER_TTL_S = 14_400
-# The one closed action set a cutover authorization can permit.  The
-# ceremony may not improvise actions the owner did not sign.
+# The singular S7 authority/action-edge identifier for the aggregate model
+# routing operation.  Per-attempt facts belong to the request envelope, not
+# this stable action-params hash domain.
+CUTOVER_ACTION = "model_routing.cutover_cuda"
+CUTOVER_ACTION_PARAMS = {"cutover_action": CUTOVER_ACTION}
+# The older cutover authorization's ordered six-step executor manifest.  It is
+# intentionally distinct from CUTOVER_ACTION: this tuple limits the concrete
+# operations the authorization permits; CUTOVER_ACTION names their aggregate
+# S7 self-modification contract.
 CUTOVER_ACTION_SET = (
     "stage_recovery_copies",
     "install_cuda_override",
@@ -3199,6 +3226,20 @@ def _canonical_wrapper_bytes(wrapper: Mapping[str, object]) -> bytes:
             allow_nan=False,
         ).encode("utf-8")
         + b"\n"
+    )
+
+
+def s7_execution_grant_projection_bytes(grant: object) -> bytes:
+    """Encode the complete v2 S7 execution-grant projection."""
+    from core.governance.operator_user_boundary import S7ExecutionGrant
+
+    if not isinstance(grant, S7ExecutionGrant):
+        raise ValueError("s7_grant_projection")
+    projected_fields = {
+        name: getattr(grant, name) for name in S7_GRANT_PROJECTION_FIELDS
+    }
+    return _canonical_wrapper_bytes(
+        {"schema": S7_GRANT_PROJECTION_SCHEMA, "fields": projected_fields}
     )
 
 

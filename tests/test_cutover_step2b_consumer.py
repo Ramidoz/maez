@@ -28,15 +28,42 @@ from __future__ import annotations
 
 import ast
 import inspect
+import sqlite3
+import textwrap
+from contextlib import closing
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_v2_migration
 from scripts import cuda_cutover as cutover
 from scripts import cuda_migration as cm
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def _s7_grant_fixture() -> s7.S7ExecutionGrant:
+    return s7.S7ExecutionGrant(
+        artifact_id="artifact-1",
+        request_id="request-1",
+        request_envelope_hash="1" * 64,
+        rendered_text_hash="2" * 64,
+        action_params_hash="3" * 64,
+        precondition_hash="4" * 64,
+        authority_context_hash="5" * 64,
+        action="model_routing.cutover_cuda",
+        derived_work_class="self_modification",
+        derived_aggregation_group="s7agg_fixture",
+        nonce="nonce-1",
+        credential_ref="credential-1",
+        auth_method="founder_webauthn",
+        grant_source="founder_webauthn",
+        consumed_at="2000-01-01T00:01:00Z",
+        ceremony_kind="founder_local_webauthn",
+        _mint_token=s7._EXECUTION_GRANT_TOKEN,
+    )
 
 
 class TestActionContract:
@@ -69,6 +96,15 @@ class TestActionContract:
         present, every frozen affected_ref would be silently thrown away."""
         for key in ("path", "file", "target", "cmd"):
             assert key not in cm.CUTOVER_ACTION_PARAMS, key
+
+    def test_fixed_params_hash_is_the_canonical_mapping_hash(self) -> None:
+        expected = {"cutover_action": cm.CUTOVER_ACTION}
+        assert cm.CUTOVER_ACTION_PARAMS == expected
+        assert (
+            s7.canonical_hash(cm.CUTOVER_ACTION_PARAMS)
+            == "378e391cf73648e3da262b24ab9bb4b72"
+            "ab048db80e5a9ce11665e7359f84536"
+        )
 
     def test_derivation_is_empty_so_the_real_refs_survive(self) -> None:
         """I wrote this test against the wrong seam, and it could never pass.
@@ -163,27 +199,199 @@ class TestGrantProjection:
         derived-only check would agree with itself if the dataclass lost
         a field.
         """
-        from dataclasses import fields as dataclass_fields
-
-        expected = tuple(f.name for f in dataclass_fields(s7.S7ExecutionGrant))
-        assert cm.S7_GRANT_PROJECTION_FIELDS == expected
-        assert len(expected) == 17
+        expected = (
+            "artifact_id",
+            "request_id",
+            "request_envelope_hash",
+            "rendered_text_hash",
+            "action_params_hash",
+            "precondition_hash",
+            "authority_context_hash",
+            "action",
+            "derived_work_class",
+            "derived_aggregation_group",
+            "nonce",
+            "credential_ref",
+            "auth_method",
+            "grant_source",
+            "consumed_at",
+            "ceremony_kind",
+            "schema_version",
+        )
+        actual = tuple(f.name for f in dataclass_fields(s7.S7ExecutionGrant))
+        assert cm.S7_GRANT_PROJECTION_FIELDS == expected == actual
+        assert len(actual) == 17
 
     def test_the_private_mint_token_is_structurally_excluded(self) -> None:
         """_mint_token is an InitVar, so it is not a dataclass field at all
         -- the exclusion cannot be forgotten."""
-        from dataclasses import fields as dataclass_fields
-
         names = {f.name for f in dataclass_fields(s7.S7ExecutionGrant)}
         assert "_mint_token" not in names
 
-    def test_every_projected_field_has_a_committed_row_column(self) -> None:
-        """Reconstruction from durable state is the whole point."""
-        source = inspect.getsource(s7)
-        start = source.index("s7_authorization_artifacts (")
-        columns = source[start : source.index(")", start)]
-        for name in cm.S7_GRANT_PROJECTION_FIELDS:
-            assert name in columns, name
+    def test_projection_uses_the_existing_canonical_wrapper_encoder(self) -> None:
+        grant = _s7_grant_fixture()
+        expected_fields = {
+            name: getattr(grant, name) for name in cm.S7_GRANT_PROJECTION_FIELDS
+        }
+        expected = cm._canonical_wrapper_bytes(
+            {"schema": cm.S7_GRANT_PROJECTION_SCHEMA, "fields": expected_fields}
+        )
+
+        assert cm.s7_execution_grant_projection_bytes(grant) == expected
+        assert expected.endswith(b"\n")
+
+        tree = ast.parse(
+            textwrap.dedent(
+                inspect.getsource(cm.s7_execution_grant_projection_bytes)
+            )
+        )
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_canonical_wrapper_bytes"
+        ]
+        assert len(calls) == 1
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "dumps"
+            for node in ast.walk(tree)
+        )
+
+    def test_projection_refuses_non_grant_with_positive_control(self) -> None:
+        grant = _s7_grant_fixture()
+        with pytest.raises(ValueError, match="s7_grant_projection"):
+            cm.s7_execution_grant_projection_bytes(object())
+        assert cm.s7_execution_grant_projection_bytes(grant).endswith(b"\n")
+
+    def test_sixteen_row_backed_fields_join_the_v2_writer(self) -> None:
+        """v28: exact identifiers from the v2 writer, never v1 substrings."""
+        tree = ast.parse(inspect.getsource(s7))
+        table_assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "_V2_AUTH_TABLE"
+                for target in node.targets
+            )
+        )
+        assert isinstance(table_assignment.value, ast.Constant)
+        assert table_assignment.value.value == "s7_authorization_artifacts_v2"
+        store_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "S7AuthorizationStore"
+        )
+        insert_v2 = next(
+            node
+            for node in store_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_insert_v2"
+        )
+        calls = [
+            node
+            for node in ast.walk(insert_v2)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "conn"
+            and node.func.attr == "execute"
+        ]
+        assert len(calls) == 1
+        sql_node = calls[0].args[0]
+        assert isinstance(sql_node, ast.JoinedStr)
+        formatted = [
+            part for part in sql_node.values if isinstance(part, ast.FormattedValue)
+        ]
+        assert len(formatted) == 1
+        assert isinstance(formatted[0].value, ast.Name)
+        assert formatted[0].value.id == "_V2_AUTH_TABLE"
+        literal_sql = "".join(
+            part.value
+            for part in sql_node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+        column_text = literal_sql.split("(", 1)[1].split(") VALUES", 1)[0]
+        columns = tuple(part.strip() for part in column_text.split(","))
+        row_backed = tuple(
+            name
+            for name in cm.S7_GRANT_PROJECTION_FIELDS
+            if name != "schema_version"
+        )
+        assert len(row_backed) == 16
+        assert set(row_backed) <= set(columns)
+        assert len(columns) == len(set(columns))
+        assert columns[18] == "consumed_by_request_id"
+        assert columns[-2:] == ("action", "schema_version")
+
+        values = calls[0].args[1]
+        assert isinstance(values, ast.Tuple)
+        bound_columns = columns[:18] + columns[19:]
+        assert len(bound_columns) == len(values.elts)
+        value_sources = dict(
+            zip(bound_columns, (ast.unparse(value) for value in values.elts), strict=True)
+        )
+        expected_row_backed_sources = {
+            "artifact_id": "artifact.artifact_id",
+            "request_id": "artifact.request_id",
+            "request_envelope_hash": "artifact.request_envelope_hash",
+            "rendered_text_hash": "artifact.rendered_text_hash",
+            "action_params_hash": "artifact.action_params_hash",
+            "precondition_hash": "artifact.precondition_hash",
+            "authority_context_hash": "artifact.authority_context_hash",
+            "action": "artifact.action",
+            "derived_work_class": "artifact.derived_work_class",
+            "derived_aggregation_group": "artifact.derived_aggregation_group",
+            "nonce": "artifact.nonce",
+            "credential_ref": "artifact.credential_ref",
+            "auth_method": "artifact.auth_method",
+            "grant_source": "artifact.grant_source",
+            "consumed_at": "consumed_at",
+            "ceremony_kind": "artifact.ceremony_kind",
+        }
+        assert {
+            name: value_sources[name] for name in row_backed
+        } == expected_row_backed_sources
+        assert value_sources["schema_version"] == "artifact.schema_version"
+
+    def test_v2_ddl_and_grant_keep_separate_version_domains(self) -> None:
+        """Sixteen row joins plus two deliberately unequal version stamps."""
+        with closing(sqlite3.connect(":memory:")) as conn:
+            conn.executescript(s7_v2_migration._V2_AUTH_DDL)
+            rows = conn.execute(
+                f"PRAGMA table_info({s7_v2_migration.V2_AUTH})"
+            ).fetchall()
+        columns = {str(row[1]): row for row in rows}
+        row_backed = tuple(
+            name
+            for name in cm.S7_GRANT_PROJECTION_FIELDS
+            if name != "schema_version"
+        )
+        assert len(row_backed) == 16
+        assert set(row_backed) <= set(columns)
+        assert "action" in columns
+
+        grant_schema = next(
+            field.default
+            for field in dataclass_fields(s7.S7ExecutionGrant)
+            if field.name == "schema_version"
+        )
+        row_schema = next(
+            field.default
+            for field in dataclass_fields(s7.S7AuthorizationArtifact)
+            if field.name == "schema_version"
+        )
+        assert grant_schema == "s7.execution_grant.v2"
+        assert (
+            row_schema
+            == s7.S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA
+            == "s7.authorization_artifact.v2"
+        )
+        assert columns["schema_version"][4] == "'s7.authorization_artifact.v2'"
+        assert grant_schema != row_schema
 
 
 class TestStoreOpener:
