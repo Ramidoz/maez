@@ -182,7 +182,7 @@ def _backup_authorization(tmp: Path, *, action: str):
         expires_at=FUTURE,
         rendered_at=NOW,
     )
-    store = fresh_store(tmp)
+    store = _migrated_store(tmp)
     store.put(
         s7.S7AuthorizationArtifact(
             artifact_id="artifact-backup-1",
@@ -255,8 +255,7 @@ def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
 
     Opening S7AuthorizationStore must NOT make v2 appear -- the design
     forbids open-time migration -- so the fixture must invoke the
-    migration entrypoint explicitly. That entrypoint does not exist yet,
-    which is the intended red.
+    private-copy migration entrypoint explicitly before persisting rows.
     """
     store = fresh_store(tmp)
     # PRIVATE helper, separately named. My first version froze
@@ -793,17 +792,19 @@ class TestArtifactMustMatchTheRenderedAction:
     ) -> None:
         env, authority, params_hash, rendered = _bundle()
         artifact = _stored_artifact(env, authority, params_hash, rendered)
+        match_kwargs = {
+            "rendered": rendered,
+            "action_params_hash": params_hash,
+            "authority_context_hash": s7.authority_context_hash(authority),
+            "precondition_hash": artifact.precondition_hash,
+            "derived_work_class": artifact.derived_work_class,
+            "derived_aggregation_group": artifact.derived_aggregation_group,
+            "now": NOW,
+        }
+        assert s7.authorization_artifact_matches(artifact, **match_kwargs)
+
         mismatched = replace(artifact, action=SIBLING)
-        assert not s7.authorization_artifact_matches(
-            mismatched,
-            rendered=rendered,
-            action_params_hash=params_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            precondition_hash=artifact.precondition_hash,
-            derived_work_class=artifact.derived_work_class,
-            derived_aggregation_group=artifact.derived_aggregation_group,
-            now=NOW,
-        )
+        assert not s7.authorization_artifact_matches(mismatched, **match_kwargs)
 
     def test_an_arbitrary_schema_version_refuses(self) -> None:
         """Now refused at CONSTRUCTION, which is stronger than refusing at
@@ -884,7 +885,7 @@ def _consume(auth, **over):
 def _consumed_at(store) -> object:
     with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
         row = conn.execute(
-            "SELECT consumed_at FROM s7_authorization_artifacts"
+            "SELECT consumed_at FROM s7_authorization_artifacts_v2"
         ).fetchone()
     return row[0] if row else "NO ROW"
 
@@ -895,9 +896,9 @@ class TestExceptionsAreClassifiedNotSwallowed:
 
     A programming error inside the mint is currently reported to every
     caller as an ordinary denial. That is fail-closed, so it is safe -- but
-    it is not honest, and it hid the fact that the entire execution path is
-    dead on this branch. A genuine non-match must still return (None, None);
-    a broken seam must not be able to impersonate one.
+    it is not honest. The migrated fixture now proves the execution path is
+    live; a genuine non-match must still return (None, None), while a broken
+    seam must not be able to impersonate one.
     """
 
     def test_a_mint_exception_propagates(self, tmp_path: Path, monkeypatch) -> None:
@@ -1005,14 +1006,8 @@ class TestFixedActionConsumersCheckTheirAction:
     def test_the_positive_control_reaches_a_grant(self, tmp_path: Path) -> None:
         """Without this the refusal below is vacuous.
 
-        RED TODAY, and NOT for an action-binding reason: S7ExecutionGrant
-        now requires `action`, _mint_s7_execution_grant deliberately supplies
-        none until the v2 row exists, and consume_for_execution's bare
-        `except Exception` turns that TypeError into a silent (None, None).
-        Every seam that needs a real grant is therefore dead on this branch.
-        Fail-closed, so safe -- but it means this witness cannot be honest
-        until the v2 row lands. It is written now so that it flips the moment
-        it can, rather than being retro-fitted around whatever ships.
+        The fixture migrates its private store before persisting the row,
+        then drives the same real consumer as the sibling refusal below.
         """
         from core.governance import s7_webauthn_ceremony as ceremony
 

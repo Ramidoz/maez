@@ -2314,6 +2314,7 @@ def authorization_artifact_matches(
         "request_id": rendered.request_id,
         "request_envelope_hash": rendered.request_envelope_hash,
         "rendered_text_hash": rendered.rendered_text_hash,
+        "action": rendered.action,
         "action_params_hash": action_params_hash,
         "precondition_hash": precondition_hash,
         "authority_context_hash": authority_context_hash,
@@ -3048,6 +3049,7 @@ class S7AuthorizationStore:
                       AND request_id = ?
                       AND request_envelope_hash = ?
                       AND rendered_text_hash = ?
+                      AND action = ?
                       AND action_params_hash = ?
                       AND precondition_hash = ?
                       AND authority_context_hash = ?
@@ -3072,6 +3074,7 @@ class S7AuthorizationStore:
                         rendered.request_id,
                         rendered.request_envelope_hash,
                         rendered.rendered_text_hash,
+                        rendered.action,
                         action_params_hash,
                         precondition_hash,
                         auth_hash,

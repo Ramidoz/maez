@@ -11,16 +11,11 @@ A single test asserting "the action is equal everywhere" is not this. It
 passes as soon as any one link holds and cannot say which broke, so each
 link gets its own isolated tamper here.
 
-Two things would otherwise make every test in this file vacuous, and both
-are neutralised explicitly rather than worked around:
-
-* `_mint_s7_execution_grant` supplies no action until the v2 row exists,
-  so any test needing a real grant dies in the mint. Where a join is
-  downstream of the mint, the mint is STUBBED to succeed with a chosen
-  action -- which isolates the join under test from the absent row.
-* `consume_for_execution` swallows every exception into (None, None), so
-  a broken seam is indistinguishable from a denial. Tests that depend on
-  reaching a seam assert they reached it.
+Two things can otherwise make a test in this file vacuous, and both are
+neutralised explicitly rather than worked around: tests that isolate a
+downstream boundary say when they stub the mint, and tests that depend on
+reaching a seam prove reachability because `consume_for_execution` still
+swallows broad exceptions into (None, None).
 """
 
 from __future__ import annotations
@@ -176,8 +171,7 @@ def _migrated_store(tmp: Path):
 
     Opening the store must not make v2 appear -- the design forbids
     open-time migration -- so the fixture invokes the migration explicitly.
-    That entrypoint does not exist yet; tests that need it are red on a
-    named blocker rather than on an absent column.
+    It then persists and verifies only through that private activated copy.
     """
     import os
 
@@ -365,10 +359,10 @@ class TestLinkRowToGrant:
         statement that consumes the row, so there is no second read to
         launder -- plus the AST provenance chain in
         `test_the_mint_does_not_take_the_action_from_the_caller`. The
-        real-path behavioural witness belongs with the row-to-rendered
-        refusal join, which is where a mismatch acquires defined semantics;
-        until that lands, a mismatch reaching the mint is unreachable in
-        production for reasons no test here asserts.
+        real-path behavioural witness now lives with the row-to-rendered
+        refusal join, where it proves the mismatch never reaches the mint.
+        It cannot prove the row source after the two actions agree; the AST
+        provenance chain remains load-bearing for that property.
         """
         env, authority, params_hash, _stored_rendered = _chain(action=OTHER_ACTION)
         assert OTHER_ACTION != ACTION
@@ -530,25 +524,78 @@ class TestConsumeVerifiedRowRenderedJoin:
         assert hasattr(s7.S7AuthorizationStore, "consume_verified")
 
     def test_a_row_whose_action_differs_from_the_rendered_action_refuses(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Behavioural. A source check for the word `action` would green on
-        unrelated text; this stores a row whose action differs from the
-        signed statement and requires the verification to refuse it."""
+        """Drive the real consumer through refusal and its positive control.
+
+        The mismatch cannot reach the mint once the row/rendered join is in
+        the atomic UPDATE. This test proves that boundary behaviour, that a
+        refusal does not consume the row, and that removing ONLY the action
+        mismatch on the same durable row reaches a real grant carrying the
+        row's action.
+
+        Because row and rendered action necessarily agree in the positive
+        control, that grant cannot distinguish which equal value fed the
+        mint. The atomic RETURNING construction and the separate AST
+        provenance test guard that source property.
+        """
         env, authority, params_hash, rendered = _chain()
         store = _migrated_store(tmp_path)
         store.put(_artifact(env, authority, params_hash, rendered, action=SIBLING))
-        verified = store.consume_verified(
-            "artifact-join-1",
-            rendered=rendered,
-            action_params_hash=params_hash,
-            authority_context=authority,
-            precondition_hash=env.precondition_hash,
-            derived_work_class=env.derived_work_class,
-            derived_aggregation_group=env.derived_aggregation_group,
-            now=NOW,
+        real_mint = s7._mint_s7_execution_grant
+        mint_actions: list[str] = []
+
+        def recording_mint(**kwargs):
+            mint_actions.append(kwargs["stored_action"])
+            return real_mint(**kwargs)
+
+        monkeypatch.setattr(s7, "_mint_s7_execution_grant", recording_mint)
+        consume_kwargs = {
+            "rendered": rendered,
+            "action_params_hash": params_hash,
+            "authority_context": authority,
+            "precondition_hash": env.precondition_hash,
+            "derived_work_class": env.derived_work_class,
+            "derived_aggregation_group": env.derived_aggregation_group,
+            "now": NOW,
+        }
+        with store.anchored_transaction() as conn:
+            row = conn.execute(
+                f"SELECT action, consumed_at FROM {V2_TABLE} "
+                "WHERE artifact_id = ?",
+                ("artifact-join-1",),
+            ).fetchone()
+        assert row == (SIBLING, None)
+
+        refused = store.consume_for_execution("artifact-join-1", **consume_kwargs)
+        assert refused == (None, None)
+        assert mint_actions == [], "an action-mismatched row reached the mint"
+
+        with store.anchored_transaction() as conn:
+            row = conn.execute(
+                f"SELECT action, consumed_at FROM {V2_TABLE} "
+                "WHERE artifact_id = ?",
+                ("artifact-join-1",),
+            ).fetchone()
+            assert row == (SIBLING, None)
+            conn.execute(
+                f"UPDATE {V2_TABLE} SET action = ? WHERE artifact_id = ?",
+                (rendered.action, "artifact-join-1"),
+            )
+
+        grant, callback_result = store.consume_for_execution(
+            "artifact-join-1", **consume_kwargs
         )
-        assert not verified
+        assert callback_result is None
+        assert grant is not None
+        with store.anchored_transaction() as conn:
+            row_action = conn.execute(
+                f"SELECT action FROM {V2_TABLE} WHERE artifact_id = ?",
+                ("artifact-join-1",),
+            ).fetchone()
+        assert row_action == (rendered.action,)
+        assert grant.action == row_action[0]
+        assert mint_actions == [row_action[0]]
 
     def test_the_control_verifies_a_matching_row(self, tmp_path: Path) -> None:
         env, authority, params_hash, rendered = _chain()
@@ -680,10 +727,10 @@ class TestTheFourCallerJoins:
 
     SCOPE, stated plainly: these are AST-level, not behavioural. They kill
     the comment/dead-string mutation that a substring check would pass, but
-    they cannot prove the comparison is REACHED. A behavioural join needs a
-    real grant, and `_mint_s7_execution_grant` cannot produce one until the
-    v2 row exists -- so the behavioural half of these four lands with that
-    work rather than being faked here.
+    they cannot prove the comparison is REACHED. Real-grant controls now
+    exist for the migrated execution plane, but each caller still needs its
+    own behavioural reachability witness rather than borrowing this AST
+    claim.
     """
 
     def test_the_consumers_are_reachable_where_the_tests_look(self) -> None:
