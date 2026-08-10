@@ -115,10 +115,15 @@ is absent, then persist and validate in the v2 plane of that same
 activated store. Cross-store v1 validation and a non-persisting validator
 are both REJECTED and recorded in canon so the shortcut cannot return.
 
-**BLOCKED ON UNBUILT APIS.** `put_voice_source_bundle_v2` and
-`read_voice_source_bundle` are frozen in canon but DO NOT EXIST in
-`core/`. Steps 4-5 below cannot be written until the v2 voice plane is
-implemented, which is its own slice.
+**THE APIS ARE ABSENT, WHICH IS WHERE THE REDS START.**
+`put_voice_source_bundle_v2` and `read_voice_source_bundle` are frozen in
+canon but DO NOT EXIST in `core/`.
+
+An earlier version of this note said the REDs "cannot be written until the
+voice plane is implemented". That is backwards — it inverts both the
+released sequence and this repo's TDD rule, and it is exactly how a test
+ends up written to fit whatever the code already does. The absent API is
+the FIRST red, not a reason to defer writing one.
 
 Ordered:
 
@@ -127,10 +132,14 @@ Ordered:
    failures and broke none;
 2. use the frozen `ceremony.sqlite3` fixture name;
 3. migrate the private store while voice is absent;
-4. REDs for v2 voice write -> read -> execution validation *(needs the
-   APIs above)*;
-5. the real-route success and rollback witnesses;
-6. stop for review before stored-action minting.
+4. **behavioural REDs for the v2 voice APIs FIRST** — write → read →
+   execution validation, red against the absent seam;
+5. **then implement** the voice plane;
+6. **then re-witness each RED at its intended assertion** — red on the
+   missing API is not the same as red on the property it names;
+7. the real-route success and rollback witnesses through
+   `put_artifact_with_bundle_reservation`;
+8. stop for review before stored-action minting.
 
 ### Why the obvious routes are closed (historical, kept only as reasons)
 
