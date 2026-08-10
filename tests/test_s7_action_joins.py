@@ -25,6 +25,9 @@ are neutralised explicitly rather than worked around:
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -799,3 +802,204 @@ class TestStorageFollowsTheMigratedPlane:
         env, authority, params_hash, rendered = _chain()
         store.put(_artifact(env, authority, params_hash, rendered))
         assert self._rows(store.db_path, V1_TABLE) == 1
+
+
+class TestOnlyAVerifiedReceiptGrantsV2Storage:
+    """The table existing is NOT activation.
+
+    Reproduced: migrate, remove the receipt (the commit-before-publication
+    window), and put() wrote a v2 row anyway -- which then made recovery
+    refuse the store as indeterminate, because committed-not-published
+    requires BOTH v2 tables empty. Writing on table-presence alone
+    destroys the frozen recovery path.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def _v2_rows(self, db_path) -> int:
+        with closing(sqlite3.connect(db_path)) as conn:
+            return conn.execute(f"SELECT count(*) FROM {V2_TABLE}").fetchone()[0]
+
+    def test_a_verified_receipt_permits_storage(self, tmp_path: Path) -> None:
+        """CONTROL: refusing always would satisfy every test below."""
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._v2_rows(store.db_path) == 1
+
+    def test_a_missing_receipt_refuses_storage(self, tmp_path: Path) -> None:
+        store = self._migrated(tmp_path)
+        (tmp_path / "s7_migration_receipt.json").unlink()
+        env, authority, params_hash, rendered = _chain()
+        with pytest.raises((ValueError, OSError)):
+            store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._v2_rows(store.db_path) == 0
+
+    def test_a_missing_receipt_leaves_recovery_intact(
+        self, tmp_path: Path
+    ) -> None:
+        """The harm, stated directly: a row written in that window makes
+        the store indeterminate and unrecoverable."""
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = self._migrated(tmp_path)
+        (tmp_path / "s7_migration_receipt.json").unlink()
+        env, authority, params_hash, rendered = _chain()
+        with contextlib.suppress(Exception):
+            store.put(_artifact(env, authority, params_hash, rendered))
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+
+    def test_a_corrupt_receipt_refuses_storage(self, tmp_path: Path) -> None:
+        store = self._migrated(tmp_path)
+        receipt = tmp_path / "s7_migration_receipt.json"
+        receipt.unlink()
+        receipt.write_bytes(b"{ not json")
+        os.chmod(receipt, 0o600)
+        env, authority, params_hash, rendered = _chain()
+        with pytest.raises((ValueError, OSError)):
+            store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._v2_rows(store.db_path) == 0
+
+    def test_a_foreign_receipt_refuses_storage(self, tmp_path: Path) -> None:
+        """dev/ino pin the receipt to its own store."""
+        store = self._migrated(tmp_path)
+        receipt = tmp_path / "s7_migration_receipt.json"
+        body = json.loads(receipt.read_bytes())
+        body["store_ino"] = body["store_ino"] + 1
+        receipt.unlink()
+        receipt.write_bytes(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        )
+        os.chmod(receipt, 0o600)
+        env, authority, params_hash, rendered = _chain()
+        with pytest.raises((ValueError, OSError)):
+            store.put(_artifact(env, authority, params_hash, rendered))
+        assert self._v2_rows(store.db_path) == 0
+
+
+class TestSchemaIdentityIsNotLaundered:
+    def test_a_forged_artifact_schema_version_refuses(self) -> None:
+        """A forged identity was ACCEPTED at construction and then written
+        as a valid v2 row, because the insert hardcoded the label. The
+        durable row would then assert an identity the object never had."""
+        env, authority, params_hash, rendered = _chain()
+        artifact = _artifact(env, authority, params_hash, rendered)
+        with pytest.raises(ValueError):
+            replace(artifact, schema_version="s7.authorization_artifact.v999")
+
+    def test_the_stored_label_comes_from_the_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """Hardcoding it means the row's identity is asserted by the writer
+        rather than carried by the record."""
+        import ast
+        import inspect
+        import textwrap
+
+        # dedent, not cleandoc: cleandoc mangles the indentation and
+        # ast.parse then fails, which is a broken TEST rather than a
+        # finding about the writer.
+        source = textwrap.dedent(inspect.getsource(s7.S7AuthorizationStore))
+        tree = ast.parse(source)
+        hardcoded = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and node.value == "s7.authorization_artifact.v2"
+        ]
+        assert not hardcoded, "the v2 label is hardcoded in the writer"
+
+
+class TestConsumptionFollowsTheMigratedPlane:
+    """The read half of storage. The banked order required receipt-validated
+    v2 READS as well as writes; shipping only the write half was a
+    narrowing I should not have made.
+
+    The mint is STUBBED to succeed here on purpose: it has no action source
+    until the next slice, so without the stub this would die in the mint
+    and prove nothing about which table was consumed.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def _consumed_at(self, db_path, table):
+        with closing(sqlite3.connect(db_path)) as conn:
+            row = conn.execute(f"SELECT consumed_at FROM {table}").fetchone()
+        return row[0] if row else "NO ROW"
+
+    def _consume(self, store, env, authority, params_hash, rendered):
+        return store.consume_for_execution(
+            "artifact-join-1",
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=env.precondition_hash,
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            now=NOW,
+        )
+
+    def test_consumption_marks_the_v2_row(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        monkeypatch.setattr(
+            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
+        )
+        self._consume(store, env, authority, params_hash, rendered)
+        assert self._consumed_at(store.db_path, V2_TABLE) is not None
+
+    def test_consumption_leaves_frozen_v1_alone(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        monkeypatch.setattr(
+            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
+        )
+        self._consume(store, env, authority, params_hash, rendered)
+        assert self._consumed_at(store.db_path, V1_TABLE) == "NO ROW"
+
+    def test_an_unmigrated_store_still_consumes_v1(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """CONTROL: pre-activation behaviour is unchanged."""
+        store = fresh_store(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        monkeypatch.setattr(
+            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
+        )
+        self._consume(store, env, authority, params_hash, rendered)
+        assert self._consumed_at(store.db_path, V1_TABLE) is not None

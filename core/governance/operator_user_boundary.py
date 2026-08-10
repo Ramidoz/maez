@@ -2171,6 +2171,11 @@ class S7AuthorizationArtifact:
     ceremony_kind: str = "founder_local_webauthn"
 
     def __post_init__(self) -> None:
+        if self.schema_version != S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA:
+            raise ValueError(
+                "S7AuthorizationArtifact schema_version must be "
+                f"{S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA}"
+            )
         if not self.artifact_id:
             raise ValueError("S7 artifact_id is required")
         if not self.request_id:
@@ -2460,6 +2465,33 @@ _V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
 S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
 
 
+def _v2_is_activated(db_path) -> bool:
+    """Is v2 ACTIVATED -- receipt present, valid, and bound to this store?
+
+    The table existing is not permission. Writing on table-presence alone
+    put a row into the commit-before-publication window, which then made
+    the store indeterminate and destroyed the frozen recovery path.
+    Creating the table does not activate v2; only the verified receipt
+    does.
+    """
+    from core.governance import s7_v2_migration as _migration
+
+    directory = Path(db_path).parent
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        receipt = _migration._read_receipt(fd)
+    finally:
+        os.close(fd)
+    if receipt is None:
+        raise ValueError(
+            "S7 v2 table exists but no migration receipt activates it; "
+            "creating the table is not permission to write to it"
+        )
+    with closing(sqlite3.connect(db_path)) as conn:
+        _migration._validate_receipt(receipt, conn)
+    return True
+
+
 def _table_present(conn: sqlite3.Connection, name: str) -> bool:
     return (
         conn.execute(
@@ -2654,7 +2686,9 @@ class S7AuthorizationStore:
         # Scope: this routes STORAGE only. Receipt-gated activation of
         # guarded EXECUTION -- "absent is not permission" -- belongs to the
         # mint and consume seams.
-        if _table_present(conn, _V2_AUTH_TABLE):
+        if _table_present(conn, _V2_AUTH_TABLE) and _v2_is_activated(
+            self.db_path
+        ):
             conn.execute(
                 f"""
                 INSERT INTO {_V2_AUTH_TABLE} (
@@ -2692,7 +2726,7 @@ class S7AuthorizationStore:
                     consumed_at,
                     artifact.ceremony_kind,
                     artifact.action,
-                    S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA,
+                    artifact.schema_version,
                 ),
             )
             return
@@ -2816,9 +2850,18 @@ class S7AuthorizationStore:
         now_text = _timestamp_text(now, field="now")
         try:
             with closing(sqlite3.connect(self.db_path)) as conn:
+                # Consumption follows the migrated plane too. Shipping the
+                # write half alone would leave records written to v2 and
+                # consumed from a v1 row that does not exist.
+                table = (
+                    _V2_AUTH_TABLE
+                    if _table_present(conn, _V2_AUTH_TABLE)
+                    and _v2_is_activated(self.db_path)
+                    else _AUTH_TABLE
+                )
                 cur = conn.execute(
-                    """
-                    UPDATE s7_authorization_artifacts
+                    f"""
+                    UPDATE {table}
                     SET consumed_at = ?,
                         consumed_by_request_id = ?
                     WHERE artifact_id = ?
