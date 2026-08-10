@@ -87,25 +87,36 @@ for another's reason.
    in the wrong place. Roads unchanged; a control proves identity ignoring
    lines is exact.
 
-## OPEN CANON QUESTION — needs a ruling, not a workaround
+## OWED BEFORE THE MINT
 
-`_v2_is_activated_for_fd` in `operator_user_boundary.py` calls the PRIVATE
-migration receipt reader. Canon freezes a no-argument production reader
-and **exactly one** private-reader callsite, and the structural guard
-scans only `anchored_io`, so it cannot see this indirect route.
+Migrated-store tests through the REAL
+`put_artifact_with_bundle_reservation` route, for BOTH success and
+insert-failure rollback. My attempt stopped at fixture setup, not at the
+property: the route requires a validated
+`S7VoiceSourceBundleValidationResult`, which needs the validator token and
+a real bundle. `TestTheGuardedWriterStaysAtomic` exercises the vended
+transaction directly, which is NOT the same thing — it never creates a
+voice reservation, so it does not witness the two staying atomic.
 
-The tension is real, not an oversight to paper over: activation must be
-checkable for an ARBITRARY store — private copies, tests, any path — and
-the no-argument canonical reader opens only the ONE canonical directory
-by design. So either
+## CANON AMENDED (ruled) — held-store verification
 
-* the canonical/private split is restored and activation finds another
-  way to read a receipt beside a given store, or
-* canon is amended to allow a second private callsite, and the guard is
-  widened deliberately and visibly.
+RULED: canon conflated two authorities, and they are now separate.
 
-Do NOT silently widen the allowlist. That is the laundering this arc
-exists to prevent.
+1. **Canonical activation DISCOVERY** — `read_migration_receipt()`,
+   unchanged, no arguments, selects the one live store.
+2. **Held-store activation VERIFICATION** —
+   `_verify_held_store_activation(dir_fd, store_fd, conn)`. Takes no
+   pathname and no supplied root; the directory fd from the anchored walk
+   is RETAINED, the database is opened beneath it, the sibling receipt is
+   read through that same fd, identity is checked against the held
+   database fd, and schema against the same transaction.
+
+The `readlink → reopen directory` shape is GONE: canon already named
+pathname re-resolution as the race to avoid.
+
+STILL OWED: an exact repo-wide qualified-callsite allowlist for
+`_verify_held_store_activation`, matching the one that guards the
+initializer.
 
 ## Standing constraints
 

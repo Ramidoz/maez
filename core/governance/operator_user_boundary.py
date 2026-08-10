@@ -2462,15 +2462,79 @@ def _mint_s7_execution_grant(
 
 _AUTH_TABLE = "s7_authorization_artifacts"
 _V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
-# Connections this store vended. Membership is the ONLY thing that makes a
-# supplied connection identity-bound; anything else is a pathname.
-_VENDED_CONNECTIONS: set[int] = set()
-
 S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
 
 
 class S7GuardedExecutionUnavailable(RuntimeError):
     """v2 is absent or inert. Absent is not permission."""
+
+
+@contextmanager
+def _held_store(db_path):
+    """Hold the parent directory AND the database beneath it.
+
+    Both descriptors are retained for the whole operation. The previous
+    shape read `readlink("/proc/self/fd/N")` and REOPENED the directory by
+    name -- pathname re-resolution, which canon already identified as the
+    race to avoid. The directory fd from the original walk is kept instead,
+    and the sibling receipt is read through that same fd.
+    """
+    directory = Path(db_path).parent
+    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        store_fd = os.open(
+            Path(db_path).name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=dir_fd
+        )
+        try:
+            conn = sqlite3.connect(
+                f"file:/proc/self/fd/{store_fd}?mode=rw", uri=True
+            )
+            try:
+                yield dir_fd, store_fd, conn
+            finally:
+                conn.close()
+        finally:
+            os.close(store_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _verify_held_store_activation(
+    dir_fd: int, store_fd: int, conn: sqlite3.Connection
+) -> bool:
+    """HELD-STORE ACTIVATION VERIFICATION -- distinct from canonical
+    activation DISCOVERY.
+
+    Canon conflated two questions. `read_migration_receipt()` answers
+    "which store is live?" and rightly takes no arguments. This answers
+    "does the store I am ALREADY HOLDING carry a valid activation
+    receipt?", which private copies and configured roots also need.
+
+    It accepts no pathname and no independently supplied root: the
+    directory fd and the database fd are both already held, the sibling
+    receipt is read through that same directory fd, identity is checked
+    against the held database fd, and the schema is checked on the very
+    transaction that will do the writing.
+    """
+    from core.governance import s7_v2_migration as _migration
+
+    receipt = _migration._read_receipt(dir_fd)
+    if receipt is None:
+        raise ValueError(
+            "S7 v2 table exists but no migration receipt activates it; "
+            "creating the table is not permission to write to it"
+        )
+    stat = os.fstat(store_fd)
+    if (
+        receipt.get("store_dev") != stat.st_dev
+        or receipt.get("store_ino") != stat.st_ino
+    ):
+        raise ValueError(
+            "the migration receipt does not describe the database this "
+            "connection holds"
+        )
+    _migration._validate_receipt(receipt, conn)
+    return True
 
 
 @contextmanager
@@ -2496,39 +2560,6 @@ def _anchored_v2_connection(db_path):
             conn.close()
     finally:
         os.close(fd)
-
-
-def _v2_is_activated_for_fd(fd: int, conn: sqlite3.Connection) -> bool:
-    """Validate the receipt against the HELD descriptor's own identity.
-
-    The receipt's store_dev/store_ino must match this fd's fstat, not a
-    stat of some path resolved again afterwards.
-    """
-    from core.governance import s7_v2_migration as _migration
-
-    stat = os.fstat(fd)
-    directory = Path(os.readlink(f"/proc/self/fd/{fd}")).parent
-    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        receipt = _migration._read_receipt(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-    if receipt is None:
-        raise ValueError(
-            "S7 v2 table exists but no migration receipt activates it; "
-            "creating the table is not permission to write to it"
-        )
-    if (
-        receipt.get("store_dev") != stat.st_dev
-        or receipt.get("store_ino") != stat.st_ino
-    ):
-        raise ValueError(
-            "the migration receipt does not describe the database this "
-            "connection holds"
-        )
-    _migration._validate_receipt(receipt, conn)
-    return True
 
 
 def _table_present(conn: sqlite3.Connection, name: str) -> bool:
@@ -2659,6 +2690,9 @@ class S7AuthorizationStore:
         bootstrap/setup.
         """
         self.db_path = Path(db_path)
+        # Connections THIS store vended. Per-instance on purpose: a
+        # process-global set proves only that some store vended it.
+        self._vended: set[int] = set()
         # mode=rw NEVER creates. A plain sqlite3.connect() after an
         # is_file() check is a TOCTOU: if the file disappears in the window
         # between them, connect() silently recreates an EMPTY database and
@@ -2690,10 +2724,13 @@ class S7AuthorizationStore:
         Commits on clean exit, rolls back on any exception -- a reservation
         must not survive an artifact insert that failed.
         """
-        with _anchored_v2_connection(self.db_path) as (fd, conn):
+        with _held_store(self.db_path) as (dir_fd, store_fd, conn):
             conn.execute("BEGIN IMMEDIATE")
-            _v2_is_activated_for_fd(fd, conn)
-            _VENDED_CONNECTIONS.add(id(conn))
+            _verify_held_store_activation(dir_fd, store_fd, conn)
+            # PER-STORE, not process-global: a global set proves only that
+            # SOME store vended this connection. Reproduced -- A vended one
+            # and B.put(connection=connA) succeeded, writing A.
+            self._vended.add(id(conn))
             try:
                 yield conn
             except BaseException:
@@ -2702,7 +2739,7 @@ class S7AuthorizationStore:
             else:
                 conn.commit()
             finally:
-                _VENDED_CONNECTIONS.discard(id(conn))
+                self._vended.discard(id(conn))
 
     def _insert_v2(self, conn, artifact, created_at, expires_at, consumed_at):
         """The v2 row. The action and the schema label both come from the
@@ -2773,7 +2810,7 @@ class S7AuthorizationStore:
             if connection is not None:
                 # Only a connection THIS store vended is identity-bound. A
                 # foreign one reports a pathname and nothing more.
-                if id(connection) not in _VENDED_CONNECTIONS:
+                if id(connection) not in self._vended:
                     raise ValueError(
                         "v2 authorization writes may not use a "
                         "caller-supplied connection; the database it holds "
@@ -2958,13 +2995,13 @@ class S7AuthorizationStore:
                 )
 
         try:
-            with _anchored_v2_connection(self.db_path) as (_store_fd, conn):
+            with _held_store(self.db_path) as (_dir_fd, _store_fd, conn):
                 # Validation and mutation share ONE held descriptor and ONE
                 # transaction. Validating a disposable probe and then
                 # opening a second connection let a swap between the two
                 # steps consume a receipt-less store.
                 conn.execute("BEGIN IMMEDIATE")
-                _v2_is_activated_for_fd(_store_fd, conn)
+                _verify_held_store_activation(_dir_fd, _store_fd, conn)
                 table = _V2_AUTH_TABLE
                 cur = conn.execute(
                     f"""

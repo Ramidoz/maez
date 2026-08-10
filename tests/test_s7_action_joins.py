@@ -1186,3 +1186,59 @@ class TestTheGuardedWriterStaysAtomicAfterMigration:
             assert check.execute(
                 f"SELECT count(*) FROM {V2_TABLE}"
             ).fetchone()[0] == 0
+
+
+class TestVendingIsPerStore:
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def test_one_stores_vended_connection_cannot_write_another(
+        self, tmp_path: Path
+    ) -> None:
+        """A process-global set proves only that SOME store vended this
+        connection. Reproduced: A vended one and B.put(connection=connA)
+        succeeded, writing A."""
+        a_dir = tmp_path / "A"
+        b_dir = tmp_path / "B"
+        a_dir.mkdir()
+        b_dir.mkdir()
+        store_a = self._migrated(a_dir)
+        store_b = self._migrated(b_dir)
+        env, authority, params_hash, rendered = _chain()
+
+        with store_a.anchored_transaction() as conn_a:
+            with pytest.raises(ValueError, match="caller-supplied"):
+                store_b.put(
+                    _artifact(env, authority, params_hash, rendered),
+                    connection=conn_a,
+                )
+
+        for store in (store_a, store_b):
+            with closing(sqlite3.connect(store.db_path)) as check:
+                assert check.execute(
+                    f"SELECT count(*) FROM {V2_TABLE}"
+                ).fetchone()[0] == 0
+
+
+# OWED, and named rather than faked: migrated-store tests through the REAL
+# `put_artifact_with_bundle_reservation` route, for BOTH success and
+# insert-failure rollback.
+#
+# My attempt stopped at fixture setup, not at the property: the route
+# requires a validated S7VoiceSourceBundleValidationResult, which needs
+# the validator token and a real bundle. TestTheGuardedWriterStaysAtomic
+# above exercises the vended transaction directly, which is NOT the same
+# thing -- it never creates a voice reservation, so it does not witness
+# the two staying atomic. That gap is real and is recorded here rather
+# than papered over with a hand-rolled transaction that resembles the
+# route without being it.
