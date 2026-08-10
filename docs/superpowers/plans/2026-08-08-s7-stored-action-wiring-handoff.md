@@ -1,16 +1,15 @@
 # S7 stored-action wiring — resumption note
 
-**Released at:** `788f731` (reviewer PASS on migration).
-**Status:** stored-action wiring NOT STARTED. Focused baseline
-**28 failed / 91 passed**, across **14 failing classes**.
+**Current head:** `57d2efe`.
+**Resume with: the V2 VOICE PLANE.** Not v2 storage — that shipped.
 
-**Scope of "nothing changed" — narrowed.** Production code from the
-earlier slices ALREADY EXISTS and is live in the tree: the initializer and
-verification-only opening, `anchored_io`, the v2 migration module, and the
-daemon's 503 refusal. What has not started is the stored-action wiring.
-Migration has never been RUN against the live store, which remains
-byte-identical at `5384bce8…`, mode `0600`, with no WAL/SHM/journal or
-receipt.
+Focused baseline **29 failed / 135 passed**; collateral **87 failed / 427
+passed**; guarded **3 failed / 25 passed**, all three stopping at the
+missing v2 voice evidence route.
+
+**Live migration has never been run against the live store**, which
+remains byte-identical at `5384bce8…`, mode `0600`, with no receipt or
+SQLite sidecars. Production code from the shipped slices is in the tree.
 
 ## What is already done and green
 
@@ -20,6 +19,9 @@ receipt.
 | `anchored_io` (escape, zero-progress, binding, durability) | 59 passed |
 | v2 migration (16 steps, 5-row classification) | 105 passed |
 | daemon route refuses missing setup with 503 | witnessed end-to-end |
+| **v2 storage — write AND read, receipt-gated** | **SHIPPED** |
+| **held-store activation + its callsite allowlist** | **SHIPPED** |
+| **store-vended anchored transaction, per-store** | **SHIPPED** |
 
 Collateral is **87 failed / 427 passed** on the six-file ignore set. It sat
 at 90/424 for most of this arc; the two guarded-suite `_artifact()`
@@ -30,11 +32,17 @@ repairs moved it, fixing three pre-existing failures and breaking none.
 The 28 reds are NOT independent; this order avoids each piece being red
 for another's reason.
 
-1. **v2 storage.** `S7AuthorizationStore.put` writes to
-   `s7_authorization_artifacts_v2` including `action`; reads come from v2
-   when the migration receipt validates, and refuse when the v2 table is
-   absent — absent is not permission, and there is no fallback to v1.
-   Clears `TestLinkArtifactToRow` and unblocks everything below.
+1. ~~**v2 storage.**~~ **SHIPPED.** Writes and reads both follow the
+   migrated plane, gated on a receipt validated against the HELD
+   descriptor, with no v1 fallback — absent is not permission. The store
+   vends its own anchored transaction; caller-supplied connections are
+   refused because their held database cannot be identified.
+
+   **1a. NEXT: the v2 VOICE PLANE.** `put_voice_source_bundle_v2` and
+   `read_voice_source_bundle` are frozen in canon but ABSENT from
+   `core/`. Everything below is blocked on them, because canon v18
+   requires evidence to be persisted and validated in the v2 plane of the
+   already-migrated store.
 
 2. **Stored-action mint.** `_mint_s7_execution_grant` takes the action
    from the COMMITTED ROW, never from `rendered`. This is the defect the
@@ -81,11 +89,11 @@ for another's reason.
 
 9. **Regenerate the allowlist line numbers** — dead last, after production
    files stop moving. That is the single red in
-   `test_s7_action_route_allowlist.py`: **29 of 69 rows stale, across TWO
-   files** — `core/governance/operator_user_boundary.py` AND
-   `daemon/maez_daemon.py`. The daemon drifted when its 503 refusal
-   landed, so a note claiming one file would send the next session looking
-   in the wrong place. Roads unchanged; a control proves identity ignoring
+   `test_s7_action_route_allowlist.py`: **33 of 69 rows stale, across THREE
+   files** — `core/governance/operator_user_boundary.py`,
+   `daemon/maez_daemon.py` AND `core/governance/s7_guarded_execution.py`.
+   Each drifted as its slice landed; the figure grows with every
+   production edit, which is exactly why it is regenerated LAST. Roads unchanged; a control proves identity ignoring
    lines is exact.
 
 ## OWED BEFORE THE MINT — with the real blocker now identified
@@ -146,9 +154,12 @@ RULED: canon conflated two authorities, and they are now separate.
 The `readlink → reopen directory` shape is GONE: canon already named
 pathname re-resolution as the race to avoid.
 
-STILL OWED: an exact repo-wide qualified-callsite allowlist for
-`_verify_held_store_activation`, matching the one that guards the
-initializer.
+DONE: `_verify_held_store_activation` carries an exact repo-wide
+qualified-callsite allowlist, built from the SHARED hardened scanner
+(`tests/s7_callsite_scanner.py`) that both guards now import — plus
+runtime witnesses that both allowed methods actually execute it exactly
+once, because a structural allowlist proves a call APPEARS, never that it
+RUNS.
 
 ## Standing constraints
 
@@ -167,8 +178,13 @@ initializer.
 
 ## Resume with
 
-**v2 storage ONLY.** RED baseline first, then storage, then review before
-touching the mint.
+**THE V2 VOICE PLANE ONLY** — `put_voice_source_bundle_v2` and
+`read_voice_source_bundle`, which canon freezes and `core/` lacks.
+
+Then, in order: REDs for v2 voice write → read → validation in the
+migrated store; the real-route success and rollback witnesses through
+`put_artifact_with_bundle_reservation`; review; and only then the
+stored-action mint.
 
 ## Method notes that earned their keep
 
