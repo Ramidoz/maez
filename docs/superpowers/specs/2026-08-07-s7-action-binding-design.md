@@ -1,4 +1,7 @@
-# S7 action binding — design v16 (R7 RULED — implementing)
+# S7 action binding — design v18 (R7 RULED — implementing)
+
+*v16 ratified; v17 split the two activation authorities; v18 froze the
+evidence ordering. Both amendments are in the body below.*
 
 Status: **RATIFIED 2026-08-07. R7 and scope both RULED by the owner.
 REDs written; implementation cleared.**

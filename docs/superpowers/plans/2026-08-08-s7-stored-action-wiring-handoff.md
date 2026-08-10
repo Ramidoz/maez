@@ -21,8 +21,9 @@ receipt.
 | v2 migration (16 steps, 5-row classification) | 105 passed |
 | daemon route refuses missing setup with 503 | witnessed end-to-end |
 
-Collateral is 90 failed / 424 passed on the six-file ignore set, and has
-been unchanged across every commit in this arc.
+Collateral is **87 failed / 427 passed** on the six-file ignore set. It sat
+at 90/424 for most of this arc; the two guarded-suite `_artifact()`
+repairs moved it, fixing three pre-existing failures and breaking none.
 
 ## What remains — ordered
 
@@ -117,28 +118,17 @@ Ordered:
 5. the real-route success and rollback witnesses;
 6. stop for review before stored-action minting.
 
-**Three obstacles found, in order. The third is the real one.**
+### Why the obvious routes are closed (historical, kept only as reasons)
 
-1. `_artifact()` in `test_s7_3_guarded_execution.py` predates the required
-   `action`. Adding `action=env.action` fixes construction — but it moved
-   that file from 6 failed to 9, so at least one existing test depends on
-   the old shape. Investigate before adopting.
-2. The migration is anchored to the frozen store NAME. That suite names
-   its store `s7_3_guarded.db`, so a subclass must override `_db_path()`
-   to `ceremony.sqlite3`.
-3. **THE BLOCKER.** `_valid_source_bundle_validation` CREATES the legacy
-   voice table. The migration's source identity requires the voice plane
-   to be ABSENT — that is the whole point of the
-   `4f53cda1…` empty-preimage literal. So validating first makes the store
-   match neither source nor target, and the migration refuses it as
-   indeterminate. Validating after migration is also impossible: the voice
-   table is frozen by then.
+`_valid_source_bundle_validation` CREATES the legacy voice table, and the
+migration's source identity requires that plane to be ABSENT — that is
+what the `4f53cda1…` empty-preimage literal encodes. So validating before
+migrating makes the store match neither source nor target, and validating
+after is impossible because the table is frozen by then.
 
-   So the witness needs the validation result produced against one store
-   and the route driven against a migrated one, OR a validator path that
-   does not touch the legacy voice table. That is a real design question,
-   not a fixture detail, and it should be answered before the witness is
-   written.
+That is WHY v18 rules as it does. It is **not** an invitation to reach for
+a cross-store result or a non-persisting validator; both are rejected
+above. The answer is to put the evidence in the new room.
 
 ## CANON AMENDED (ruled) — held-store verification
 

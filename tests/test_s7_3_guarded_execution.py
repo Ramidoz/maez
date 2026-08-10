@@ -1310,6 +1310,8 @@ class S73MintRouteStoreHygieneTests(unittest.TestCase):
             created_at=NOW,
             expires_at=FUTURE,
             consumed_at=None,
+            # The v2 row carries the action; this fixture predates it.
+            action=env.action,
         )
 
     def test_guarded_work_class_artifact_cannot_be_minted_with_only_raw_store(self):
