@@ -4691,7 +4691,6 @@ def authorizes_work(
 from core.governance.s7_v2_migration import (  # noqa: E402,F401
     S7MigrationRefused,
     _utc_now,
-    _migrate_authorization_store_to_v2_at,
     migrate_authorization_store_to_v2,
 )
 

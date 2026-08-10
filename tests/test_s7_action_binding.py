@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_v2_migration as mig
 from tests.s7_store_fixture import fresh_store
 from core.governance import s7_guarded_execution as guarded
 
@@ -265,7 +266,7 @@ def _migrated_store(tmp: Path) -> "s7.S7AuthorizationStore":
     # Production exposes migrate_authorization_store_to_v2() with NO
     # arguments; only this private-copy helper accepts a directory.
     with _dir_fd(tmp) as fd:
-        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
     return store
 
 
@@ -647,7 +648,7 @@ class TestHistoricalV1CannotAuthorize:
 
         # 2. migrate that PRIVATE store through the real seam.
         with _dir_fd(tmp_path) as fd:
-            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
 
         # 3. the v1 row must not authorize anything.
         grant, _ = store.consume_for_execution(

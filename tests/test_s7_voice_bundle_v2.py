@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_v2_migration as mig
 from core.governance import s7_guarded_execution as guarded
 from tests.s7_store_fixture import STORE_NAME, fresh_store
 
@@ -109,7 +110,7 @@ def _migrated_store(tmp_path: Path):
     assert V2_VOICE not in _tables(store.db_path)
 
     with _dir_fd(tmp_path) as fd:
-        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
 
     assert {V1_VOICE, V2_VOICE} <= _tables(store.db_path)
     assert _count(store.db_path, V1_VOICE) == 0

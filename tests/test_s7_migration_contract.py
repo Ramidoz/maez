@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_v2_migration as mig
 from tests.s7_store_fixture import fresh_store, open_only
 
 
@@ -125,7 +126,7 @@ def _refuses():
     implementation crash as a refusal. Both are closed: the entrypoint must
     exist, and the raised error must be a refusal type rather than a bug.
     """
-    assert hasattr(s7, "_migrate_authorization_store_to_v2_at"), (
+    assert hasattr(mig, "_migrate_authorization_store_to_v2_at"), (
         "migration entrypoint absent: a refusal cannot be distinguished "
         "from a missing seam until it exists"
     )
@@ -181,7 +182,7 @@ def _dir_fd(tmp: Path):
 
 def _migrate(tmp: Path) -> None:
     with _dir_fd(tmp) as fd:
-        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
 
 
 def _receipt(tmp: Path) -> dict:
@@ -463,7 +464,7 @@ class TestTheEntrypointShape:
         import inspect
 
         assert set(
-            inspect.signature(s7._migrate_authorization_store_to_v2_at).parameters
+            inspect.signature(mig._migrate_authorization_store_to_v2_at).parameters
         ) == {"store_dir_fd"}
 
     def test_the_private_reader_has_one_production_callsite(self) -> None:
@@ -1292,7 +1293,7 @@ class TestFingerprintsAreVerifiedNotEmitted:
 
         tree = ast.parse(
             textwrap.dedent(
-                inspect.getsource(s7._migrate_authorization_store_to_v2_at)
+                inspect.getsource(mig._migrate_authorization_store_to_v2_at)
             )
         )
         names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}

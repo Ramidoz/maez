@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_v2_migration as mig
 from tests.s7_callsite_scanner import find_callsites
 from tests.s7_store_fixture import fresh_store
 
@@ -183,7 +184,7 @@ def _migrated_store(tmp: Path):
     store = fresh_store(tmp)
     fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
     finally:
         os.close(fd)
     return store
@@ -308,7 +309,7 @@ class TestLinkArtifactToRow:
 
         fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
         finally:
             os.close(fd)
 
@@ -329,7 +330,7 @@ class TestLinkArtifactToRow:
 
         fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            s7._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
         finally:
             os.close(fd)
 
