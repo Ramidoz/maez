@@ -108,6 +108,11 @@ _assert_s7_reviewed_prompt_files_unchanged()
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
 _VALIDATOR_TOKEN = object()
 
+S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA = "s7.voice_source_bundle.v1"
+S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA = "s7.voice_source_bundle.v2"
+_V1_VOICE_BUNDLE_TABLE = "s7_voice_consultation_bundles"
+_V2_VOICE_BUNDLE_TABLE = "s7_voice_source_bundles_v2"
+
 
 def _validate_hash64(value: str, *, field: str) -> None:
     if not isinstance(value, str) or _HASH64_RE.fullmatch(value) is None:
@@ -456,6 +461,110 @@ class S7VoiceSourceBundleValidationResult:
             raise ValueError("failed source-bundle validation must carry a failure reason")
 
 
+@dataclass(frozen=True, init=False)
+class S7VoiceSourceBundleValidationResultV2:
+    """Validator-produced result bound to durable versioned voice evidence."""
+
+    status: str
+    source_bundle_valid: bool
+    mint_eligible: bool
+    authority_projection: str
+    failure_reason_code: str | None
+    action: str | None
+    schema_version: str
+    source_bundle_hash: str
+    binding_hash: str
+
+    def __init__(
+        self,
+        *,
+        status: str,
+        source_bundle_valid: bool,
+        mint_eligible: bool,
+        authority_projection: str,
+        failure_reason_code: str | None,
+        action: str | None,
+        schema_version: str,
+        source_bundle_hash: str,
+        binding_hash: str,
+        _validator_token: object | None = None,
+    ) -> None:
+        if _validator_token is not _VALIDATOR_TOKEN:
+            raise ValueError("s7_validation_result_forged")
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "source_bundle_valid", source_bundle_valid)
+        object.__setattr__(self, "mint_eligible", mint_eligible)
+        object.__setattr__(self, "authority_projection", authority_projection)
+        object.__setattr__(self, "failure_reason_code", failure_reason_code)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "source_bundle_hash", source_bundle_hash)
+        object.__setattr__(self, "binding_hash", binding_hash)
+        object.__setattr__(self, "_token_verified", True)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        s7._validate_closed_value(
+            self.status,
+            VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES,
+            "voice source bundle validation status",
+        )
+        s7._validate_closed_value(
+            self.authority_projection,
+            VOICE_SOURCE_BUNDLE_AUTHORITY_PROJECTIONS,
+            "voice source bundle authority projection",
+        )
+        if type(self.source_bundle_valid) is not bool:
+            raise ValueError("source_bundle_valid must be bool")
+        if type(self.mint_eligible) is not bool:
+            raise ValueError("mint_eligible must be bool")
+        if self.failure_reason_code is not None and (
+            type(self.failure_reason_code) is not str
+            or not self.failure_reason_code
+        ):
+            raise ValueError("failure_reason_code must be a non-empty str when present")
+        if self.schema_version not in {
+            S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+            S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+        }:
+            raise ValueError("unknown S7 voice source bundle schema_version")
+        if self.schema_version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+            if self.action is not None or self.mint_eligible is True:
+                raise ValueError("v1 voice source bundles are audit-only")
+        else:
+            s7.validate_action_literal(self.action)
+        _validate_hash64(self.source_bundle_hash, field="source_bundle_hash")
+        _validate_hash64(self.binding_hash, field="binding_hash")
+        if self.mint_eligible is True and (
+            self.status != "valid_absent"
+            or self.source_bundle_valid is not True
+            or self.authority_projection != "valid_absent"
+            or self.failure_reason_code is not None
+            or self.schema_version != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+        ):
+            raise ValueError("mint-eligible voice validation is not a complete success")
+        if self.source_bundle_valid is False and self.mint_eligible is True:
+            raise ValueError("an invalid voice source bundle cannot be mint-eligible")
+        if self.status == "valid_absent" and (
+            self.source_bundle_valid is not True
+            or self.mint_eligible is not True
+            or self.authority_projection != "valid_absent"
+            or self.failure_reason_code is not None
+        ):
+            raise ValueError("valid_absent requires the complete successful tuple")
+        if self.status == "blocking_present" and (
+            self.source_bundle_valid is not True
+            or self.mint_eligible is not False
+            or self.authority_projection != "grounded_refusal"
+            or self.failure_reason_code is not None
+        ):
+            raise ValueError("blocking_present requires the grounded-refusal tuple")
+        if self.status not in {"valid_absent", "blocking_present"} and (
+            self.mint_eligible is True or self.failure_reason_code is None
+        ):
+            raise ValueError("failed voice validation must be unmintable with a reason")
+
+
 @dataclass(frozen=True)
 class S7VoiceSourceBundleHashBinding:
     """Expected exact-change hashes the private voice bundle must be bound to."""
@@ -767,6 +876,8 @@ class S7VoiceConsultationBundle:
     has_grounded_semantic_blocking_signal: bool = False
     context_manifest_ref: str | None = None
     source_bundle_hash: str | None = None
+    action: str | None = None
+    schema_version: str | None = None
 
     def __post_init__(self) -> None:
         _validate_hash64(self.source_ref_hash, field="source_ref_hash")
@@ -816,6 +927,24 @@ class S7VoiceConsultationBundle:
             raise ValueError("context_manifest_ref must be non-empty when present")
         if self.source_bundle_hash is not None:
             _validate_hash64(self.source_bundle_hash, field="source_bundle_hash")
+        if self.schema_version is None:
+            object.__setattr__(
+                self,
+                "schema_version",
+                S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA
+                if self.action is None
+                else S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+            )
+        if type(self.schema_version) is not str or self.schema_version not in {
+            S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+            S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+        }:
+            raise ValueError("unknown S7 voice source bundle schema_version")
+        if self.schema_version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+            if self.action is not None:
+                raise ValueError("v1 voice source bundles cannot carry action")
+        else:
+            s7.validate_action_literal(self.action)
 
 
 def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
@@ -848,6 +977,292 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
         "semantic_reader_attempt_hash": bundle.semantic_reader_attempt_hash,
         "authority_class": bundle.authority_class,
     })
+
+
+_VOICE_BUNDLE_V1_COLUMNS = (
+    "source_ref_hash",
+    "request_id",
+    "consultation_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "maez_voice_consultation_hash",
+    "rendered_prompt_ref",
+    "rendered_prompt_hash",
+    "mutation_preview_hash",
+    "rollback_plan_ref",
+    "context_manifest_ref",
+    "context_manifest_hash",
+    "runtime_identity_hash",
+    "model_routing_identity_hash",
+    "model_config_hash",
+    "raw_response_ref",
+    "raw_response_hash",
+    "semantic_reader_attempt_hash",
+    "expires_at",
+    "authority_class",
+    "has_grounded_semantic_blocking_signal",
+    "source_bundle_hash",
+)
+
+
+def _voice_bundle_values(bundle: S7VoiceConsultationBundle) -> tuple[object, ...]:
+    values = []
+    for name in _VOICE_BUNDLE_V1_COLUMNS:
+        value = getattr(bundle, name)
+        if name == "has_grounded_semantic_blocking_signal":
+            value = 1 if value else 0
+        values.append(value)
+    return tuple(values)
+
+
+def _voice_bundle_from_row(
+    row: sqlite3.Row | tuple[object, ...],
+    *,
+    version: str,
+) -> S7VoiceConsultationBundle:
+    values: dict[str, object] = {}
+    for index, name in enumerate(_VOICE_BUNDLE_V1_COLUMNS):
+        value = row[index]
+        if name == "has_grounded_semantic_blocking_signal":
+            if version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA and (
+                type(value) is not int or value not in {0, 1}
+            ):
+                raise ValueError("persisted v2 blocking-signal flag must be 0 or 1")
+            values[name] = bool(value)
+        elif name == "expires_at":
+            if value is None and version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+                raise ValueError("persisted v2 expires_at must be present")
+            values[name] = (
+                str(value)
+                if value is not None
+                else "1970-01-01T00:00:00+00:00"
+            )
+        elif name == "authority_class":
+            if value is None and version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+                raise ValueError("persisted v2 authority_class must be present")
+            values[name] = "none" if value is None else str(value)
+        elif name in {"source_ref_hash", "request_id", "consultation_id"}:
+            values[name] = str(value)
+        else:
+            values[name] = None if value is None else str(value)
+    if version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        values["action"] = str(row[len(_VOICE_BUNDLE_V1_COLUMNS)])
+        values["schema_version"] = str(row[len(_VOICE_BUNDLE_V1_COLUMNS) + 1])
+    else:
+        values["action"] = None
+        values["schema_version"] = S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA
+    return S7VoiceConsultationBundle(**values)
+
+
+def _voice_source_bundle_binding_hash(bundle: S7VoiceConsultationBundle) -> str:
+    fields = {name: getattr(bundle, name) for name in _VOICE_BUNDLE_V1_COLUMNS}
+    if bundle.schema_version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        fields["action"] = bundle.action
+    return s7.canonical_hash({
+        "schema": bundle.schema_version,
+        "fields": fields,
+    })
+
+
+def _voice_table_present(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def put_voice_source_bundle_v2(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    conn: sqlite3.Connection,
+) -> None:
+    """Persist one complete v2 bundle through an activated held transaction."""
+
+    if type(bundle) is not S7VoiceConsultationBundle:
+        raise ValueError("put_voice_source_bundle_v2 requires S7VoiceConsultationBundle")
+    if not _voice_table_present(conn, _V2_VOICE_BUNDLE_TABLE):
+        raise s7.S7GuardedExecutionUnavailable(
+            "S7 v2 voice plane is absent; absent is not permission"
+        )
+    s7._require_vended_anchored_connection(conn)
+    if bundle.schema_version != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        raise ValueError("put_voice_source_bundle_v2 requires a v2 bundle")
+    s7.validate_action_literal(bundle.action)
+    if (
+        bundle.source_bundle_hash is None
+        or bundle.source_bundle_hash != s7_voice_consultation_bundle_hash(bundle)
+    ):
+        raise ValueError("invalid voice source bundle content hash")
+    columns = (*_VOICE_BUNDLE_V1_COLUMNS, "action", "schema_version")
+    conn.execute(
+        f"INSERT INTO {_V2_VOICE_BUNDLE_TABLE} ({', '.join(columns)}) "
+        f"VALUES ({', '.join('?' for _ in columns)})",
+        (*_voice_bundle_values(bundle), bundle.action, bundle.schema_version),
+    )
+
+
+def read_voice_source_bundle(
+    *,
+    source_ref_hash: str,
+    conn: sqlite3.Connection,
+) -> tuple[S7VoiceConsultationBundle, str]:
+    """Read v2 authority evidence, or v1 evidence only when the v2 plane is absent."""
+
+    _validate_hash64(source_ref_hash, field="source_ref_hash")
+    if _voice_table_present(conn, _V2_VOICE_BUNDLE_TABLE):
+        vended_token = s7._require_vended_anchored_connection(conn)
+        columns = (*_VOICE_BUNDLE_V1_COLUMNS, "action", "schema_version")
+        row = conn.execute(
+            f"SELECT {', '.join(columns)} FROM {_V2_VOICE_BUNDLE_TABLE} "
+            "WHERE source_ref_hash = ?",
+            (source_ref_hash,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("v2 voice source bundle is unavailable")
+        bundle = _voice_bundle_from_row(
+            row,
+            version=S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+        )
+        object.__setattr__(bundle, "_v2_read_token", vended_token)
+        return bundle, str(bundle.schema_version)
+    if not _voice_table_present(conn, _V1_VOICE_BUNDLE_TABLE):
+        raise s7.S7GuardedExecutionUnavailable(
+            "S7 voice plane is absent; absent is not permission"
+        )
+    row = conn.execute(
+        f"SELECT {', '.join(_VOICE_BUNDLE_V1_COLUMNS)} "
+        f"FROM {_V1_VOICE_BUNDLE_TABLE} WHERE source_ref_hash = ?",
+        (source_ref_hash,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("v1 voice source bundle is unavailable")
+    return (
+        _voice_bundle_from_row(
+            row,
+            version=S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+        ),
+        S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+    )
+
+
+def _voice_validation_result_v2(
+    *,
+    status: str,
+    source_bundle_valid: bool,
+    mint_eligible: bool,
+    authority_projection: str,
+    failure_reason_code: str | None,
+    bundle: S7VoiceConsultationBundle,
+    binding_hash: str,
+) -> S7VoiceSourceBundleValidationResultV2:
+    source_bundle_hash = (
+        bundle.source_bundle_hash or s7_voice_consultation_bundle_hash(bundle)
+    )
+    return S7VoiceSourceBundleValidationResultV2(
+        status=status,
+        source_bundle_valid=source_bundle_valid,
+        mint_eligible=mint_eligible,
+        authority_projection=authority_projection,
+        failure_reason_code=failure_reason_code,
+        action=bundle.action,
+        schema_version=str(bundle.schema_version),
+        source_bundle_hash=source_bundle_hash,
+        binding_hash=binding_hash,
+        _validator_token=_VALIDATOR_TOKEN,
+    )
+
+
+def validate_voice_source_bundle(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    version: str,
+    purpose: str,
+) -> S7VoiceSourceBundleValidationResultV2:
+    """Validate durable voice evidence for audit or v2 execution."""
+
+    if type(bundle) is not S7VoiceConsultationBundle:
+        raise ValueError("validate_voice_source_bundle requires S7VoiceConsultationBundle")
+    if purpose not in {"audit", "execution"}:
+        raise ValueError("unknown voice source bundle validation purpose")
+    if version not in {
+        S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+        S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+    } or version != bundle.schema_version:
+        raise ValueError("voice source bundle version mismatch")
+    binding_hash = _voice_source_bundle_binding_hash(bundle)
+    source_bundle_valid = (
+        bundle.source_bundle_hash is not None
+        and bundle.source_bundle_hash == s7_voice_consultation_bundle_hash(bundle)
+    )
+    if not source_bundle_valid:
+        return _voice_validation_result_v2(
+            status="invalid_hash_binding",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="operational_block",
+            failure_reason_code="invalid_hash_binding",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+        return _voice_validation_result_v2(
+            status="not_mint_eligible",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="marker_only" if purpose == "audit" else "operational_block",
+            failure_reason_code=(
+                "v1_audit_only" if purpose == "audit" else "v1_execution_refused"
+            ),
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if not s7._vended_anchored_connection_token_is_active(
+        getattr(bundle, "_v2_read_token", None)
+    ):
+        return _voice_validation_result_v2(
+            status="source_bundle_unavailable",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="unavailable",
+            failure_reason_code="source_bundle_not_read_from_v2_store",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if purpose == "audit":
+        return _voice_validation_result_v2(
+            status="not_mint_eligible",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="marker_only",
+            failure_reason_code="audit_only",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if bundle.has_grounded_semantic_blocking_signal:
+        return _voice_validation_result_v2(
+            status="blocking_present",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="grounded_refusal",
+            failure_reason_code=None,
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    return _voice_validation_result_v2(
+        status="valid_absent",
+        source_bundle_valid=True,
+        mint_eligible=True,
+        authority_projection="valid_absent",
+        failure_reason_code=None,
+        bundle=bundle,
+        binding_hash=binding_hash,
+    )
 
 
 @dataclass(frozen=True)

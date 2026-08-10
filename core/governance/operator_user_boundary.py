@@ -2490,6 +2490,41 @@ def _open_directory_by_components(directory: Path) -> int:
     return fd
 
 
+class _S7HeldConnection(sqlite3.Connection):
+    """Connection opened from the descriptor-held S7 store."""
+
+
+class _S7VendedAnchoredConnectionToken:
+    """Per-transaction capability retired when its anchored scope exits."""
+
+    __slots__ = ("active",)
+
+    def __init__(self) -> None:
+        self.active = True
+
+
+def _vended_anchored_connection_token_is_active(token: object) -> bool:
+    return (
+        isinstance(token, _S7VendedAnchoredConnectionToken)
+        and token.active is True
+    )
+
+
+def _require_vended_anchored_connection(
+    conn: sqlite3.Connection,
+) -> _S7VendedAnchoredConnectionToken:
+    """Refuse connections not yielded by an active anchored transaction."""
+    token = getattr(conn, "_s7_vended_token", None)
+    if not isinstance(conn, _S7HeldConnection) or not (
+        _vended_anchored_connection_token_is_active(token)
+    ):
+        raise ValueError(
+            "S7 v2 voice operations require a store-vended connection; "
+            "a caller-supplied connection cannot be identified"
+        )
+    return token
+
+
 @contextmanager
 def _held_store(db_path):
     """Hold the parent directory AND the database beneath it.
@@ -2512,7 +2547,9 @@ def _held_store(db_path):
         )
         try:
             conn = sqlite3.connect(
-                f"file:/proc/self/fd/{store_fd}?mode=rw", uri=True
+                f"file:/proc/self/fd/{store_fd}?mode=rw",
+                uri=True,
+                factory=_S7HeldConnection,
             )
             try:
                 yield dir_fd, store_fd, conn
@@ -2727,6 +2764,8 @@ class S7AuthorizationStore:
         with _held_store(self.db_path) as (dir_fd, store_fd, conn):
             conn.execute("BEGIN IMMEDIATE")
             _verify_held_store_activation(dir_fd, store_fd, conn)
+            vended_token = _S7VendedAnchoredConnectionToken()
+            conn._s7_vended_token = vended_token
             # PER-STORE, not process-global: a global set proves only that
             # SOME store vended this connection. Reproduced -- A vended one
             # and B.put(connection=connA) succeeded, writing A.
@@ -2740,6 +2779,8 @@ class S7AuthorizationStore:
                 conn.commit()
             finally:
                 self._vended.discard(id(conn))
+                vended_token.active = False
+                conn._s7_vended_token = None
 
     def _insert_v2(self, conn, artifact, created_at, expires_at, consumed_at):
         """The v2 row. The action and the schema label both come from the

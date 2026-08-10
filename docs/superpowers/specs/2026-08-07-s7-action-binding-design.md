@@ -409,6 +409,8 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 1288 |
 | `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 1866 |
 | `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 1839 |
+| `core/governance/s7_guarded_execution.py` | `_voice_bundle_from_row` | source_bundle | call:S7VoiceConsultationBundle | 1048 |
+| `core/governance/s7_guarded_execution.py` | `_voice_validation_result_v2` | hash | call:s7_voice_consultation_bundle_hash | 1156 |
 | `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 588 |
 | `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 587 |
 | `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 604 |
@@ -424,8 +426,10 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 2287 |
 | `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 2258 |
 | `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1294 |
+| `core/governance/s7_guarded_execution.py` | `put_voice_source_bundle_v2` | hash | call:s7_voice_consultation_bundle_hash | 1090 |
 | `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 821 |
 | `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2090 |
+| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1192 |
 | `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 886 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 659 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 682 |
@@ -437,7 +441,7 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 628 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 20, producer 8, renderer 3, source_bundle 6, validator 3 — **total 69**.
+**Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 23, producer 8, renderer 3, source_bundle 7, validator 3 — **total 73**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

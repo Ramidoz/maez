@@ -345,59 +345,42 @@ class TestVoicePlaneRefusals:
         assert _count(store.db_path, V2_VOICE) == 1
         assert _count(store.db_path, V1_VOICE) == 0
 
-    def test_v2_writer_reaches_the_cross_version_source_ref_trigger(
-        self, tmp_path: Path
-    ) -> None:
+    def test_v2_writer_refuses_a_plain_connection(self, tmp_path: Path) -> None:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
-        collision = _voice_bundle(seed="collision")
-        control = _voice_bundle(seed="fresh-control")
-
-        # Migration can only start from an absent v1 plane, and its freeze
-        # trigger then prevents ordinary seeding.  For this trigger-isolation
-        # witness, remove and restore that one trigger around a complete v1
-        # row in the disposable store; the v2 exclusion trigger is never
-        # removed or rewritten.
-        with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
-            exclusion_trigger = conn.execute(
-                "SELECT sql FROM sqlite_master "
-                "WHERE type = 'trigger' AND name = 's7_vb_v2_no_v1'"
-            ).fetchone()
-            assert exclusion_trigger is not None and exclusion_trigger[0]
-            trigger_row = conn.execute(
-                "SELECT sql FROM sqlite_master "
-                "WHERE type = 'trigger' AND name = 's7_vb_v1_frozen_insert'"
-            ).fetchone()
-            assert trigger_row is not None and trigger_row[0]
-            conn.execute("DROP TRIGGER s7_vb_v1_frozen_insert")
-            _insert(
-                conn,
-                V1_VOICE,
-                _legacy_row(
-                    seed="collision-legacy",
-                    source_ref_hash=collision.source_ref_hash,
-                ),
-            )
-            conn.execute(str(trigger_row[0]))
-            conn.commit()
+        bundle = _voice_bundle(seed="plain-writer-refused")
 
         with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
-            # CONTROL: a complete fresh bundle reaches the same writer and
-            # table, so the collision below cannot pass because all writes
-            # refuse or because the row shape is malformed.
-            writer(bundle=control, conn=conn)
-            with pytest.raises(
-                sqlite3.IntegrityError,
-                match="s7_cross_version_bundle",
-            ):
-                writer(bundle=collision, conn=conn)
-            conn.commit()
+            with pytest.raises(ValueError, match="store-vended"):
+                writer(bundle=bundle, conn=conn)
+        assert _count(store.db_path, V2_VOICE) == 0
 
+        # CONTROL: the same complete bundle succeeds through the activated
+        # transaction this store vends.
+        with store.anchored_transaction() as conn:
+            writer(bundle=bundle, conn=conn)
         assert _count(store.db_path, V2_VOICE) == 1
+
+    def test_v2_reader_refuses_a_plain_connection(self, tmp_path: Path) -> None:
+        store = _migrated_store(tmp_path)
+        writer = _require_voice_api("put_voice_source_bundle_v2")
+        reader = _require_voice_api("read_voice_source_bundle")
+        bundle = _voice_bundle(seed="plain-reader-refused")
+        with store.anchored_transaction() as conn:
+            writer(bundle=bundle, conn=conn)
+
         with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
-            assert conn.execute(
-                f"SELECT source_ref_hash FROM {V2_VOICE}"
-            ).fetchone() == (control.source_ref_hash,)
+            with pytest.raises(ValueError, match="store-vended"):
+                reader(source_ref_hash=bundle.source_ref_hash, conn=conn)
+
+        # CONTROL: the activated read returns the exact durable v2 bundle.
+        with store.anchored_transaction() as conn:
+            read_back, version = reader(
+                source_ref_hash=bundle.source_ref_hash,
+                conn=conn,
+            )
+        assert version == V2_SCHEMA
+        assert read_back == bundle
 
     def test_reader_keeps_v1_audit_only_when_v2_is_absent(
         self, tmp_path: Path
@@ -438,6 +421,73 @@ class TestVoicePlaneRefusals:
         assert execution.schema_version == V1_SCHEMA
         assert execution.action is None
         assert execution.mint_eligible is False
+
+
+class TestVoicePlaneDefenceInDepth:
+    def test_v2_exclusion_trigger_refuses_an_unreachable_v1_collision(
+        self, tmp_path: Path
+    ) -> None:
+        """Raw-SQL alarm for a defence-in-depth, production-unreachable state.
+
+        Migration requires the voice plane absent, creates v1 empty, and
+        freezes it in the same transaction.  Production therefore cannot
+        create this collision.  The disposable fixture must disable the v1
+        INSERT freeze solely to construct it; this is not a writer-API route.
+        """
+        store = _migrated_store(tmp_path)
+        collision_source_ref = _hex("collision:source-ref")
+        control = {
+            **_legacy_row(seed="fresh-control"),
+            "action": ACTION,
+            "schema_version": V2_SCHEMA,
+        }
+        collision = {
+            **_legacy_row(
+                seed="collision-v2",
+                source_ref_hash=collision_source_ref,
+            ),
+            "action": ACTION,
+            "schema_version": V2_SCHEMA,
+        }
+
+        with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
+            exclusion_trigger = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 's7_vb_v2_no_v1'"
+            ).fetchone()
+            assert exclusion_trigger is not None and exclusion_trigger[0]
+            freeze_trigger = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 's7_vb_v1_frozen_insert'"
+            ).fetchone()
+            assert freeze_trigger is not None and freeze_trigger[0]
+            conn.execute("DROP TRIGGER s7_vb_v1_frozen_insert")
+            _insert(
+                conn,
+                V1_VOICE,
+                _legacy_row(
+                    seed="collision-legacy",
+                    source_ref_hash=collision_source_ref,
+                ),
+            )
+            conn.execute(str(freeze_trigger[0]))
+
+            # CONTROL: the complete v2 row shape remains writable for a
+            # source_ref_hash absent from v1, so the collision cannot pass
+            # merely because every raw insert refuses.
+            _insert(conn, V2_VOICE, control)
+            with pytest.raises(
+                sqlite3.IntegrityError,
+                match="s7_cross_version_bundle",
+            ):
+                _insert(conn, V2_VOICE, collision)
+            conn.commit()
+
+        assert _count(store.db_path, V2_VOICE) == 1
+        with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
+            assert conn.execute(
+                f"SELECT source_ref_hash FROM {V2_VOICE}"
+            ).fetchone() == (control["source_ref_hash"],)
 
 
 class TestV2VoiceValidation:
