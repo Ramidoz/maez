@@ -2465,16 +2465,38 @@ _V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
 S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
 
 
-def _v2_is_activated(db_path) -> bool:
-    """Is v2 ACTIVATED -- receipt present, valid, and bound to this store?
+class S7GuardedExecutionUnavailable(RuntimeError):
+    """v2 is absent or inert. Absent is not permission."""
 
-    The table existing is not permission. Writing on table-presence alone
-    put a row into the commit-before-publication window, which then made
-    the store indeterminate and destroyed the frozen recovery path.
-    Creating the table does not activate v2; only the verified receipt
-    does.
+
+def _connection_database_path(conn: sqlite3.Connection) -> str:
+    """The file THIS connection actually writes to."""
+    for _seq, name, filename in conn.execute("PRAGMA database_list"):
+        if name == "main":
+            return filename
+    raise ValueError("connection has no main database")
+
+
+def _v2_is_activated(conn: sqlite3.Connection) -> bool:
+    """Is v2 ACTIVATED for the database THIS CONNECTION will mutate?
+
+    Two separate failures live here.
+
+    Table existence is not permission: writing on table-presence alone put
+    a row into the commit-before-publication window and made the store
+    indeterminate, destroying the frozen recovery path.
+
+    And the receipt must be joined to the database RECEIVING the write.
+    Validating `self.db_path` while the caller supplies its own connection
+    let store A's receipt authorize a write into store B -- reproduced,
+    A rows 0 and B rows 1, with B's recovery then refusing. The trust root
+    and the mutated object have to be the same object.
     """
     from core.governance import s7_v2_migration as _migration
+
+    db_path = _connection_database_path(conn)
+    if not db_path:
+        raise ValueError("cannot activate v2 on a connection with no file")
 
     directory = Path(db_path).parent
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -2487,8 +2509,7 @@ def _v2_is_activated(db_path) -> bool:
             "S7 v2 table exists but no migration receipt activates it; "
             "creating the table is not permission to write to it"
         )
-    with closing(sqlite3.connect(db_path)) as conn:
-        _migration._validate_receipt(receipt, conn)
+    _migration._validate_receipt(receipt, conn)
     return True
 
 
@@ -2686,9 +2707,7 @@ class S7AuthorizationStore:
         # Scope: this routes STORAGE only. Receipt-gated activation of
         # guarded EXECUTION -- "absent is not permission" -- belongs to the
         # mint and consume seams.
-        if _table_present(conn, _V2_AUTH_TABLE) and _v2_is_activated(
-            self.db_path
-        ):
+        if _table_present(conn, _V2_AUTH_TABLE) and _v2_is_activated(conn):
             conn.execute(
                 f"""
                 INSERT INTO {_V2_AUTH_TABLE} (
@@ -2848,17 +2867,25 @@ class S7AuthorizationStore:
         if rendered.derived_aggregation_group != derived_aggregation_group:
             return None, None
         now_text = _timestamp_text(now, field="now")
+        # ABSENT IS NOT PERMISSION -- checked OUTSIDE the try below.
+        #
+        # Falling back to v1 when v2 is missing would let guarded execution
+        # proceed on a store that was never migrated. It has to sit outside
+        # the swallow: that `except Exception: return None, None` would
+        # convert this deliberate refusal into an ordinary denial, which is
+        # exactly the "a broken seam looks like a No" defect already
+        # queued for repair.
+        with closing(sqlite3.connect(self.db_path)) as probe:
+            if not _table_present(probe, _V2_AUTH_TABLE):
+                raise S7GuardedExecutionUnavailable(
+                    "S7 v2 authorization plane is absent; guarded execution "
+                    "refuses rather than falling back to v1"
+                )
+            _v2_is_activated(probe)
+
         try:
             with closing(sqlite3.connect(self.db_path)) as conn:
-                # Consumption follows the migrated plane too. Shipping the
-                # write half alone would leave records written to v2 and
-                # consumed from a v1 row that does not exist.
-                table = (
-                    _V2_AUTH_TABLE
-                    if _table_present(conn, _V2_AUTH_TABLE)
-                    and _v2_is_activated(self.db_path)
-                    else _AUTH_TABLE
-                )
+                table = _V2_AUTH_TABLE
                 cur = conn.execute(
                     f"""
                     UPDATE {table}

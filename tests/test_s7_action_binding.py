@@ -713,24 +713,19 @@ class TestArtifactMustMatchTheRenderedAction:
             now=NOW,
         )
 
-    def test_an_arbitrary_schema_version_refuses(self, tmp_path: Path) -> None:
+    def test_an_arbitrary_schema_version_refuses(self) -> None:
+        """Now refused at CONSTRUCTION, which is stronger than refusing at
+        the match boundary: a forged identity never becomes an object at
+        all, so it cannot reach a durable row.
+
+        This test was stale -- it still built the forged artifact and then
+        asked the boundary about it, so replace() raised OUTSIDE the
+        assertion and it stayed red for structure rather than behaviour.
+        """
         env, authority, params_hash, rendered = _bundle()
         artifact = _stored_artifact(env, authority, params_hash, rendered)
-        forged = replace(artifact, schema_version="s7.something.v9")
-        assert not s7.authorization_artifact_matches(
-            forged,
-            rendered=rendered,
-            action_params_hash=params_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            precondition_hash=artifact.precondition_hash,
-            derived_work_class=artifact.derived_work_class,
-            derived_aggregation_group=artifact.derived_aggregation_group,
-            now=NOW,
-        )
-
-
-class TestFrozenV2Identities:
-    """A v2 identity, not a silently-changed v1 shape."""
+        with pytest.raises(ValueError, match="schema_version"):
+            replace(artifact, schema_version="s7.something.v9")
 
     def test_the_envelope_declares_the_v2_schema(self) -> None:
         _e, _a, _p, _r = _bundle()

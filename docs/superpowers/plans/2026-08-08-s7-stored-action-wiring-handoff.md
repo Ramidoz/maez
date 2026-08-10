@@ -59,7 +59,11 @@ for another's reason.
    `except Exception: return None, None` makes a broken seam
    indistinguishable from a denial. Clears
    `TestExceptionsAreClassifiedNotSwallowed` (2). Rebuild those REDs
-   against a MIGRATED v2 row — they currently reach the v1 path.
+   against a MIGRATED v2 row — **they now fail on the absent-v2 refusal**,
+   because removing the v1 fallback means an unmigrated store no longer
+   reaches the mint at all. Two of them moved from "red for the mint" to
+   "red for absent v2" when storage landed; the rebuild is the same work
+   either way.
 
 6. **The four caller joins, behaviourally.** Each consumer joins its
    authoritative action to `rendered.action`: decision pipeline

@@ -991,15 +991,91 @@ class TestConsumptionFollowsTheMigratedPlane:
         self._consume(store, env, authority, params_hash, rendered)
         assert self._consumed_at(store.db_path, V1_TABLE) == "NO ROW"
 
-    def test_an_unmigrated_store_still_consumes_v1(
+    def test_an_unmigrated_store_refuses_guarded_execution(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """CONTROL: pre-activation behaviour is unchanged."""
+        """ABSENT IS NOT PERMISSION.
+
+        This test previously REQUIRED the v1 fallback, which is the
+        opposite of the frozen rule: if the v2 table is absent, every
+        guarded execution path refuses rather than silently proceeding on
+        a store that was never migrated. A test can enshrine a defect as
+        firmly as code can.
+        """
         store = fresh_store(tmp_path)
         env, authority, params_hash, rendered = _chain()
         store.put(_artifact(env, authority, params_hash, rendered))
         monkeypatch.setattr(
             s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
         )
-        self._consume(store, env, authority, params_hash, rendered)
-        assert self._consumed_at(store.db_path, V1_TABLE) is not None
+        with pytest.raises(Exception):
+            self._consume(store, env, authority, params_hash, rendered)
+        assert self._consumed_at(store.db_path, V1_TABLE) is None
+
+
+class TestTheReceiptBindsTheDatabaseItAuthorizes:
+    """The trust root and the mutated object must be the same object.
+
+    Reproduced: store A migrated with a valid receipt, store B migrated
+    with its receipt removed, then `storeA.put(artifact, connection=connB)`
+    -- A rows 0, B rows 1, and B's recovery then refused. A's receipt had
+    authorized a write into B.
+    """
+
+    def _migrated(self, tmp: Path, *, keep_receipt: bool):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        if not keep_receipt:
+            (tmp / "s7_migration_receipt.json").unlink()
+        return store
+
+    def test_one_stores_receipt_cannot_authorize_another(
+        self, tmp_path: Path
+    ) -> None:
+        good = tmp_path / "A"
+        bare = tmp_path / "B"
+        good.mkdir()
+        bare.mkdir()
+        store_a = self._migrated(good, keep_receipt=True)
+        store_b = self._migrated(bare, keep_receipt=False)
+
+        env, authority, params_hash, rendered = _chain()
+        with closing(sqlite3.connect(store_b.db_path)) as conn_b:
+            with pytest.raises((ValueError, OSError)):
+                store_a.put(
+                    _artifact(env, authority, params_hash, rendered),
+                    connection=conn_b,
+                )
+            conn_b.commit()
+
+        with closing(sqlite3.connect(store_b.db_path)) as conn:
+            rows = conn.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0]
+        assert rows == 0, "another store's receipt authorized this write"
+
+    def test_the_matching_connection_still_works(self, tmp_path: Path) -> None:
+        """CONTROL: refusing every supplied connection would satisfy the
+        test above while breaking the API."""
+        good = tmp_path / "A"
+        good.mkdir()
+        store = self._migrated(good, keep_receipt=True)
+        env, authority, params_hash, rendered = _chain()
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            store.put(
+                _artifact(env, authority, params_hash, rendered),
+                connection=conn,
+            )
+            conn.commit()
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            assert conn.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0] == 1
