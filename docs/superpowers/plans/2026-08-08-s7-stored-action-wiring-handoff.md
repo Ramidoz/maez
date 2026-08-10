@@ -1,9 +1,16 @@
 # S7 stored-action wiring — resumption note
 
 **Released at:** `788f731` (reviewer PASS on migration).
-**Status:** not started. 27 reds across 13 groups.
-**Nothing is live.** No production surface changed by this slice yet; the
-live store is byte-identical at `5384bce8…`, mode `0600`, no residue.
+**Status:** stored-action wiring NOT STARTED. Focused baseline
+**28 failed / 91 passed**, across **14 failing classes**.
+
+**Scope of "nothing changed" — narrowed.** Production code from the
+earlier slices ALREADY EXISTS and is live in the tree: the initializer and
+verification-only opening, `anchored_io`, the v2 migration module, and the
+daemon's 503 refusal. What has not started is the stored-action wiring.
+Migration has never been RUN against the live store, which remains
+byte-identical at `5384bce8…`, mode `0600`, with no WAL/SHM/journal or
+receipt.
 
 ## What is already done and green
 
@@ -19,7 +26,7 @@ been unchanged across every commit in this arc.
 
 ## What remains — ordered
 
-The 27 reds are NOT independent; this order avoids each piece being red
+The 28 reds are NOT independent; this order avoids each piece being red
 for another's reason.
 
 1. **v2 storage.** `S7AuthorizationStore.put` writes to
@@ -69,9 +76,12 @@ for another's reason.
 
 9. **Regenerate the allowlist line numbers** — dead last, after production
    files stop moving. That is the single red in
-   `test_s7_action_route_allowlist.py`: 27 of 69 rows stale, confined to
-   `operator_user_boundary.py`. Roads unchanged; a control proves identity
-   ignoring lines is exact.
+   `test_s7_action_route_allowlist.py`: **29 of 69 rows stale, across TWO
+   files** — `core/governance/operator_user_boundary.py` AND
+   `daemon/maez_daemon.py`. The daemon drifted when its 503 refusal
+   landed, so a note claiming one file would send the next session looking
+   in the wrong place. Roads unchanged; a control proves identity ignoring
+   lines is exact.
 
 ## Standing constraints
 
@@ -87,6 +97,11 @@ for another's reason.
   duplicate: it creates directories, enforces a byte cap, routes errors
   through `_filesystem_hazard()`, and its `on_link` takes the published
   path.
+
+## Resume with
+
+**v2 storage ONLY.** RED baseline first, then storage, then review before
+touching the mint.
 
 ## Method notes that earned their keep
 
