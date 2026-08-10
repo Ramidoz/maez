@@ -2687,7 +2687,7 @@ class S7GuardedStateStore:
         reservation_token: str | None = None,
         now: str | None = None,
     ) -> None:
-        require_source_bundle_validation_for_mint(source_bundle_validation)
+        validated = require_source_bundle_validation_for_mint(source_bundle_validation)
         if self.voice_bundle_use_store is None:
             raise ValueError("S7.3 artifact mint requires a voice bundle use store")
         if source_ref_hash is None:
@@ -2698,6 +2698,10 @@ class S7GuardedStateStore:
             raise ValueError("S7.3 artifact mint requires now")
         if self.authorization_store.db_path != self.voice_bundle_use_store.db_path:
             raise ValueError("S7.3 guarded state store requires one SQLite database")
+        if artifact.action != validated.action:
+            raise ValueError(
+                "S7.3 artifact action must match the validated source-bundle action"
+            )
         reservation_token_hash = s7.canonical_hash(reservation_token)
         # The STORE owns the transaction. It binds identity to a descriptor
         # it holds, which a connection opened here by pathname cannot do --

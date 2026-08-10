@@ -440,7 +440,7 @@ def _voice_bundle(action: str):
         rendered_prompt_ref="prompts/1",
         rendered_prompt_hash=_hex("rendered_prompt"),
         mutation_preview_hash=_hex("mutation_preview"),
-        rollback_plan_ref="rollback/1",
+        rollback_plan_ref=_hex("rollback_plan_ref"),
         context_manifest_hash=_hex("context_manifest"),
         runtime_identity_hash=_hex("runtime_identity"),
         model_routing_identity_hash=_hex("model_routing"),
@@ -464,13 +464,62 @@ def _voice_bundle(action: str):
 
 
 class TestTheProductionMintJoin:
-    """The FROZEN seam, in s7_guarded_execution -- not operator_user_boundary.
+    """The real guarded artifact mint binds validator action to artifact."""
 
-    My first version put mint_from_validated_bundle, a v2-suffixed
-    validator, and a make_test_voice_bundle helper on the wrong module.
-    Code could have added three convenience functions there and turned
-    these green while the real mint route stayed untouched.
-    """
+    @staticmethod
+    def _validated_fixture(tmp_path: Path):
+        store = _migrated_store(tmp_path)
+        bundle = _voice_bundle(ACTION)
+        with store.anchored_transaction() as conn:
+            guarded.put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+        with store.anchored_transaction() as conn:
+            read_back, version = guarded.read_voice_source_bundle(
+                source_ref_hash=bundle.source_ref_hash,
+                conn=conn,
+            )
+            validation = guarded.validate_voice_source_bundle(
+                bundle=read_back,
+                version=version,
+                purpose="execution",
+            )
+        assert read_back.action == validation.action == ACTION
+        assert validation.mint_eligible is True
+
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id="artifact-production-mint-join",
+            request_id=read_back.request_id,
+            request_envelope_hash=read_back.request_envelope_hash,
+            rendered_text_hash=read_back.rendered_text_hash,
+            action_params_hash=read_back.action_params_hash,
+            precondition_hash=read_back.precondition_hash,
+            authority_context_hash=read_back.authority_context_hash,
+            derived_work_class="self_modification",
+            derived_aggregation_group="model_routing",
+            nonce="m" * 64,
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+            action=ACTION,
+        )
+        bundle_use_store = guarded.S7VoiceBundleUseStore(store.db_path)
+        bundle_use_store.put_unreserved(
+            guarded.S7VoiceBundleUse.new_unreserved(
+                request_id=artifact.request_id,
+                source_ref_hash=read_back.source_ref_hash,
+                consultation_id=read_back.consultation_id,
+                used_at=NOW,
+            )
+        )
+        guarded_store = guarded.S7GuardedStateStore(
+            authorization_store=store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        return store, read_back, validation, artifact, guarded_store
 
     def test_the_frozen_validator_lives_on_the_voice_plane(self) -> None:
         assert hasattr(guarded, "validate_voice_source_bundle")
@@ -484,41 +533,76 @@ class TestTheProductionMintJoin:
     def test_mint_takes_no_action_argument(self) -> None:
         import inspect
 
-        params = inspect.signature(guarded.mint_from_validated_bundle).parameters
+        params = inspect.signature(guarded.mint_authorization_artifact).parameters
         assert "action" not in params, list(params)
-        assert {"bundle", "validation"} <= set(params)
+        assert {"artifact", "source_bundle_validation"} <= set(params)
 
     def test_a_real_mint_declares_the_v2_schema_and_the_validated_action(
         self, tmp_path: Path
     ) -> None:
-        """MINT, then assert the artifact -- not dataclass field presence."""
-        bundle = _voice_bundle(ACTION)
-        validation = guarded.validate_voice_source_bundle(
-            bundle=bundle, version="s7.voice_source_bundle.v2",
-            purpose="execution",
+        """Persist through the real mint and assert the durable artifact."""
+        store, bundle, validation, artifact, guarded_store = self._validated_fixture(
+            tmp_path
         )
-        with sqlite3.connect(tmp_path / "x.sqlite3") as conn:
-            artifact = guarded.mint_from_validated_bundle(
-                bundle=bundle, validation=validation, conn=conn
-            )
-        assert artifact.schema_version == "s7.authorization_artifact.v2"
-        assert artifact.action == ACTION
+        guarded.mint_authorization_artifact(
+            artifact=artifact,
+            authorization_store=store,
+            guarded_store=guarded_store,
+            source_bundle_validation=validation,
+            source_ref_hash=bundle.source_ref_hash,
+            reservation_token="reservation-control",
+            now=NOW,
+        )
+        with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
+            row = conn.execute(
+                "SELECT schema_version, action "
+                "FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
+                (artifact.artifact_id,),
+            ).fetchone()
+        assert row == ("s7.authorization_artifact.v2", ACTION)
 
     def test_a_bundle_validated_for_A_cannot_mint_for_B(
         self, tmp_path: Path
     ) -> None:
-        validated_for_a = guarded.validate_voice_source_bundle(
-            bundle=_voice_bundle(ACTION),
-            version="s7.voice_source_bundle.v2",
-            purpose="execution",
+        # POSITIVE CONTROL: the identical path succeeds when the only refused
+        # condition -- artifact action B -- is removed.
+        (
+            control_store,
+            control_bundle,
+            control_validation,
+            control_artifact,
+            control_guarded_store,
+        ) = self._validated_fixture(tmp_path / "control")
+        guarded.mint_authorization_artifact(
+            artifact=control_artifact,
+            authorization_store=control_store,
+            guarded_store=control_guarded_store,
+            source_bundle_validation=control_validation,
+            source_ref_hash=control_bundle.source_ref_hash,
+            reservation_token="reservation-positive",
+            now=NOW,
         )
-        with sqlite3.connect(tmp_path / "y.sqlite3") as conn:
-            with pytest.raises(ValueError):
-                guarded.mint_from_validated_bundle(
-                    bundle=_voice_bundle(SIBLING),
-                    validation=validated_for_a,
-                    conn=conn,
-                )
+
+        store, bundle, validation, artifact, guarded_store = self._validated_fixture(
+            tmp_path / "refusal"
+        )
+        mismatched = replace(artifact, action=SIBLING)
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^S7\.3 artifact action must match the validated "
+                r"source-bundle action$"
+            ),
+        ):
+            guarded.mint_authorization_artifact(
+                artifact=mismatched,
+                authorization_store=store,
+                guarded_store=guarded_store,
+                source_bundle_validation=validation,
+                source_ref_hash=bundle.source_ref_hash,
+                reservation_token="reservation-refusal",
+                now=NOW,
+            )
 
 
 class TestPrivateHelperHasExactlyOneProductionCallsite:
@@ -759,6 +843,7 @@ class TestARealGrantCanBeMinted:
         grant = s7._mint_s7_execution_grant(
             artifact_id="artifact-action-binding-1",
             rendered=rendered,
+            stored_action=SIBLING,
             action_params_hash=params_hash,
             precondition_hash="a" * 64,
             authority_context_hash=s7.authority_context_hash(authority),
@@ -770,7 +855,8 @@ class TestARealGrantCanBeMinted:
             ceremony_kind="founder_local_webauthn",
             consumed_at=NOW,
         )
-        assert grant.action == ACTION
+        assert rendered.action == ACTION
+        assert grant.action == SIBLING
         # The v2 LITERAL on a real grant, not dataclass field presence.
         assert grant.schema_version == "s7.execution_grant.v2"
 

@@ -344,35 +344,66 @@ class TestLinkRowToGrant:
     def test_the_grant_action_comes_from_the_committed_row(
         self, tmp_path: Path
     ) -> None:
-        """Behavioural, not source-text: hardcoded or unrelated `action`
-        text in the mint would green a source check while establishing no
-        join at all. This stores a row, consumes it, and reads the grant.
+        """The mint carries its `stored_action` through to `grant.action`,
+        and the rendered statement cannot displace it.
 
-        A mint that hardcodes the cutover action would pass a test built on
-        the cutover action, so this stores a DIFFERENT one and requires the
-        grant to carry it.
+        SCOPE, stated honestly: this test SUPPLIES `stored_action` itself,
+        so it pins the mint's parameter plumbing -- that the value reaching
+        the mint is the value on the grant, and that a differing
+        `rendered.action` sitting right beside it does not win. It does NOT
+        witness the production join, because it never drives
+        `consume_for_execution`, which is the code that DECIDES where the
+        action comes from. Mutating that decision leaves this test green.
+
+        An earlier version of this docstring claimed a mint reading the
+        caller-carried statement would fail here. That is false, and the
+        claim was worse than no claim: it read as behavioural coverage of
+        the production source while covering only the plumbing.
+
+        What guards the production source today is the atomic
+        `UPDATE ... RETURNING action` -- the action is returned by the same
+        statement that consumes the row, so there is no second read to
+        launder -- plus the AST provenance chain in
+        `test_the_mint_does_not_take_the_action_from_the_caller`. The
+        real-path behavioural witness belongs with the row-to-rendered
+        refusal join, which is where a mismatch acquires defined semantics;
+        until that lands, a mismatch reaching the mint is unreachable in
+        production for reasons no test here asserts.
         """
-        env, authority, params_hash, rendered = _chain(action=OTHER_ACTION)
+        env, authority, params_hash, _stored_rendered = _chain(action=OTHER_ACTION)
         assert OTHER_ACTION != ACTION
         store = _migrated_store(tmp_path)
-        store.put(_artifact(env, authority, params_hash, rendered))
-        grant, _result = store.consume_for_execution(
-            "artifact-join-1",
-            rendered=rendered,
-            action_params_hash=params_hash,
-            authority_context=authority,
-            precondition_hash=env.precondition_hash,
-            derived_work_class=env.derived_work_class,
-            derived_aggregation_group=env.derived_aggregation_group,
-            now=NOW,
+        store.put(_artifact(env, authority, params_hash, _stored_rendered))
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            row = conn.execute(
+                f"SELECT action FROM {V2_TABLE} WHERE artifact_id = ?",
+                ("artifact-join-1",),
+            ).fetchone()
+        assert row == (OTHER_ACTION,), "the authority row was not durably committed"
+
+        _caller_env, _caller_authority, caller_params_hash, caller_rendered = _chain(
+            action=ACTION
         )
-        assert grant is not None, "consumption produced no grant"
+        grant = s7._mint_s7_execution_grant(
+            artifact_id="artifact-join-1",
+            rendered=caller_rendered,
+            stored_action=row[0],
+            action_params_hash=caller_params_hash,
+            precondition_hash="a" * 64,
+            authority_context_hash=s7.authority_context_hash(_caller_authority),
+            derived_work_class="self_modification",
+            derived_aggregation_group="g",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=NOW,
+        )
+        assert caller_rendered.action == ACTION
         assert grant.action == OTHER_ACTION
 
     def test_the_mint_does_not_take_the_action_from_the_caller(self) -> None:
-        """The one structural check that IS the point: the action must not
-        come from the caller-carried rendered record. Kept as an AST check
-        because it asserts an ABSENCE, which no behavioural test can."""
+        """The matched SQL row must feed the mint and then the grant."""
         import ast
         import inspect
         import textwrap
@@ -380,14 +411,98 @@ class TestLinkRowToGrant:
         tree = ast.parse(
             textwrap.dedent(inspect.getsource(s7._mint_s7_execution_grant))
         )
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for kw in node.keywords:
-                    if kw.arg == "action":
-                        assert ast.unparse(kw.value) != "rendered.action", (
-                            "the mint takes the action from the caller-carried "
-                            "record; it must read the committed row"
-                        )
+        grant_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "S7ExecutionGrant"
+        ]
+        assert len(grant_calls) == 1
+        action_values = [
+            ast.unparse(keyword.value)
+            for keyword in grant_calls[0].keywords
+            if keyword.arg == "action"
+        ]
+        assert action_values == ["stored_action"], (
+            "the grant action must come from the committed-row carrier, not "
+            "from rendered or from an absent constructor argument"
+        )
+
+        consume_tree = ast.parse(
+            textwrap.dedent(inspect.getsource(s7.S7AuthorizationStore.consume_for_execution))
+        )
+        mint_calls = [
+            node
+            for node in ast.walk(consume_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_mint_s7_execution_grant"
+        ]
+        assert len(mint_calls) == 1
+        stored_sources = [
+            ast.unparse(keyword.value)
+            for keyword in mint_calls[0].keywords
+            if keyword.arg == "stored_action"
+        ]
+        assert stored_sources == ["matched_row[0]"], (
+            "the production mint call must use the action returned by the "
+            "matched durable-row update"
+        )
+
+        cur_assignments = [
+            node
+            for node in ast.walk(consume_tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "cur"
+                for target in node.targets
+            )
+        ]
+        assert len(cur_assignments) == 1
+        execute_call = cur_assignments[0].value
+        assert (
+            isinstance(execute_call, ast.Call)
+            and isinstance(execute_call.func, ast.Attribute)
+            and isinstance(execute_call.func.value, ast.Name)
+            and execute_call.func.value.id == "conn"
+            and execute_call.func.attr == "execute"
+        )
+        sql_literals = [
+            node.value
+            for node in ast.walk(execute_call.args[0])
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        assert any("RETURNING action" in literal for literal in sql_literals)
+
+        row_assignments = [
+            node
+            for node in ast.walk(consume_tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "matched_row"
+                for target in node.targets
+            )
+        ]
+        assert len(row_assignments) == 1, (
+            "matched_row must be assigned once from the UPDATE cursor; a "
+            "second assignment could launder rendered.action"
+        )
+        fetch_call = row_assignments[0].value
+        assert (
+            isinstance(fetch_call, ast.Call)
+            and isinstance(fetch_call.func, ast.Attribute)
+            and isinstance(fetch_call.func.value, ast.Name)
+            and fetch_call.func.value.id == "cur"
+            and fetch_call.func.attr == "fetchone"
+            and not fetch_call.args
+            and not fetch_call.keywords
+        )
+        assert (
+            cur_assignments[0].lineno
+            < row_assignments[0].lineno
+            < mint_calls[0].lineno
+        )
 
 
 class TestLinkGrantToRuntime:

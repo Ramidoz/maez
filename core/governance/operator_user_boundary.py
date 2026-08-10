@@ -2422,6 +2422,7 @@ def _mint_s7_execution_grant(
     *,
     artifact_id: str,
     rendered: "RenderedRequestStatement",
+    stored_action: str,
     action_params_hash: str,
     precondition_hash: str,
     authority_context_hash: str,
@@ -2435,13 +2436,7 @@ def _mint_s7_execution_grant(
 ) -> S7ExecutionGrant:
     return S7ExecutionGrant(
         artifact_id=artifact_id,
-        # NO action yet. The frozen rule is that consumption matches the
-        # STORED row atomically and mints from row.action -- never from
-        # the caller-carried rendered value. Until the v2 row exists there
-        # is no honest source, so this seam stays unbuilt and its RED
-        # stays red. Supplying rendered.action would enshrine the wrong
-        # authority source; adding a required parameter would break every
-        # production caller before the row exists.
+        action=stored_action,
         request_id=rendered.request_id,
         request_envelope_hash=rendered.request_envelope_hash,
         rendered_text_hash=rendered.rendered_text_hash,
@@ -3068,6 +3063,7 @@ class S7AuthorizationStore:
                       AND (? = 0 OR user_verification = 1)
                       AND consumed_at IS NULL
                       AND expires_at > ?
+                    RETURNING action
                     """,
                     (
                         now_text,
@@ -3089,11 +3085,13 @@ class S7AuthorizationStore:
                         now_text,
                     ),
                 )
-                if cur.rowcount != 1:
+                matched_row = cur.fetchone()
+                if matched_row is None or cur.rowcount != 1:
                     return None, None
                 grant = _mint_s7_execution_grant(
                     artifact_id=artifact_id,
                     rendered=rendered,
+                    stored_action=matched_row[0],
                     action_params_hash=action_params_hash,
                     precondition_hash=precondition_hash,
                     authority_context_hash=auth_hash,
