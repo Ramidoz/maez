@@ -530,7 +530,14 @@ class TestPrivateHelperHasExactlyOneProductionCallsite:
     """
 
     HELPER = "_migrate_authorization_store_to_v2_at"
-    ALLOWED = ("core/governance/operator_user_boundary.py",
+    # The address moved, the invariant did not. Both the helper and its one
+    # caller were extracted from `operator_user_boundary` into the migration
+    # module; the pin below recorded the pre-extraction file and so failed on
+    # a path, not on a second callsite. `calls` was a one-element list
+    # throughout. Re-pinned to where they now live -- NOT relaxed: the
+    # assertion is still exact equality against a single allowed pair, so a
+    # genuine second caller (or a move to any other file) still fails.
+    ALLOWED = ("core/governance/s7_v2_migration.py",
                "migrate_authorization_store_to_v2")
 
     @classmethod
