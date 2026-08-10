@@ -87,16 +87,37 @@ for another's reason.
    in the wrong place. Roads unchanged; a control proves identity ignoring
    lines is exact.
 
-## OWED BEFORE THE MINT
+## OWED BEFORE THE MINT — with the real blocker now identified
 
 Migrated-store tests through the REAL
 `put_artifact_with_bundle_reservation` route, for BOTH success and
-insert-failure rollback. My attempt stopped at fixture setup, not at the
-property: the route requires a validated
-`S7VoiceSourceBundleValidationResult`, which needs the validator token and
-a real bundle. `TestTheGuardedWriterStaysAtomic` exercises the vended
-transaction directly, which is NOT the same thing — it never creates a
-voice reservation, so it does not witness the two staying atomic.
+insert-failure rollback. `TestTheGuardedWriterStaysAtomic` exercises the
+vended transaction directly, which is NOT the same thing — it never
+creates a voice reservation, so it does not witness the two staying
+atomic.
+
+**Three obstacles found, in order. The third is the real one.**
+
+1. `_artifact()` in `test_s7_3_guarded_execution.py` predates the required
+   `action`. Adding `action=env.action` fixes construction — but it moved
+   that file from 6 failed to 9, so at least one existing test depends on
+   the old shape. Investigate before adopting.
+2. The migration is anchored to the frozen store NAME. That suite names
+   its store `s7_3_guarded.db`, so a subclass must override `_db_path()`
+   to `ceremony.sqlite3`.
+3. **THE BLOCKER.** `_valid_source_bundle_validation` CREATES the legacy
+   voice table. The migration's source identity requires the voice plane
+   to be ABSENT — that is the whole point of the
+   `4f53cda1…` empty-preimage literal. So validating first makes the store
+   match neither source nor target, and the migration refuses it as
+   indeterminate. Validating after migration is also impossible: the voice
+   table is frozen by then.
+
+   So the witness needs the validation result produced against one store
+   and the route driven against a migrated one, OR a validator path that
+   does not touch the legacy voice table. That is a real design question,
+   not a fixture detail, and it should be answered before the witness is
+   written.
 
 ## CANON AMENDED (ruled) — held-store verification
 
