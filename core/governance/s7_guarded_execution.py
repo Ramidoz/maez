@@ -2276,7 +2276,11 @@ class S7GuardedStateStore:
         if self.authorization_store.db_path != self.voice_bundle_use_store.db_path:
             raise ValueError("S7.3 guarded state store requires one SQLite database")
         reservation_token_hash = s7.canonical_hash(reservation_token)
-        with closing(sqlite3.connect(self.authorization_store.db_path)) as conn:
+        # The STORE owns the transaction. It binds identity to a descriptor
+        # it holds, which a connection opened here by pathname cannot do --
+        # and it still keeps the reservation and the artifact atomic, which
+        # is why this route exists at all.
+        with self.authorization_store.anchored_transaction() as conn:
             self.voice_bundle_use_store.reserve_for_artifact(
                 source_ref_hash=source_ref_hash,
                 artifact_id=artifact.artifact_id,
@@ -2285,7 +2289,6 @@ class S7GuardedStateStore:
                 connection=conn,
             )
             self.authorization_store.put(artifact, connection=conn)
-            conn.commit()
 
 
 def mint_authorization_artifact(

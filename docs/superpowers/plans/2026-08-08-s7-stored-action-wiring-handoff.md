@@ -87,6 +87,26 @@ for another's reason.
    in the wrong place. Roads unchanged; a control proves identity ignoring
    lines is exact.
 
+## OPEN CANON QUESTION — needs a ruling, not a workaround
+
+`_v2_is_activated_for_fd` in `operator_user_boundary.py` calls the PRIVATE
+migration receipt reader. Canon freezes a no-argument production reader
+and **exactly one** private-reader callsite, and the structural guard
+scans only `anchored_io`, so it cannot see this indirect route.
+
+The tension is real, not an oversight to paper over: activation must be
+checkable for an ARBITRARY store — private copies, tests, any path — and
+the no-argument canonical reader opens only the ONE canonical directory
+by design. So either
+
+* the canonical/private split is restored and activation finds another
+  way to read a receipt beside a given store, or
+* canon is amended to allow a second private callsite, and the guard is
+  widened deliberately and visibly.
+
+Do NOT silently widen the allowlist. That is the laundering this arc
+exists to prevent.
+
 ## Standing constraints
 
 - The cutover needs BOTH Rohit's key tap AND Maez consulted with no

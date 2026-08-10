@@ -2462,6 +2462,10 @@ def _mint_s7_execution_grant(
 
 _AUTH_TABLE = "s7_authorization_artifacts"
 _V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
+# Connections this store vended. Membership is the ONLY thing that makes a
+# supplied connection identity-bound; anything else is a pathname.
+_VENDED_CONNECTIONS: set[int] = set()
+
 S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
 
 
@@ -2672,6 +2676,34 @@ class S7AuthorizationStore:
                     "opening does not create one"
                 )
 
+    @contextmanager
+    def anchored_transaction(self):
+        """An anchored, activated, single transaction the caller composes
+        into.
+
+        The guarded voice-seat writer reserves a voice bundle and inserts
+        the artifact atomically. Refusing its connection secured storage by
+        killing the only route real minting uses, so the store OWNS the
+        transaction instead: identity is bound to a descriptor WE hold, and
+        the caller writes inside it.
+
+        Commits on clean exit, rolls back on any exception -- a reservation
+        must not survive an artifact insert that failed.
+        """
+        with _anchored_v2_connection(self.db_path) as (fd, conn):
+            conn.execute("BEGIN IMMEDIATE")
+            _v2_is_activated_for_fd(fd, conn)
+            _VENDED_CONNECTIONS.add(id(conn))
+            try:
+                yield conn
+            except BaseException:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
+            finally:
+                _VENDED_CONNECTIONS.discard(id(conn))
+
     def _insert_v2(self, conn, artifact, created_at, expires_at, consumed_at):
         """The v2 row. The action and the schema label both come from the
         ARTIFACT; the writer asserts neither."""
@@ -2739,17 +2771,22 @@ class S7AuthorizationStore:
             # pinned, the v2 write runs on OUR anchored connection, with
             # validation and mutation in ONE transaction on it.
             if connection is not None:
-                raise ValueError(
-                    "v2 authorization writes may not use a caller-supplied "
-                    "connection; the database it holds cannot be identified"
+                # Only a connection THIS store vended is identity-bound. A
+                # foreign one reports a pathname and nothing more.
+                if id(connection) not in _VENDED_CONNECTIONS:
+                    raise ValueError(
+                        "v2 authorization writes may not use a "
+                        "caller-supplied connection; the database it holds "
+                        "cannot be identified"
+                    )
+                self._insert_v2(
+                    connection, artifact, created_at, expires_at, consumed_at
                 )
-            with _anchored_v2_connection(self.db_path) as (fd, anchored):
-                anchored.execute("BEGIN IMMEDIATE")
-                _v2_is_activated_for_fd(fd, anchored)
+                return
+            with self.anchored_transaction() as anchored:
                 self._insert_v2(
                     anchored, artifact, created_at, expires_at, consumed_at
                 )
-                anchored.commit()
             return
 
         if connection is not None:

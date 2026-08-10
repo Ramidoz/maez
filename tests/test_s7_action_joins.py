@@ -1104,3 +1104,85 @@ class TestTheReceiptBindsTheDatabaseItAuthorizes:
             assert conn.execute(
                 f"SELECT count(*) FROM {V2_TABLE}"
             ).fetchone()[0] == 1
+
+
+class TestTheGuardedWriterStaysAtomicAfterMigration:
+    """The sole guarded voice-seat writer reserves the bundle and inserts
+    the artifact in ONE transaction. Refusing its connection secured
+    storage by killing the only route real minting uses.
+
+    The store must OWN the anchored transaction end-to-end and let the
+    caller compose into it -- not accept a connection whose held database
+    it cannot identify.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def test_the_store_vends_an_anchored_transaction(
+        self, tmp_path: Path
+    ) -> None:
+        store = self._migrated(tmp_path)
+        assert hasattr(store, "anchored_transaction"), (
+            "the store cannot own the transaction the guarded writer needs"
+        )
+
+    def test_a_vended_transaction_accepts_the_put(self, tmp_path: Path) -> None:
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        with store.anchored_transaction() as conn:
+            store.put(
+                _artifact(env, authority, params_hash, rendered),
+                connection=conn,
+            )
+        with closing(sqlite3.connect(store.db_path)) as check:
+            assert check.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0] == 1
+
+    def test_a_foreign_connection_is_still_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Vending must not become a blanket permit."""
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+        with closing(sqlite3.connect(store.db_path)) as foreign:
+            with pytest.raises(ValueError, match="caller-supplied"):
+                store.put(
+                    _artifact(env, authority, params_hash, rendered),
+                    connection=foreign,
+                )
+
+    def test_a_failure_inside_the_transaction_rolls_back_whole(
+        self, tmp_path: Path
+    ) -> None:
+        """Atomicity is the point: a reservation must not survive an
+        artifact insert that failed."""
+        store = self._migrated(tmp_path)
+        env, authority, params_hash, rendered = _chain()
+
+        class Boom(RuntimeError):
+            pass
+
+        with contextlib.suppress(Boom):
+            with store.anchored_transaction() as conn:
+                store.put(
+                    _artifact(env, authority, params_hash, rendered),
+                    connection=conn,
+                )
+                raise Boom("after the insert, before the commit")
+
+        with closing(sqlite3.connect(store.db_path)) as check:
+            assert check.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0] == 0
