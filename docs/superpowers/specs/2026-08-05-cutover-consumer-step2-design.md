@@ -35,7 +35,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v24 | the production identity is PROJECTED from the persisted bench identity |
 | v25 | chronology corrected: admission precedes the boot witness; middle joins enforced |
 | v26 | S7 does not bind the action — compensating control, stated as such |
-| **v27** | **R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge** |
+| v27 | R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge |
+| **v28** | **the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1294,18 +1295,26 @@ contains none of the four discarding keys; and the tuple survives
 **Item 3 is specified; the consultation adapter is now its open work.**
 2B remains blocked on that, plus items 4 and 5.
 
-#### ITEM 4 — the durable grant projection, concrete (v19)
+#### ITEM 4 — the durable grant projection, concrete (v19, reconciled v28)
 
-**Schema literal:** `cuda_migration.s7_execution_grant_projection.v1`.
+**Schema literal:** `cuda_migration.s7_execution_grant_projection.v2`.
 
-**Exact projected fields** — all fifteen `S7ExecutionGrant` members, in
+v19 froze this shape against a grant that carried no action and no
+version. The S7 substrate has since landed and the grant carries both.
+A projection omitting them would attest a grant shape that no longer
+exists, and — worse — could not distinguish the operation the owner
+authorized from a sibling with identical params, which is the whole
+defect the S7 slice was built to remove. The v1 projection is
+**audit-only** and cannot serve as presence evidence.
+
+**Exact projected fields** — all seventeen `S7ExecutionGrant` members, in
 this canonical order:
 
 ```
 artifact_id, request_id, request_envelope_hash, rendered_text_hash,
-action_params_hash, precondition_hash, authority_context_hash,
+action_params_hash, precondition_hash, authority_context_hash, action,
 derived_work_class, derived_aggregation_group, nonce, credential_ref,
-auth_method, grant_source, consumed_at, ceremony_kind
+auth_method, grant_source, consumed_at, ceremony_kind, schema_version
 ```
 
 The private `_mint_token` is an `InitVar` and is **not** a dataclass field,
@@ -1317,19 +1326,40 @@ this design uses, wrapped as
 `{"schema": <literal>, "fields": {...}}`. `presence_evidence_sha256` is
 the SHA-256 of those bytes.
 
-**Reconstruction from the committed row.** Verified: every one of the
-fifteen fields has a matching column in `s7_authorization_artifacts`
-([operator_user_boundary.py:2302](/home/rohit/maez/core/governance/operator_user_boundary.py#L2302)).
-So the projection is rebuildable from durable state alone, by
-`artifact_id`, long after the in-memory grant is gone. That is precisely
-what v13's "recomputable by anyone holding the grant" was not.
+**Reconstruction from the committed row.** Sixteen of the seventeen
+fields have a matching column in `s7_authorization_artifacts_v2` — the
+MIGRATED table, not the v1 table v19 named, which has no `action` column
+at all. `action` is among them: it is a v2 column, and it is the column
+the consuming `UPDATE … RETURNING action` matches on and returns. So the
+projection remains rebuildable from durable state alone, by
+`artifact_id`, long after the in-memory grant is gone.
 
-**Exact joins**, all four required:
+**The seventeenth field is NOT row-backed, and this is not a defect.**
+The row and the grant each carry a `schema_version`, but they are
+different KINDS of thing and their versions live in different domains:
+the row's is `s7.authorization_artifact.v2`, the grant's is
+`s7.execution_grant.v2`. A rule demanding field-by-field equality across
+all seventeen would be unsatisfiable — not because anything is wrong,
+but because it would be comparing the version of a record with the
+version of a permission. The field did not exist when v19 wrote that
+rule, so nothing detected the collision.
 
-1. returned grant ≡ committed row, field by field, for all fifteen;
-2. projection hash ≡ `presence_evidence_sha256` in the receipt;
-3. `grant.nonce` ≡ the artifact's nonce ≡ the value bound in `params`;
-4. `grant.action_params_hash` ≡ the hash of the frozen action/params.
+**Exact joins**, all five required:
+
+1. returned grant ≡ committed row, field by field, for the **sixteen**
+   row-backed fields — `action` included, and it is the one that stops a
+   sibling operation being attested;
+2. the row's `schema_version` ≡ `s7.authorization_artifact.v2`,
+   validated — never derived, or the check would assert only that the
+   reconstructor can copy a constant;
+3. the grant's `schema_version` **DERIVED** deterministically as
+   `s7.execution_grant.v2`, never compared to the row's. Deriving it is
+   honest precisely because it is not evidence: it records which
+   permission shape was reconstructed, and the evidence is joins 1, 2
+   and 4;
+4. projection hash ≡ `presence_evidence_sha256` in the receipt;
+5. `grant.nonce` ≡ the artifact's nonce ≡ the value bound in `params`,
+   and `grant.action_params_hash` ≡ the hash of the frozen action/params.
 
 **A gap this exposes, stated rather than glossed:** `user_presence` and
 `user_verification` are **not** `S7ExecutionGrant` fields — they exist
@@ -1357,7 +1387,7 @@ pre-consumption snapshot:
 | check | requirement |
 |---|---|
 | cardinality | exactly **one** row for `artifact_id` |
-| grant fields | exact type and value equality across all fifteen |
+| grant fields | exact type and value equality across the **sixteen** row-backed fields (v28); the grant's `schema_version` is derived, not compared — see ITEM 4 |
 | presence | `user_presence == 1` **as an integer**, not truthy |
 | verification | `user_verification == 1` **as an integer** |
 | binding | `consumed_by_request_id == request_id` |
@@ -1383,9 +1413,11 @@ opens its own connection **by pathname**
 so it would discard any anchored connection, re-resolve the path, and
 collapse failures. Frozen:
 
-* a typed `CommittedGrantRow` result carrying all fifteen fields plus
+* a typed `CommittedGrantRow` result carrying the **sixteen** row-backed
+  fields (v28 — `action` included) plus the row's own `schema_version`,
   `user_presence`, `user_verification`, `created_at`, `expires_at`,
-  `consumed_by_request_id`;
+  `consumed_by_request_id`. The row's version is carried so join 2 can
+  VALIDATE it; the grant's version is not a row field and is derived;
 * a **post-commit reader** that uses **either** the consuming RW
   connection *strictly after its commit*, **or** a freshly opened RO
   connection after consumption returns. A previously-used RO connection
@@ -1742,7 +1774,7 @@ Two new fields, both inside the binding:
 | field | rule |
 |---|---|
 | `presence_mode` | **cutover: `founder_webauthn` ONLY.** `procedural` remains a receipt-type value for other callers and is unreachable from any cutover path (Part 3 ruling) |
-| `presence_evidence_sha256` | **mandatory** — the canonical **grant-projection** hash (item 4). ~~the authorization-artifact hash~~ is superseded: that artifact has no canonical binding and its row mutates at consumption |
+| `presence_evidence_sha256` | **mandatory** — the canonical **grant-projection** hash (item 4), and specifically the **v2, seventeen-field** projection (v28). A v1 projection hash is NOT acceptable presence evidence: it omits the `action`, so it attests that *an* authorization was consumed without attesting *which*, which is exactly the substitution S7 action-binding exists to prevent. ~~the authorization-artifact hash~~ is superseded: that artifact has no canonical binding and its row mutates at consumption |
 
 The second field is the point. A bare `founder_webauthn` string is
 **descriptive, not proof** — the same error as A2, where a self-chosen
@@ -1914,7 +1946,7 @@ side of the linearization point:
 | 29g4 | S7 store absent (opener must not create) | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29g5 | guarded mint failed / invalid artifact | pre | reusable | **zero** | `presence_mint_failed` |
 | 29g6 | `consume_for_execution` did not commit | pre | reusable | **zero** | `presence_consumption_failed` |
-| 29g7 | grant projection unreconstructible from the committed row | pre | reusable | **zero** | `presence_grant_unprojectable` |
+| 29g7 | grant projection unreconstructible from the committed row — v28: the **complete v2** reconstruction, meaning any of the sixteen row-backed fields missing or unequal, OR the row's `schema_version` not `s7.authorization_artifact.v2`. A partial reconstruction is a FAILURE, not a degraded success | pre | reusable | **zero** | `presence_grant_unprojectable` |
 | 29g8 | action-edge consumption returned false | pre | reusable | **zero** | `presence_action_unauthorized` |
 | 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
 | 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |

@@ -118,17 +118,34 @@ class TestGrantProjection:
     """The evidence hash must name a REPRODUCIBLE object."""
 
     def test_schema_literal_is_frozen(self) -> None:
+        """v28: the projection reconciles to the FINAL grant shape.
+
+        v19 froze `.v1` against a grant carrying no action and no version.
+        Both exist now, so a v1 projection would attest that AN
+        authorization was consumed without attesting WHICH -- the exact
+        substitution S7 action-binding was built to prevent. v1 is
+        audit-only and is not acceptable presence evidence.
+        """
         assert (
             cm.S7_GRANT_PROJECTION_SCHEMA
-            == "cuda_migration.s7_execution_grant_projection.v1"
+            == "cuda_migration.s7_execution_grant_projection.v2"
         )
 
     def test_projection_covers_every_grant_field(self) -> None:
+        """Seventeen (v28): the fifteen originals plus `action` and
+        `schema_version`.
+
+        The expectation is DERIVED from the dataclass rather than listed,
+        so a field added to the grant and forgotten here fails instead of
+        passing silently. The count is asserted separately because a
+        derived-only check would agree with itself if the dataclass lost
+        a field.
+        """
         from dataclasses import fields as dataclass_fields
 
         expected = tuple(f.name for f in dataclass_fields(s7.S7ExecutionGrant))
         assert cm.S7_GRANT_PROJECTION_FIELDS == expected
-        assert len(expected) == 15
+        assert len(expected) == 17
 
     def test_the_private_mint_token_is_structurally_excluded(self) -> None:
         """_mint_token is an InitVar, so it is not a dataclass field at all
