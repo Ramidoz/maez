@@ -1463,7 +1463,7 @@ class TestTheCallsiteScannerIsItselfAttacked:
             "            def n(self):\n"
             "                _verify_held_store_activation()\n",
             self.TARGET,
-        ) == ["A.m.B.n"]
+        ) == ["A.m.<locals>.B.n"]  # class-in-function IS a <locals> scope
 
     def test_a_reverse_ordered_alias_chain_is_seen(self) -> None:
         assert find_callsites(
