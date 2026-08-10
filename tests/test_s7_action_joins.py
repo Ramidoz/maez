@@ -1005,11 +1005,19 @@ class TestConsumptionFollowsTheMigratedPlane:
         store = fresh_store(tmp_path)
         env, authority, params_hash, rendered = _chain()
         store.put(_artifact(env, authority, params_hash, rendered))
-        monkeypatch.setattr(
-            s7, "_mint_s7_execution_grant", lambda **_kwargs: object()
-        )
-        with pytest.raises(Exception):
+
+        minted: list[object] = []
+
+        def recording_mint(**_kwargs):
+            minted.append(object())
+            return object()
+
+        monkeypatch.setattr(s7, "_mint_s7_execution_grant", recording_mint)
+        # The EXACT type: pytest.raises(Exception) would pass on any
+        # unrelated crash and call this a refusal.
+        with pytest.raises(s7.S7GuardedExecutionUnavailable):
             self._consume(store, env, authority, params_hash, rendered)
+        assert minted == [], "the mint was reached despite the refusal"
         assert self._consumed_at(store.db_path, V1_TABLE) is None
 
 
@@ -1062,19 +1070,36 @@ class TestTheReceiptBindsTheDatabaseItAuthorizes:
             ).fetchone()[0]
         assert rows == 0, "another store's receipt authorized this write"
 
-    def test_the_matching_connection_still_works(self, tmp_path: Path) -> None:
-        """CONTROL: refusing every supplied connection would satisfy the
-        test above while breaking the API."""
+    def test_a_supplied_connection_is_refused_not_trusted(
+        self, tmp_path: Path
+    ) -> None:
+        """Even the store's OWN database refuses through a supplied
+        connection.
+
+        A connection's held inode is not observable from Python, and
+        PRAGMA reports only a NAME -- repoint it and another store's
+        receipt authorizes this write. Refusing what cannot be pinned is
+        the honest answer; pretending to validate it is not.
+        """
         good = tmp_path / "A"
         good.mkdir()
         store = self._migrated(good, keep_receipt=True)
         env, authority, params_hash, rendered = _chain()
         with closing(sqlite3.connect(store.db_path)) as conn:
-            store.put(
-                _artifact(env, authority, params_hash, rendered),
-                connection=conn,
-            )
-            conn.commit()
+            with pytest.raises(ValueError, match="caller-supplied"):
+                store.put(
+                    _artifact(env, authority, params_hash, rendered),
+                    connection=conn,
+                )
+
+    def test_the_stores_own_put_still_works(self, tmp_path: Path) -> None:
+        """CONTROL: refusing everything would satisfy the tests above while
+        breaking storage entirely."""
+        good = tmp_path / "A"
+        good.mkdir()
+        store = self._migrated(good, keep_receipt=True)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
         with closing(sqlite3.connect(store.db_path)) as conn:
             assert conn.execute(
                 f"SELECT count(*) FROM {V2_TABLE}"

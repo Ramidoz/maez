@@ -12,7 +12,7 @@ mint WebAuthn assertions, or grant authority from legacy owner labels.
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -2469,45 +2469,59 @@ class S7GuardedExecutionUnavailable(RuntimeError):
     """v2 is absent or inert. Absent is not permission."""
 
 
-def _connection_database_path(conn: sqlite3.Connection) -> str:
-    """The file THIS connection actually writes to."""
-    for _seq, name, filename in conn.execute("PRAGMA database_list"):
-        if name == "main":
-            return filename
-    raise ValueError("connection has no main database")
+@contextmanager
+def _anchored_v2_connection(db_path):
+    """One descriptor, one connection, one identity.
+
+    `PRAGMA database_list` returns a PATHNAME, not the inode the
+    connection already holds -- reproduced: repoint that name at another
+    database and its receipt authorizes writes into the original. A
+    pathname is an address, not a thing.
+
+    So the descriptor is opened ONCE here and SQLite is connected THROUGH
+    it. Everything downstream -- receipt validation and the mutation --
+    uses this same connection inside one transaction, so nothing can be
+    swapped between checking and writing.
+    """
+    fd = os.open(db_path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        conn = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True)
+        try:
+            yield fd, conn
+        finally:
+            conn.close()
+    finally:
+        os.close(fd)
 
 
-def _v2_is_activated(conn: sqlite3.Connection) -> bool:
-    """Is v2 ACTIVATED for the database THIS CONNECTION will mutate?
+def _v2_is_activated_for_fd(fd: int, conn: sqlite3.Connection) -> bool:
+    """Validate the receipt against the HELD descriptor's own identity.
 
-    Two separate failures live here.
-
-    Table existence is not permission: writing on table-presence alone put
-    a row into the commit-before-publication window and made the store
-    indeterminate, destroying the frozen recovery path.
-
-    And the receipt must be joined to the database RECEIVING the write.
-    Validating `self.db_path` while the caller supplies its own connection
-    let store A's receipt authorize a write into store B -- reproduced,
-    A rows 0 and B rows 1, with B's recovery then refusing. The trust root
-    and the mutated object have to be the same object.
+    The receipt's store_dev/store_ino must match this fd's fstat, not a
+    stat of some path resolved again afterwards.
     """
     from core.governance import s7_v2_migration as _migration
 
-    db_path = _connection_database_path(conn)
-    if not db_path:
-        raise ValueError("cannot activate v2 on a connection with no file")
-
-    directory = Path(db_path).parent
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    stat = os.fstat(fd)
+    directory = Path(os.readlink(f"/proc/self/fd/{fd}")).parent
+    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        receipt = _migration._read_receipt(fd)
+        receipt = _migration._read_receipt(dir_fd)
     finally:
-        os.close(fd)
+        os.close(dir_fd)
+
     if receipt is None:
         raise ValueError(
             "S7 v2 table exists but no migration receipt activates it; "
             "creating the table is not permission to write to it"
+        )
+    if (
+        receipt.get("store_dev") != stat.st_dev
+        or receipt.get("store_ino") != stat.st_ino
+    ):
+        raise ValueError(
+            "the migration receipt does not describe the database this "
+            "connection holds"
         )
     _migration._validate_receipt(receipt, conn)
     return True
@@ -2658,6 +2672,49 @@ class S7AuthorizationStore:
                     "opening does not create one"
                 )
 
+    def _insert_v2(self, conn, artifact, created_at, expires_at, consumed_at):
+        """The v2 row. The action and the schema label both come from the
+        ARTIFACT; the writer asserts neither."""
+        conn.execute(
+            f"""
+            INSERT INTO {_V2_AUTH_TABLE} (
+                artifact_id, request_id, request_envelope_hash,
+                rendered_text_hash, action_params_hash, precondition_hash,
+                authority_context_hash, derived_work_class,
+                derived_aggregation_group, nonce, credential_ref,
+                auth_method, grant_source, user_presence,
+                user_verification, created_at, expires_at, consumed_at,
+                consumed_by_request_id, ceremony_kind, action, schema_version
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                NULL, ?, ?, ?
+            )
+            """,
+            (
+                artifact.artifact_id,
+                artifact.request_id,
+                artifact.request_envelope_hash,
+                artifact.rendered_text_hash,
+                artifact.action_params_hash,
+                artifact.precondition_hash,
+                artifact.authority_context_hash,
+                artifact.derived_work_class,
+                artifact.derived_aggregation_group,
+                artifact.nonce,
+                artifact.credential_ref,
+                artifact.auth_method,
+                artifact.grant_source,
+                1 if artifact.user_presence else 0,
+                1 if artifact.user_verification else 0,
+                created_at,
+                expires_at,
+                consumed_at,
+                artifact.ceremony_kind,
+                artifact.action,
+                artifact.schema_version,
+            ),
+        )
+
     def put(
         self,
         artifact: S7AuthorizationArtifact,
@@ -2671,6 +2728,30 @@ class S7AuthorizationStore:
             if artifact.consumed_at is not None
             else None
         )
+        with closing(sqlite3.connect(self.db_path)) as probe:
+            v2_present = _table_present(probe, _V2_AUTH_TABLE)
+
+        if v2_present:
+            # A caller-supplied connection cannot be identity-bound: its
+            # held inode is not observable from Python, and PRAGMA reports
+            # only a NAME -- repoint that name and another store's receipt
+            # authorizes this write. Rather than validate what cannot be
+            # pinned, the v2 write runs on OUR anchored connection, with
+            # validation and mutation in ONE transaction on it.
+            if connection is not None:
+                raise ValueError(
+                    "v2 authorization writes may not use a caller-supplied "
+                    "connection; the database it holds cannot be identified"
+                )
+            with _anchored_v2_connection(self.db_path) as (fd, anchored):
+                anchored.execute("BEGIN IMMEDIATE")
+                _v2_is_activated_for_fd(fd, anchored)
+                self._insert_v2(
+                    anchored, artifact, created_at, expires_at, consumed_at
+                )
+                anchored.commit()
+            return
+
         if connection is not None:
             self._put_with_connection(
                 connection,
@@ -2707,49 +2788,6 @@ class S7AuthorizationStore:
         # Scope: this routes STORAGE only. Receipt-gated activation of
         # guarded EXECUTION -- "absent is not permission" -- belongs to the
         # mint and consume seams.
-        if _table_present(conn, _V2_AUTH_TABLE) and _v2_is_activated(conn):
-            conn.execute(
-                f"""
-                INSERT INTO {_V2_AUTH_TABLE} (
-                    artifact_id, request_id, request_envelope_hash,
-                    rendered_text_hash, action_params_hash, precondition_hash,
-                    authority_context_hash, derived_work_class,
-                    derived_aggregation_group, nonce, credential_ref,
-                    auth_method, grant_source, user_presence,
-                    user_verification, created_at, expires_at, consumed_at,
-                    consumed_by_request_id, ceremony_kind, action,
-                    schema_version
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    NULL, ?, ?, ?
-                )
-                """,
-                (
-                    artifact.artifact_id,
-                    artifact.request_id,
-                    artifact.request_envelope_hash,
-                    artifact.rendered_text_hash,
-                    artifact.action_params_hash,
-                    artifact.precondition_hash,
-                    artifact.authority_context_hash,
-                    artifact.derived_work_class,
-                    artifact.derived_aggregation_group,
-                    artifact.nonce,
-                    artifact.credential_ref,
-                    artifact.auth_method,
-                    artifact.grant_source,
-                    1 if artifact.user_presence else 0,
-                    1 if artifact.user_verification else 0,
-                    created_at,
-                    expires_at,
-                    consumed_at,
-                    artifact.ceremony_kind,
-                    artifact.action,
-                    artifact.schema_version,
-                ),
-            )
-            return
-
         conn.execute(
             """
             INSERT INTO s7_authorization_artifacts (
@@ -2881,10 +2919,15 @@ class S7AuthorizationStore:
                     "S7 v2 authorization plane is absent; guarded execution "
                     "refuses rather than falling back to v1"
                 )
-            _v2_is_activated(probe)
 
         try:
-            with closing(sqlite3.connect(self.db_path)) as conn:
+            with _anchored_v2_connection(self.db_path) as (_store_fd, conn):
+                # Validation and mutation share ONE held descriptor and ONE
+                # transaction. Validating a disposable probe and then
+                # opening a second connection let a swap between the two
+                # steps consume a receipt-less store.
+                conn.execute("BEGIN IMMEDIATE")
+                _v2_is_activated_for_fd(_store_fd, conn)
                 table = _V2_AUTH_TABLE
                 cur = conn.execute(
                     f"""
