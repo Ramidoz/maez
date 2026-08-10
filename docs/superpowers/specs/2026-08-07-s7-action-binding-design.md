@@ -531,7 +531,7 @@ v2 wrote "current binding → v2 binding", which is a placeholder. Frozen:
 | carrier | identity | fields | hash domain | decoder routing |
 |---|---|---|---|---|
 | voice source bundle | `s7.voice_source_bundle.v2` | v1 fields **+ `action`** | `s7.voice_source_bundle.v2` | v1 decodes audit-only; v2 required for execution |
-| cutover grant projection | `cuda_migration.s7_execution_grant_projection.v2` | the 15 grant fields **+ `action`** = 16 | `…projection.v2` | v1 projection is audit-only |
+| cutover grant projection | `cuda_migration.s7_execution_grant_projection.v2` | the 15 grant fields **+ `action` + `schema_version`** = 17 | `…projection.v2` | v1 projection is audit-only |
 
 ## The database transition, concrete (v3)
 
