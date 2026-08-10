@@ -1242,3 +1242,119 @@ class TestVendingIsPerStore:
 # the two staying atomic. That gap is real and is recorded here rather
 # than papered over with a hand-rolled transaction that resembles the
 # route without being it.
+
+
+class TestTheStorePathIsWalkedComponentwise:
+    """Opening the whole parent path once with O_NOFOLLOW protects only the
+    FINAL component. Reproduced: an intermediate symlink was followed and a
+    v2 row landed in the real target store.
+    """
+
+    def _migrated(self, tmp: Path):
+        import os
+
+        from core.governance import s7_v2_migration as mig
+
+        store = fresh_store(tmp)
+        fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            mig._migrate_authorization_store_to_v2_at(store_dir_fd=fd)
+        finally:
+            os.close(fd)
+        return store
+
+    def test_an_intermediate_symlink_cannot_choose_the_store(
+        self, tmp_path: Path
+    ) -> None:
+        real = tmp_path / "real"
+        real.mkdir()
+        self._migrated(real)
+        link = tmp_path / "via"
+        link.symlink_to(real)
+
+        env, authority, params_hash, rendered = _chain()
+        with pytest.raises(OSError):
+            s7.S7AuthorizationStore(link / "ceremony.sqlite3").put(
+                _artifact(env, authority, params_hash, rendered)
+            )
+        with closing(sqlite3.connect(real / "ceremony.sqlite3")) as check:
+            assert check.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0] == 0
+
+    def test_a_legitimate_nested_path_still_works(self, tmp_path: Path) -> None:
+        """CONTROL: refusing every multi-component path would satisfy the
+        test above while breaking ordinary nested store locations."""
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        store = self._migrated(nested)
+        env, authority, params_hash, rendered = _chain()
+        store.put(_artifact(env, authority, params_hash, rendered))
+        with closing(sqlite3.connect(store.db_path)) as check:
+            assert check.execute(
+                f"SELECT count(*) FROM {V2_TABLE}"
+            ).fetchone()[0] == 1
+
+
+class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
+    """The amended canon names a second authority; it needs the same
+    repo-wide qualified guard the initializer has, or the amendment just
+    widens the surface."""
+
+    ALLOWED = {
+        "core/governance/operator_user_boundary.py::"
+        "S7AuthorizationStore.anchored_transaction",
+        "core/governance/operator_user_boundary.py::"
+        "S7AuthorizationStore.consume_for_execution",
+    }
+
+    def test_only_the_allowed_callsites_verify_held_activation(self) -> None:
+        import ast
+        import os
+
+        target = "_verify_held_store_activation"
+        repo = Path(__file__).resolve().parents[1]
+        skip = {".git", ".venv", "node_modules", "__pycache__", "tests", "docs"}
+        found: set[str] = set()
+
+        for dirpath, dirnames, filenames in os.walk(repo):
+            dirnames[:] = [
+                d for d in dirnames if d not in skip and not d.startswith(".")
+            ]
+            for name in filenames:
+                if not name.endswith(".py"):
+                    continue
+                path = Path(dirpath, name)
+                rel = str(path.relative_to(repo))
+                try:
+                    tree = ast.parse(path.read_text())
+                except (SyntaxError, UnicodeDecodeError):
+                    continue
+
+                def walk(node, scope, _rel=rel):
+                    for child in ast.iter_child_nodes(node):
+                        if isinstance(child, ast.ClassDef):
+                            walk(child, child.name, _rel=_rel)
+                            continue
+                        if isinstance(
+                            child, (ast.FunctionDef, ast.AsyncFunctionDef)
+                        ):
+                            inner = (
+                                f"{scope}.{child.name}" if scope else child.name
+                            )
+                            walk(child, inner, _rel=_rel)
+                            continue
+                        if isinstance(child, ast.Call):
+                            called = (
+                                child.func.attr
+                                if isinstance(child.func, ast.Attribute)
+                                else getattr(child.func, "id", None)
+                            )
+                            if called == target:
+                                found.add(f"{_rel}::{scope or '<module>'}")
+                        walk(child, scope, _rel=_rel)
+
+                walk(tree, "")
+
+        assert found, "nothing verifies held-store activation; the guard is vacuous"
+        assert found == self.ALLOWED, found

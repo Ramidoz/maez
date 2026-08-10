@@ -1200,6 +1200,54 @@ on the public route.
 allowlist of exactly one** — `read_migration_receipt`. Any other
 production caller fails.
 
+## AMENDMENT (v17) — two authorities, not one
+
+**Canon conflated "which store is live?" with "does this already-held
+store carry a valid activation receipt?"** The zero-argument reader
+answers only the first. Private copies, configured store roots and every
+migrated store that is not the canonical one need the second, and the
+canonical reader cannot answer it *by design* — it opens the one frozen
+directory and nothing else.
+
+Ruled: **two distinct authorities.**
+
+**1. Canonical activation DISCOVERY — unchanged.**
+`read_migration_receipt()` takes no arguments and selects the one live
+canonical store. Its private-callsite allowlist of exactly one stands.
+
+**2. Held-store activation VERIFICATION — new, internal.**
+
+```python
+_verify_held_store_activation(dir_fd: int, store_fd: int,
+                              conn: sqlite3.Connection) -> bool
+```
+
+It verifies the receipt for the exact store **already opened for
+mutation**, and it must:
+
+* accept **no pathname** and no independently supplied root;
+* **retain** the parent-directory fd from the anchored component walk,
+  open the database beneath it, and retain both;
+* read the sibling receipt **through that same directory fd**;
+* validate receipt identity against the **held database fd**, and schema
+  against the **same SQLite transaction** that will write;
+* carry an **exact repo-wide qualified-callsite allowlist**.
+
+**The parent walk is component-by-component.** Opening the whole parent
+path once with `O_NOFOLLOW` protects only the final component —
+reproduced: an intermediate symlink was followed and a v2 row landed in
+the real target store.
+
+**`readlink("/proc/self/fd/N")` then reopening the directory is
+forbidden.** That is pathname re-resolution, which this document already
+named as the race the anchoring exists to remove; an earlier
+implementation reintroduced it one layer down.
+
+**Rejected:** canonical-only verification, which breaks legitimate
+configured and private stores; and simply widening the existing
+allowlist, which would preserve the conflation and launder the new path
+into canon.
+
 **Binding RED:** no public or production route accepts a path, a root or
 a descriptor — asserted from the signatures, not from prose.
 

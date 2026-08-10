@@ -2469,6 +2469,27 @@ class S7GuardedExecutionUnavailable(RuntimeError):
     """v2 is absent or inert. Absent is not permission."""
 
 
+def _open_directory_by_components(directory: Path) -> int:
+    """Walk to `directory` one component at a time, each with O_NOFOLLOW."""
+    resolved = Path(directory)
+    if not resolved.is_absolute():
+        resolved = Path(os.getcwd()) / resolved
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in resolved.parts[1:]:
+            nxt = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = nxt
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
 @contextmanager
 def _held_store(db_path):
     """Hold the parent directory AND the database beneath it.
@@ -2479,8 +2500,12 @@ def _held_store(db_path):
     race to avoid. The directory fd from the original walk is kept instead,
     and the sibling receipt is read through that same fd.
     """
-    directory = Path(db_path).parent
-    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # COMPONENT-BY-COMPONENT. Opening the whole parent path once with
+    # O_NOFOLLOW protects only the FINAL component -- reproduced: an
+    # intermediate symlink was followed and a v2 row landed in the real
+    # target store. Every component is walked with O_NOFOLLOW so no link
+    # anywhere in the path can choose the directory.
+    dir_fd = _open_directory_by_components(Path(db_path).parent)
     try:
         store_fd = os.open(
             Path(db_path).name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=dir_fd
@@ -2535,31 +2560,6 @@ def _verify_held_store_activation(
         )
     _migration._validate_receipt(receipt, conn)
     return True
-
-
-@contextmanager
-def _anchored_v2_connection(db_path):
-    """One descriptor, one connection, one identity.
-
-    `PRAGMA database_list` returns a PATHNAME, not the inode the
-    connection already holds -- reproduced: repoint that name at another
-    database and its receipt authorizes writes into the original. A
-    pathname is an address, not a thing.
-
-    So the descriptor is opened ONCE here and SQLite is connected THROUGH
-    it. Everything downstream -- receipt validation and the mutation --
-    uses this same connection inside one transaction, so nothing can be
-    swapped between checking and writing.
-    """
-    fd = os.open(db_path, os.O_RDWR | os.O_NOFOLLOW)
-    try:
-        conn = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True)
-        try:
-            yield fd, conn
-        finally:
-            conn.close()
-    finally:
-        os.close(fd)
 
 
 def _table_present(conn: sqlite3.Connection, name: str) -> bool:
