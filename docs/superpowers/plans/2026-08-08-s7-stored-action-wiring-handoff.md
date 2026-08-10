@@ -96,6 +96,27 @@ vended transaction directly, which is NOT the same thing — it never
 creates a voice reservation, so it does not witness the two staying
 atomic.
 
+**RULED (canon v18): evidence goes in the NEW room.** Migrate while voice
+is absent, then persist and validate in the v2 plane of that same
+activated store. Cross-store v1 validation and a non-persisting validator
+are both REJECTED and recorded in canon so the shortcut cannot return.
+
+**BLOCKED ON UNBUILT APIS.** `put_voice_source_bundle_v2` and
+`read_voice_source_bundle` are frozen in canon but DO NOT EXIST in
+`core/`. Steps 4-5 below cannot be written until the v2 voice plane is
+implemented, which is its own slice.
+
+Ordered:
+
+1. repair `_artifact()` with `action=env.action` and audit what that
+   exposes;
+2. use the frozen `ceremony.sqlite3` fixture name;
+3. migrate the private store while voice is absent;
+4. REDs for v2 voice write -> read -> execution validation *(needs the
+   APIs above)*;
+5. the real-route success and rollback witnesses;
+6. stop for review before stored-action minting.
+
 **Three obstacles found, in order. The third is the real one.**
 
 1. `_artifact()` in `test_s7_3_guarded_execution.py` predates the required

@@ -273,6 +273,8 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             created_at=NOW,
             expires_at=FUTURE,
             consumed_at=None,
+            # The v2 row carries the action; this fixture predates it.
+            action=env.action,
         )
 
     def _artifact_count(self) -> int:

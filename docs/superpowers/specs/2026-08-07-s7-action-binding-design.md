@@ -1200,6 +1200,38 @@ on the public route.
 allowlist of exactly one** — `read_migration_receipt`. Any other
 production caller fails.
 
+## AMENDMENT (v18) — evidence goes in the NEW room
+
+**Ordering clarification, not new architecture.** The migration builds an
+empty legacy voice table and permanently freezes it, and the source
+identity requires that plane to be **absent** beforehand. So a witness
+that validates voice evidence and then migrates cannot exist: validating
+first makes the store match neither source nor target, and validating
+afterwards writes a frozen table.
+
+Frozen order for any guarded-route witness or production path:
+
+1. migrate the store while the voice plane is **absent**;
+2. persist the source bundle into the **v2** plane via
+   `put_voice_source_bundle_v2`;
+3. read it back via `read_voice_source_bundle`;
+4. produce the **v2** validation result in that same activated store;
+5. only then authorize the write.
+
+**Rejected, and recorded so they cannot return:**
+
+* **Cross-store v1 validation** — borrowing a validation result produced
+  in another database. It may prove transaction mechanics, but it
+  certifies a migrated route using an **audit-only v1** result and proves
+  nothing about production reachability.
+* **A new in-memory / non-persisting validator** — it bypasses the frozen
+  durable v2 bundle, decoder, version, action and binding-hash joins,
+  which are the joins the evidence plane exists to carry.
+
+The validation result must be **genuinely v2 validator-produced and bound
+to the exact bundle, action and binding hash** — never a v1 token
+borrowed from another database.
+
 ## AMENDMENT (v17) — two authorities, not one
 
 **Canon conflated "which store is live?" with "does this already-held
