@@ -2185,6 +2185,7 @@ class S7AuthorizationArtifact:
         _validate_hash64(self.action_params_hash, field="action_params_hash")
         _validate_hash64(self.precondition_hash, field="precondition_hash")
         _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_action_literal(self.action)
         validate_work_class(self.derived_work_class)
         if not self.derived_aggregation_group:
             raise ValueError("S7 artifact derived_aggregation_group is required")
@@ -2405,6 +2406,7 @@ class S7ExecutionGrant:
         _validate_hash64(self.action_params_hash, field="action_params_hash")
         _validate_hash64(self.precondition_hash, field="precondition_hash")
         _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_action_literal(self.action)
         validate_work_class(self.derived_work_class)
         if not self.derived_aggregation_group:
             raise ValueError("S7 execution grant requires derived_aggregation_group")
@@ -3031,90 +3033,87 @@ class S7AuthorizationStore:
                     "refuses rather than falling back to v1"
                 )
 
-        try:
-            with _held_store(self.db_path) as (_dir_fd, _store_fd, conn):
-                # Validation and mutation share ONE held descriptor and ONE
-                # transaction. Validating a disposable probe and then
-                # opening a second connection let a swap between the two
-                # steps consume a receipt-less store.
-                conn.execute("BEGIN IMMEDIATE")
-                _verify_held_store_activation(_dir_fd, _store_fd, conn)
-                table = _V2_AUTH_TABLE
-                cur = conn.execute(
-                    f"""
-                    UPDATE {table}
-                    SET consumed_at = ?,
-                        consumed_by_request_id = ?
-                    WHERE artifact_id = ?
-                      AND request_id = ?
-                      AND request_envelope_hash = ?
-                      AND rendered_text_hash = ?
-                      AND action = ?
-                      AND action_params_hash = ?
-                      AND precondition_hash = ?
-                      AND authority_context_hash = ?
-                      AND derived_work_class = ?
-                      AND derived_aggregation_group = ?
-                      AND nonce = ?
-                      AND credential_ref = ?
-                      AND auth_method = ?
-                      AND grant_source = ?
-                      AND ceremony_kind = 'founder_local_webauthn'
-                      AND user_presence = 1
-                      AND user_verification IN (0, 1)
-                      AND (? = 0 OR user_verification = 1)
-                      AND consumed_at IS NULL
-                      AND expires_at > ?
-                    RETURNING action
-                    """,
-                    (
-                        now_text,
-                        rendered.request_id,
-                        artifact_id,
-                        rendered.request_id,
-                        rendered.request_envelope_hash,
-                        rendered.rendered_text_hash,
-                        rendered.action,
-                        action_params_hash,
-                        precondition_hash,
-                        auth_hash,
-                        derived_work_class,
-                        derived_aggregation_group,
-                        rendered.nonce,
-                        authority_context.credential_ref,
-                        authority_context.auth_method,
-                        authority_context.grant_source,
-                        1 if _webauthn_requires_user_verification(derived_work_class) else 0,
-                        now_text,
-                    ),
-                )
-                matched_row = cur.fetchone()
-                if matched_row is None or cur.rowcount != 1:
-                    return None, None
-                grant = _mint_s7_execution_grant(
-                    artifact_id=artifact_id,
-                    rendered=rendered,
-                    stored_action=matched_row[0],
-                    action_params_hash=action_params_hash,
-                    precondition_hash=precondition_hash,
-                    authority_context_hash=auth_hash,
-                    derived_work_class=derived_work_class,
-                    derived_aggregation_group=derived_aggregation_group,
-                    credential_ref=authority_context.credential_ref or "",
-                    auth_method=authority_context.auth_method,
-                    grant_source=authority_context.grant_source,
-                    ceremony_kind="founder_local_webauthn",
-                    consumed_at=now_text,
-                )
-                callback_result = (
-                    after_consume_before_commit(grant)
-                    if after_consume_before_commit is not None
-                    else None
-                )
-                conn.commit()
-                return grant, callback_result
-        except Exception:
-            return None, None
+        with _held_store(self.db_path) as (_dir_fd, _store_fd, conn):
+            # Validation and mutation share ONE held descriptor and ONE
+            # transaction. Validating a disposable probe and then
+            # opening a second connection let a swap between the two
+            # steps consume a receipt-less store.
+            conn.execute("BEGIN IMMEDIATE")
+            _verify_held_store_activation(_dir_fd, _store_fd, conn)
+            table = _V2_AUTH_TABLE
+            cur = conn.execute(
+                f"""
+                UPDATE {table}
+                SET consumed_at = ?,
+                    consumed_by_request_id = ?
+                WHERE artifact_id = ?
+                  AND request_id = ?
+                  AND request_envelope_hash = ?
+                  AND rendered_text_hash = ?
+                  AND action = ?
+                  AND action_params_hash = ?
+                  AND precondition_hash = ?
+                  AND authority_context_hash = ?
+                  AND derived_work_class = ?
+                  AND derived_aggregation_group = ?
+                  AND nonce = ?
+                  AND credential_ref = ?
+                  AND auth_method = ?
+                  AND grant_source = ?
+                  AND ceremony_kind = 'founder_local_webauthn'
+                  AND user_presence = 1
+                  AND user_verification IN (0, 1)
+                  AND (? = 0 OR user_verification = 1)
+                  AND consumed_at IS NULL
+                  AND expires_at > ?
+                RETURNING action
+                """,
+                (
+                    now_text,
+                    rendered.request_id,
+                    artifact_id,
+                    rendered.request_id,
+                    rendered.request_envelope_hash,
+                    rendered.rendered_text_hash,
+                    rendered.action,
+                    action_params_hash,
+                    precondition_hash,
+                    auth_hash,
+                    derived_work_class,
+                    derived_aggregation_group,
+                    rendered.nonce,
+                    authority_context.credential_ref,
+                    authority_context.auth_method,
+                    authority_context.grant_source,
+                    1 if _webauthn_requires_user_verification(derived_work_class) else 0,
+                    now_text,
+                ),
+            )
+            matched_row = cur.fetchone()
+            if matched_row is None or cur.rowcount != 1:
+                return None, None
+            grant = _mint_s7_execution_grant(
+                artifact_id=artifact_id,
+                rendered=rendered,
+                stored_action=matched_row[0],
+                action_params_hash=action_params_hash,
+                precondition_hash=precondition_hash,
+                authority_context_hash=auth_hash,
+                derived_work_class=derived_work_class,
+                derived_aggregation_group=derived_aggregation_group,
+                credential_ref=authority_context.credential_ref or "",
+                auth_method=authority_context.auth_method,
+                grant_source=authority_context.grant_source,
+                ceremony_kind="founder_local_webauthn",
+                consumed_at=now_text,
+            )
+            callback_result = (
+                after_consume_before_commit(grant)
+                if after_consume_before_commit is not None
+                else None
+            )
+            conn.commit()
+            return grant, callback_result
 
 
 @dataclass(frozen=True)
@@ -3158,6 +3157,8 @@ def execution_grant_authorizes_action(
 ) -> bool:
     """Return True only when a consumed S7 grant matches this execution."""
     if not isinstance(grant, S7ExecutionGrant):
+        return False
+    if type(action) is not str:
         return False
     try:
         derived = derive_work_class(action=action, params=params or {})
@@ -4435,6 +4436,7 @@ class RenderedRequestStatement:
             raise ValueError("S7 rendered surface is required")
         if not self.origin:
             raise ValueError("S7 rendered origin is required")
+        validate_action_literal(self.action)
         if not self.rendered_text:
             raise ValueError("S7 rendered_text is required")
         lines = self.rendered_text.splitlines()

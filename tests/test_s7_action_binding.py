@@ -1035,6 +1035,235 @@ class TestFixedActionConsumersCheckTheirAction:
         )
 
 
+class TestBehavioralCallerActionJoins:
+    """Runtime witnesses for the dynamic caller seams.
+
+    These call the production consumer methods against private migrated
+    stores.  The dream witness substitutes only the envelope-hash operation
+    so the test can isolate the local action join; it is not a full dream
+    route test.  Backup has its own real-store sibling witness above.  The
+    disable witness calls the proof-route consumer directly with synthetic
+    route material and a recording credential store; it does not exercise
+    Flask or a physical credential ceremony.
+    """
+
+    @staticmethod
+    def _card_for(auth, *, action: str):
+        from types import SimpleNamespace
+
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        return SimpleNamespace(
+            request_id=auth.rendered.request_id,
+            action=action,
+            params=ceremony.backup_registration_action_params(),
+        )
+
+    @staticmethod
+    def _dialog_for(auth):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            s7_artifact_id=auth.artifact_id,
+            s7_request_envelope_hash=auth.rendered.request_envelope_hash,
+        )
+
+    @staticmethod
+    def _envelope_for(auth, *, action: str):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            request_id=auth.rendered.request_id,
+            action=action,
+            request_envelope_hash=auth.rendered.request_envelope_hash,
+            precondition_hash=auth.precondition_hash,
+            derived_work_class=auth.derived_work_class,
+            derived_aggregation_group=auth.derived_aggregation_group,
+        )
+
+    def test_decision_consumer_refuses_a_sibling_without_consuming(
+        self, tmp_path: Path
+    ) -> None:
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        control_dir = tmp_path / "control"
+        refusal_dir = tmp_path / "refusal"
+        control_dir.mkdir()
+        refusal_dir.mkdir()
+        pipeline = DecisionPipeline.__new__(DecisionPipeline)
+
+        control = _backup_authorization(control_dir, action=BACKUP_ACTION)
+        control_grant, _ = pipeline._consume_s7_execution_authorization(
+            control,
+            card=self._card_for(control, action=BACKUP_ACTION),
+            dialog=self._dialog_for(control),
+        )
+        assert isinstance(control_grant, s7.S7ExecutionGrant)
+
+        refused = _backup_authorization(refusal_dir, action=BACKUP_ACTION)
+        refused_grant, _ = pipeline._consume_s7_execution_authorization(
+            refused,
+            card=self._card_for(refused, action=BACKUP_SIBLING),
+            dialog=self._dialog_for(refused),
+        )
+        assert refused_grant is False
+        assert _consumed_at(refused.store) is None
+
+    def test_decision_consumer_propagates_store_breakage(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        control_dir = tmp_path / "control"
+        broken_dir = tmp_path / "broken"
+        control_dir.mkdir()
+        broken_dir.mkdir()
+        pipeline = DecisionPipeline.__new__(DecisionPipeline)
+
+        control = _backup_authorization(control_dir, action=BACKUP_ACTION)
+        control_grant, _ = pipeline._consume_s7_execution_authorization(
+            control,
+            card=self._card_for(control, action=BACKUP_ACTION),
+            dialog=self._dialog_for(control),
+        )
+        assert isinstance(control_grant, s7.S7ExecutionGrant)
+
+        broken = _backup_authorization(broken_dir, action=BACKUP_ACTION)
+
+        def boom(_store, *_args, **_kwargs):
+            raise _Sentinel("decision consumer")
+
+        monkeypatch.setattr(s7.S7AuthorizationStore, "consume_for_execution", boom)
+        with pytest.raises(_Sentinel):
+            pipeline._consume_s7_execution_authorization(
+                broken,
+                card=self._card_for(broken, action=BACKUP_ACTION),
+                dialog=self._dialog_for(broken),
+            )
+        assert _consumed_at(broken.store) is None
+
+    def test_dream_consumer_refuses_a_sibling_without_consuming(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from core.evolution.dream_state import DreamState
+        from core.governance import s7_webauthn_ceremony as ceremony
+
+        control_dir = tmp_path / "control"
+        refusal_dir = tmp_path / "refusal"
+        control_dir.mkdir()
+        refusal_dir.mkdir()
+        dream = DreamState.__new__(DreamState)
+        control = _backup_authorization(control_dir, action=BACKUP_ACTION)
+        refused = _backup_authorization(refusal_dir, action=BACKUP_ACTION)
+        monkeypatch.setattr(
+            s7,
+            "work_request_envelope_hash",
+            lambda envelope: envelope.request_envelope_hash,
+        )
+        action_params = ceremony.backup_registration_action_params()
+
+        control_grant, control_error = (
+            dream._consume_s7_execution_authorization_for_envelope(
+                envelope=self._envelope_for(control, action=BACKUP_ACTION),
+                action_params=action_params,
+                s7_execution_authorization=control,
+                missing_message="missing",
+            )
+        )
+        assert isinstance(control_grant, s7.S7ExecutionGrant)
+        assert control_error is None
+
+        refused_grant, refused_error = (
+            dream._consume_s7_execution_authorization_for_envelope(
+                envelope=self._envelope_for(refused, action=BACKUP_SIBLING),
+                action_params=action_params,
+                s7_execution_authorization=refused,
+                missing_message="missing",
+            )
+        )
+        assert refused_grant is None
+        assert (
+            refused_error
+            == "S7 execution authorization does not match this guarded request"
+        )
+        assert _consumed_at(refused.store) is None
+
+    def test_disable_consumer_refuses_a_sibling_before_the_effect(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from core.governance import s7_webauthn_ceremony as ceremony
+        from daemon import maez_daemon
+
+        refusal_dir = tmp_path / "refusal"
+        control_dir = tmp_path / "control"
+        refusal_dir.mkdir()
+        control_dir.mkdir()
+        action_params = ceremony.backup_registration_action_params()
+
+        def invoke(auth):
+            material = SimpleNamespace(
+                ok=True,
+                kwargs={
+                    "action_params": action_params,
+                    "rendered_statement": auth.rendered,
+                    "action_params_hash": auth.action_params_hash,
+                    "authority_context": auth.authority_context,
+                    "precondition_hash": auth.precondition_hash,
+                },
+            )
+            monkeypatch.setattr(
+                maez_daemon,
+                "_s7_authorization_route_material",
+                lambda *_args, **_kwargs: material,
+            )
+            request = SimpleNamespace(
+                headers={},
+                get_json=lambda **_kwargs: {
+                    "s7_authorization_artifact_id": auth.artifact_id,
+                    "disable_authorization_request_id": auth.rendered.request_id,
+                },
+            )
+            disable_calls = []
+
+            def disable_credential(
+                credential_ref: str, *, authorization_id: str, now: str
+            ):
+                disable_calls.append((credential_ref, authorization_id, now))
+                return {"ok": True}
+
+            store = SimpleNamespace(
+                db_path=auth.store.db_path,
+                disable_credential=disable_credential,
+                credential_recovery_state=lambda: {
+                    "mode": "ready",
+                    "manual_recovery_required": False,
+                    "manual_recovery_cause": None,
+                    "active_credential_count": 2,
+                },
+            )
+            result = maez_daemon._s7_disable_credential_for_proof(
+                SimpleNamespace(), request, now=auth.now, store=store
+            )
+            return result, disable_calls
+
+        refused = _backup_authorization(refusal_dir, action=BACKUP_ACTION)
+        assert refused.derived_work_class == s7.derive_work_class(
+            action=BACKUP_SIBLING,
+            params=action_params,
+        )
+        assert refused.action_params_hash == s7.canonical_hash(action_params)
+        refused_result, refused_calls = invoke(refused)
+        assert refused_result.status_code == 403
+        assert refused_calls == []
+
+        control = _backup_authorization(control_dir, action=BACKUP_SIBLING)
+        control_result, control_calls = invoke(control)
+        assert control_result.status_code == 200
+        assert len(control_calls) == 1
+
+
 class TestActionsAreExactStrings:
     """A hostile str subclass defeats ordinary equality.
 
@@ -1051,10 +1280,12 @@ class TestActionsAreExactStrings:
             return hash(str(self))
 
     def test_the_grammar_refuses_a_subclass(self) -> None:
+        assert s7.validate_action_literal(ACTION) == ACTION
         with pytest.raises(ValueError):
             s7.validate_action_literal(self.Sneaky(ACTION))
 
     def test_the_envelope_refuses_a_subclass(self) -> None:
+        assert _bundle(ACTION)[0].action == ACTION
         with pytest.raises(ValueError):
             _bundle(self.Sneaky(ACTION))
 
@@ -1086,8 +1317,14 @@ class TestActionsAreExactStrings:
         )
 
     def test_the_voice_bundle_refuses_a_subclass(self) -> None:
+        assert _voice_bundle(ACTION).action == ACTION
         with pytest.raises(ValueError):
             _voice_bundle(self.Sneaky(ACTION))
+
+    def test_the_grant_refuses_a_subclass(self) -> None:
+        assert _direct_grant(action=ACTION).action == ACTION
+        with pytest.raises(ValueError):
+            _direct_grant(action=self.Sneaky(ACTION))
 
     def test_the_generic_edge_accepts_its_own_action(self) -> None:
         """CONTROL: without this the refusal below could come from a grant

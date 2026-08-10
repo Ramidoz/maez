@@ -1167,8 +1167,12 @@ class DreamState:
 
         if not isinstance(s7_execution_authorization, s7.S7ExecutionAuthorization):
             return None, missing_message
+        rendered = s7_execution_authorization.rendered
         action_params_hash = s7.canonical_hash(action_params)
-        if s7_execution_authorization.rendered.request_id != envelope.request_id:
+        if rendered.request_id != envelope.request_id:
+            return None, "S7 execution authorization does not match this guarded request"
+        action_matches = envelope.action == rendered.action
+        if not action_matches:
             return None, "S7 execution authorization does not match this guarded request"
         if (
             s7_execution_authorization.rendered.request_envelope_hash

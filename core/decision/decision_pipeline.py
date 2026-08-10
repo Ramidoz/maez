@@ -1545,41 +1545,42 @@ class DecisionPipeline:
         dialog: Any,
         after_consume_before_commit: Optional[Callable[[Any], Any]] = None,
     ) -> tuple[Any, Any]:
-        try:
-            from core.governance import operator_user_boundary as s7
+        from core.governance import operator_user_boundary as s7
 
-            if not isinstance(authorization, s7.S7ExecutionAuthorization):
-                return False, None
-            if authorization.rendered.request_id != card.request_id:
-                return False, None
-            if getattr(dialog, "s7_artifact_id", None) != authorization.artifact_id:
-                return False, None
-            if (
-                getattr(dialog, "s7_request_envelope_hash", None)
-                != authorization.rendered.request_envelope_hash
-            ):
-                return False, None
-            execute_params = self._execution_params_for_card(card)
-            actual_action_params_hash = s7.canonical_hash(execute_params)
-            if authorization.action_params_hash != actual_action_params_hash:
-                return False, None
-            grant, transitioned_card = authorization.store.consume_for_execution(
-                authorization.artifact_id,
-                rendered=authorization.rendered,
-                action_params_hash=actual_action_params_hash,
-                authority_context=authorization.authority_context,
-                precondition_hash=authorization.precondition_hash,
-                derived_work_class=authorization.derived_work_class,
-                derived_aggregation_group=authorization.derived_aggregation_group,
-                now=authorization.now,
-                covenant_ceremony_evidence=authorization.covenant_ceremony_evidence,
-                after_consume_before_commit=after_consume_before_commit,
-            )
-            if not isinstance(grant, s7.S7ExecutionGrant):
-                return False, transitioned_card
-            return grant, transitioned_card
-        except Exception:
+        if not isinstance(authorization, s7.S7ExecutionAuthorization):
             return False, None
+        rendered = authorization.rendered
+        if rendered.request_id != card.request_id:
+            return False, None
+        action_matches = card.action == rendered.action
+        if not action_matches:
+            return False, None
+        if getattr(dialog, "s7_artifact_id", None) != authorization.artifact_id:
+            return False, None
+        if (
+            getattr(dialog, "s7_request_envelope_hash", None)
+            != authorization.rendered.request_envelope_hash
+        ):
+            return False, None
+        execute_params = self._execution_params_for_card(card)
+        actual_action_params_hash = s7.canonical_hash(execute_params)
+        if authorization.action_params_hash != actual_action_params_hash:
+            return False, None
+        grant, transitioned_card = authorization.store.consume_for_execution(
+            authorization.artifact_id,
+            rendered=authorization.rendered,
+            action_params_hash=actual_action_params_hash,
+            authority_context=authorization.authority_context,
+            precondition_hash=authorization.precondition_hash,
+            derived_work_class=authorization.derived_work_class,
+            derived_aggregation_group=authorization.derived_aggregation_group,
+            now=authorization.now,
+            covenant_ceremony_evidence=authorization.covenant_ceremony_evidence,
+            after_consume_before_commit=after_consume_before_commit,
+        )
+        if not isinstance(grant, s7.S7ExecutionGrant):
+            return False, transitioned_card
+        return grant, transitioned_card
 
     @staticmethod
     def _execution_params_for_card(card: CardRecord) -> dict:

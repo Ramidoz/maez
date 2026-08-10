@@ -746,16 +746,20 @@ class TestTheFourCallerJoins:
     def test_action_params_hash_does_not_count_as_binding_an_action(self) -> None:
         """CONTROL, and the reason the two tests below name an exact
         expression. Every consumer already mentions `action_params_hash`;
-        a substring test on "action" greened both caller joins while
-        neither bound an action at all."""
+        a substring test on "action" greened both caller joins before
+        either bound an action at all. Keep that decoy present without
+        forbidding the real action join this class requires."""
         from core.decision.decision_pipeline import DecisionPipeline
 
         compared, passed = _action_uses(
             DecisionPipeline._consume_s7_execution_authorization
         )
-        mentions = {e for e in compared | passed if "action" in e}
-        assert mentions, "expected the params-hash mentions that caused the defect"
-        assert all("action_params_hash" in e for e in mentions), mentions
+        params_hash_mentions = {
+            e for e in compared | passed if "action_params_hash" in e
+        }
+        assert params_hash_mentions, (
+            "expected the params-hash mentions that caused the defect"
+        )
 
     def test_the_decision_pipeline_consumer_binds_card_action(self) -> None:
         """Its authoritative action is `card.action` -- pinned exactly, not

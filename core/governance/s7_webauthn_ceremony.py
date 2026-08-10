@@ -878,6 +878,10 @@ def _consume_backup_registration_authorization(
 
     if not isinstance(s7_execution_authorization, s7.S7ExecutionAuthorization):
         return None
+    rendered = s7_execution_authorization.rendered
+    action_matches = rendered.action == "register_backup_webauthn_credential"
+    if not action_matches:
+        return None
     action_params_hash = s7.canonical_hash(backup_registration_action_params())
     if s7_execution_authorization.action_params_hash != action_params_hash:
         return None
