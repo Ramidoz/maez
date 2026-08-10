@@ -2637,24 +2637,32 @@ def validate_s7_voice_source_bundle(
 
 
 def require_source_bundle_validation_for_mint(
-    source_bundle_validation: S7VoiceSourceBundleValidationResult | None,
-) -> S7VoiceSourceBundleValidationResult:
-    """Require the literal validator pass before an S7.3 artifact can be minted."""
+    source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None,
+) -> S7VoiceSourceBundleValidationResultV2:
+    """Require the literal v2 validator pass before an artifact can be minted."""
 
     # This token is an ordinary-caller guard, not a same-process security
     # boundary. A privileged same-box actor remains inside the S7.3 honesty
     # banner; live-route safety comes from deriving and validating the bundle
     # in daemon code before this mint seam is reached.
-    if not isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult):
-        raise ValueError("S7.3 artifact mint requires source-bundle validation")
+    if type(source_bundle_validation) is not S7VoiceSourceBundleValidationResultV2:
+        raise ValueError(
+            "S7.3 artifact mint requires valid absent v2 source-bundle validation"
+        )
     if (
-        source_bundle_validation.status != "valid_absent"
+        getattr(source_bundle_validation, "_token_verified", False) is not True
+        or source_bundle_validation.status != "valid_absent"
         or source_bundle_validation.source_bundle_valid is not True
         or source_bundle_validation.mint_eligible is not True
         or source_bundle_validation.authority_projection != "valid_absent"
         or source_bundle_validation.failure_reason_code is not None
+        or source_bundle_validation.schema_version
+        != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+        or source_bundle_validation.action is None
     ):
-        raise ValueError("S7.3 artifact mint requires valid absent source-bundle validation")
+        raise ValueError(
+            "S7.3 artifact mint requires valid absent v2 source-bundle validation"
+        )
     return source_bundle_validation
 
 
@@ -2674,7 +2682,7 @@ class S7GuardedStateStore:
         self,
         *,
         artifact: s7.S7AuthorizationArtifact,
-        source_bundle_validation: S7VoiceSourceBundleValidationResult | None,
+        source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None,
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
         now: str | None = None,
@@ -2711,7 +2719,7 @@ def mint_authorization_artifact(
     artifact: s7.S7AuthorizationArtifact,
     authorization_store: s7.S7AuthorizationStore,
     guarded_store: S7GuardedStateStore | None = None,
-    source_bundle_validation: S7VoiceSourceBundleValidationResult | None = None,
+    source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None = None,
     source_ref_hash: str | None = None,
     reservation_token: str | None = None,
     now: str | None = None,

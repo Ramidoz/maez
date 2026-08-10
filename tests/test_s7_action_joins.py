@@ -1231,18 +1231,203 @@ class TestVendingIsPerStore:
                 ).fetchone()[0] == 0
 
 
-# OWED, and named rather than faked: migrated-store tests through the REAL
-# `put_artifact_with_bundle_reservation` route, for BOTH success and
-# insert-failure rollback.
-#
-# My attempt stopped at fixture setup, not at the property: the route
-# requires a validated S7VoiceSourceBundleValidationResult, which needs
-# the validator token and a real bundle. TestTheGuardedWriterStaysAtomic
-# above exercises the vended transaction directly, which is NOT the same
-# thing -- it never creates a voice reservation, so it does not witness
-# the two staying atomic. That gap is real and is recorded here rather
-# than papered over with a hand-rolled transaction that resembles the
-# route without being it.
+def _migrated_v2_guarded_route_material(tmp_path: Path):
+    """Persist and validate voice evidence in the migrated store itself."""
+    from core.governance import s7_guarded_execution as guarded
+    from tests.test_s7_voice_bundle_v2 import _voice_bundle
+
+    store = _migrated_store(tmp_path)
+    env, authority, params_hash, rendered = _chain()
+    artifact = _artifact(env, authority, params_hash, rendered)
+    bundle = replace(
+        _voice_bundle(seed="route-atomicity", action=artifact.action),
+        request_id=artifact.request_id,
+        request_envelope_hash=artifact.request_envelope_hash,
+        rendered_text_hash=artifact.rendered_text_hash,
+        action_params_hash=artifact.action_params_hash,
+        precondition_hash=artifact.precondition_hash,
+        authority_context_hash=artifact.authority_context_hash,
+        source_bundle_hash=None,
+    )
+    bundle = replace(
+        bundle,
+        source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(bundle),
+    )
+
+    with store.anchored_transaction() as conn:
+        guarded.put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+    with store.anchored_transaction() as conn:
+        read_back, version = guarded.read_voice_source_bundle(
+            source_ref_hash=bundle.source_ref_hash,
+            conn=conn,
+        )
+        validation = guarded.validate_voice_source_bundle(
+            bundle=read_back,
+            version=version,
+            purpose="execution",
+        )
+    assert type(validation) is guarded.S7VoiceSourceBundleValidationResultV2
+    assert validation.schema_version == "s7.voice_source_bundle.v2"
+    assert validation.source_bundle_hash == bundle.source_bundle_hash
+    assert validation.action == artifact.action
+    assert validation.mint_eligible is True
+
+    bundle_use_store = guarded.S7VoiceBundleUseStore(store.db_path)
+    bundle_use_store.put_unreserved(
+        guarded.S7VoiceBundleUse.new_unreserved(
+            request_id=artifact.request_id,
+            source_ref_hash=bundle.source_ref_hash,
+            consultation_id=bundle.consultation_id,
+            used_at=NOW,
+        )
+    )
+    guarded_store = guarded.S7GuardedStateStore(
+        authorization_store=store,
+        voice_bundle_use_store=bundle_use_store,
+    )
+    return store, guarded_store, bundle_use_store, artifact, bundle, validation
+
+
+def _v2_artifact_row(db_path: Path, artifact_id: str):
+    with closing(sqlite3.connect(db_path)) as conn:
+        return conn.execute(
+            f"SELECT artifact_id, action FROM {V2_TABLE} WHERE artifact_id = ?",
+            (artifact_id,),
+        ).fetchone()
+
+
+class TestTheRealGuardedRouteStaysAtomicAfterMigration:
+    def test_success_commits_the_artifact_and_voice_reservation_together(
+        self, tmp_path: Path
+    ) -> None:
+        (
+            store,
+            guarded_store,
+            bundle_use_store,
+            artifact,
+            bundle,
+            validation,
+        ) = _migrated_v2_guarded_route_material(tmp_path)
+
+        guarded_store.put_artifact_with_bundle_reservation(
+            artifact=artifact,
+            source_bundle_validation=validation,
+            source_ref_hash=bundle.source_ref_hash,
+            reservation_token="route-success-token",
+            now=NOW,
+        )
+
+        assert _v2_artifact_row(store.db_path, artifact.artifact_id) == (
+            artifact.artifact_id,
+            artifact.action,
+        )
+        bundle_use = bundle_use_store.get_for_source_ref(bundle.source_ref_hash)
+        assert bundle_use is not None
+        assert (
+            bundle_use.reservation_state,
+            bundle_use.artifact_id,
+            bundle_use.reservation_token_hash,
+            bundle_use.reserved_at,
+            bundle_use.consumed_at,
+        ) == (
+            "reserved",
+            artifact.artifact_id,
+            s7.canonical_hash("route-success-token"),
+            NOW,
+            None,
+        )
+
+    def test_insert_failure_rolls_back_artifact_and_voice_reservation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (
+            store,
+            guarded_store,
+            bundle_use_store,
+            artifact,
+            bundle,
+            validation,
+        ) = _migrated_v2_guarded_route_material(tmp_path)
+        blocker = replace(artifact, artifact_id="artifact-atomicity-blocker")
+        assert blocker.artifact_id != artifact.artifact_id
+        assert blocker.nonce == artifact.nonce
+        store.put(blocker)
+        real_put = store.put
+        reservation_states_at_insert: list[str | None] = []
+
+        def observing_real_put(candidate, *, connection=None):
+            if connection is None:
+                reservation_states_at_insert.append(None)
+            else:
+                pending_use = bundle_use_store.get_for_source_ref(
+                    bundle.source_ref_hash,
+                    connection=connection,
+                )
+                reservation_states_at_insert.append(
+                    None if pending_use is None else pending_use.reservation_state
+                )
+            return real_put(candidate, connection=connection)
+
+        monkeypatch.setattr(store, "put", observing_real_put)
+
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match=r"UNIQUE constraint failed: s7_authorization_artifacts_v2\.nonce",
+        ):
+            guarded_store.put_artifact_with_bundle_reservation(
+                artifact=artifact,
+                source_bundle_validation=validation,
+                source_ref_hash=bundle.source_ref_hash,
+                reservation_token="route-rollback-token",
+                now=NOW,
+            )
+
+        assert reservation_states_at_insert == ["reserved"]
+        assert _v2_artifact_row(store.db_path, artifact.artifact_id) is None
+        assert _v2_artifact_row(store.db_path, blocker.artifact_id) == (
+            blocker.artifact_id,
+            blocker.action,
+        )
+        bundle_use = bundle_use_store.get_for_source_ref(bundle.source_ref_hash)
+        assert bundle_use is not None
+        assert (
+            bundle_use.reservation_state,
+            bundle_use.artifact_id,
+            bundle_use.reservation_token_hash,
+            bundle_use.reserved_at,
+            bundle_use.consumed_at,
+        ) == ("unreserved", None, None, None, None)
+        assert (
+            bundle_use_store.get_for_artifact(
+                bundle.source_ref_hash,
+                artifact.artifact_id,
+            )
+            is None
+        )
+
+        # POSITIVE CONTROL: remove only the nonce collision. The same durable
+        # bundle, validator result, artifact and reservation route must work.
+        with store.anchored_transaction() as conn:
+            conn.execute(
+                f"DELETE FROM {V2_TABLE} WHERE artifact_id = ?",
+                (blocker.artifact_id,),
+            )
+        guarded_store.put_artifact_with_bundle_reservation(
+            artifact=artifact,
+            source_bundle_validation=validation,
+            source_ref_hash=bundle.source_ref_hash,
+            reservation_token="route-rollback-token",
+            now=NOW,
+        )
+        assert _v2_artifact_row(store.db_path, artifact.artifact_id) == (
+            artifact.artifact_id,
+            artifact.action,
+        )
+        reserved = bundle_use_store.get_for_source_ref(bundle.source_ref_hash)
+        assert reserved is not None
+        assert reservation_states_at_insert == ["reserved", "reserved"]
+        assert reserved.reservation_state == "reserved"
+        assert reserved.artifact_id == artifact.artifact_id
 
 
 class TestTheStorePathIsWalkedComponentwise:
