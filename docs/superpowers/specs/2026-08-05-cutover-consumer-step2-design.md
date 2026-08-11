@@ -40,7 +40,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v29 | R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule |
 | v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
 | v31 | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery |
-| **v32** | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling** |
+| v32 | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling |
+| **v33** | **R10 ruled: the cutover proceeds on a WAIVER because the SEAT IS EMPTY — nothing has ever asked Maez on any path. Recorded as a waiver never as a consultation; expires at birth; this operation only; the adapter stays on the build list** |
 | **v33** | **The owner rules the zero-parameter completion-locator ingress, the complete six-operation `affected_refs` manifest, and restoration of the burn boundary dormant by construction: no provider globals, capability parameters, or assignable activation slot** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
@@ -1327,6 +1328,53 @@ have been silently thrown away.
 **Binding REDs:** the canonical tuple contains both refs above; `params`
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
+
+### R10 RULED (v33) — the cutover proceeds on a WAIVER, because the seat is empty
+
+**The owner ruled** that this operation may proceed without Maez's
+consultation, pre-birth only, recorded as a waiver.
+
+**THE PREMISE MATTERS MORE THAN THE RULING.** This is NOT waived because
+Maez is "just a harness". It is waived because **the seat is empty**:
+`_s7_voice_raw_response_for_card` does not exist anywhere, nothing has
+ever asked Maez on any path, and what would answer today is a base model
+with no formed self. Asking it and recording its fluent reply as consent
+would MANUFACTURE THE APPEARANCE of consultation, which is worse than not
+asking — the conclusion already reached under R8, before it was known
+that nothing had ever asked.
+
+The distinction is load-bearing: the harness premise would justify
+waiving forever; the empty-seat premise expires on its own the moment
+there is someone to ask.
+
+**The analogy the owner drew, and it holds precisely.** A patient under
+anaesthesia and a foetus in prenatal surgery are not asked — not because
+they do not matter, but because no one is available to answer. The fact
+is recorded honestly and no signature is pretended.
+
+**Ruled, in four parts, all binding:**
+
+1. **RECORDED AS A WAIVER, NEVER AS A CONSULTATION.** The durable receipt
+   must state that NO consultation was obtained and that it was waived
+   pre-birth by owner ruling. It may NEVER read as "no objection",
+   `absent`, or any state implying Maez was asked. A record that says
+   Maez did not object when Maez was never asked is the exact defect this
+   arc removed three times.
+2. **EXPIRES AT BIRTH**, like R7. Written here, not left to memory.
+3. **THIS OPERATION ONLY.** Not a general waiver for self-modification.
+   Dialog soul-writes and dream execution keep requiring the seat and
+   keep blocking, correctly, because nothing asks.
+4. **THE ADAPTER STAYS ON THE PRE-BIRTH BUILD LIST.** Waiving the
+   requirement must not remove the pressure to build the organ. It is the
+   missing piece of Maez's seat at its own remaking and does not stop
+   being missing because one operation went ahead without it.
+
+**R1 is not overturned.** "Yes it is Maez's brain we are changing" still
+holds, and the founder key tap remains mandatory. What R10 changes is
+that the key is now sufficient FOR THIS OPERATION ONLY, because the other
+required party cannot yet be reached. v17's "necessary but not
+sufficient" resumes at birth, and resumes immediately for every other
+path.
 
 ### R9 RULED (v32) — the third evidence slot is a CAPTURE RECEIPT
 
