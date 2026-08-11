@@ -14,6 +14,7 @@ No helper in this module names or opens the canonical live S7 store.
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import inspect
 import os
@@ -26,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import anchored_io as s7_io
 from core.governance import s7_v2_migration as mig
 from core.governance import s7_guarded_execution as guarded
 from tests.s7_store_fixture import STORE_NAME, fresh_store
@@ -118,17 +120,52 @@ def _migrated_store(tmp_path: Path):
     return store
 
 
-def _voice_bundle(*, seed: str, action: str = ACTION):
+def _voice_bundle(
+    *,
+    seed: str,
+    action: str = ACTION,
+    capture_root: Path | None = None,
+):
     """Build the v2 carrier only after the missing API seam is explicit."""
     names = {field.name for field in dataclass_fields(guarded.S7VoiceConsultationBundle)}
     assert "action" in names, (
         "S7VoiceConsultationBundle has no action field; v2 persistence cannot "
         "take authority from bundle.action"
     )
+    request_id = f"req-{seed}"
+    consultation_id = f"voice-{seed}"
+    response_capture_receipt = None
+    if type(action) is str and action == ACTION:
+        assert capture_root is not None, "cutover fixtures require durable response root"
+        raw_response = f"{seed}:raw-response".encode()
+        raw_response_ref = f"responses/{_hex(f'{seed}:raw-response')}.bin"
+        raw_response_hash = hashlib.sha256(raw_response).hexdigest()
+        semantic_reader_attempt_hash = None
+        capture_root.mkdir(parents=True)
+        (capture_root / Path(raw_response_ref).parent).mkdir(parents=True)
+        s7_io.write_private_file(
+            raw_response_ref,
+            raw_response,
+            root=capture_root,
+        )
+        response_capture_receipt = guarded.produce_s7_response_capture_receipt(
+            request_id=request_id,
+            consultation_id=consultation_id,
+            attempt_identity=_hex(f"{seed}:attempt"),
+            raw_response_ref=raw_response_ref,
+            raw_response_bytes=raw_response,
+            captured_at="2099-08-11T11:59:00Z",
+            response_root=capture_root,
+            expected_uid=os.getuid(),
+        )
+    else:
+        raw_response_ref = f"raw-response-{seed}"
+        raw_response_hash = _hex(f"{seed}:raw-response")
+        semantic_reader_attempt_hash = _hex(f"{seed}:semantic-reader")
     bundle = guarded.S7VoiceConsultationBundle(
         source_ref_hash=_hex(f"{seed}:source-ref"),
-        request_id=f"req-{seed}",
-        consultation_id=f"voice-{seed}",
+        request_id=request_id,
+        consultation_id=consultation_id,
         request_envelope_hash=_hex(f"{seed}:request-envelope"),
         rendered_text_hash=_hex(f"{seed}:rendered-text"),
         action_params_hash=_hex(f"{seed}:action-params"),
@@ -144,13 +181,14 @@ def _voice_bundle(*, seed: str, action: str = ACTION):
         runtime_identity_hash=_hex(f"{seed}:runtime-identity"),
         model_routing_identity_hash=_hex(f"{seed}:model-routing"),
         model_config_hash=_hex(f"{seed}:model-config"),
-        raw_response_ref=f"raw-response-{seed}",
-        raw_response_hash=_hex(f"{seed}:raw-response"),
-        semantic_reader_attempt_hash=_hex(f"{seed}:semantic-reader"),
+        raw_response_ref=raw_response_ref,
+        raw_response_hash=raw_response_hash,
+        semantic_reader_attempt_hash=semantic_reader_attempt_hash,
         expires_at="2099-08-11T12:00:00Z",
         authority_class="none",
         has_grounded_semantic_blocking_signal=False,
         source_bundle_hash=None,
+        response_capture_receipt=response_capture_receipt,
         action=action,
     )
     return replace(
@@ -164,6 +202,14 @@ def _reseal_voice_bundle(bundle, **changes):
     return replace(
         unsealed,
         source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(unsealed),
+    )
+
+
+def _r9_cutover_bundle(*, seed: str, capture_root: Path):
+    return _voice_bundle(
+        seed=seed,
+        action=ACTION,
+        capture_root=capture_root,
     )
 
 
@@ -211,9 +257,41 @@ def _validate_after_in_memory_evidence_mutation(
             conn=conn,
         )
         # Normal construction rejects half-pairs and malformed hashes before
-        # validation. Mutate only this in-memory read-back so each redundant
-        # validator predicate has an independent mutation-killing witness.
+        # validation. Mutate this in-memory read-back to reach the consuming
+        # rail. For R9 ref/hash mutations, coordinate and reseal the typed
+        # receipt too; otherwise its stale join would refuse for the wrong
+        # reason and the named common predicate would not bite independently.
         object.__setattr__(read_back, field_name, replacement)
+        receipt = read_back.response_capture_receipt
+        if (
+            type(receipt) is guarded.S7ResponseCaptureReceipt
+            and type(replacement) is str
+            and field_name in {"raw_response_ref", "raw_response_hash"}
+        ):
+            coordinated = copy.copy(receipt)
+            receipt_field = (
+                "raw_response_ref"
+                if field_name == "raw_response_ref"
+                else "raw_response_sha256"
+            )
+            object.__setattr__(coordinated, receipt_field, replacement)
+            object.__setattr__(
+                coordinated,
+                "binding_sha256",
+                guarded._response_capture_receipt_binding_sha256(
+                    request_id=coordinated.request_id,
+                    consultation_id=coordinated.consultation_id,
+                    attempt_identity=coordinated.attempt_identity,
+                    raw_response_ref=coordinated.raw_response_ref,
+                    raw_response_sha256=coordinated.raw_response_sha256,
+                    captured_at=coordinated.captured_at,
+                ),
+            )
+            object.__setattr__(
+                read_back,
+                "response_capture_receipt",
+                coordinated,
+            )
         object.__setattr__(
             read_back,
             "source_bundle_hash",
@@ -305,14 +383,19 @@ def _insert(conn: sqlite3.Connection, table: str, row: dict[str, object]) -> Non
 
 
 def _v2_binding_hash(bundle) -> str:
-    """Independent transcription of canon's 25-fields-plus-action recipe."""
+    """Independent transcription of the v2 sealed binding recipe."""
+    fields = {
+        **{field: getattr(bundle, field) for field in V1_FIELDS},
+        "action": bundle.action,
+    }
+    if bundle.response_capture_receipt is not None:
+        fields["response_capture_receipt"] = (
+            bundle.response_capture_receipt.as_dict()
+        )
     return s7.canonical_hash(
         {
             "schema": V2_SCHEMA,
-            "fields": {
-                **{field: getattr(bundle, field) for field in V1_FIELDS},
-                "action": bundle.action,
-            },
+            "fields": fields,
         }
     )
 
@@ -339,10 +422,81 @@ class TestFrozenVoicePlaneAPI:
 
 
 class TestV2VoicePersistence:
+    def test_r9_capture_receipt_round_trips_and_changes_the_bundle_hash(
+        self, tmp_path: Path
+    ) -> None:
+        names = {
+            field.name for field in dataclass_fields(guarded.S7VoiceConsultationBundle)
+        }
+        assert "response_capture_receipt" in names, (
+            "the consultation bundle has no distinct R9 capture-receipt field"
+        )
+        bundle = _r9_cutover_bundle(
+            seed="capture-roundtrip",
+            capture_root=tmp_path / "capture",
+        )
+        store = _migrated_store(tmp_path)
+        writer = _require_voice_api("put_voice_source_bundle_v2")
+        reader = _require_voice_api("read_voice_source_bundle")
+
+        with store.anchored_transaction() as conn:
+            writer(bundle=bundle, conn=conn)
+        with store.anchored_transaction() as conn:
+            read_back, version = reader(
+                source_ref_hash=bundle.source_ref_hash,
+                conn=conn,
+            )
+
+        without_receipt = replace(
+            bundle,
+            response_capture_receipt=None,
+            source_bundle_hash=None,
+        )
+        assert version == V2_SCHEMA
+        assert read_back == bundle
+        assert type(read_back.response_capture_receipt) is guarded.S7ResponseCaptureReceipt
+        assert guarded.s7_voice_consultation_bundle_hash(without_receipt) != (
+            bundle.source_bundle_hash
+        )
+
+    @pytest.mark.parametrize(
+        "existing_value",
+        (
+            pytest.param("raw_response_hash", id="response-hash-is-not-a-receipt"),
+            pytest.param("attempt_receipt_ref", id="receipt-ref-is-not-a-receipt"),
+        ),
+    )
+    def test_capture_receipt_field_refuses_existing_bundle_values(
+        self, tmp_path: Path, existing_value: str
+    ) -> None:
+        control = _r9_cutover_bundle(
+            seed=f"anti-relabelling-{existing_value}",
+            capture_root=tmp_path / "capture",
+        )
+        replacement = (
+            control.raw_response_hash
+            if existing_value == "raw_response_hash"
+            else "attempts/fixture.terminal.json"
+        )
+
+        assert type(control.response_capture_receipt) is guarded.S7ResponseCaptureReceipt
+        accepted = _validate_written_voice_bundle(tmp_path / "control", control)
+        assert accepted.status == "valid_absent"
+        assert accepted.source_bundle_valid is True
+        assert accepted.mint_eligible is True
+        with pytest.raises(
+            ValueError,
+            match="response_capture_receipt must be S7ResponseCaptureReceipt",
+        ):
+            replace(control, response_capture_receipt=replacement)
+
     def test_writer_persists_only_in_the_v2_voice_table(self, tmp_path: Path) -> None:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
-        bundle = _voice_bundle(seed="v2-only")
+        bundle = _voice_bundle(
+            seed="v2-only",
+            capture_root=tmp_path / "capture",
+        )
 
         with store.anchored_transaction() as conn:
             assert writer(bundle=bundle, conn=conn) is None
@@ -374,7 +528,10 @@ class TestV2VoicePersistence:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
         reader = _require_voice_api("read_voice_source_bundle")
-        wanted = _voice_bundle(seed="wanted")
+        wanted = _voice_bundle(
+            seed="wanted",
+            capture_root=tmp_path / "capture",
+        )
         neighbour = _voice_bundle(seed="neighbour", action=SIBLING_ACTION)
 
         with store.anchored_transaction() as conn:
@@ -407,7 +564,10 @@ class TestVoicePlaneRefusals:
     def test_v2_write_succeeds_on_the_migrated_store(self, tmp_path: Path) -> None:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
-        bundle = _voice_bundle(seed="v2-control")
+        bundle = _voice_bundle(
+            seed="v2-control",
+            capture_root=tmp_path / "capture",
+        )
         with store.anchored_transaction() as conn:
             writer(bundle=bundle, conn=conn)
         assert _count(store.db_path, V2_VOICE) == 1
@@ -416,7 +576,10 @@ class TestVoicePlaneRefusals:
     def test_v2_writer_refuses_a_plain_connection(self, tmp_path: Path) -> None:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
-        bundle = _voice_bundle(seed="plain-writer-refused")
+        bundle = _voice_bundle(
+            seed="plain-writer-refused",
+            capture_root=tmp_path / "capture",
+        )
 
         with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
             with pytest.raises(ValueError, match="store-vended"):
@@ -433,7 +596,10 @@ class TestVoicePlaneRefusals:
         store = _migrated_store(tmp_path)
         writer = _require_voice_api("put_voice_source_bundle_v2")
         reader = _require_voice_api("read_voice_source_bundle")
-        bundle = _voice_bundle(seed="plain-reader-refused")
+        bundle = _voice_bundle(
+            seed="plain-reader-refused",
+            capture_root=tmp_path / "capture",
+        )
         with store.anchored_transaction() as conn:
             writer(bundle=bundle, conn=conn)
 
@@ -559,6 +725,176 @@ class TestVoicePlaneDefenceInDepth:
 
 
 class TestV2VoiceValidation:
+    def test_r9_cutover_requires_capture_receipt_even_when_reader_hash_exists(
+        self, tmp_path: Path
+    ) -> None:
+        complete = _reseal_voice_bundle(
+            _r9_cutover_bundle(
+                seed="capture-required",
+                capture_root=tmp_path / "capture",
+            ),
+            semantic_reader_attempt_hash=_hex("capture-required:obsolete-reader"),
+        )
+        relabelled = _reseal_voice_bundle(
+            complete,
+            response_capture_receipt=None,
+        )
+
+        refused = _validate_written_voice_bundle(tmp_path / "refused", relabelled)
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        assert control.status == "valid_absent"
+        assert control.mint_eligible is True
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+        assert refused.failure_reason_code == "source_bundle_unavailable"
+
+    def test_r9_cutover_capture_receipt_needs_no_reader_attempt(
+        self, tmp_path: Path
+    ) -> None:
+        complete = _r9_cutover_bundle(
+            seed="reader-abolished",
+            capture_root=tmp_path / "capture",
+        )
+
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        assert complete.semantic_reader_attempt_hash is None
+        assert control.status == "valid_absent"
+        assert control.source_bundle_valid is True
+        assert control.mint_eligible is True
+
+    @pytest.mark.parametrize(
+        ("field_name", "replacement"),
+        (
+            pytest.param(
+                "raw_response_ref",
+                "",
+                id="r9-response-ref-is-required",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                "not-a-sha256-digest",
+                id="r9-response-hash-must-be-well-formed",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                hashlib.sha256(b"").hexdigest(),
+                id="r9-empty-byte-response-hash-is-refused",
+            ),
+            pytest.param(
+                "response_capture_receipt",
+                None,
+                id="r9-capture-receipt-is-required",
+            ),
+        ),
+    )
+    def test_r9_each_content_blind_rail_requirement_bites_independently(
+        self,
+        tmp_path: Path,
+        field_name: str,
+        replacement: object,
+    ) -> None:
+        complete = _r9_cutover_bundle(
+            seed=f"rail-{field_name}-{replacement}",
+            capture_root=tmp_path / "capture",
+        )
+
+        refused = _validate_after_in_memory_evidence_mutation(
+            tmp_path / "refused",
+            complete,
+            field_name=field_name,
+            replacement=replacement,
+        )
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        assert control.status == "valid_absent"
+        assert control.source_bundle_valid is True
+        assert control.mint_eligible is True
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+        assert refused.failure_reason_code == "source_bundle_unavailable"
+
+    def test_non_cutover_reader_requirement_cannot_be_replaced_by_capture_receipt(
+        self, tmp_path: Path
+    ) -> None:
+        control = _voice_bundle(seed="sibling-reader", action=SIBLING_ACTION)
+        response = b"sibling-reader:raw-response"
+        capture_root = tmp_path / "capture"
+        capture_root.mkdir()
+        s7_io.write_private_file(
+            str(control.raw_response_ref),
+            response,
+            root=capture_root,
+        )
+        receipt = guarded.produce_s7_response_capture_receipt(
+            request_id=control.request_id,
+            consultation_id=control.consultation_id,
+            attempt_identity=_hex("sibling-reader:attempt"),
+            raw_response_ref=str(control.raw_response_ref),
+            raw_response_bytes=response,
+            captured_at="2099-08-11T11:59:00Z",
+            response_root=capture_root,
+            expected_uid=os.getuid(),
+        )
+        capture_only = _reseal_voice_bundle(
+            control,
+            semantic_reader_attempt_hash=None,
+            response_capture_receipt=receipt,
+        )
+
+        refused = _validate_written_voice_bundle(tmp_path / "refused", capture_only)
+        accepted = _validate_written_voice_bundle(tmp_path / "control", control)
+
+        assert accepted.status == "valid_absent"
+        assert accepted.mint_eligible is True
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+
+    def test_r9_capture_receipt_seal_is_revalidated_at_the_consuming_rail(
+        self, tmp_path: Path
+    ) -> None:
+        complete = _r9_cutover_bundle(
+            seed="capture-seal",
+            capture_root=tmp_path / "capture",
+        )
+        store = _migrated_store(tmp_path / "refused")
+        writer = _require_voice_api("put_voice_source_bundle_v2")
+        reader = _require_voice_api("read_voice_source_bundle")
+        validator = _require_voice_api("validate_voice_source_bundle")
+
+        with store.anchored_transaction() as conn:
+            writer(bundle=complete, conn=conn)
+        with store.anchored_transaction() as conn:
+            read_back, version = reader(
+                source_ref_hash=complete.source_ref_hash,
+                conn=conn,
+            )
+            tampered = copy.copy(read_back.response_capture_receipt)
+            object.__setattr__(tampered, "binding_sha256", "0" * 64)
+            object.__setattr__(read_back, "response_capture_receipt", tampered)
+            object.__setattr__(
+                read_back,
+                "source_bundle_hash",
+                guarded.s7_voice_consultation_bundle_hash(read_back),
+            )
+            refused = validator(
+                bundle=read_back,
+                version=version,
+                purpose="execution",
+            )
+
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        assert control.status == "valid_absent"
+        assert control.mint_eligible is True
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+
     @pytest.mark.parametrize(
         "evidence_changes",
         (
@@ -581,7 +917,10 @@ class TestV2VoiceValidation:
         tmp_path: Path,
         evidence_changes: dict[str, object],
     ) -> None:
-        complete = _voice_bundle(seed="evidence-join")
+        complete = _voice_bundle(
+            seed="evidence-join",
+            action=SIBLING_ACTION,
+        )
         incomplete = _reseal_voice_bundle(complete, **evidence_changes)
 
         refused = _validate_written_voice_bundle(tmp_path / "refused", incomplete)
@@ -637,7 +976,10 @@ class TestV2VoiceValidation:
         field_name: str,
         replacement: object,
     ) -> None:
-        complete = _voice_bundle(seed="independent-evidence-check")
+        complete = _voice_bundle(
+            seed="independent-evidence-check",
+            action=SIBLING_ACTION,
+        )
 
         refused = _validate_after_in_memory_evidence_mutation(
             tmp_path / "refused",
@@ -667,7 +1009,10 @@ class TestV2VoiceValidation:
         reader = _require_voice_api("read_voice_source_bundle")
         validator = _require_voice_api("validate_voice_source_bundle")
         result_type = _require_voice_api("S7VoiceSourceBundleValidationResultV2")
-        written = _voice_bundle(seed="validation")
+        written = _voice_bundle(
+            seed="validation",
+            capture_root=tmp_path / "capture",
+        )
 
         with store.anchored_transaction() as conn:
             writer(bundle=written, conn=conn)
@@ -699,7 +1044,10 @@ class TestV2VoiceValidation:
         writer = _require_voice_api("put_voice_source_bundle_v2")
         reader = _require_voice_api("read_voice_source_bundle")
         validator = _require_voice_api("validate_voice_source_bundle")
-        written = _voice_bundle(seed="frozen-result")
+        written = _voice_bundle(
+            seed="frozen-result",
+            capture_root=tmp_path / "capture",
+        )
 
         with store.anchored_transaction() as conn:
             writer(bundle=written, conn=conn)

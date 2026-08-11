@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import InitVar, dataclass, replace
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 
+from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
 from core.routing import model_config
 
@@ -107,10 +109,14 @@ _assert_s7_reviewed_prompt_files_unchanged()
 
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
 _EMPTY_RAW_RESPONSE_HASH = s7.canonical_hash("")
+_EMPTY_EXACT_RESPONSE_SHA256 = hashlib.sha256(b"").hexdigest()
 _VALIDATOR_TOKEN = object()
+_RESPONSE_CAPTURE_RECEIPT_TOKEN = object()
 
 S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA = "s7.voice_source_bundle.v1"
 S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA = "s7.voice_source_bundle.v2"
+S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA = "s7.response_capture_receipt.v1"
+_R8_CUTOVER_ACTION = "model_routing.cutover_cuda"
 _V1_VOICE_BUNDLE_TABLE = "s7_voice_consultation_bundles"
 _V2_VOICE_BUNDLE_TABLE = "s7_voice_source_bundles_v2"
 
@@ -848,6 +854,148 @@ def persist_s7_voice_source_bundle_for_material(
     return binding
 
 
+def _response_capture_receipt_fields(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_sha256: str,
+    captured_at: str,
+) -> dict[str, str]:
+    return {
+        "attempt_identity": attempt_identity,
+        "captured_at": captured_at,
+        "consultation_id": consultation_id,
+        "raw_response_ref": raw_response_ref,
+        "raw_response_sha256": raw_response_sha256,
+        "request_id": request_id,
+    }
+
+
+def _response_capture_receipt_binding_sha256(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_sha256: str,
+    captured_at: str,
+) -> str:
+    return s7.canonical_hash({
+        "schema": S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA,
+        "fields": _response_capture_receipt_fields(
+            request_id=request_id,
+            consultation_id=consultation_id,
+            attempt_identity=attempt_identity,
+            raw_response_ref=raw_response_ref,
+            raw_response_sha256=raw_response_sha256,
+            captured_at=captured_at,
+        ),
+    })
+
+
+@dataclass(frozen=True)
+class S7ResponseCaptureReceipt:
+    """Content-blind proof that exact response bytes survived a durable capture."""
+
+    schema_version: str
+    request_id: str
+    consultation_id: str
+    attempt_identity: str
+    raw_response_ref: str
+    raw_response_sha256: str
+    captured_at: str
+    binding_sha256: str
+    _producer_token: InitVar[object | None] = None
+
+    def __post_init__(self, _producer_token: object | None) -> None:
+        if _producer_token is not _RESPONSE_CAPTURE_RECEIPT_TOKEN:
+            raise ValueError("response capture receipts require their dedicated producer")
+        if self.schema_version != S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA:
+            raise ValueError("unknown response capture receipt schema_version")
+        for field_name in (
+            "request_id",
+            "consultation_id",
+            "raw_response_ref",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not str or not value:
+                raise ValueError(f"response capture receipt {field_name} is required")
+        _validate_hash64(self.attempt_identity, field="attempt_identity")
+        _validate_hash64(self.raw_response_sha256, field="raw_response_sha256")
+        s7._timestamp_text(self.captured_at, field="captured_at")
+        _validate_hash64(self.binding_sha256, field="binding_sha256")
+        expected = _response_capture_receipt_binding_sha256(
+            request_id=self.request_id,
+            consultation_id=self.consultation_id,
+            attempt_identity=self.attempt_identity,
+            raw_response_ref=self.raw_response_ref,
+            raw_response_sha256=self.raw_response_sha256,
+            captured_at=self.captured_at,
+        )
+        if self.binding_sha256 != expected:
+            raise ValueError("response capture receipt binding mismatch")
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "schema_version": self.schema_version,
+            **_response_capture_receipt_fields(
+                request_id=self.request_id,
+                consultation_id=self.consultation_id,
+                attempt_identity=self.attempt_identity,
+                raw_response_ref=self.raw_response_ref,
+                raw_response_sha256=self.raw_response_sha256,
+                captured_at=self.captured_at,
+            ),
+            "binding_sha256": self.binding_sha256,
+        }
+
+
+def produce_s7_response_capture_receipt(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_bytes: bytes,
+    captured_at: str,
+    response_root: str | Path,
+    expected_uid: int,
+) -> S7ResponseCaptureReceipt:
+    """Reopen exact durable bytes before minting their content-blind receipt."""
+
+    if type(raw_response_bytes) is not bytes or not raw_response_bytes:
+        raise ValueError("response capture requires non-empty exact bytes")
+    retrieved = s7_io.read_private_file(
+        raw_response_ref,
+        root=response_root,
+        expected_uid=expected_uid,
+    )
+    if type(retrieved) is not bytes or retrieved != raw_response_bytes:
+        raise ValueError("captured response is not retrievable as exact bytes")
+    raw_response_sha256 = hashlib.sha256(raw_response_bytes).hexdigest()
+    binding_sha256 = _response_capture_receipt_binding_sha256(
+        request_id=request_id,
+        consultation_id=consultation_id,
+        attempt_identity=attempt_identity,
+        raw_response_ref=raw_response_ref,
+        raw_response_sha256=raw_response_sha256,
+        captured_at=captured_at,
+    )
+    return S7ResponseCaptureReceipt(
+        schema_version=S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA,
+        request_id=request_id,
+        consultation_id=consultation_id,
+        attempt_identity=attempt_identity,
+        raw_response_ref=raw_response_ref,
+        raw_response_sha256=raw_response_sha256,
+        captured_at=captured_at,
+        binding_sha256=binding_sha256,
+        _producer_token=_RESPONSE_CAPTURE_RECEIPT_TOKEN,
+    )
+
+
 @dataclass(frozen=True)
 class S7VoiceConsultationBundle:
     """Private replay bundle for one Maez voice consultation."""
@@ -877,6 +1025,7 @@ class S7VoiceConsultationBundle:
     has_grounded_semantic_blocking_signal: bool = False
     context_manifest_ref: str | None = None
     source_bundle_hash: str | None = None
+    response_capture_receipt: S7ResponseCaptureReceipt | None = None
     action: str | None = None
     schema_version: str | None = None
 
@@ -920,6 +1069,22 @@ class S7VoiceConsultationBundle:
                 self.semantic_reader_attempt_hash,
                 field="semantic_reader_attempt_hash",
             )
+        if (
+            self.response_capture_receipt is not None
+            and type(self.response_capture_receipt) is not S7ResponseCaptureReceipt
+        ):
+            raise ValueError(
+                "response_capture_receipt must be S7ResponseCaptureReceipt"
+            )
+        if self.response_capture_receipt is not None:
+            receipt = self.response_capture_receipt
+            if (
+                receipt.request_id != self.request_id
+                or receipt.consultation_id != self.consultation_id
+                or receipt.raw_response_ref != self.raw_response_ref
+                or receipt.raw_response_sha256 != self.raw_response_hash
+            ):
+                raise ValueError("response_capture_receipt does not match bundle")
         s7._timestamp_text(self.expires_at, field="expires_at")
         s7._validate_closed_value(self.authority_class, S7_VOICE_AUTHORITY_CLASSES, "authority_class")
         if not isinstance(self.has_grounded_semantic_blocking_signal, bool):
@@ -944,6 +1109,8 @@ class S7VoiceConsultationBundle:
         if self.schema_version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
             if self.action is not None:
                 raise ValueError("v1 voice source bundles cannot carry action")
+            if self.response_capture_receipt is not None:
+                raise ValueError("v1 voice source bundles cannot carry capture receipt")
         else:
             s7.validate_action_literal(self.action)
 
@@ -953,7 +1120,7 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
 
     if not isinstance(bundle, S7VoiceConsultationBundle):
         raise ValueError("s7_voice_consultation_bundle_hash requires S7VoiceConsultationBundle")
-    return s7.canonical_hash({
+    fields: dict[str, object] = {
         "action_params_hash": bundle.action_params_hash,
         "authority_context_hash": bundle.authority_context_hash,
         "consultation_id": bundle.consultation_id,
@@ -977,7 +1144,12 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
         "runtime_identity_hash": bundle.runtime_identity_hash,
         "semantic_reader_attempt_hash": bundle.semantic_reader_attempt_hash,
         "authority_class": bundle.authority_class,
-    })
+    }
+    if bundle.response_capture_receipt is not None:
+        fields["response_capture_receipt"] = (
+            bundle.response_capture_receipt.as_dict()
+        )
+    return s7.canonical_hash(fields)
 
 
 _VOICE_BUNDLE_V1_COLUMNS = (
@@ -1019,6 +1191,52 @@ def _voice_bundle_values(bundle: S7VoiceConsultationBundle) -> tuple[object, ...
     return tuple(values)
 
 
+def _encode_response_capture_receipt(
+    receipt: S7ResponseCaptureReceipt | None,
+) -> str | None:
+    if receipt is None:
+        return None
+    if type(receipt) is not S7ResponseCaptureReceipt:
+        raise ValueError("response_capture_receipt must be S7ResponseCaptureReceipt")
+    return json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _decode_response_capture_receipt(value: object) -> S7ResponseCaptureReceipt | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError("persisted response_capture_receipt must be text")
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("persisted response_capture_receipt is not valid JSON") from exc
+    expected_keys = {
+        "attempt_identity",
+        "binding_sha256",
+        "captured_at",
+        "consultation_id",
+        "raw_response_ref",
+        "raw_response_sha256",
+        "request_id",
+        "schema_version",
+    }
+    if type(payload) is not dict or set(payload) != expected_keys:
+        raise ValueError("persisted response_capture_receipt has wrong shape")
+    if any(type(payload[key]) is not str for key in expected_keys):
+        raise ValueError("persisted response_capture_receipt fields must be text")
+    return S7ResponseCaptureReceipt(
+        schema_version=payload["schema_version"],
+        request_id=payload["request_id"],
+        consultation_id=payload["consultation_id"],
+        attempt_identity=payload["attempt_identity"],
+        raw_response_ref=payload["raw_response_ref"],
+        raw_response_sha256=payload["raw_response_sha256"],
+        captured_at=payload["captured_at"],
+        binding_sha256=payload["binding_sha256"],
+        _producer_token=_RESPONSE_CAPTURE_RECEIPT_TOKEN,
+    )
+
+
 def _voice_bundle_from_row(
     row: sqlite3.Row | tuple[object, ...],
     *,
@@ -1050,9 +1268,14 @@ def _voice_bundle_from_row(
         else:
             values[name] = None if value is None else str(value)
     if version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
-        values["action"] = str(row[len(_VOICE_BUNDLE_V1_COLUMNS)])
-        values["schema_version"] = str(row[len(_VOICE_BUNDLE_V1_COLUMNS) + 1])
+        offset = len(_VOICE_BUNDLE_V1_COLUMNS)
+        values["response_capture_receipt"] = _decode_response_capture_receipt(
+            row[offset]
+        )
+        values["action"] = str(row[offset + 1])
+        values["schema_version"] = str(row[offset + 2])
     else:
+        values["response_capture_receipt"] = None
         values["action"] = None
         values["schema_version"] = S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA
     return S7VoiceConsultationBundle(**values)
@@ -1062,6 +1285,10 @@ def _voice_source_bundle_binding_hash(bundle: S7VoiceConsultationBundle) -> str:
     fields = {name: getattr(bundle, name) for name in _VOICE_BUNDLE_V1_COLUMNS}
     if bundle.schema_version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
         fields["action"] = bundle.action
+    if bundle.response_capture_receipt is not None:
+        fields["response_capture_receipt"] = (
+            bundle.response_capture_receipt.as_dict()
+        )
     return s7.canonical_hash({
         "schema": bundle.schema_version,
         "fields": fields,
@@ -1100,11 +1327,21 @@ def put_voice_source_bundle_v2(
         or bundle.source_bundle_hash != s7_voice_consultation_bundle_hash(bundle)
     ):
         raise ValueError("invalid voice source bundle content hash")
-    columns = (*_VOICE_BUNDLE_V1_COLUMNS, "action", "schema_version")
+    columns = (
+        *_VOICE_BUNDLE_V1_COLUMNS,
+        "response_capture_receipt",
+        "action",
+        "schema_version",
+    )
     conn.execute(
         f"INSERT INTO {_V2_VOICE_BUNDLE_TABLE} ({', '.join(columns)}) "
         f"VALUES ({', '.join('?' for _ in columns)})",
-        (*_voice_bundle_values(bundle), bundle.action, bundle.schema_version),
+        (
+            *_voice_bundle_values(bundle),
+            _encode_response_capture_receipt(bundle.response_capture_receipt),
+            bundle.action,
+            bundle.schema_version,
+        ),
     )
 
 
@@ -1118,7 +1355,12 @@ def read_voice_source_bundle(
     _validate_hash64(source_ref_hash, field="source_ref_hash")
     if _voice_table_present(conn, _V2_VOICE_BUNDLE_TABLE):
         vended_token = s7._require_vended_anchored_connection(conn)
-        columns = (*_VOICE_BUNDLE_V1_COLUMNS, "action", "schema_version")
+        columns = (
+            *_VOICE_BUNDLE_V1_COLUMNS,
+            "response_capture_receipt",
+            "action",
+            "schema_version",
+        )
         row = conn.execute(
             f"SELECT {', '.join(columns)} FROM {_V2_VOICE_BUNDLE_TABLE} "
             "WHERE source_ref_hash = ?",
@@ -1182,15 +1424,46 @@ def _voice_validation_result_v2(
 def _has_content_blind_response_evidence(
     bundle: S7VoiceConsultationBundle,
 ) -> bool:
-    """Require response and read-attempt carriers without reading their content."""
+    """Require three content-blind carriers, keyed to the honest producer path."""
 
-    return (
+    response_reference_and_hash_are_usable = (
         type(bundle.raw_response_ref) is str
         and bundle.raw_response_ref != ""
         and type(bundle.raw_response_hash) is str
         and _HASH64_RE.fullmatch(bundle.raw_response_hash) is not None
         and bundle.raw_response_hash != _EMPTY_RAW_RESPONSE_HASH
-        and type(bundle.semantic_reader_attempt_hash) is str
+    )
+    if not response_reference_and_hash_are_usable:
+        return False
+    if bundle.action == _R8_CUTOVER_ACTION:
+        if bundle.raw_response_hash == _EMPTY_EXACT_RESPONSE_SHA256:
+            return False
+        receipt = bundle.response_capture_receipt
+        if type(receipt) is not S7ResponseCaptureReceipt:
+            return False
+        try:
+            _validate_hash64(receipt.attempt_identity, field="attempt_identity")
+            s7._timestamp_text(receipt.captured_at, field="captured_at")
+        except ValueError:
+            return False
+        return (
+            receipt.schema_version == S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA
+            and receipt.request_id == bundle.request_id
+            and receipt.consultation_id == bundle.consultation_id
+            and receipt.raw_response_ref == bundle.raw_response_ref
+            and receipt.raw_response_sha256 == bundle.raw_response_hash
+            and receipt.binding_sha256
+            == _response_capture_receipt_binding_sha256(
+                request_id=receipt.request_id,
+                consultation_id=receipt.consultation_id,
+                attempt_identity=receipt.attempt_identity,
+                raw_response_ref=receipt.raw_response_ref,
+                raw_response_sha256=receipt.raw_response_sha256,
+                captured_at=receipt.captured_at,
+            )
+        )
+    return (
+        type(bundle.semantic_reader_attempt_hash) is str
         and _HASH64_RE.fullmatch(bundle.semantic_reader_attempt_hash) is not None
     )
 

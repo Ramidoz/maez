@@ -22,12 +22,14 @@ here claims to.
 from __future__ import annotations
 
 import contextlib
+import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
 from core.governance import s7_v2_migration as mig
 from tests.s7_store_fixture import fresh_store
@@ -417,7 +419,7 @@ def _hex(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()
 
 
-def _voice_bundle(action: str):
+def _voice_bundle(action: str, *, capture_root: Path | None = None):
     """A REAL S7VoiceConsultationBundle that can actually validate.
 
     Three defects in my first version: non-hex hash fields, an
@@ -426,6 +428,25 @@ def _voice_bundle(action: str):
     recomputed one. Any of them refuses before the mint, so the mint join
     would never have been exercised.
     """
+    response = b"raw_response"
+    response_capture_receipt = None
+    semantic_reader_attempt_hash = _hex("semantic_reader")
+    if type(action) is str and action == ACTION:
+        assert capture_root is not None, "cutover fixtures require durable response root"
+        capture_root.mkdir(parents=True)
+        (capture_root / "responses").mkdir()
+        s7_io.write_private_file("responses/1", response, root=capture_root)
+        response_capture_receipt = guarded.produce_s7_response_capture_receipt(
+            request_id="req-action-binding-1",
+            consultation_id="voice-action-binding-1",
+            attempt_identity=_hex("capture_attempt"),
+            raw_response_ref="responses/1",
+            raw_response_bytes=response,
+            captured_at=NOW,
+            response_root=capture_root,
+            expected_uid=os.getuid(),
+        )
+        semantic_reader_attempt_hash = None
     bundle = guarded.S7VoiceConsultationBundle(
         source_ref_hash=_hex("source_ref"),
         request_id="req-action-binding-1",
@@ -446,12 +467,13 @@ def _voice_bundle(action: str):
         model_config_hash=_hex("model_config"),
         raw_response_ref="responses/1",
         raw_response_hash=_hex("raw_response"),
-        semantic_reader_attempt_hash=_hex("semantic_reader"),
+        semantic_reader_attempt_hash=semantic_reader_attempt_hash,
         expires_at=FUTURE,
         authority_class="authoritative",
         has_grounded_semantic_blocking_signal=False,
         context_manifest_ref="manifests/1",
         source_bundle_hash=_hex("placeholder"),
+        response_capture_receipt=response_capture_receipt,
         action=action,
     )
     # source_bundle_hash is DERIVED, not chosen: recompute it from the
@@ -468,7 +490,10 @@ class TestTheProductionMintJoin:
     @staticmethod
     def _validated_fixture(tmp_path: Path):
         store = _migrated_store(tmp_path)
-        bundle = _voice_bundle(ACTION)
+        bundle = _voice_bundle(
+            ACTION,
+            capture_root=tmp_path / "capture",
+        )
         with store.anchored_transaction() as conn:
             guarded.put_voice_source_bundle_v2(bundle=bundle, conn=conn)
         with store.anchored_transaction() as conn:
@@ -1316,8 +1341,11 @@ class TestActionsAreExactStrings:
             "is red for the missing field, not for exact typing"
         )
 
-    def test_the_voice_bundle_refuses_a_subclass(self) -> None:
-        assert _voice_bundle(ACTION).action == ACTION
+    def test_the_voice_bundle_refuses_a_subclass(self, tmp_path: Path) -> None:
+        assert _voice_bundle(
+            ACTION,
+            capture_root=tmp_path / "capture",
+        ).action == ACTION
         with pytest.raises(ValueError):
             _voice_bundle(self.Sneaky(ACTION))
 

@@ -1,6 +1,6 @@
 """Cutover step 2B — the consumer primitive.
 
-Written against ratified design v29 and its R8 recorded-consultation ruling.
+Written against ratified design v32 and its R8/R9 recorded-consultation ruling.
 
 Slice 1 covers the contracts that are unambiguous from the frozen design
 and testable without a live S7 ceremony: the receipt's v2 shape, the
@@ -847,6 +847,108 @@ class TestConsultationProducer:
         assert terminal["raw_response_sha256"] == digest
         assert terminal["maez_objection_state"] == "not_determined"
         assert "valid_absent" not in terminal.values()
+
+    def test_answered_response_has_its_own_typed_sealed_capture_receipt(
+        self, tmp_path: Path
+    ) -> None:
+        producer_params = inspect.signature(
+            guarded.produce_s7_response_capture_receipt
+        ).parameters
+        assert tuple(producer_params) == (
+            "request_id",
+            "consultation_id",
+            "attempt_identity",
+            "raw_response_ref",
+            "raw_response_bytes",
+            "captured_at",
+            "response_root",
+            "expected_uid",
+        )
+        assert "retrieve_response" not in producer_params
+        assert all(
+            param.kind is inspect.Parameter.KEYWORD_ONLY
+            for param in producer_params.values()
+        )
+        response = b"opaque response whose durable capture is independently receipted"
+        envelope, attempt, ask = _consultation_fixture(tmp_path, response=response)
+
+        result = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+        )
+
+        receipt_type = getattr(guarded, "S7ResponseCaptureReceipt", None)
+        assert receipt_type is not None, (
+            "S7ResponseCaptureReceipt is absent: R9 requires its own typed receipt"
+        )
+        receipt = result.response_capture_receipt
+        assert type(receipt) is receipt_type
+        assert receipt.request_id == envelope.request_id
+        assert receipt.consultation_id == attempt.consultation_id
+        assert receipt.attempt_identity == attempt.attempt_identity
+        assert receipt.raw_response_ref == result.raw_response_ref
+        assert receipt.raw_response_sha256 == result.raw_response_sha256
+        assert receipt.binding_sha256 not in {
+            result.raw_response_sha256,
+            result.rendered_text_hash,
+            result.attempt_receipt_ref,
+            attempt.attempt_identity,
+        }
+
+        terminal = json.loads(
+            s7_io.read_private_file(
+                result.attempt_receipt_ref,
+                root=attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+        )["fields"]
+        assert terminal["response_capture_receipt"] == receipt.as_dict()
+
+    def test_capture_receipt_refuses_when_persisted_response_is_not_retrievable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        refused_root = tmp_path / "refused"
+        refused_root.mkdir()
+        envelope, attempt, ask = _consultation_fixture(refused_root)
+        persist = cutover._persist_exact_consultation_response
+
+        def persist_then_remove(**kwargs):
+            relative = persist(**kwargs)
+            (attempt.receipt_root / relative).unlink()
+            return relative
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                cutover,
+                "_persist_exact_consultation_response",
+                persist_then_remove,
+            )
+            refused = cutover.produce_cutover_consultation(
+                envelope=envelope,
+                attempt=attempt,
+                ask=ask,
+                now="2000-01-01T00:01:00Z",
+            )
+
+        control_root = tmp_path / "control"
+        control_root.mkdir()
+        control_envelope, control_attempt, control_ask = _consultation_fixture(
+            control_root
+        )
+        control = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=control_envelope,
+            attempt=control_attempt,
+            ask=control_ask,
+        )
+
+        assert control.outcome == "asked_and_answered"
+        assert refused.outcome == "attempt_failed"
+        assert refused.failure_reason_code == "bundle_unreservable"
+        assert control.response_capture_receipt is not None
+        assert refused.response_capture_receipt is None
 
     @pytest.mark.parametrize(
         ("response", "failure", "expected_outcome", "expected_reason"),

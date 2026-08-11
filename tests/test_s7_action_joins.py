@@ -1406,14 +1406,36 @@ def _migrated_v2_guarded_route_material(tmp_path: Path):
     store = _migrated_store(tmp_path)
     env, authority, params_hash, rendered = _chain()
     artifact = _artifact(env, authority, params_hash, rendered)
+    response = b"route-atomicity:raw-response"
+    capture_root = tmp_path / "capture"
+    base_bundle = _voice_bundle(
+        seed="route-atomicity",
+        action=artifact.action,
+        capture_root=capture_root,
+    )
+    response_capture_receipt = guarded.produce_s7_response_capture_receipt(
+        request_id=artifact.request_id,
+        consultation_id="voice-route-atomicity",
+        attempt_identity=_hex("route-atomicity:attempt"),
+        raw_response_ref=(
+            "responses/"
+            + _hex("route-atomicity:raw-response")
+            + ".bin"
+        ),
+        raw_response_bytes=response,
+        captured_at=NOW,
+        response_root=capture_root,
+        expected_uid=os.getuid(),
+    )
     bundle = replace(
-        _voice_bundle(seed="route-atomicity", action=artifact.action),
+        base_bundle,
         request_id=artifact.request_id,
         request_envelope_hash=artifact.request_envelope_hash,
         rendered_text_hash=artifact.rendered_text_hash,
         action_params_hash=artifact.action_params_hash,
         precondition_hash=artifact.precondition_hash,
         authority_context_hash=artifact.authority_context_hash,
+        response_capture_receipt=response_capture_receipt,
         source_bundle_hash=None,
     )
     bundle = replace(

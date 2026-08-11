@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS {V2_VOICE} (
     semantic_reader_attempt_hash TEXT, expires_at TEXT,
     authority_class TEXT, has_grounded_semantic_blocking_signal INTEGER,
     source_bundle_hash TEXT,
+    response_capture_receipt TEXT,
     action TEXT NOT NULL,
     schema_version TEXT NOT NULL DEFAULT 's7.voice_source_bundle.v2'
 );

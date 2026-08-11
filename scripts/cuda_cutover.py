@@ -21,6 +21,7 @@ from pathlib import Path
 
 from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
+from core.governance import s7_guarded_execution as guarded
 from core.governance import s7_v2_migration as s7_migration
 from core.governance import s7_webauthn_bootstrap as s7_bootstrap
 from scripts import cuda_migration as cm
@@ -133,6 +134,7 @@ class CutoverConsultationResult:
     raw_response_sha256: str | None
     owner_visible_response: str | None
     rendered_text_hash: str | None
+    response_capture_receipt: guarded.S7ResponseCaptureReceipt | None
     attempt_receipt_ref: str | None
     failure_reason_code: str | None
 
@@ -182,12 +184,25 @@ class CutoverConsultationResult:
             )
             if self.attempt_receipt_ref is None:
                 raise ValueError("answered consultation requires a durable receipt")
+            receipt = self.response_capture_receipt
+            if type(receipt) is not guarded.S7ResponseCaptureReceipt:
+                raise ValueError("answered consultation requires its typed capture receipt")
+            if (
+                receipt.request_id != self.attempt.request_id
+                or receipt.consultation_id != self.attempt.consultation_id
+                or receipt.attempt_identity != self.attempt.attempt_identity
+                or receipt.raw_response_ref != self.raw_response_ref
+                or receipt.raw_response_sha256 != self.raw_response_sha256
+            ):
+                raise ValueError("capture receipt does not match the consultation result")
             return
 
         if self.consultation is not None:
             raise ValueError("non-answered consultation cannot carry a voice fact")
         if self.failure_reason_code is None:
             raise ValueError("non-answered consultation requires a failure reason")
+        if self.response_capture_receipt is not None:
+            raise ValueError("non-answered consultation cannot carry a capture receipt")
         if self.outcome == "consultation_withdrawn" and (
             self.failure_reason_code != "consultation_withdrawn"
         ):
@@ -600,6 +615,7 @@ def _failed_consultation_result(
         raw_response_sha256=None,
         owner_visible_response=None,
         rendered_text_hash=rendered_text_hash,
+        response_capture_receipt=None,
         attempt_receipt_ref=receipt_ref,
         failure_reason_code=failure_reason_code,
     )
@@ -825,6 +841,16 @@ def produce_cutover_consultation(
             response_sha256=raw_response_sha256,
         )
         owner_visible_response = response.decode("utf-8")
+        response_capture_receipt = guarded.produce_s7_response_capture_receipt(
+            request_id=envelope.request_id,
+            consultation_id=attempt.consultation_id,
+            attempt_identity=attempt.attempt_identity,
+            raw_response_ref=raw_response_ref,
+            raw_response_bytes=response,
+            captured_at=now,
+            response_root=attempt.receipt_root,
+            expected_uid=os.getuid(),
+        )
     except UnicodeDecodeError:
         return _failed_consultation_result(
             attempt=attempt,
@@ -858,6 +884,9 @@ def produce_cutover_consultation(
             "precondition_hash": envelope.precondition_hash,
             "raw_response_ref": raw_response_ref,
             "raw_response_sha256": raw_response_sha256,
+            "response_capture_receipt_sha256": (
+                response_capture_receipt.binding_sha256
+            ),
             "rendered_text_hash": rendered_text_hash,
             "request_envelope_hash": request_envelope_hash,
             "request_id": envelope.request_id,
@@ -886,6 +915,7 @@ def produce_cutover_consultation(
         "outcome": "asked_and_answered",
         "raw_response_ref": raw_response_ref,
         "raw_response_sha256": raw_response_sha256,
+        "response_capture_receipt": response_capture_receipt.as_dict(),
         "source_ref_hash": source_ref_hash,
     }
     try:
@@ -906,6 +936,7 @@ def produce_cutover_consultation(
         raw_response_sha256=raw_response_sha256,
         owner_visible_response=owner_visible_response,
         rendered_text_hash=rendered_text_hash,
+        response_capture_receipt=response_capture_receipt,
         attempt_receipt_ref=attempt_receipt_ref,
         failure_reason_code=None,
     )

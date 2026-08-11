@@ -407,30 +407,30 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4580 |
 | `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1523 |
 | `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1184 |
-| `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 1730 |
-| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 2308 |
-| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 2281 |
-| `core/governance/s7_guarded_execution.py` | `_voice_bundle_from_row` | source_bundle | call:S7VoiceConsultationBundle | 1058 |
-| `core/governance/s7_guarded_execution.py` | `_voice_validation_result_v2` | hash | call:s7_voice_consultation_bundle_hash | 1166 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 698 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 697 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 714 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 678 |
-| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 1831 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 2748 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:authorization_store.put | 2781 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 2773 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:attempt_store.put | 788 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:bundle_store.put_bundle | 812 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 813 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 776 |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 2745 |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 2708 |
-| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1736 |
-| `core/governance/s7_guarded_execution.py` | `put_voice_source_bundle_v2` | hash | call:s7_voice_consultation_bundle_hash | 1100 |
-| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 951 |
-| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2532 |
-| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1218 |
+| `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 2003 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 2581 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 2554 |
+| `core/governance/s7_guarded_execution.py` | `_voice_bundle_from_row` | source_bundle | call:S7VoiceConsultationBundle | 1281 |
+| `core/governance/s7_guarded_execution.py` | `_voice_validation_result_v2` | hash | call:s7_voice_consultation_bundle_hash | 1408 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 704 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 703 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 720 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 684 |
+| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 2104 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 3021 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:authorization_store.put | 3054 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 3046 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:attempt_store.put | 794 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:bundle_store.put_bundle | 818 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 819 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 782 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 3018 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 2981 |
+| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 2009 |
+| `core/governance/s7_guarded_execution.py` | `put_voice_source_bundle_v2` | hash | call:s7_voice_consultation_bundle_hash | 1327 |
+| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 1118 |
+| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2805 |
+| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1491 |
 | `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 891 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 659 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 683 |
@@ -701,8 +701,9 @@ the original migration hazard survived on the *evidence* plane. The
 existing `s7_voice_consultation_bundles` auto-creates and auto-`ALTER`s an
 unversioned table.
 
-**Exact v2 DDL** — the 25 v1 columns verbatim (read from
-`s7_guarded_execution.py:983`) plus two, **27 total**:
+**Exact v2 DDL** — the 25 v1 columns verbatim plus the R9 typed sealed
+capture-receipt carrier, `action`, and `schema_version`: **28 total**.
+The receipt is v2-only; the frozen v1 table remains byte-for-byte unchanged:
 
 ```sql
 CREATE TABLE IF NOT EXISTS s7_voice_source_bundles_v2 (
@@ -719,6 +720,7 @@ CREATE TABLE IF NOT EXISTS s7_voice_source_bundles_v2 (
     semantic_reader_attempt_hash TEXT, expires_at TEXT,
     authority_class TEXT, has_grounded_semantic_blocking_signal INTEGER,
     source_bundle_hash TEXT,
+    response_capture_receipt TEXT,
     action TEXT NOT NULL,
     schema_version TEXT NOT NULL DEFAULT 's7.voice_source_bundle.v2'
 );
@@ -885,8 +887,10 @@ are module-private factories. Nothing else may pass the token.
 
 **`binding_hash` recipe, exact fields** — the project canonical encoder
 over `{"schema": "s7.voice_source_bundle.v2", "fields": {…}}` where the
-fields are precisely the 25 v1 bundle columns plus `action`, in the DDL's
-column order:
+fields are precisely the 25 v1 bundle columns plus the R9
+`response_capture_receipt` projection and `action`. The receipt projection
+is present when the typed receipt is present; omitting it preserves the
+already-sealed non-R9 bundle recipe:
 
 ```
 source_ref_hash, request_id, consultation_id, request_envelope_hash,
@@ -897,7 +901,7 @@ context_manifest_ref, context_manifest_hash, runtime_identity_hash,
 model_routing_identity_hash, model_config_hash, raw_response_ref,
 raw_response_hash, semantic_reader_attempt_hash, expires_at,
 authority_class, has_grounded_semantic_blocking_signal,
-source_bundle_hash, action
+source_bundle_hash, response_capture_receipt, action
 ```
 
 SHA-256 of those exact bytes, same newline-bearing encoder as every other

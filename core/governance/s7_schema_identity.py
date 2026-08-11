@@ -21,7 +21,10 @@ receipt can bind it rather than describe a gap in prose.
 The TARGET literals were withdrawn in v9 after three careful parties
 computed three different pairs. These are recomputed from the frozen DDL
 with the frozen recipe, and they agree with the pair the review arrived
-at independently.
+at independently. R9 later extended the still-pre-live v2 voice target with
+the distinct response-capture-receipt column. Its replacement voice literal
+was recomputed both through the frozen recipe and an independent transcription
+of that recipe; the authorization target did not change.
 """
 
 from __future__ import annotations
@@ -37,5 +40,5 @@ S7_TARGET_FINGERPRINT_AUTH = (
     "5bea4677d4d3917afaac4159cda4810484d2c5f381a482291b812de526b73226"
 )
 S7_TARGET_FINGERPRINT_VOICE = (
-    "a4546eb9a57bb91dd9b9d3195b649d17d893e246823a80444df267bd6eb8219e"
+    "fd43c756cb23c83b7e75f86b8a65646a593a1d4dd498bd964f7ae27360f0d0ea"
 )
