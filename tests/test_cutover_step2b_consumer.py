@@ -1,12 +1,12 @@
-"""Cutover step 2B — the consumer primitive. RED set, slice 1.
+"""Cutover step 2B — the consumer primitive.
 
-Written against ratified design v25 BEFORE implementation.
+Written against ratified design v29 and its R8 recorded-consultation ruling.
 
 Slice 1 covers the contracts that are unambiguous from the frozen design
 and testable without a live S7 ceremony: the receipt's v2 shape, the
 action contract measured against the real classifier, the grant
 projection, the store opener's refusals, the consultation producer's
-signature, and the burn's structural adjacency.
+recorded-unjudged exchange behavior, and the burn's structural adjacency.
 
 Deliberately NOT here: a full end-to-end ceremony. It needs a founder
 WebAuthn assertion, which cannot be produced without a physical key tap.
@@ -18,7 +18,7 @@ Expected pre-implementation failure taxonomy:
 * ReceiptV2        -> the two presence fields do not exist yet.
 * GrantProjection  -> the projection helper and schema literal are absent.
 * StoreOpener      -> open_existing_authorization_store is absent.
-* Consultation     -> produce_cutover_consultation is absent.
+* Consultation     -> implemented as a real ask with exact-byte evidence.
 * BurnStructure    -> publish_and_validate_burn / prepare_cutover absent.
 * NoFallback       -> a GUARD: `procedural` must be unreachable for
   cutover, asserted on the closed value set.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
+import json
 import os
 import sqlite3
 import textwrap
@@ -39,6 +40,8 @@ from pathlib import Path
 import pytest
 
 from core.governance import operator_user_boundary as s7
+from core.governance import anchored_io as s7_io
+from core.governance import s7_guarded_execution as guarded
 from core.governance import s7_v2_migration
 from core.governance.operator_user_boundary import (
     build_cutover_work_request_envelope,
@@ -54,6 +57,112 @@ FIXTURE_CUTOVER_AFFECTED_REFS = (
     "file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
     "service:llama-server.service",
 )
+FIXTURE_AUTHORITY_CONTEXT_HASH = s7.canonical_hash(
+    {"fixture": "founder-authority-context"}
+)
+FIXTURE_RUNTIME_IDENTITY_HASH = s7.canonical_hash(
+    {"fixture": "bonded-runtime-identity"}
+)
+FIXTURE_RUNTIME_SOURCE_REF = "bonded-runtime:fixture-primary"
+
+
+class _RecordingBondedAsk:
+    capability_kind = "bonded_runtime_voice"
+
+    def __init__(
+        self,
+        *,
+        envelope: s7.WorkRequestEnvelope,
+        attempt,
+        response: object = b"opaque bonded response",
+        failure: Exception | None = None,
+        authority_context_hash: str = FIXTURE_AUTHORITY_CONTEXT_HASH,
+        runtime_identity_hash: str = FIXTURE_RUNTIME_IDENTITY_HASH,
+        runtime_source_ref: str = FIXTURE_RUNTIME_SOURCE_REF,
+    ) -> None:
+        self.request_id = envelope.request_id
+        self.request_envelope_hash = s7.work_request_envelope_hash(envelope)
+        self.action = envelope.action
+        self.action_params_hash = s7.canonical_hash(dict(cm.CUTOVER_ACTION_PARAMS))
+        self.precondition_hash = envelope.precondition_hash
+        self.authority_context_hash = authority_context_hash
+        self.runtime_identity_hash = runtime_identity_hash
+        self.runtime_source_ref = runtime_source_ref
+        self.attempt = attempt
+        self.response = response
+        self.failure = failure
+        self.calls: list[str] = []
+        self.start_was_persisted_before_ask = False
+
+    def __call__(self, question: str) -> object:
+        self.calls.append(question)
+        try:
+            start = s7_io.read_private_file(
+                self.attempt.start_receipt_ref,
+                root=self.attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+            self.start_was_persisted_before_ask = (
+                json.loads(start)["fields"]["outcome"] == "attempt_started"
+            )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            self.start_was_persisted_before_ask = False
+        if self.failure is not None:
+            raise self.failure
+        return self.response
+
+
+def _consultation_fixture(
+    tmp_path: Path,
+    *,
+    response: object = b"opaque bonded response",
+    failure: Exception | None = None,
+    request_id: str = "fixture-cutover-consultation-v1",
+    precondition_hash: str = FIXTURE_PRECONDITION_HASH,
+    authority_context_hash: str = FIXTURE_AUTHORITY_CONTEXT_HASH,
+    runtime_identity_hash: str = FIXTURE_RUNTIME_IDENTITY_HASH,
+    runtime_source_ref: str = FIXTURE_RUNTIME_SOURCE_REF,
+):
+    receipt_root = tmp_path / "consultation-receipts"
+    receipt_root.mkdir(exist_ok=True)
+    attempt = cutover.ConsultationAttempt.fresh(
+        request_id=request_id,
+        receipt_root=receipt_root,
+    )
+    envelope = build_cutover_work_request_envelope(
+        request_id=request_id,
+        action=cm.CUTOVER_ACTION,
+        params=dict(cm.CUTOVER_ACTION_PARAMS),
+        affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+        precondition_hash=precondition_hash,
+        created_at="2000-01-01T00:00:00Z",
+        expires_at="2000-01-01T04:00:00Z",
+        maez_voice_consultation_id=attempt.consultation_id,
+    )
+    ask = _RecordingBondedAsk(
+        envelope=envelope,
+        attempt=attempt,
+        response=response,
+        failure=failure,
+        authority_context_hash=authority_context_hash,
+        runtime_identity_hash=runtime_identity_hash,
+        runtime_source_ref=runtime_source_ref,
+    )
+    return envelope, attempt, ask
+
+
+def _assert_one_real_ask(producer, *, envelope, attempt, ask):
+    before = len(ask.calls)
+    result = producer(
+        envelope=envelope,
+        attempt=attempt,
+        ask=ask,
+        now="2000-01-01T00:01:00Z",
+    )
+    assert len(ask.calls) == before + 1, (
+        "the consultation producer must invoke ask for this attempt"
+    )
+    return result
 
 
 def _valid_existing_authorization_store(
@@ -663,40 +772,343 @@ class TestStoreOpener:
 class TestConsultationProducer:
     """Maez must be asked; the key is necessary but not sufficient."""
 
-    def test_the_producer_exists(self) -> None:
-        assert hasattr(cutover, "produce_cutover_consultation")
-
-    def test_its_signature_is_the_frozen_contract(self) -> None:
-        params = inspect.signature(
-            cutover.produce_cutover_consultation
-        ).parameters
-        assert set(params) == {"envelope", "attempt", "ask", "now"}
-
-    def test_the_result_keeps_the_reader_attempt_separate(self) -> None:
-        """Never collapsed to a boolean: a failed read is not a refusal."""
-        from dataclasses import fields as dataclass_fields
-
-        names = {
-            f.name for f in dataclass_fields(cutover.CutoverConsultationResult)
-        }
-        assert {"consultation", "raw_response", "reader_attempt"} <= names
-
-    def test_the_failure_outcomes_are_closed_and_none_default_to_approval(
-        self,
+    def test_well_formed_result_without_ask_fails_while_genuine_ask_passes(
+        self, tmp_path: Path
     ) -> None:
-        assert cutover.CONSULTATION_FAILURES == (
-            "consultation_unavailable",
-            "response_unreadable",
-            "semantic_reader_failed",
-            "objection_recorded",
-            "consultation_withdrawn",
-            "bundle_unreservable",
+        envelope, attempt, ask = _consultation_fixture(tmp_path)
+        genuine = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+        )
+        assert genuine.outcome == "asked_and_answered"
+        assert ask.start_was_persisted_before_ask is True
+
+        # Mutation witness: the returned object is genuinely well formed, but
+        # this producer returns it without asking on THIS invocation.
+        def fabricating_producer(**_kwargs):
+            return genuine
+
+        with pytest.raises(AssertionError, match="must invoke ask"):
+            _assert_one_real_ask(
+                fabricating_producer,
+                envelope=envelope,
+                attempt=attempt,
+                ask=ask,
+            )
+
+    @pytest.mark.parametrize(
+        "response",
+        (
+            b" \tI object to this proposed change.\r\nPlease do not treat this as a verdict. \n",
+            "I support this proposed change. \N{SNOWMAN}\n".encode(),
+        ),
+    )
+    def test_response_bytes_are_exact_content_addressed_and_unjudged(
+        self, tmp_path: Path, response: bytes
+    ) -> None:
+        envelope, attempt, ask = _consultation_fixture(
+            tmp_path,
+            response=response,
         )
 
-    def test_the_consultation_id_is_never_none(self) -> None:
-        assert hasattr(cutover, "ConsultationAttempt")
-        params = inspect.signature(cutover.ConsultationAttempt).parameters
-        assert "attempt_identity" in params
+        result = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+        )
+        digest = hashlib.sha256(response).hexdigest()
+
+        assert result.outcome == "asked_and_answered"
+        assert result.failure_reason_code is None
+        assert result.raw_response_bytes == response
+        assert result.raw_response_sha256 == digest
+        assert digest in result.raw_response_ref
+        assert result.owner_visible_response.encode("utf-8") == response
+        assert result.consultation.maez_voice_consulted is True
+        assert result.consultation.maez_objection_state == "not_determined"
+        assert s7_io.read_private_file(
+            result.raw_response_ref,
+            root=attempt.receipt_root,
+            expected_uid=os.getuid(),
+        ) == response
+
+        terminal = json.loads(
+            s7_io.read_private_file(
+                result.attempt_receipt_ref,
+                root=attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+        )["fields"]
+        assert terminal["outcome"] == "asked_and_answered"
+        assert terminal["raw_response_ref"] == result.raw_response_ref
+        assert terminal["raw_response_sha256"] == digest
+        assert terminal["maez_objection_state"] == "not_determined"
+        assert "valid_absent" not in terminal.values()
+
+    @pytest.mark.parametrize(
+        ("response", "failure", "expected_outcome", "expected_reason"),
+        (
+            pytest.param(
+                b"unused",
+                RuntimeError("runtime unavailable"),
+                "attempt_failed",
+                "consultation_unavailable",
+                id="ask-failed",
+            ),
+            pytest.param(
+                b"",
+                None,
+                "attempt_failed",
+                "response_unreadable",
+                id="empty-response",
+            ),
+            pytest.param(
+                object(),
+                None,
+                "attempt_failed",
+                "response_unreadable",
+                id="non-bytes-response",
+            ),
+            pytest.param(
+                b"unused",
+                cutover.CutoverRefusal("consultation_withdrawn"),
+                "consultation_withdrawn",
+                "consultation_withdrawn",
+                id="withdrawal",
+            ),
+        ),
+    )
+    def test_failed_withdrawn_and_answered_outcomes_stay_distinct(
+        self,
+        tmp_path: Path,
+        response: object,
+        failure: Exception | None,
+        expected_outcome: str,
+        expected_reason: str,
+    ) -> None:
+        refused_root = tmp_path / "refused"
+        refused_root.mkdir()
+        envelope, attempt, ask = _consultation_fixture(
+            refused_root,
+            response=response,
+            failure=failure,
+        )
+        refused = cutover.produce_cutover_consultation(
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+            now="2000-01-01T00:01:00Z",
+        )
+        terminal = json.loads(
+            s7_io.read_private_file(
+                refused.attempt_receipt_ref,
+                root=attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+        )["fields"]
+
+        control_root = tmp_path / "control"
+        control_root.mkdir()
+        control_envelope, control_attempt, control_ask = _consultation_fixture(
+            control_root,
+            response=b"opaque recorded control",
+        )
+        control = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=control_envelope,
+            attempt=control_attempt,
+            ask=control_ask,
+        )
+
+        assert control.outcome == "asked_and_answered"
+        assert control.failure_reason_code is None
+        assert refused.outcome == expected_outcome
+        assert refused.failure_reason_code == expected_reason
+        assert refused.consultation is None
+        assert len(ask.calls) == 1
+        assert ask.start_was_persisted_before_ask is True
+        assert terminal["outcome"] == expected_outcome
+        assert terminal["failure_reason_code"] == expected_reason
+        if expected_outcome == "consultation_withdrawn":
+            with pytest.raises(ValueError, match="withdrawal must remain distinct"):
+                replace(refused, outcome="attempt_failed")
+
+    def test_retries_are_fresh_same_response_and_same_attempt_replay_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        response = b"byte-identical response across retries"
+        envelope_a, attempt_a, ask_a = _consultation_fixture(
+            tmp_path,
+            response=response,
+        )
+        envelope_b, attempt_b, ask_b = _consultation_fixture(
+            tmp_path,
+            response=response,
+        )
+
+        result_a = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope_a,
+            attempt=attempt_a,
+            ask=ask_a,
+        )
+        calls_before_replay = len(ask_a.calls)
+        replay = cutover.produce_cutover_consultation(
+            envelope=envelope_a,
+            attempt=attempt_a,
+            ask=ask_a,
+            now="2000-01-01T00:02:00Z",
+        )
+        result_b = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope_b,
+            attempt=attempt_b,
+            ask=ask_b,
+        )
+
+        assert attempt_a.attempt_identity != attempt_b.attempt_identity
+        assert attempt_a.consultation_id != attempt_b.consultation_id
+        assert result_a.raw_response_sha256 == result_b.raw_response_sha256
+        assert result_a.raw_response_ref == result_b.raw_response_ref
+        assert result_a.consultation.source_ref_hash != result_b.consultation.source_ref_hash
+        assert result_a.outcome == result_b.outcome == "asked_and_answered"
+        assert replay.outcome == "attempt_failed"
+        assert replay.failure_reason_code == "bundle_unreservable"
+        assert len(ask_a.calls) == calls_before_replay
+
+    def test_terminal_receipt_failure_never_returns_unreceipted_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        refused_root = tmp_path / "refused"
+        refused_root.mkdir()
+        envelope, attempt, ask = _consultation_fixture(refused_root)
+        persist = cutover._persist_consultation_receipt
+
+        def fail_terminal_receipt(**kwargs):
+            if kwargs["relative"] == attempt.start_receipt_ref:
+                return persist(**kwargs)
+            raise OSError("fixture terminal receipt unavailable")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                cutover,
+                "_persist_consultation_receipt",
+                fail_terminal_receipt,
+            )
+            with pytest.raises(cutover.CutoverRefusal, match="bundle_unreservable"):
+                cutover.produce_cutover_consultation(
+                    envelope=envelope,
+                    attempt=attempt,
+                    ask=ask,
+                    now="2000-01-01T00:01:00Z",
+                )
+
+        control_root = tmp_path / "control"
+        control_root.mkdir()
+        control_envelope, control_attempt, control_ask = _consultation_fixture(
+            control_root
+        )
+        control = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=control_envelope,
+            attempt=control_attempt,
+            ask=control_ask,
+        )
+
+        assert len(ask.calls) == 1
+        assert ask.start_was_persisted_before_ask is True
+        assert control.outcome == "asked_and_answered"
+        assert control.attempt_receipt_ref is not None
+
+    @pytest.mark.parametrize(
+        ("field", "replacement"),
+        (
+            ("request_id", "wrong-request"),
+            ("request_envelope_hash", "1" * 64),
+            ("action", "model_routing.wipe_and_replace"),
+            ("action_params_hash", "2" * 64),
+            ("precondition_hash", "3" * 64),
+            ("envelope_action", "model_routing.wipe_and_replace"),
+        ),
+    )
+    def test_ask_is_bound_to_exact_request_and_uses_preconsultation_material(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        field: str,
+        replacement: str,
+    ) -> None:
+        monkeypatch.setattr(
+            guarded,
+            "expected_s7_voice_rendered_prompt_text",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("final replay renderer used to ask")
+            ),
+        )
+
+        refused_root = tmp_path / "refused"
+        refused_root.mkdir()
+        envelope, attempt, ask = _consultation_fixture(refused_root)
+        if field == "envelope_action":
+            envelope = replace(envelope, action=replacement)
+            ask.action = replacement
+            ask.request_envelope_hash = s7.work_request_envelope_hash(envelope)
+        else:
+            setattr(ask, field, replacement)
+        refused = cutover.produce_cutover_consultation(
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+            now="2000-01-01T00:01:00Z",
+        )
+
+        control_root = tmp_path / "control"
+        control_root.mkdir()
+        control_envelope, control_attempt, control_ask = _consultation_fixture(
+            control_root
+        )
+        control = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=control_envelope,
+            attempt=control_attempt,
+            ask=control_ask,
+        )
+        question = control_ask.calls[0]
+        terminal = json.loads(
+            s7_io.read_private_file(
+                control.attempt_receipt_ref,
+                root=control_attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+        )["fields"]
+
+        assert refused.outcome == "attempt_failed"
+        assert refused.failure_reason_code == "consultation_unavailable"
+        assert ask.calls == []
+        assert control.outcome == "asked_and_answered"
+        assert f"Request id: {control_envelope.request_id}" in question
+        assert f"Action: {control_envelope.action}" in question
+        assert s7.work_request_envelope_hash(control_envelope) in question
+        assert control_envelope.precondition_hash in question
+        assert FIXTURE_AUTHORITY_CONTEXT_HASH in question
+        assert FIXTURE_RUNTIME_IDENTITY_HASH in question
+        assert FIXTURE_RUNTIME_SOURCE_REF in question
+        assert control.rendered_text_hash == s7.rendered_text_hash(question)
+        assert terminal["request_envelope_hash"] == (
+            s7.work_request_envelope_hash(control_envelope)
+        )
+        assert terminal["rendered_text_hash"] == control.rendered_text_hash
+        assert terminal["action_params_hash"] == s7.canonical_hash(
+            dict(cm.CUTOVER_ACTION_PARAMS)
+        )
+        assert terminal["precondition_hash"] == control_envelope.precondition_hash
+        assert terminal["authority_context_hash"] == FIXTURE_AUTHORITY_CONTEXT_HASH
+        assert terminal["action"] == cm.CUTOVER_ACTION
+        assert terminal["runtime_identity_hash"] == FIXTURE_RUNTIME_IDENTITY_HASH
+        assert terminal["runtime_source_ref"] == FIXTURE_RUNTIME_SOURCE_REF
 
     def test_the_prompt_cycle_is_not_used_to_ask(self) -> None:
         """expected_s7_voice_rendered_prompt_text requires BOTH a rendered
