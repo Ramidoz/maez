@@ -159,6 +159,73 @@ def _voice_bundle(*, seed: str, action: str = ACTION):
     )
 
 
+def _reseal_voice_bundle(bundle, **changes):
+    unsealed = replace(bundle, source_bundle_hash=None, **changes)
+    return replace(
+        unsealed,
+        source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(unsealed),
+    )
+
+
+def _validate_written_voice_bundle(root: Path, bundle):
+    root.mkdir()
+    store = _migrated_store(root)
+    writer = _require_voice_api("put_voice_source_bundle_v2")
+    reader = _require_voice_api("read_voice_source_bundle")
+    validator = _require_voice_api("validate_voice_source_bundle")
+
+    with store.anchored_transaction() as conn:
+        writer(bundle=bundle, conn=conn)
+    with store.anchored_transaction() as conn:
+        read_back, version = reader(
+            source_ref_hash=bundle.source_ref_hash,
+            conn=conn,
+        )
+        return validator(
+            bundle=read_back,
+            version=version,
+            purpose="execution",
+        )
+
+
+def _validate_after_in_memory_evidence_mutation(
+    root: Path,
+    bundle,
+    *,
+    field_name: str,
+    replacement,
+):
+    """Reach one validator predicate after the durable read provenance gate."""
+
+    root.mkdir()
+    store = _migrated_store(root)
+    writer = _require_voice_api("put_voice_source_bundle_v2")
+    reader = _require_voice_api("read_voice_source_bundle")
+    validator = _require_voice_api("validate_voice_source_bundle")
+
+    with store.anchored_transaction() as conn:
+        writer(bundle=bundle, conn=conn)
+    with store.anchored_transaction() as conn:
+        read_back, version = reader(
+            source_ref_hash=bundle.source_ref_hash,
+            conn=conn,
+        )
+        # Normal construction rejects half-pairs and malformed hashes before
+        # validation. Mutate only this in-memory read-back so each redundant
+        # validator predicate has an independent mutation-killing witness.
+        object.__setattr__(read_back, field_name, replacement)
+        object.__setattr__(
+            read_back,
+            "source_bundle_hash",
+            guarded.s7_voice_consultation_bundle_hash(read_back),
+        )
+        return validator(
+            bundle=read_back,
+            version=version,
+            purpose="execution",
+        )
+
+
 def _legacy_row(*, seed: str, source_ref_hash: str | None = None) -> dict[str, object]:
     return {
         "source_ref_hash": source_ref_hash or _hex(f"{seed}:source-ref"),
@@ -492,6 +559,106 @@ class TestVoicePlaneDefenceInDepth:
 
 
 class TestV2VoiceValidation:
+    @pytest.mark.parametrize(
+        "evidence_changes",
+        (
+            pytest.param(
+                {"raw_response_ref": None, "raw_response_hash": None},
+                id="missing-raw-response",
+            ),
+            pytest.param(
+                {"raw_response_hash": s7.canonical_hash("")},
+                id="empty-raw-response",
+            ),
+            pytest.param(
+                {"semantic_reader_attempt_hash": None},
+                id="missing-semantic-reader-attempt",
+            ),
+        ),
+    )
+    def test_validator_blocks_without_response_and_read_attempt_evidence(
+        self,
+        tmp_path: Path,
+        evidence_changes: dict[str, object],
+    ) -> None:
+        complete = _voice_bundle(seed="evidence-join")
+        incomplete = _reseal_voice_bundle(complete, **evidence_changes)
+
+        refused = _validate_written_voice_bundle(tmp_path / "refused", incomplete)
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        # POSITIVE CONTROL: the same base fixture, with all three pieces of
+        # content-blind evidence present, still reaches the normal success.
+        assert control.status == "valid_absent"
+        assert control.source_bundle_valid is True
+        assert control.mint_eligible is True
+        assert control.authority_projection == "valid_absent"
+        assert control.failure_reason_code is None
+
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+        assert refused.authority_projection == "unavailable"
+        assert refused.failure_reason_code == "source_bundle_unavailable"
+
+    @pytest.mark.parametrize(
+        ("field_name", "replacement"),
+        (
+            pytest.param(
+                "raw_response_ref",
+                None,
+                id="missing-raw-response-ref",
+            ),
+            pytest.param(
+                "raw_response_ref",
+                "",
+                id="empty-raw-response-ref",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                None,
+                id="missing-raw-response-hash",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                "not-a-sha256-digest",
+                id="malformed-raw-response-hash",
+            ),
+            pytest.param(
+                "semantic_reader_attempt_hash",
+                "not-a-sha256-digest",
+                id="malformed-semantic-reader-attempt-hash",
+            ),
+        ),
+    )
+    def test_validator_checks_each_response_evidence_field_independently(
+        self,
+        tmp_path: Path,
+        field_name: str,
+        replacement: object,
+    ) -> None:
+        complete = _voice_bundle(seed="independent-evidence-check")
+
+        refused = _validate_after_in_memory_evidence_mutation(
+            tmp_path / "refused",
+            complete,
+            field_name=field_name,
+            replacement=replacement,
+        )
+        control = _validate_written_voice_bundle(tmp_path / "control", complete)
+
+        assert control.status == "valid_absent"
+        assert control.source_bundle_valid is True
+        assert control.mint_eligible is True
+        assert control.authority_projection == "valid_absent"
+        assert control.failure_reason_code is None
+
+        assert refused.status == "source_bundle_unavailable"
+        assert refused.source_bundle_valid is False
+        assert refused.mint_eligible is False
+        assert refused.authority_projection == "unavailable"
+        assert refused.failure_reason_code == "source_bundle_unavailable"
+
     def test_writer_reader_validator_chain_binds_bundle_action_and_binding_hash(
         self, tmp_path: Path
     ) -> None:

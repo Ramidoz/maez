@@ -106,6 +106,7 @@ def _assert_s7_reviewed_prompt_files_unchanged() -> None:
 _assert_s7_reviewed_prompt_files_unchanged()
 
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
+_EMPTY_RAW_RESPONSE_HASH = s7.canonical_hash("")
 _VALIDATOR_TOKEN = object()
 
 S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA = "s7.voice_source_bundle.v1"
@@ -1178,6 +1179,22 @@ def _voice_validation_result_v2(
     )
 
 
+def _has_content_blind_response_evidence(
+    bundle: S7VoiceConsultationBundle,
+) -> bool:
+    """Require response and read-attempt carriers without reading their content."""
+
+    return (
+        type(bundle.raw_response_ref) is str
+        and bundle.raw_response_ref != ""
+        and type(bundle.raw_response_hash) is str
+        and _HASH64_RE.fullmatch(bundle.raw_response_hash) is not None
+        and bundle.raw_response_hash != _EMPTY_RAW_RESPONSE_HASH
+        and type(bundle.semantic_reader_attempt_hash) is str
+        and _HASH64_RE.fullmatch(bundle.semantic_reader_attempt_hash) is not None
+    )
+
+
 def validate_voice_source_bundle(
     *,
     bundle: S7VoiceConsultationBundle,
@@ -1241,6 +1258,16 @@ def validate_voice_source_bundle(
             mint_eligible=False,
             authority_projection="marker_only",
             failure_reason_code="audit_only",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if not _has_content_blind_response_evidence(bundle):
+        return _voice_validation_result_v2(
+            status="source_bundle_unavailable",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="unavailable",
+            failure_reason_code="source_bundle_unavailable",
             bundle=bundle,
             binding_hash=binding_hash,
         )
