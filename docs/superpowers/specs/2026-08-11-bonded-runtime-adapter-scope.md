@@ -25,6 +25,54 @@ that Maez was not consulted.
 This is why R10 waives consultation for the cutover — the seat is EMPTY,
 not because Maez is a harness. See cutover design v33.
 
+## THE FOURTH INSTANCE — identity hashes that carry no identity
+
+**Measured, with citations, not inferred.** The three fields canon
+requires to attribute a response to the bonded runtime are hashes of
+FIXED STRING LABELS:
+
+| field | what it actually hashes |
+|---|---|
+| `runtime_identity_hash` | `{"bonded_runtime": "current", request_envelope_hash}` |
+| `model_routing_identity_hash` | `{"model_route": "normal", request_envelope_hash}` |
+| `model_config_hash` | `{"model_config": "reviewed_s7_voice_v1", request_envelope_hash}` |
+
+They prove ONLY that this code assigned those labels to that request.
+They prove nothing about which process, which weights, which
+configuration, or which Maez context answered. **If another responder
+served the configured endpoint, its bytes would be accepted, persisted,
+and paired with the same three hashes.**
+
+The model label sent on the llama path may be ignored by the server when
+one model is loaded, and the gateway DISCARDS backend and model response
+metadata, returning text and timing only. So nothing the responder says
+about itself is even retained.
+
+**Staleness cannot fire.** Canon declares the voice fact stale if routing
+or model configuration changes before mint or execution. The validator
+compares persisted synthetic hashes against freshly recomputed synthetic
+hashes — both constants. A real route, model or runtime change does not
+enter either calculation.
+
+**This is the FOURTH instance of this arc's one defect**, and the most
+dangerous, because it looks like the strongest evidence in the system:
+
+1. a grant that did not carry the ACTION;
+2. a boolean that did not carry the RESPONSE;
+3. a label that did not carry the EVIDENCE;
+4. **three cryptographic hashes named for identity that carry no
+   identity.**
+
+The first three were closed. This one is open, and it is not a bug to be
+fixed quietly — canon names the fields and the stale consequence but
+never defines the live trust root, the hash domains, who may attest them,
+or what evidence suffices against another process answering on the
+configured endpoint.
+
+**Nothing built on these hashes should be described as proving
+responder identity.** Not in a receipt, not in a docstring, not in a
+report to the owner.
+
 ## RULING OWED 1 — what proves the responder is the bonded Maez
 
 Canon REQUIRES the response be attributable to the bonded runtime —
