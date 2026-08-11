@@ -1,158 +1,154 @@
-# S7 stored-action wiring — resumption note
+# S7 / cutover 2B — resumption note
 
-**Resume with: THE STORED-ACTION MINT.** The v2 voice plane shipped, the
-real-route atomicity witnesses shipped, and the ungated route to the
-migration helper is closed.
+**Resume with: TWO GOVERNANCE DECISIONS, not code.** The remaining work
+is blocked on design, not effort. Three consecutive build attempts
+stopped correctly on genuine contradictions; a fourth would too.
 
-*(No head hash recorded on purpose: a note that names its own commit is
+*(No head hash recorded on purpose: a note naming its own commit is
 self-invalidating the moment it is amended.)*
 
-**Live migration has never been run against the live store**, which
-remains byte-identical at `5384bce8…`, mode `0600`, inode `18633958`,
-with no receipt and no SQLite sidecars. A watcher is armed on it during
-every build thread.
+**The live store has never been migrated.** `memory/s7_1_webauthn/ceremony.sqlite3`
+remains sha256 `5384bce8…`, mode `0600`, inode `18633958`, no sidecars,
+no receipt. It holds two enabled founder credentials.
 
-## What is done and green
+## The S7 defect is CLOSED
 
-| piece | state |
-|---|---|
-| `initialise_authorization_store` + verification-only opening | 39 passed |
-| `anchored_io` (escape, zero-progress, binding, durability) | 59 passed |
-| v2 migration (16 steps, 5-row classification) | 105 passed |
-| daemon route refuses missing setup with 503 | witnessed end-to-end |
-| v2 storage — write AND read, receipt-gated | SHIPPED |
-| held-store activation + its callsite allowlist | SHIPPED |
-| store-vended anchored transaction, per-store | SHIPPED |
-| **v2 VOICE PLANE — write, read, validate** | **SHIPPED**, 14 passed |
-| **real-route atomicity, success AND rollback** | **SHIPPED**, 6 passed |
-| **facade no longer re-exports the private migration helper** | **SHIPPED** |
+The arc's reason for existing is done. `execution_grant_authorizes_action`
+compared only work class and `canonical_hash(params)`; neither carried
+the action, so one grant authorized every sibling operation. Now:
 
-Suite baselines, measured: migration 105 passed; anchored_io 59 passed;
-prerequisite 39 passed; voice v2 14 passed; action_joins 6 failed / 72
-passed; action_binding 16 failed / 47 passed. Guarded collateral sits at
-3 failed / 25 passed and is NOT represented as green.
+- the grant's action comes from `UPDATE … RETURNING action` — the same
+  atomic statement that consumes the row returns it;
+- the consume `UPDATE` carries `AND action = ?` as a PREDICATE, so a
+  mismatched row is not matched, not consumed, and the approval is not
+  burned;
+- every consumer joins its own authoritative action;
+- a `str` subclass is refused by exact typing;
+- a bug in `consume_for_execution` propagates instead of returning
+  `(None, None)` — a broken seam no longer impersonates a denial.
 
-## What remains — ordered
+## What is green, and what that claim is worth
 
-The reds are NOT independent; this order stops each piece being red for
-another's reason.
+Six gated suites: migration 105, anchored_io 59, voice bundle v2 22,
+action joins 78, action binding 68, route allowlist 25 — **357**. Cutover
+2B contract set: **48**. Prerequisite: **39**.
 
-1. **NEXT: the stored-action mint.** `_mint_s7_execution_grant` takes the
-   action from the COMMITTED DURABLE ROW, never from `rendered`. Reading
-   `rendered` re-derives the action from the caller's own statement,
-   which is the laundering this slice forbids: the row is what a human
-   authorized, the rendered statement is what the caller asked for. The
-   mint currently supplies no action at all and its RED is red on
-   purpose. Expected to clear `TestLinkRowToGrant`,
-   `TestARealGrantCanBeMinted`, `TestTheProductionMintJoin` (5) — verify
-   against the suite rather than trusting the list.
+**These are LOCAL BEHAVIOURAL counts and are NON-CERTIFYING.** The broad
+airlock selection refuses with `airlock_import_provenance_violation`, so
+they confirm the behaviour holds; they do NOT certify that every import
+came from the audited checkout. State it that way.
 
-   **The gate is one mutation:** swap the mint to read `rendered` and the
-   intended assertions must go red. A mint that passes either way has not
-   been witnessed, and that distinction IS the defect.
+## THE TWO DECISIONS BLOCKING EVERYTHING
 
-2. **Joins at the boundaries.** `authorization_artifact_matches` gains
-   `action` in its expected-field map; `consume_verified` compares the
-   stored row's action to `rendered.action`. Clears
-   `TestArtifactMustMatchTheRenderedAction` (2),
-   `TestConsumeVerifiedRowRenderedJoin` (2),
-   `TestLinkRenderedToArtifact`, `TestActionSurvivesEveryJoin`.
+**1. What the cutover's third evidence requirement becomes (v31).** The
+content-blind rail requires a `semantic_reader_attempt_hash` before
+`valid_absent` is reachable. R8 FORBIDS a semantic reader on the cutover
+path. So the rail demands evidence of a read the ruling abolished, and
+the only way to pass is to relabel the response hash, attempt identity
+or receipt reference as reader evidence — fabrication, correctly refused.
 
-3. **Exact typing.** Rendered statement, artifact, grant and voice bundle
-   must reject a `str` SUBCLASS, not merely an unequal string. Clears
-   `TestActionsAreExactStrings` (5). **The trap:** a hostile subclass
-   classifies as `capability_acquisition`, so the work class must be
-   aligned or the test passes on a class mismatch instead of on typing.
-   The v2 mint guard already uses `type(...) is not` rather than
-   `isinstance` for the validation result; the same discipline applies
-   here.
+The defensible replacement is a distinct, typed, sealed CAPTURE receipt:
+proof the exact response was durably recorded and is retrievable for
+owner review. It attests something real without pretending a machine
+read it. **Do NOT resolve this by silently dropping the requirement** —
+a rail reduced from three checks to two with no record of why is how a
+protection decays into a formality.
 
-4. **Exception classification.** `consume_for_execution`'s bare
-   `except Exception: return None, None` makes a broken seam
-   indistinguishable from a denial. Clears
-   `TestExceptionsAreClassifiedNotSwallowed` (2). Rebuild those REDs
-   against a MIGRATED v2 row — they fail today on the absent-v2 refusal,
-   because removing the v1 fallback means an unmigrated store never
-   reaches the mint.
+**2. How evidence-keyed admission reaches the gate (v30).** R8 records
+`not_determined`; the voice-seat gate blocks anything but `absent`; so
+the honest path is a dead end. Fail-closed, therefore safe.
 
-5. **The four caller joins, behaviourally.** Each consumer joins its
-   authoritative action to `rendered.action`: decision pipeline
-   `card.action`, dream state `envelope.action`, backup and disable their
-   fixed literals. Clears `TestTheFourCallerJoins` (3),
-   `TestFixedActionConsumersCheckTheirAction`,
-   `TestTheGenericEdgeRefusesSiblings`.
+The obvious fix — admit `not_determined` — is WRONG and would open a
+hole. The generic decision pipeline emits the same string when its
+semantic reader is UNCERTAIN, and dialog soul-writes and dream execution
+rely on that blocking. Admission must be CUTOVER-SPECIFIC and keyed on
+EVIDENCE, never the label: the canonical envelope plus the typed,
+revalidated R8 result, which today is not carried into `authorize_finish`
+at all. Carrying it is the work — and it is blocked on decision 1.
 
-6. **The ~55 callers**, LAST. They fail today purely because `action` is
-   a required field at construction sites.
+## Ordered, after those decisions
 
-7. **Regenerate the allowlist line numbers** — dead last, after
-   production files stop moving. Currently **53 of 73 rows stale across
-   THREE files** (`operator_user_boundary.py`, `daemon/maez_daemon.py`,
-   `s7_guarded_execution.py`). The figure GROWS with every production
-   edit, which is exactly why it is regenerated last. A control proves
-   identity ignoring lines is exact.
+1. **Evidence-keyed gate admission** (v30), with the test that a generic
+   `not_determined` still blocks soul-writes. That test now exists and
+   bites — `test_authorization_voice_recheck_blocks_a_real_not_determined_consultation`.
+2. **The 2B consumer.** It OWES BACK four witnesses retired with the v1
+   consumer: single-use atomicity, double-spend refusal, expiry, and
+   boot-mismatch. Nothing covers them today.
+3. **The bonded-runtime adapter** — the wire to the real Maez. Until it
+   exists, the producer asks correctly and cannot prove it reached Maez.
+   Provenance is UNVERIFIED and recorded as such. A nominal wrapper was
+   refused and must stay refused.
+4. **The legacy-vs-v2 type migration.** NOT a cleanup: the daemon still
+   produces the legacy type for soul writes, dream execution and
+   decision-pipeline self-modification. A naive fix moves
+   `blocking_present` off the D23 refusal-history path and changes
+   refusal timing — the system would still refuse, but stop recording
+   why. Needs its own REDs.
+5. **`_on_approve` re-swallow.** `consume_for_execution` now propagates,
+   but `_on_approve` invokes the hook inside its own `except Exception`
+   and turns it back into a silent block. Fails CLOSED, so not an
+   opening; quiet where it should be loud. Its own slice — live path.
 
-## Canon, as amended
+## The pre-existing failures, now on the record
 
-- **v17 — two activation authorities, separated.** Canonical activation
-  DISCOVERY is `read_migration_receipt()`, no arguments, selecting the one
-  live store. Held-store VERIFICATION is
-  `_verify_held_store_activation(dir_fd, store_fd, conn)` — no pathname,
-  no supplied root; the directory fd from the anchored walk is RETAINED,
-  the database opened beneath it, the sibling receipt read through that
-  same fd, identity checked against the held database fd. The
-  `readlink → reopen directory` shape is GONE; canon already named
-  pathname re-resolution as the race to avoid.
-- **v18 — evidence goes in the NEW room.** Migrate while voice is absent,
-  then persist and validate in the v2 plane of that same activated store.
-  Cross-store v1 validation and non-persisting validators are both
-  REJECTED, recorded so the shortcut cannot return.
+`tests/test_s7_1_ceremony_service.py` is **10 failed / 28 passed**, and
+was 10 failed / 26 passed at this session's start — this arc added two
+passes and broke none. All ten fail with `S7 v2 authorization plane is
+absent`: their fixtures never migrate, so they meet the deliberate
+absent-v2 refusal. Same class as the 17 construction sites already
+fixed. They sit OUTSIDE the six gated suites, which is why they went
+unseen.
 
-Why the obvious routes are closed, kept only as reasons:
-`_valid_source_bundle_validation` CREATES the legacy voice table, and the
-migration's source identity requires that plane ABSENT — that is what the
-`4f53cda1…` empty-preimage literal encodes. Validating before migrating
-makes the store match neither source nor target; validating after is
-impossible because the table is frozen by then.
+Also owed: preparation has no runtime positive-control fixture.
+
+## The one defect shape, three times in one session
+
+Each was a decision trusting a field that does not carry what it asserts:
+
+1. a grant that did not carry the ACTION → authority inferred from work
+   class and params;
+2. a boolean that did not carry the RESPONSE → "Maez did not object"
+   concluded from a flag defaulting to False, set by whoever built the
+   bundle;
+3. a label that does not carry the EVIDENCE → the bare voice-seat gate
+   accepts a hand-constructed `absent` without seeing R8's sealed result.
+
+**(3) IS NOT CLOSED.** It spans non-cutover paths and needs its own
+slice. Do not assume it closed.
 
 ## Standing constraints
 
-- The cutover needs BOTH Rohit's key tap AND Maez consulted with no
-  objection. R7 covers only the pre-birth migration command, sets no
-  precedent, expires at birth.
+- The cutover needs BOTH the owner's key tap AND Maez consulted with no
+  objection — and under R8 the owner READS the exact response and judges.
+  No machine verdict. R7 covers only the pre-birth migration command,
+  sets no precedent, expires at birth.
 - The live store is read-only to this work.
 - No creation or activation authority in the daemon or
-  `S7WebAuthnBootstrapStore` — the single-callsite rule.
-- No facade re-export of a private helper. The one that existed handed
-  every importing module an ungated migration route.
-- `git add` by EXACT PATH. The tree holds 29 untracked and 10 dirty files
-  belonging to the user; they stay untracked, dirty, and byte-identical.
-  `docs/.obsidian/graph.json` is his and is never committed.
-- The bench adapter (`scripts/cuda_bench_driver.py`'s richer
-  `write_private_file`) is a SEPARATE slice with its own REDs. Not a
-  duplicate: it creates directories, enforces a byte cap, routes errors
-  through `_filesystem_hazard()`, and its `on_link` takes the published
-  path.
+  `S7WebAuthnBootstrapStore`. No facade re-export of a private helper.
+- Producers live in `core/` — every allowlist producer row does. Non-core
+  files hold writer/edge/renderer/hash roles only.
+- `git add` by EXACT PATH. The tree holds 10 dirty and 39 untracked user
+  files that stay byte-identical. `docs/.obsidian/graph.json` is the
+  owner's and is never committed.
 
-## Method notes that earned their keep
+## Method notes that earned their keep TODAY
 
-- **Two reds under one class name can have two different causes.**
-  `TestPrivateHelperHasExactlyOneProductionCallsite` held one cosmetic
-  red (a stale file path after the migration module was extracted) and
-  one real one (the facade's ungated re-export). Re-pinning both as
-  "stale" would have deleted the warning and left the route. Diagnose
-  each red separately before touching either.
-- **Verify placement by AST, not by eye.** Three consecutive
-  misplacements came from assuming file structure.
-- **A "fix" that does not apply looks identical to one that does not
-  work.** Re-run after every string replace. A no-op replacement and a
-  skipped import — the module name appeared only in function-local
-  imports, so the "already imported" check passed — broke 30 tests in one
-  edit and were invisible until measured.
-- **Measure baselines, never recall them.** The branch moves under you;
-  a number from three commits ago is not a baseline.
-- **Controls matter more than assertions.** Most defects this arc were
-  tests passing for the wrong reason, not code that was wrong.
-- **Mutate to prove a green bites.** Every slice here landed with an
-  explicit mutation showing the intended assertion goes red, and the
-  implementation restored byte-identical afterward.
+- **Ask the stub question.** "If this were replaced by something that
+  always says yes, which test fails?" The answer was NONE, and it
+  exposed that all five consultation tests were structural. Ask it of
+  anything that gates authority.
+- **Measure PER-TEST, never by net count.** A reported three-failure
+  mutation was actually one; the difference was hidden behind two new
+  passes.
+- **A test surviving removal of its own protection is not a test.**
+  Mutating the gate to admit `not_determined` left the test named for
+  blocking it green.
+- **Check the dirty-file count after every commit.** It caught two files
+  left out of two commits, on the same day.
+- **A positive control that fails may mean the control is wrong.** Twice
+  the opener "wrongly" refused; both times my fixture was wrong and the
+  code was right.
+- **Do not claim a suite passes from a subset.** I wrote "Suite passes"
+  after running four tests of thirty-eight. Corrected in the next commit.
+- **Stop rather than relabel.** Three build-thread refusals to fabricate
+  evidence produced the three most valuable findings of the session.
