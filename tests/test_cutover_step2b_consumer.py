@@ -182,6 +182,104 @@ def _valid_existing_authorization_store(
     return store.db_path
 
 
+def _cutover_voice_gate_fixture(
+    tmp_path: Path,
+    *,
+    name: str,
+    carry_capture_receipt: bool = True,
+    has_grounded_semantic_blocking_signal: bool = False,
+):
+    """Build one real R8/R9 result and its private durable v2 bundle."""
+
+    fixture_root = tmp_path / name
+    fixture_root.mkdir()
+    envelope, attempt, ask = _consultation_fixture(fixture_root)
+    result = _assert_one_real_ask(
+        cutover.produce_cutover_consultation,
+        envelope=envelope,
+        attempt=attempt,
+        ask=ask,
+    )
+    consultation = result.consultation
+    assert consultation is not None
+    assert result.response_capture_receipt is not None
+
+    bundle = guarded.S7VoiceConsultationBundle(
+        source_ref_hash=consultation.source_ref_hash,
+        request_id=envelope.request_id,
+        consultation_id=consultation.consultation_id,
+        request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        rendered_text_hash=result.rendered_text_hash,
+        action_params_hash=s7.canonical_hash(dict(cm.CUTOVER_ACTION_PARAMS)),
+        precondition_hash=envelope.precondition_hash,
+        authority_context_hash=ask.authority_context_hash,
+        maez_voice_consultation_hash=s7.maez_voice_consultation_hash(consultation),
+        rendered_prompt_ref="rendered-prompt:cutover-gate-fixture",
+        rendered_prompt_hash="1" * 64,
+        mutation_preview_hash="2" * 64,
+        rollback_plan_ref="3" * 64,
+        context_manifest_ref="context-manifest:cutover-gate-fixture",
+        context_manifest_hash="4" * 64,
+        runtime_identity_hash=ask.runtime_identity_hash,
+        model_routing_identity_hash="5" * 64,
+        model_config_hash="6" * 64,
+        raw_response_ref=result.raw_response_ref,
+        raw_response_hash=result.raw_response_sha256,
+        semantic_reader_attempt_hash=None,
+        expires_at=envelope.expires_at,
+        authority_class="none",
+        has_grounded_semantic_blocking_signal=(has_grounded_semantic_blocking_signal),
+        source_bundle_hash=None,
+        response_capture_receipt=(
+            result.response_capture_receipt if carry_capture_receipt else None
+        ),
+        action=cm.CUTOVER_ACTION,
+    )
+    bundle = replace(
+        bundle,
+        source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(bundle),
+    )
+
+    db_path = _valid_existing_authorization_store(
+        fixture_root,
+        name="authorization-store",
+    )
+    authorization_store = s7.S7AuthorizationStore(db_path)
+    with authorization_store.anchored_transaction() as conn:
+        guarded.put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+    guarded_store = guarded.S7GuardedStateStore(
+        authorization_store=authorization_store,
+    )
+    return envelope, result, guarded_store
+
+
+def _call_cutover_voice_gate(
+    *,
+    envelope,
+    result,
+    guarded_store,
+    include_result: bool = True,
+):
+    """Keep the first RED at the admission assertion, not a new kwarg error."""
+
+    from core.governance.s7_webauthn_ceremony import (
+        authorization_voice_seat_recheck,
+    )
+
+    kwargs = {
+        "envelope": envelope,
+        "maez_voice_consultation": result.consultation,
+    }
+    parameters = inspect.signature(authorization_voice_seat_recheck).parameters
+    optional = {
+        "guarded_store": guarded_store,
+        "source_ref_hash": result.consultation.source_ref_hash,
+        "cutover_consultation_result": result if include_result else None,
+    }
+    kwargs.update({name: value for name, value in optional.items() if name in parameters})
+    return authorization_voice_seat_recheck(**kwargs)
+
+
 def _s7_grant_fixture(
     *, credential_ref: str = "credential-1"
 ) -> s7.S7ExecutionGrant:
@@ -1218,6 +1316,434 @@ class TestConsultationProducer:
         produces the consultation. It is replay material after rendering."""
         source = (REPO / "scripts" / "cuda_cutover.py").read_text()
         assert "expected_s7_voice_rendered_prompt_text" not in source
+
+
+class TestCutoverVoiceGateAdmission:
+    """R8's unjudged result may pass only through R9's durable evidence rail."""
+
+    def test_real_r8_result_with_gate_revalidated_r9_evidence_is_admitted(
+        self, tmp_path: Path
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="admitted",
+        )
+
+        admitted = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert admitted.status_code == 200
+        assert admitted.body == {
+            "ok": True,
+            "maez_objection_state": "not_determined",
+            "maez_voice_consultation_id": result.consultation.consultation_id,
+        }
+
+    def test_canonical_envelope_discriminator_rejects_a_shape_substitution(
+        self, tmp_path: Path
+    ) -> None:
+        envelope, _attempt, _ask = _consultation_fixture(tmp_path)
+        substituted = replace(envelope, requesting_subsystem="unit")
+
+        assert cutover._is_canonical_cutover_envelope(envelope) is True
+        assert cutover._is_canonical_cutover_envelope(substituted) is False
+
+    def test_gate_consumes_the_canonical_envelope_discriminator(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="canonical-discriminator",
+        )
+
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        monkeypatch.setattr(
+            cutover,
+            "_is_canonical_cutover_envelope",
+            lambda _envelope: False,
+        )
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_label_alone_without_typed_r8_result_remains_blocked(self, tmp_path: Path) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="label-alone",
+        )
+
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+            include_result=False,
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+        assert refused.body["maez_objection_state"] == "not_determined"
+
+    def test_gate_reopens_r9_bundle_instead_of_trusting_the_r8_object(self, tmp_path: Path) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="missing-durable-capture",
+            carry_capture_receipt=False,
+        )
+
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        control_envelope, control_result, control_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="complete-durable-capture-control",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=control_envelope,
+            result=control_result,
+            guarded_store=control_store,
+        )
+
+        assert result.response_capture_receipt is not None
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_gate_rejects_a_stale_valid_result_from_a_different_bundle(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="current-bundle",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        _other_envelope, other_result, other_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="stale-validation-bundle",
+        )
+        with other_store.authorization_store.anchored_transaction() as conn:
+            other_bundle, other_version = guarded.read_voice_source_bundle(
+                source_ref_hash=other_result.consultation.source_ref_hash,
+                conn=conn,
+            )
+            stale_validation = guarded.validate_voice_source_bundle(
+                bundle=other_bundle,
+                version=other_version,
+                purpose="execution",
+            )
+        assert stale_validation.status == "valid_absent"
+        monkeypatch.setattr(
+            guarded,
+            "validate_voice_source_bundle",
+            lambda **_kwargs: stale_validation,
+        )
+
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_gate_reruns_the_current_bundle_validator_for_blocking_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="current-blocking-bundle",
+            has_grounded_semantic_blocking_signal=True,
+        )
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        control_envelope, control_result, control_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="current-nonblocking-control",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=control_envelope,
+            result=control_result,
+            guarded_store=control_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    @pytest.mark.parametrize(
+        ("column", "replacement"),
+        (
+            pytest.param(
+                "raw_response_ref",
+                "",
+                id="response-ref-must-be-non-empty",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                "not-a-sha256-digest",
+                id="response-hash-must-be-well-formed",
+            ),
+            pytest.param(
+                "raw_response_hash",
+                hashlib.sha256(b"").hexdigest(),
+                id="response-hash-must-not-name-empty-bytes",
+            ),
+        ),
+    )
+    def test_gate_fails_closed_on_malformed_durable_response_fields(
+        self,
+        tmp_path: Path,
+        column: str,
+        replacement: str,
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name=f"rail-{column}-{replacement}",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        with guarded_store.authorization_store.anchored_transaction() as conn:
+            conn.execute(
+                f"UPDATE {guarded._V2_VOICE_BUNDLE_TABLE} SET {column} = ? "
+                "WHERE source_ref_hash = ?",
+                (replacement, result.consultation.source_ref_hash),
+            )
+
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_generic_not_determined_does_not_import_the_cutover_stack(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import builtins
+
+        from core.governance.s7_webauthn_ceremony import (
+            authorization_voice_seat_recheck,
+        )
+
+        envelope = s7.build_work_request_envelope(
+            request_id="generic-uncertain-reader",
+            action="write_any_file",
+            params={"path": "config/soul.md", "content": "x"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at="2000-01-01T00:00:00Z",
+            expires_at="2000-01-01T04:00:00Z",
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id="generic-voice",
+            free_text_ref_hash="b" * 64,
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="generic-voice",
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="not_determined",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=envelope.created_at,
+        )
+        assert s7.voice_consultation_satisfies_request(envelope, consultation)
+        real_import = builtins.__import__
+
+        def refusing_import(name, *args, **kwargs):
+            if name == "scripts" or name.startswith("scripts."):
+                raise AssertionError("generic path imported the cutover stack")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", refusing_import)
+        try:
+            refused = authorization_voice_seat_recheck(
+                envelope=envelope,
+                maez_voice_consultation=consultation,
+            )
+        except Exception as exc:
+            pytest.fail(f"generic path changed dependency surface: {exc!r}")
+
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_gate_revalidates_the_durable_r8_result_join(self, tmp_path: Path) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="tampered-terminal-join",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        terminal_path = result.attempt.receipt_root / result.attempt_receipt_ref
+        terminal = json.loads(terminal_path.read_bytes())
+        terminal["fields"]["source_ref_hash"] = "0" * 64
+        terminal_path.write_bytes(cutover._consultation_receipt_bytes(terminal["fields"]))
+
+        refused = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_gate_fails_closed_when_typed_r8_object_was_mutated_after_construction(
+        self, tmp_path: Path
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="mutated-r8-object",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        object.__setattr__(result, "owner_visible_response", object())
+
+        try:
+            refused = _call_cutover_voice_gate(
+                envelope=envelope,
+                result=result,
+                guarded_store=guarded_store,
+            )
+        except Exception as exc:
+            pytest.fail(f"gate raised instead of failing closed: {exc!r}")
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_gate_rejects_noncanonical_response_ref_before_reopening(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="noncanonical-response-ref",
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+        forbidden_ref = result.attempt.start_receipt_ref
+        object.__setattr__(result, "raw_response_ref", forbidden_ref)
+        real_read = s7_io.read_private_file
+
+        def recording_read(relative, **kwargs):
+            if relative == forbidden_ref:
+                raise AssertionError("noncanonical response ref was reopened")
+            return real_read(relative, **kwargs)
+
+        monkeypatch.setattr(cutover.s7_io, "read_private_file", recording_read)
+        try:
+            refused = _call_cutover_voice_gate(
+                envelope=envelope,
+                result=result,
+                guarded_store=guarded_store,
+            )
+        except Exception as exc:
+            pytest.fail(f"gate read before rejecting the ref: {exc!r}")
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+    def test_result_bound_to_a_different_canonical_request_remains_blocked(
+        self, tmp_path: Path
+    ) -> None:
+        envelope, result, guarded_store = _cutover_voice_gate_fixture(
+            tmp_path,
+            name="request-substitution",
+        )
+        substituted_envelope = build_cutover_work_request_envelope(
+            request_id="substituted-cutover-request",
+            action=cm.CUTOVER_ACTION,
+            params=dict(cm.CUTOVER_ACTION_PARAMS),
+            affected_refs=envelope.affected_refs,
+            precondition_hash=envelope.precondition_hash,
+            created_at=envelope.created_at,
+            expires_at=envelope.expires_at,
+            maez_voice_consultation_id=envelope.maez_voice_consultation_id,
+        )
+        substituted_result = replace(
+            result,
+            consultation=replace(
+                result.consultation,
+                request_id=substituted_envelope.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(substituted_envelope),
+            ),
+        )
+        control = _call_cutover_voice_gate(
+            envelope=envelope,
+            result=result,
+            guarded_store=guarded_store,
+        )
+
+        refused = _call_cutover_voice_gate(
+            envelope=substituted_envelope,
+            result=substituted_result,
+            guarded_store=guarded_store,
+        )
+
+        assert control.status_code == 200
+        assert refused.status_code == 409
+        assert refused.body["error"] == "s7_voice_seat_unresolved"
 
 
 class TestBurnStructure:

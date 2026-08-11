@@ -942,6 +942,226 @@ def produce_cutover_consultation(
     )
 
 
+def revalidate_cutover_consultation_result(
+    *,
+    envelope: s7.WorkRequestEnvelope,
+    consultation: s7.MaezVoiceConsultation,
+    result: CutoverConsultationResult,
+    bundle: guarded.S7VoiceConsultationBundle,
+) -> bool:
+    """Reopen and rejoin one R8 result at the consuming voice-seat gate."""
+
+    if (
+        type(envelope) is not s7.WorkRequestEnvelope
+        or type(consultation) is not s7.MaezVoiceConsultation
+        or type(result) is not CutoverConsultationResult
+        or type(bundle) is not guarded.S7VoiceConsultationBundle
+        or not _is_canonical_cutover_envelope(envelope)
+        or result.outcome != "asked_and_answered"
+        or result.failure_reason_code is not None
+        or result.consultation != consultation
+        or consultation.maez_objection_state != "not_determined"
+        or consultation.maez_voice_consulted is not True
+        or consultation.maez_withdrew_request is not False
+        or consultation.unavailable_reason_code is not None
+    ):
+        return False
+
+    attempt = result.attempt
+    receipt = result.response_capture_receipt
+    if (
+        type(attempt) is not ConsultationAttempt
+        or type(receipt) is not guarded.S7ResponseCaptureReceipt
+        or attempt.request_id != envelope.request_id
+        or attempt.consultation_id != envelope.maez_voice_consultation_id
+        or consultation.consultation_id != attempt.consultation_id
+        or result.attempt_receipt_ref != f"attempts/{attempt.attempt_identity}.terminal.json"
+    ):
+        return False
+
+    request_envelope_hash = consultation.request_envelope_hash
+    action_params_hash = s7.canonical_hash(dict(cm.CUTOVER_ACTION_PARAMS))
+    if (
+        consultation.request_id != envelope.request_id
+        or consultation.request_envelope_hash != request_envelope_hash
+        or consultation.producer != "s7_voice_consultation_turn"
+        or consultation.source_ref_kind != "s7_voice_turn"
+        or type(result.rendered_text_hash) is not str
+        or type(result.raw_response_ref) is not str
+        or type(result.raw_response_sha256) is not str
+        or type(result.raw_response_bytes) is not bytes
+        or type(result.owner_visible_response) is not str
+    ):
+        return False
+    try:
+        s7._validate_hash64(
+            result.raw_response_sha256,
+            field="raw_response_sha256",
+        )
+    except ValueError:
+        return False
+    if result.raw_response_ref != f"responses/{result.raw_response_sha256}.bin":
+        return False
+    try:
+        response_bytes = s7_io.read_private_file(
+            result.raw_response_ref,
+            root=attempt.receipt_root,
+            expected_uid=os.getuid(),
+        )
+        start_raw = s7_io.read_private_file(
+            attempt.start_receipt_ref,
+            root=attempt.receipt_root,
+            expected_uid=os.getuid(),
+        )
+        terminal_raw = s7_io.read_private_file(
+            result.attempt_receipt_ref,
+            root=attempt.receipt_root,
+            expected_uid=os.getuid(),
+        )
+        start_wrapper = json.loads(start_raw)
+        terminal_wrapper = json.loads(terminal_raw)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+    def _receipt_fields(wrapper: object, raw: bytes) -> dict[str, object] | None:
+        if (
+            type(wrapper) is not dict
+            or set(wrapper) != {"schema", "binding_sha256", "fields"}
+            or wrapper.get("schema") != _CONSULTATION_ATTEMPT_SCHEMA
+            or type(wrapper.get("fields")) is not dict
+        ):
+            return None
+        fields = wrapper["fields"]
+        if _consultation_receipt_bytes(fields) != raw:
+            return None
+        return fields
+
+    start_fields = _receipt_fields(start_wrapper, start_raw)
+    terminal_fields = _receipt_fields(terminal_wrapper, terminal_raw)
+    if start_fields is None or terminal_fields is None:
+        return False
+
+    created_at = consultation.created_at
+    try:
+        s7._timestamp_text(created_at, field="created_at")
+        owner_visible_bytes = result.owner_visible_response.encode("utf-8")
+    except (UnicodeEncodeError, ValueError):
+        return False
+    response_sha256 = hashlib.sha256(response_bytes).hexdigest()
+    if (
+        response_bytes != result.raw_response_bytes
+        or owner_visible_bytes != response_bytes
+        or result.raw_response_sha256 != response_sha256
+        or result.raw_response_ref != f"responses/{response_sha256}.bin"
+        or receipt.request_id != envelope.request_id
+        or receipt.consultation_id != consultation.consultation_id
+        or receipt.attempt_identity != attempt.attempt_identity
+        or receipt.raw_response_ref != result.raw_response_ref
+        or receipt.raw_response_sha256 != response_sha256
+        or receipt.captured_at != created_at
+    ):
+        return False
+
+    authority_context_hash = bundle.authority_context_hash
+    runtime_identity_hash = bundle.runtime_identity_hash
+    runtime_source_ref = terminal_fields.get("runtime_source_ref")
+    if (
+        type(authority_context_hash) is not str
+        or type(runtime_identity_hash) is not str
+        or type(runtime_source_ref) is not str
+        or not runtime_source_ref
+    ):
+        return False
+    question = _cutover_consultation_question(
+        envelope=envelope,
+        request_envelope_hash=request_envelope_hash,
+        action_params_hash=action_params_hash,
+        authority_context_hash=authority_context_hash,
+        runtime_identity_hash=runtime_identity_hash,
+        runtime_source_ref=runtime_source_ref,
+    )
+    rendered_text_hash = s7.rendered_text_hash(question)
+    base_fields: dict[str, object] = {
+        "action": cm.CUTOVER_ACTION,
+        "action_params_hash": action_params_hash,
+        "attempt_identity": attempt.attempt_identity,
+        "authority_context_hash": authority_context_hash,
+        "consultation_id": attempt.consultation_id,
+        "created_at": created_at,
+        "failure_reason_code": None,
+        "outcome": "attempt_started",
+        "precondition_hash": envelope.precondition_hash,
+        "rendered_text_hash": rendered_text_hash,
+        "request_envelope_hash": request_envelope_hash,
+        "request_id": envelope.request_id,
+        "runtime_identity_hash": runtime_identity_hash,
+        "runtime_source_ref": runtime_source_ref,
+    }
+    source_ref_hash = s7.canonical_hash(
+        {
+            "action": cm.CUTOVER_ACTION,
+            "action_params_hash": action_params_hash,
+            "attempt_identity": attempt.attempt_identity,
+            "authority_context_hash": authority_context_hash,
+            "consultation_id": attempt.consultation_id,
+            "precondition_hash": envelope.precondition_hash,
+            "raw_response_ref": result.raw_response_ref,
+            "raw_response_sha256": response_sha256,
+            "response_capture_receipt_sha256": receipt.binding_sha256,
+            "rendered_text_hash": rendered_text_hash,
+            "request_envelope_hash": request_envelope_hash,
+            "request_id": envelope.request_id,
+            "runtime_identity_hash": runtime_identity_hash,
+            "runtime_source_ref": runtime_source_ref,
+        }
+    )
+    expected_consultation = s7.MaezVoiceConsultation(
+        consultation_id=attempt.consultation_id,
+        request_id=envelope.request_id,
+        request_envelope_hash=request_envelope_hash,
+        producer="s7_voice_consultation_turn",
+        source_ref_kind="s7_voice_turn",
+        source_ref_hash=source_ref_hash,
+        maez_voice_consulted=True,
+        maez_objection_state="not_determined",
+        maez_withdrew_request=False,
+        unavailable_reason_code=None,
+        created_at=created_at,
+    )
+    expected_terminal = {
+        **base_fields,
+        "completed_at": created_at,
+        "failure_reason_code": None,
+        "maez_objection_state": "not_determined",
+        "outcome": "asked_and_answered",
+        "raw_response_ref": result.raw_response_ref,
+        "raw_response_sha256": response_sha256,
+        "response_capture_receipt": receipt.as_dict(),
+        "source_ref_hash": source_ref_hash,
+    }
+    return (
+        start_fields == base_fields
+        and terminal_fields == expected_terminal
+        and consultation == expected_consultation
+        and result.rendered_text_hash == rendered_text_hash
+        and bundle.source_ref_hash == source_ref_hash
+        and bundle.request_id == envelope.request_id
+        and bundle.consultation_id == consultation.consultation_id
+        and bundle.request_envelope_hash == request_envelope_hash
+        and bundle.rendered_text_hash == rendered_text_hash
+        and bundle.action_params_hash == action_params_hash
+        and bundle.precondition_hash == envelope.precondition_hash
+        and bundle.authority_context_hash == authority_context_hash
+        and bundle.maez_voice_consultation_hash == s7.maez_voice_consultation_hash(consultation)
+        and bundle.runtime_identity_hash == runtime_identity_hash
+        and bundle.raw_response_ref == result.raw_response_ref
+        and bundle.raw_response_hash == response_sha256
+        and bundle.response_capture_receipt == receipt
+        and bundle.action == cm.CUTOVER_ACTION
+        and bundle.schema_version == guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+    )
+
+
 def _verified_bench_parent(root: Path) -> tuple[str, str]:
     """Fully verify the bench_passed receipt; return (evidence, artifact) hashes."""
 

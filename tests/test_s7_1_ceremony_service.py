@@ -1459,6 +1459,64 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(artifact_count, 0)
         self.assertEqual(len(history), 0)
 
+    def test_authorize_finish_carries_cutover_result_to_the_voice_gate(self):
+        from unittest.mock import patch
+
+        from core.governance.s7_webauthn_ceremony import (
+            S7CeremonyServiceResult,
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+            carried_result = object()
+            gate_stop = S7CeremonyServiceResult(
+                body={"ok": False, "error": "fixture_gate_stop"},
+                status_code=409,
+            )
+            with patch(
+                "core.governance.s7_webauthn_ceremony.authorization_voice_seat_recheck",
+                return_value=gate_stop,
+            ) as gate:
+                finish = service.authorize_finish(
+                    now=NOW,
+                    envelope=envelope,
+                    rendered_statement=rendered,
+                    precondition_hash=envelope.precondition_hash,
+                    maez_voice_consultation=self._voice_consultation(state="not_determined"),
+                    session_binding="session-auth",
+                    internal_channel_binding="daemon-channel",
+                    request_json={
+                        "challenge_id": begin.body["challenge_id"],
+                        "credential_ref": "cred-primary",
+                        "authentication_response": {"clientDataJSON": "valid-auth"},
+                    },
+                    source_ref_hash="c" * 64,
+                    cutover_consultation_result=carried_result,
+                )
+
+        self.assertEqual(finish, gate_stop)
+        self.assertIs(
+            gate.call_args.kwargs["cutover_consultation_result"],
+            carried_result,
+        )
+        self.assertEqual(gate.call_args.kwargs["source_ref_hash"], "c" * 64)
+
     def test_authorize_finish_for_voice_seat_mints_with_validated_bundle_reservation(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (

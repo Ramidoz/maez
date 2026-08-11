@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import sqlite3
 from typing import Any, Callable
 import uuid
 
@@ -504,6 +505,7 @@ class S7LocalWebAuthnCeremonyService:
         source_bundle_validation: Any | None = None,
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
+        cutover_consultation_result: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -581,6 +583,9 @@ class S7LocalWebAuthnCeremonyService:
             rendered_text_hash=rendered_statement.rendered_text_hash,
             requester_ref="founder-local-browser",
             now=now,
+            guarded_store=guarded_store,
+            source_ref_hash=source_ref_hash,
+            cutover_consultation_result=cutover_consultation_result,
         )
         if voice.status_code != 200:
             return voice
@@ -777,6 +782,9 @@ def authorization_voice_seat_recheck(
     rendered_text_hash: str | None = None,
     requester_ref: str | None = None,
     now: str | None = None,
+    guarded_store: Any | None = None,
+    source_ref_hash: str | None = None,
+    cutover_consultation_result: Any | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
 
@@ -802,6 +810,25 @@ def authorization_voice_seat_recheck(
         )
     state = str(getattr(maez_voice_consultation, "maez_objection_state", "not_determined"))
     unavailable_reason = getattr(maez_voice_consultation, "unavailable_reason_code", None)
+    if (
+        state == "not_determined"
+        and getattr(envelope, "action", None) == "model_routing.cutover_cuda"
+        and _cutover_voice_evidence_revalidated_at_gate(
+            envelope=envelope,
+            consultation=maez_voice_consultation,
+            guarded_store=guarded_store,
+            source_ref_hash=source_ref_hash,
+            cutover_consultation_result=cutover_consultation_result,
+        )
+    ):
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                "maez_objection_state": "not_determined",
+                "maez_voice_consultation_id": (maez_voice_consultation.consultation_id),
+            },
+            status_code=200,
+        )
     if state != "absent":
         return _voice_seat_block(
             state,
@@ -840,6 +867,65 @@ def authorization_voice_seat_recheck(
         },
         status_code=200,
     )
+
+
+def _cutover_voice_evidence_revalidated_at_gate(
+    *,
+    envelope: Any,
+    consultation: Any,
+    guarded_store: Any | None,
+    source_ref_hash: str | None,
+    cutover_consultation_result: Any | None,
+) -> bool:
+    """Reopen cutover evidence here; a caller's label or verdict is not evidence."""
+
+    from core.governance import operator_user_boundary as s7
+    from core.governance import s7_guarded_execution as guarded
+    from scripts import cuda_cutover
+    from scripts import cuda_migration
+
+    if (
+        type(envelope) is not s7.WorkRequestEnvelope
+        or envelope.action != cuda_migration.CUTOVER_ACTION
+        or type(consultation) is not s7.MaezVoiceConsultation
+        or type(guarded_store) is not guarded.S7GuardedStateStore
+        or type(source_ref_hash) is not str
+        or source_ref_hash != consultation.source_ref_hash
+        or type(cutover_consultation_result) is not cuda_cutover.CutoverConsultationResult
+    ):
+        return False
+    try:
+        with guarded_store.authorization_store.anchored_transaction() as conn:
+            bundle, version = guarded.read_voice_source_bundle(
+                source_ref_hash=source_ref_hash,
+                conn=conn,
+            )
+            validation = guarded.validate_voice_source_bundle(
+                bundle=bundle,
+                version=version,
+                purpose="execution",
+            )
+            guarded.require_source_bundle_validation_for_mint(validation)
+            return (
+                validation.action == cuda_migration.CUTOVER_ACTION
+                and validation.source_bundle_hash == bundle.source_bundle_hash
+                and validation.binding_hash == guarded._voice_source_bundle_binding_hash(bundle)
+                and cuda_cutover.revalidate_cutover_consultation_result(
+                    envelope=envelope,
+                    consultation=consultation,
+                    result=cutover_consultation_result,
+                    bundle=bundle,
+                )
+            )
+    except (
+        AttributeError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        sqlite3.DatabaseError,
+    ):
+        return False
 
 
 def authorization_aggregation_recheck(
