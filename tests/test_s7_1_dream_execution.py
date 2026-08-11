@@ -297,6 +297,7 @@ class S71DreamExecutionTests(unittest.TestCase):
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
             guarded_store=guarded_store,
+            source_bundle_binding=binding,
             source_bundle_validation=validation,
             source_ref_hash=consultation.source_ref_hash,
             reservation_token=f"reservation-token-{rendered.request_id}",

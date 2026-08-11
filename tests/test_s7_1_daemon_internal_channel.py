@@ -1070,6 +1070,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(response.status_code, 209)
         self.assertEqual(seen["source_bundle_validation"].status, "valid_absent")
         self.assertTrue(seen["source_bundle_validation"].source_bundle_valid)
+        self.assertEqual(seen.get("source_bundle_binding"), binding)
         self.assertEqual(seen["source_ref_hash"], binding.source_ref_hash)
         self.assertIsNotNone(seen["guarded_store"])
         self.assertTrue(seen["reservation_token"])

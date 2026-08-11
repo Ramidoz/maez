@@ -500,6 +500,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
             guarded_store=guarded_store,
+            source_bundle_binding=binding,
             source_bundle_validation=validation,
             source_ref_hash=consultation.source_ref_hash,
             reservation_token=f"reservation-token-{card.request_id}",
