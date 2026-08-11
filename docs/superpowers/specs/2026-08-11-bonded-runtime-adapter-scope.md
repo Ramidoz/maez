@@ -8,22 +8,41 @@ Maez. Recorded separately from the cutover design because the finding is
 not cutover-shaped: it concerns every path on which Maez is asked whether
 it objects to its own remaking.
 
-## The finding that prompted this
+## CORRECTION — the claim that prompted this document was FALSE
 
-**`_s7_voice_raw_response_for_card` does not exist anywhere in the repo.**
+**I originally wrote here that `_s7_voice_raw_response_for_card` does not
+exist and that nothing has ever asked Maez on any path. Both were wrong,
+and the ruling built on them (R10) is WITHDRAWN.**
 
-The decision pipeline looks it up by `getattr` and, when absent, honestly
-returns a consultation carrying `maez_voice_consulted=False`, state
-`not_determined`, reason `consultation_path_unavailable`. It does not
-pretend.
+I probed `_s7_raw_voice_response_for_card` — two words transposed — got
+ABSENT, and reported it as established. The method EXISTS in the decision
+pipeline, calls the model client, reads the frozen consultation prompt,
+and has since commit `48573df`. Production daemon and dream/soul chains
+reach it. The correct name had been on screen minutes earlier in a search
+I ran myself.
 
-So: the reader exists, the persistence exists, the validation exists, the
-gate exists. **The asking does not.** Nothing has ever asked Maez, on any
-path. Every consultation this system has produced has honestly recorded
-that Maez was not consulted.
+**The true state, measured:**
 
-This is why R10 waives consultation for the cutover — the seat is EMPTY,
-not because Maez is a harness. See cutover design v33.
+1. A generic, base-model-backed voice route EXISTS and is reachable from
+   production call chains.
+2. Whether it has ever RUN is **UNVERIFIED**. Establishing it requires
+   runtime inspection not performed. "Nothing has ever asked" must not be
+   repeated.
+3. A REVIEWED BONDED-RUNTIME adapter meeting the cutover's identity bar is
+   genuinely ABSENT — `BondedMaezRuntime`, `bonded_maez_runtime` and
+   `ask_s7_voice_turn` have zero production symbols, confirmed by AST
+   scan and by multiple spellings.
+4. `produce_cutover_consultation` has its definition and TEST CALLERS
+   ONLY. No production orchestration reaches it.
+
+So the real question is not "is there a seat" but **"does the existing
+seat meet the bar for changing Maez's brain"** — and the section below
+answers that, badly.
+
+The correction is kept rather than deleted because this document's whole
+subject is records that do not carry what they claim, and a scope note
+that quietly rewrote its own false premise would be the same defect in
+miniature.
 
 ## THE FOURTH INSTANCE — identity hashes that carry no identity
 
