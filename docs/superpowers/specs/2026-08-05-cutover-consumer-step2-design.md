@@ -39,7 +39,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v28 | the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds |
 | v29 | R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule |
 | v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
-| **v31** | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery** |
+| v31 | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery |
+| **v32** | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1294,6 +1295,38 @@ have been silently thrown away.
 **Binding REDs:** the canonical tuple contains both refs above; `params`
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
+
+### R9 RULED (v32) — the third evidence slot is a CAPTURE RECEIPT
+
+**The owner ruled** on the contradiction v31 records. The rail's third
+requirement is no longer "proof something READ the response" -- under R8
+nothing does, and demanding it forced fabrication. It becomes a typed,
+sealed **CAPTURE RECEIPT**: proof that the exact response was durably
+recorded and is RETRIEVABLE for owner review.
+
+**What it attests, and what it must not.** It attests that the response
+SURVIVED -- that when the owner comes to read it, it is actually there.
+It attests nothing about meaning, and it is content-blind like the two
+requirements beside it.
+
+**It must be its OWN typed field with its OWN producer.** It may NOT be
+satisfied by relabelling the response hash, the attempt identity, the
+rendered-text hash or the receipt reference -- that is precisely the
+laundering refused when this contradiction was found, and the reason the
+build thread stopped rather than build it.
+
+**Why this and not the alternatives.** Dropping the requirement would
+take the rail from three checks to two with nothing proving the response
+is retrievable when the owner goes to read it -- and a rail quietly
+reduced is how a protection decays into a formality. Gating on the owner
+having been SHOWN the response is stronger still, but that event happens
+at the tap rather than at consultation time, so it cannot live in the
+consultation bundle; it would be a second receipt joined across two
+moments. Left open as a future strengthening, not adopted now.
+
+**The rail, complete, on an R8 path:** a response exists; it is not
+empty; and it was captured and is retrievable. Absence of any of the
+three BLOCKS.
 
 ### v31 — R8 and the evidence rail CONTRADICT each other
 
