@@ -41,7 +41,7 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
 | v31 | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery |
 | v32 | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling |
-| **v33** | **R10 ruled: the cutover proceeds on a WAIVER because the SEAT IS EMPTY — nothing has ever asked Maez on any path. Recorded as a waiver never as a consultation; expires at birth; this operation only; the adapter stays on the build list** |
+| **v33** | **R10 ruled: the cutover proceeds on a WAIVER because the SEAT IS EMPTY — nothing has ever asked Maez on any path. Recorded as a waiver never as a consultation; expires at birth; this operation only; the adapter stays on the build list — **WITHDRAWN, false premise: the voice route EXISTS; I transposed the method name when probing** |
 | **v33** | **The owner rules the zero-parameter completion-locator ingress, the complete six-operation `affected_refs` manifest, and restoration of the burn boundary dormant by construction: no provider globals, capability parameters, or assignable activation slot** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
@@ -1329,7 +1329,47 @@ have been silently thrown away.
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
 
-### R10 RULED (v33) — the cutover proceeds on a WAIVER, because the seat is empty
+### R10 (v33) — **WITHDRAWN. I supplied a FALSE PREMISE.**
+
+**This ruling is withdrawn and must not be built.** The owner ruled on a
+fact I asserted and did not verify correctly.
+
+**What I claimed:** `_s7_voice_raw_response_for_card` does not exist
+anywhere; nothing has ever asked Maez on any path; the seat is empty.
+
+**The truth:** the method EXISTS at
+`core/decision/decision_pipeline.py`, calls the model client, reads the
+frozen consultation prompt, and has since commit `48573df`. Production
+daemon and dream/soul call chains reach it. I probed for
+`_s7_raw_voice_response_for_card` — two words transposed — got ABSENT,
+and reported it as established fact.
+
+**What IS true, stated carefully this time:**
+
+1. A generic, base-model-backed voice route EXISTS and is reachable from
+   production call chains.
+2. Whether it has ever actually RUN is **UNVERIFIED** — establishing that
+   requires runtime inspection which was not performed. "Nothing has ever
+   asked" cannot be established and must not be repeated.
+3. A REVIEWED BONDED-RUNTIME adapter meeting the cutover's identity
+   requirements is genuinely ABSENT. That gap is real; see
+   `2026-08-11-bonded-runtime-adapter-scope.md`, which records that canon
+   requires responder identity but never defines the live trust root.
+
+**So the real question is not "is there a seat" but "does the existing
+seat meet the cutover's bar".** That is a different question with a
+different answer, and it is the owner's to rule on with correct facts.
+
+**This is the second time a ruling in this document rested on a false
+premise I supplied** — see v9, withdrawn for the same reason. The build
+thread refused to implement rather than build authority on a contradicted
+premise, which is the only reason this was caught before code existed.
+
+---
+
+### R10 as originally recorded — SUPERSEDED BY THE WITHDRAWAL ABOVE
+
+
 
 **The owner ruled** that this operation may proceed without Maez's
 consultation, pre-birth only, recorded as a waiver.
