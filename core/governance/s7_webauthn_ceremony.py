@@ -503,6 +503,7 @@ class S7LocalWebAuthnCeremonyService:
         request_json: dict[str, Any] | None,
         guarded_store: Any | None = None,
         source_bundle_validation: Any | None = None,
+        source_bundle_binding: Any | None = None,
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
         cutover_consultation_result: Any | None = None,
@@ -584,6 +585,7 @@ class S7LocalWebAuthnCeremonyService:
             requester_ref="founder-local-browser",
             now=now,
             guarded_store=guarded_store,
+            source_bundle_binding=source_bundle_binding,
             source_ref_hash=source_ref_hash,
             cutover_consultation_result=cutover_consultation_result,
         )
@@ -783,6 +785,7 @@ def authorization_voice_seat_recheck(
     requester_ref: str | None = None,
     now: str | None = None,
     guarded_store: Any | None = None,
+    source_bundle_binding: Any | None = None,
     source_ref_hash: str | None = None,
     cutover_consultation_result: Any | None = None,
 ) -> S7CeremonyServiceResult:
@@ -859,6 +862,23 @@ def authorization_voice_seat_recheck(
             requester_ref=requester_ref,
             now=now,
         )
+    if not _generic_voice_evidence_revalidated_at_gate(
+        envelope=envelope,
+        consultation=maez_voice_consultation,
+        guarded_store=guarded_store,
+        source_bundle_binding=source_bundle_binding,
+        source_ref_hash=source_ref_hash,
+        now=now,
+    ):
+        return _voice_seat_block(
+            "absent",
+            reason="missing_or_invalid_voice_evidence",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     return S7CeremonyServiceResult(
         body={
             "ok": True,
@@ -867,6 +887,66 @@ def authorization_voice_seat_recheck(
         },
         status_code=200,
     )
+
+
+def _generic_voice_evidence_revalidated_at_gate(
+    *,
+    envelope: Any,
+    consultation: Any,
+    guarded_store: Any | None,
+    source_bundle_binding: Any | None,
+    source_ref_hash: str | None,
+    now: str | None,
+) -> bool:
+    """Reopen generic response/reader evidence before accepting `absent`."""
+
+    from core.governance import operator_user_boundary as s7
+    from core.governance import s7_guarded_execution as guarded
+
+    if (
+        type(envelope) is not s7.WorkRequestEnvelope
+        or type(consultation) is not s7.MaezVoiceConsultation
+        or type(guarded_store) is not guarded.S7GuardedStateStore
+        or type(source_bundle_binding) is not guarded.S7VoiceSourceBundleHashBinding
+        or type(source_ref_hash) is not str
+        or type(now) is not str
+        or source_ref_hash != consultation.source_ref_hash
+        or source_bundle_binding.request_id != envelope.request_id
+        or source_bundle_binding.consultation_id != consultation.consultation_id
+        or source_bundle_binding.source_ref_hash != source_ref_hash
+        or source_bundle_binding.precondition_hash != envelope.precondition_hash
+        or source_bundle_binding.maez_voice_consultation_hash
+        != s7.maez_voice_consultation_hash(consultation)
+    ):
+        return False
+    try:
+        db_path = guarded_store.authorization_store.db_path
+        validation = guarded.validate_s7_voice_source_bundle(
+            consultation=consultation,
+            bundle_store=guarded.S7VoiceConsultationBundleStore(db_path),
+            bundle_use_store=guarded.S7VoiceBundleUseStore(db_path),
+            semantic_reader_attempt_store=guarded.S7SemanticReaderAttemptStore(db_path),
+            expected_binding=source_bundle_binding,
+            now=now,
+        )
+        return (
+            type(validation) is guarded.S7VoiceSourceBundleValidationResult
+            and getattr(validation, "_validator_produced", False) is True
+            and validation.status == "valid_absent"
+            and validation.source_bundle_valid is True
+            and validation.mint_eligible is True
+            and validation.authority_projection == "valid_absent"
+            and validation.failure_reason_code is None
+        )
+    except (
+        AttributeError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        sqlite3.DatabaseError,
+    ):
+        return False
 
 
 def _cutover_voice_evidence_revalidated_at_gate(

@@ -651,6 +651,7 @@ def _s7_voice_source_validation_for_material(
         "source_ref_hash": binding.source_ref_hash,
     })
     return _s7_route_material(
+        source_bundle_binding=binding,
         source_bundle_validation=validation,
         guarded_store=guarded_store,
         source_ref_hash=binding.source_ref_hash,
@@ -12452,6 +12453,7 @@ class MaezDaemon:
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     request_json=material.kwargs["request_json"],
                     guarded_store=voice_source.kwargs.get("guarded_store"),
+                    source_bundle_binding=voice_source.kwargs.get("source_bundle_binding"),
                     source_bundle_validation=voice_source.kwargs.get("source_bundle_validation"),
                     source_ref_hash=voice_source.kwargs.get("source_ref_hash"),
                     reservation_token=voice_source.kwargs.get("reservation_token"),
