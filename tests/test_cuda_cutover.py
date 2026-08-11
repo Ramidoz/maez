@@ -8,7 +8,10 @@ TTL/boot/action-set/recovery bindings.
 from __future__ import annotations
 
 import json
+import ast
+import inspect
 import shutil
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
@@ -86,37 +89,37 @@ def test_mint_refuses_symlinked_target_and_double_mint(root: Path) -> None:
         cutover.mint_cutover_authorization(root=root)
 
 
-def test_consumption_is_atomic_and_single_use(root: Path) -> None:
-    minted = cutover.mint_cutover_authorization(root=root)
-    consumed = cutover.consume_cutover_authorization(root=root)
-    assert consumed.nonce == minted.nonce
-    marker = root / "markers" / f"cutover-{minted.nonce}.consumed"
-    assert marker.exists()
-    with pytest.raises(cutover.CutoverRefusal, match="authorization_consumed"):
-        cutover.consume_cutover_authorization(root=root)
-
-
-def test_consumption_refuses_expired_and_boot_mismatch(root: Path) -> None:
-    doc = cutover.mint_cutover_authorization(root=root)
-    with pytest.raises(cutover.CutoverRefusal, match="authorization_expired"):
-        cutover.consume_cutover_authorization(
-            root=root, now_utc=doc.expires_at
+def test_legacy_consumption_path_is_structurally_retired() -> None:
+    source = textwrap.dedent(
+        inspect.getsource(cutover.consume_cutover_authorization)
+    )
+    function = ast.parse(source).body[0]
+    assert isinstance(function, ast.FunctionDef)
+    executable = [
+        statement
+        for statement in function.body
+        if not (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
         )
+    ]
+    assert len(executable) == 1
+    assert isinstance(executable[0], ast.Raise)
 
-    payload = json.loads((root / cutover.AUTHORIZATION_NAME).read_bytes())
-    payload["fields"]["boot_id"] = "not-the-current-boot"
-    fields = dict(payload["fields"])
-    forged = cm.CutoverAuthorizationDoc(
-        **{**fields, "actions": tuple(fields["actions"])}
+
+def test_legacy_consumer_has_no_v1_publication_callsite() -> None:
+    source = textwrap.dedent(
+        inspect.getsource(cutover.consume_cutover_authorization)
     )
-    payload["binding_sha256"] = forged.binding_sha256
-    (root / cutover.AUTHORIZATION_NAME).write_bytes(
-        cm._canonical_wrapper_bytes(payload)
-    )
-    with pytest.raises(
-        cutover.CutoverRefusal, match="authorization_boot_mismatch"
-    ):
-        cutover.consume_cutover_authorization(root=root)
+    tree = ast.parse(source)
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_anchored_exclusive_write" not in called
+    assert "cuda_migration.cutover_consumption.v1" not in source
 
 
 def test_document_bindings_are_closed(root: Path) -> None:
