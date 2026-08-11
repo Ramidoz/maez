@@ -1041,7 +1041,19 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(state["mode"], "degraded")
         self.assertEqual(state["distinct_device_confidence"], "same_device_override")
 
-    def test_authorization_voice_recheck_blocks_not_determined(self):
+    def test_authorization_voice_recheck_blocks_an_absent_consultation(self):
+        """Renamed: this passes None, so it never reaches the state branch.
+
+        It was called ...blocks_not_determined and asserted the response
+        carries `not_determined` -- but that is the DEFAULT emitted when no
+        consultation exists at all. The test exits through the
+        missing-voice-fact path first, so it would pass whether or not the
+        gate handles a real `not_determined` consultation correctly. The
+        name promised a protection the body never exercised.
+
+        What it does witness is real and worth keeping: a missing
+        consultation blocks. That is now what it is called.
+        """
         from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
 
         result = authorization_voice_seat_recheck(
@@ -1052,6 +1064,77 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 409)
         self.assertEqual(result.body["error"], "s7_voice_seat_unresolved")
         self.assertEqual(result.body["maez_objection_state"], "not_determined")
+
+    def test_authorization_voice_recheck_blocks_a_real_not_determined_consultation(self):
+        """The protection the old name claimed, actually exercised.
+
+        A PRESENT, request-bound consultation whose state is
+        `not_determined` must block. This reaches the state branch rather
+        than exiting on a missing voice fact, so it fails if the gate ever
+        starts admitting `not_determined` on this generic path.
+
+        That matters beyond bookkeeping: the generic decision pipeline
+        emits `not_determined` when its semantic reader is UNCERTAIN, and
+        this gate is what stops an uncertain reader authorising a soul
+        write. Recorded in cutover design v30.
+        """
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        envelope = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id=envelope.maez_voice_consultation_id,
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="not_determined",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=envelope.created_at,
+        )
+
+        result = authorization_voice_seat_recheck(
+            envelope=envelope,
+            maez_voice_consultation=consultation,
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["maez_objection_state"], "not_determined")
+
+    def test_authorization_voice_recheck_positive_control_absent_passes(self):
+        """POSITIVE CONTROL for the test above.
+
+        The same fixture with `absent` must NOT be blocked, so the refusal
+        above is caused by the STATE and not by a fixture that could never
+        have succeeded.
+        """
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        envelope = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id=envelope.maez_voice_consultation_id,
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=envelope.created_at,
+        )
+
+        result = authorization_voice_seat_recheck(
+            envelope=envelope,
+            maez_voice_consultation=consultation,
+        )
+
+        self.assertNotEqual(result.body.get("error"), "s7_voice_seat_unresolved")
 
     def test_voice_recheck_denial_writes_refusal_history_for_d23(self):
         from dataclasses import replace
