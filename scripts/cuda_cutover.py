@@ -14,6 +14,7 @@ import os
 import secrets
 import sqlite3
 import stat as stat_module
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,6 +31,8 @@ BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
 RECEIPT_NAME = "command-assemble-stage1-attempt-026-terminal.json"
 AUTHORIZATION_NAME = "receipts/cutover-authorization.json"
 MARKER_DIR = "markers"
+COMPLETION_SELECTION_NAME = "cutover-completion-selection.json"
+COMPLETION_SELECTION_SCHEMA = "cuda_cutover.completion_selection.v1"
 
 CUTOVER_REFUSALS = frozenset(
     {
@@ -436,10 +439,137 @@ def open_existing_authorization_store(
             os.close(parent_fd)
 
 
-def execute_cutover() -> object:
-    """Refuse until the owner-selected completion locator has a ruled ingress."""
+class PreparedCutover(ABC):
+    """A capability whose implementation already holds its pinned resources."""
 
-    raise CutoverRefusal("completion_locator_unavailable")
+    @abstractmethod
+    def begin(self) -> object:
+        """Start the precomputed operation sequence without new resolution."""
+
+
+def _prepare_selected_cutover(completion_locator: str) -> PreparedCutover:
+    """Keep preparation dormant until the real authority adapter exists."""
+
+    cm._validate_private_ref(completion_locator)
+    raise CutoverRefusal("preparation_unavailable")
+
+
+def publish_and_validate_burn() -> None:
+    """Preserve the frozen burn boundary without an assignable publisher."""
+
+    raise CutoverRefusal("burn_content_invalid")
+
+
+def _read_completion_locator_at(root: Path, expected_uid: int) -> str:
+    """Read the canonical owner selection below a caller-supplied test root."""
+
+    root_fd = -1
+    selected_fd = -1
+    try:
+        root_fd = s7._open_directory_by_components(Path(root))
+        root_stat = os.fstat(root_fd)
+        if (
+            not stat_module.S_ISDIR(root_stat.st_mode)
+            or root_stat.st_uid != expected_uid
+            or stat_module.S_IMODE(root_stat.st_mode) != 0o700
+        ):
+            raise PermissionError("selection root is not owner-private")
+        selected_fd = os.open(
+            COMPLETION_SELECTION_NAME,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        before = os.fstat(selected_fd)
+        raw = s7_io._verify_and_read(
+            selected_fd,
+            before,
+            COMPLETION_SELECTION_NAME,
+            expected_uid,
+        )
+        named = os.stat(
+            COMPLETION_SELECTION_NAME,
+            dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        if not _same_file_identity(before, named) or any(
+            getattr(before, field) != getattr(named, field)
+            for field in ("st_size", "st_mtime_ns", "st_ctime_ns")
+        ):
+            raise OSError("selection name no longer identifies held file")
+
+        wrapper = json.loads(raw)
+        if (
+            type(wrapper) is not dict
+            or set(wrapper) != {"fields", "schema"}
+            or wrapper.get("schema") != COMPLETION_SELECTION_SCHEMA
+            or type(wrapper.get("fields")) is not dict
+            or set(wrapper["fields"]) != {"completion_locator"}
+        ):
+            raise ValueError("completion selection is malformed")
+        locator = cm._validate_private_ref(
+            wrapper["fields"].get("completion_locator")
+        )
+        driver._relative_parts(locator)
+        if raw != cm._canonical_wrapper_bytes(wrapper):
+            raise ValueError("completion selection is noncanonical")
+        return locator
+    except CutoverRefusal:
+        raise
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        RecursionError,
+        driver.BenchRefusal,
+    ) as exc:
+        raise CutoverRefusal("completion_locator_unavailable") from exc
+    finally:
+        if selected_fd >= 0:
+            os.close(selected_fd)
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def _bind_owner_completion_locator_reader():
+    """Bind the production reader to one root without an injection surface."""
+
+    fixed_root = Path(BENCH_ROOT)
+    fixed_expected_uid = os.getuid()
+    read_completion_locator_at = _read_completion_locator_at
+
+    def _read_owner_completion_locator() -> str:
+        """Read the one fixed owner-selected completion locator."""
+
+        return read_completion_locator_at(fixed_root, fixed_expected_uid)
+
+    return _read_owner_completion_locator
+
+
+_read_owner_completion_locator = _bind_owner_completion_locator_reader()
+del _bind_owner_completion_locator_reader
+
+
+def _bind_dormant_cutover_entrypoint():
+    """Close the entrypoint over tracked refusals, never provider globals."""
+
+    read_owner_completion_locator = _read_owner_completion_locator
+    prepare_selected_cutover = _prepare_selected_cutover
+    publish_and_validate_burn = globals()["publish_and_validate_burn"]
+
+    def execute_cutover() -> object:
+        """Read owner selection, prepare, burn, then call the pre-bound executor."""
+
+        completion_locator = read_owner_completion_locator()
+        prepared = prepare_selected_cutover(completion_locator)
+        begin = prepared.begin
+        publish_and_validate_burn()
+        return begin()
+
+    return execute_cutover
+
+
+execute_cutover = _bind_dormant_cutover_entrypoint()
+del _bind_dormant_cutover_entrypoint
 
 
 def _now_z() -> str:
@@ -618,7 +748,7 @@ def _is_canonical_cutover_envelope(envelope: s7.WorkRequestEnvelope) -> bool:
             request_id=envelope.request_id,
             action=cm.CUTOVER_ACTION,
             params=dict(cm.CUTOVER_ACTION_PARAMS),
-            affected_refs=envelope.affected_refs,
+            affected_refs=cm.CUTOVER_AFFECTED_REFS,
             precondition_hash=envelope.precondition_hash,
             created_at=envelope.created_at,
             expires_at=envelope.expires_at,

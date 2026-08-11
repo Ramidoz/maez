@@ -582,6 +582,34 @@ CUTOVER_ACTION_SET = (
     "restart_llama_judge",
     "host_reboot",
 )
+# Each executor operation names the state it can mutate. Recovery staging is a
+# logical ref because preparation chooses its private destination at runtime;
+# the other refs denote the exact owner-user manager, services, and host boot
+# domain changed by their respective operations.
+CUTOVER_OPERATION_AFFECTED_REFS = MappingProxyType(
+    {
+        "stage_recovery_copies": ("backup:cuda_cutover_recovery",),
+        "install_cuda_override": (
+            "file:/home/rohit/.config/systemd/user/"
+            "llama-server.service.d/zz-b9596-cuda.conf",
+        ),
+        "daemon_reload": ("systemd_manager:user",),
+        "restart_llama_server": ("service:llama-server.service",),
+        "restart_llama_judge": ("service:llama-judge.service",),
+        "host_reboot": ("host:local",),
+    }
+)
+if tuple(CUTOVER_OPERATION_AFFECTED_REFS) != CUTOVER_ACTION_SET:
+    raise RuntimeError("cutover affected-ref manifest does not match action set")
+CUTOVER_AFFECTED_REFS = tuple(
+    sorted(
+        {
+            ref
+            for refs in CUTOVER_OPERATION_AFFECTED_REFS.values()
+            for ref in refs
+        }
+    )
+)
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v3"

@@ -815,7 +815,9 @@ def _canonical_affected_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
         text = str(ref or "").strip()
         if not text:
             continue
-        if text.startswith("service:"):
+        if text in {"host:local", "systemd_manager:user"}:
+            canonical.append(text)
+        elif text.startswith("service:"):
             service_name = text.removeprefix("service:").strip()
             if service_name and not service_name.endswith(".service"):
                 service_name += ".service"

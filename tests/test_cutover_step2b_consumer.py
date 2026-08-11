@@ -1,6 +1,6 @@
 """Cutover step 2B — the consumer primitive.
 
-Written against ratified design v32 and its R8/R9 recorded-consultation ruling.
+Written against ratified design v33 and its R8/R9 recorded-consultation ruling.
 
 Slice 1 covers the contracts that are unambiguous from the frozen design
 and testable without a live S7 ceremony: the receipt's v2 shape, the
@@ -19,7 +19,7 @@ Expected pre-implementation failure taxonomy:
 * GrantProjection  -> the projection helper and schema literal are absent.
 * StoreOpener      -> open_existing_authorization_store is absent.
 * Consultation     -> implemented as a real ask with exact-byte evidence.
-* ConsumerIngress  -> the unruled completion-locator surface stays blocked.
+* ConsumerIngress  -> one fixed anchored owner selection; no injection parameter.
 * NoFallback       -> a GUARD: `procedural` must be unreachable for
   cutover, asserted on the closed value set.
 """
@@ -32,6 +32,7 @@ import inspect
 import json
 import os
 import sqlite3
+import stat as stat_module
 import textwrap
 from contextlib import closing
 from dataclasses import fields as dataclass_fields, replace
@@ -53,9 +54,24 @@ REPO = Path(__file__).resolve().parents[1]
 FIXTURE_PRECONDITION_HASH = s7.canonical_hash(
     {"fixture": "expired-cutover-action-contract-v1"}
 )
+EXPECTED_CUTOVER_OPERATION_AFFECTED_REFS = {
+    "stage_recovery_copies": ("backup:cuda_cutover_recovery",),
+    "install_cuda_override": (
+        "file:/home/rohit/.config/systemd/user/"
+        "llama-server.service.d/zz-b9596-cuda.conf",
+    ),
+    "daemon_reload": ("systemd_manager:user",),
+    "restart_llama_server": ("service:llama-server.service",),
+    "restart_llama_judge": ("service:llama-judge.service",),
+    "host_reboot": ("host:local",),
+}
 FIXTURE_CUTOVER_AFFECTED_REFS = (
+    "backup:cuda_cutover_recovery",
     "file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
+    "host:local",
+    "service:llama-judge.service",
     "service:llama-server.service",
+    "systemd_manager:user",
 )
 FIXTURE_AUTHORITY_CONTEXT_HASH = s7.canonical_hash(
     {"fixture": "founder-authority-context"}
@@ -64,6 +80,51 @@ FIXTURE_RUNTIME_IDENTITY_HASH = s7.canonical_hash(
     {"fixture": "bonded-runtime-identity"}
 )
 FIXTURE_RUNTIME_SOURCE_REF = "bonded-runtime:fixture-primary"
+FIXTURE_COMPLETION_LOCATOR = (
+    "command-assemble-stage2-attempt-027-terminal.json"
+)
+
+
+def _completion_selection_bytes(locator: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "fields": {"completion_locator": locator},
+                "schema": "cuda_cutover.completion_selection.v1",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _write_completion_selection(root: Path, locator: str) -> Path:
+    root.mkdir(mode=0o700)
+    selected = root / "cutover-completion-selection.json"
+    selected.write_bytes(_completion_selection_bytes(locator))
+    selected.chmod(0o600)
+    return selected
+
+
+def _completion_selection_outcome(root: Path, expected_uid: int) -> tuple[str, str]:
+    try:
+        return (
+            "accepted",
+            cutover._read_completion_locator_at(root, expected_uid),
+        )
+    except cutover.CutoverRefusal as exc:
+        return ("refused", str(exc))
+    except Exception as exc:  # the assertion exposes wrong-reason failures
+        return ("unexpected_exception", type(exc).__name__)
+
+
+def _assert_completion_selection_positive_control(root: Path) -> None:
+    _write_completion_selection(root, FIXTURE_COMPLETION_LOCATOR)
+    assert _completion_selection_outcome(root, os.getuid()) == (
+        "accepted",
+        FIXTURE_COMPLETION_LOCATOR,
+    )
 
 
 class _RecordingBondedAsk:
@@ -396,28 +457,32 @@ class TestActionContract:
             == ()
         )
 
+    def test_each_executor_operation_derives_its_honest_affected_ref(self) -> None:
+        """The six-operation authority manifest and its ref map are one shape.
+
+        Recovery staging is deliberately logical: its physical private
+        destination does not exist until preparation, while the frozen
+        rollback manifest binds the bytes it will contain.
+        """
+        assert cm.CUTOVER_OPERATION_AFFECTED_REFS == (
+            EXPECTED_CUTOVER_OPERATION_AFFECTED_REFS
+        )
+        assert tuple(cm.CUTOVER_OPERATION_AFFECTED_REFS) == cm.CUTOVER_ACTION_SET
+        assert cm.CUTOVER_AFFECTED_REFS == FIXTURE_CUTOVER_AFFECTED_REFS
+
+    def test_new_closed_ref_kinds_survive_canonicalization(self) -> None:
+        assert (
+            s7._canonical_affected_refs(FIXTURE_CUTOVER_AFFECTED_REFS)
+            == FIXTURE_CUTOVER_AFFECTED_REFS
+        )
+
     def test_the_envelope_carries_the_real_mutation_targets(self) -> None:
-        """The frozen fields, plus refs that are SUPPLIED, not frozen.
+        """Positive control: the frozen six-operation ref union survives.
 
-        POSITIVE CONTROL for the test above: empty derivation is only good
-        news if the supplied refs genuinely survive into the envelope. This
-        asserts they do, so 'derivation is empty' cannot be mistaken for
-        'no refs anywhere'.
-
-        SCOPE, because the two halves differ. The closed values below --
-        work class, subsystem, change class, exposure risk -- ARE frozen in
-        the producer, and asserting them witnesses that. `affected_refs` is
-        NOT: the producer takes it as a parameter and this test hands it in,
-        so the ref assertion witnesses PASS-THROUGH, not that the envelope
-        names the true cutover targets.
-
-        That is deliberate rather than an omission. The refs are absolute
-        paths under the owner's home directory; freezing them here would
-        bake an owner-specific path into core governance, which is a worse
-        defect than the one it would close. The real targets are pinned
-        where they belong -- in the cutover executor's own steps -- and the
-        owner does not see `affected_refs` at the tap, since the renderer
-        does not project them.
+        The generic builder receives refs, but cutover truth is independently
+        frozen in ``cm.CUTOVER_OPERATION_AFFECTED_REFS`` and canonical
+        admission rejects any different union. The consultation question
+        projects this exact tuple for owner review.
         """
         env = build_cutover_work_request_envelope(
             request_id="fixture-cutover-action-contract-v1",
@@ -449,6 +514,29 @@ class TestActionContract:
             == "fixture-cutover-consultation-v1"
         )
         assert env.free_text_ref_hash is None
+
+    def test_canonical_cutover_envelope_refuses_one_omitted_manifest_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        envelope, _attempt, _ask = _consultation_fixture(tmp_path)
+        omitted = build_cutover_work_request_envelope(
+            request_id=envelope.request_id,
+            action=envelope.action,
+            params=dict(cm.CUTOVER_ACTION_PARAMS),
+            affected_refs=tuple(
+                ref for ref in envelope.affected_refs if ref != "host:local"
+            ),
+            precondition_hash=envelope.precondition_hash,
+            created_at=envelope.created_at,
+            expires_at=envelope.expires_at,
+            maez_voice_consultation_id=(
+                envelope.maez_voice_consultation_id or ""
+            ),
+        )
+
+        assert cutover._is_canonical_cutover_envelope(envelope) is True
+        assert cutover._is_canonical_cutover_envelope(omitted) is False
 
     def test_cutover_producer_rejects_the_wrong_action(self) -> None:
         with pytest.raises(ValueError, match="must target"):
@@ -1746,17 +1834,315 @@ class TestCutoverVoiceGateAdmission:
         assert refused.body["error"] == "s7_voice_seat_unresolved"
 
 
-class TestUnruledConsumerIngress:
-    """The consumer stays unreachable until the owner selects its ingress."""
+class TestBurnStructure:
+    """The frozen burn sequence exists but has no assignable capability seam."""
 
-    def test_execute_refuses_at_the_missing_locator_surface(self) -> None:
+    def test_frozen_burn_names_exist_without_a_provider_slot(self) -> None:
+        assert hasattr(cutover, "PreparedCutover")
+        assert hasattr(cutover.PreparedCutover, "begin")
+        assert inspect.isabstract(cutover.PreparedCutover)
+        assert hasattr(cutover, "publish_and_validate_burn")
+        assert not inspect.signature(cutover.publish_and_validate_burn).parameters
+        assert not inspect.signature(cutover.execute_cutover).parameters
+        assert not hasattr(cutover, "_CUTOVER_PREPARER")
+        assert not hasattr(cutover, "_BURN_PUBLICATION")
+
+    def test_preparation_and_burn_helpers_are_inert_without_authority(
+        self,
+    ) -> None:
         with pytest.raises(
             cutover.CutoverRefusal,
-            match=r"^completion_locator_unavailable$",
+            match=r"^preparation_unavailable$",
         ):
-            cutover.execute_cutover()
+            cutover._prepare_selected_cutover(FIXTURE_COMPLETION_LOCATOR)
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^burn_content_invalid$",
+        ):
+            cutover.publish_and_validate_burn()
 
-    def test_the_unruled_entrypoint_has_no_injection_parameters(self) -> None:
+    def test_begin_is_pre_bound_before_the_burn(self) -> None:
+        """No descriptor lookup is allowed after the burn helper returns."""
+        source = textwrap.dedent(inspect.getsource(cutover.execute_cutover))
+        function = ast.parse(source).body[0]
+        assert isinstance(function, ast.FunctionDef)
+
+        bind_index = next(
+            (
+                index
+                for index, statement in enumerate(function.body)
+                if isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == "begin"
+                and isinstance(statement.value, ast.Attribute)
+                and statement.value.attr == "begin"
+            ),
+            None,
+        )
+        burn_index = next(
+            (
+                index
+                for index, statement in enumerate(function.body)
+                if isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Name)
+                and statement.value.func.id == "publish_and_validate_burn"
+            ),
+            None,
+        )
+        begin_index = next(
+            (
+                index
+                for index, statement in enumerate(function.body)
+                if isinstance(statement, ast.Return)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Name)
+                and statement.value.func.id == "begin"
+            ),
+            None,
+        )
+
+        assert (bind_index, burn_index, begin_index) == (3, 4, 5)
+
+    def test_exactly_one_executor_call_site(self) -> None:
+        source = inspect.getsource(cutover)
+        sites = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "begin"
+        ]
+
+        assert len(sites) == 1, sites
+
+
+class TestRuledConsumerIngress:
+    """The zero-parameter consumer reads one fixed owner selection."""
+
+    def test_fixed_selection_reader_accepts_one_private_canonical_artifact(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        root = tmp_path / "bench"
+        _write_completion_selection(root, FIXTURE_COMPLETION_LOCATOR)
+
+        assert hasattr(cutover, "_read_completion_locator_at")
+        assert cutover._read_completion_locator_at(root, os.getuid()) == (
+            FIXTURE_COMPLETION_LOCATOR
+        )
+
+    def test_absent_fixed_selection_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        absent = tmp_path / "absent"
+        absent.mkdir(mode=0o700)
+
+        assert _completion_selection_outcome(absent, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_malformed_fixed_selection_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        malformed = tmp_path / "malformed"
+        selected = _write_completion_selection(
+            malformed,
+            FIXTURE_COMPLETION_LOCATOR,
+        )
+        selected.write_text(
+            json.dumps(
+                {
+                    "fields": {
+                        "completion_locator": FIXTURE_COMPLETION_LOCATOR,
+                    },
+                    "schema": "cuda_cutover.completion_selection.v1",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        assert _completion_selection_outcome(malformed, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_invalid_private_relative_locator_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        invalid = tmp_path / "invalid-locator"
+        _write_completion_selection(invalid, "receipts//terminal.json")
+
+        assert _completion_selection_outcome(invalid, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_json_depth_failure_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        depth_failure = tmp_path / "depth-failure"
+        _write_completion_selection(
+            depth_failure,
+            FIXTURE_COMPLETION_LOCATOR,
+        )
+
+        def fail_at_depth(_raw: bytes):
+            raise RecursionError("JSON nesting limit")
+
+        monkeypatch.setattr(cutover.json, "loads", fail_at_depth)
+
+        assert _completion_selection_outcome(depth_failure, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_unreadable_fixed_selection_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        unreadable = tmp_path / "unreadable"
+        selected = _write_completion_selection(
+            unreadable,
+            FIXTURE_COMPLETION_LOCATOR,
+        )
+        selected.chmod(0o000)
+
+        assert _completion_selection_outcome(unreadable, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_non_owner_owned_fixed_selection_refuses_with_closed_reason(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+        wrong_owner = tmp_path / "wrong-owner"
+        _write_completion_selection(wrong_owner, FIXTURE_COMPLETION_LOCATOR)
+
+        real_fstat = cutover.os.fstat
+        real_stat = cutover.os.stat
+
+        def foreign_owned(info: os.stat_result) -> os.stat_result:
+            values = list(info)
+            values[4] = info.st_uid + 1
+            return os.stat_result(values)
+
+        def fstat_with_foreign_file(fd: int) -> os.stat_result:
+            info = real_fstat(fd)
+            if stat_module.S_ISREG(info.st_mode):
+                return foreign_owned(info)
+            return info
+
+        def stat_with_foreign_file(*args, **kwargs) -> os.stat_result:
+            info = real_stat(*args, **kwargs)
+            if stat_module.S_ISREG(info.st_mode):
+                return foreign_owned(info)
+            return info
+
+        monkeypatch.setattr(cutover.os, "fstat", fstat_with_foreign_file)
+        monkeypatch.setattr(cutover.os, "stat", stat_with_foreign_file)
+
+        assert _completion_selection_outcome(wrong_owner, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_symlinked_selection_component_or_leaf_refuses(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _assert_completion_selection_positive_control(tmp_path / "control")
+
+        real_parent = tmp_path / "real"
+        real_parent.mkdir(mode=0o700)
+        real_root = real_parent / "bench"
+        _write_completion_selection(real_root, FIXTURE_COMPLETION_LOCATOR)
+        routed_parent = tmp_path / "routed"
+        routed_parent.mkdir(mode=0o700)
+        (routed_parent / "redirect").symlink_to(real_parent, target_is_directory=True)
+        routed_root = routed_parent / "redirect" / "bench"
+
+        leaf_root = tmp_path / "leaf-link"
+        leaf_root.mkdir(mode=0o700)
+        leaf_target = tmp_path / "selected-target.json"
+        leaf_target.write_bytes(_completion_selection_bytes(FIXTURE_COMPLETION_LOCATOR))
+        leaf_target.chmod(0o600)
+        (leaf_root / "cutover-completion-selection.json").symlink_to(leaf_target)
+
+        assert _completion_selection_outcome(routed_root, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+        assert _completion_selection_outcome(leaf_root, os.getuid()) == (
+            "refused",
+            "completion_locator_unavailable",
+        )
+
+    def test_selection_leaf_open_pins_no_follow_nonblock_and_cloexec(self) -> None:
+        source = textwrap.dedent(
+            inspect.getsource(cutover._read_completion_locator_at)
+        )
+        function = ast.parse(source).body[0]
+        selected_open = next(
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "COMPLETION_SELECTION_NAME"
+        )
+        flags = {
+            node.attr
+            for node in ast.walk(selected_open.args[1])
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+        }
+
+        assert flags == {"O_RDONLY", "O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC"}
+
+    def test_real_entrypoint_is_closed_over_the_fixed_reader_and_refusals(
+        self,
+    ) -> None:
+        closed = inspect.getclosurevars(cutover.execute_cutover).nonlocals
+        reader_closed = inspect.getclosurevars(
+            cutover._read_owner_completion_locator
+        ).nonlocals
+
+        assert closed["read_owner_completion_locator"] is (
+            cutover._read_owner_completion_locator
+        )
+        assert closed["prepare_selected_cutover"] is (
+            cutover._prepare_selected_cutover
+        )
+        assert closed["publish_and_validate_burn"] is (
+            cutover.publish_and_validate_burn
+        )
+        assert reader_closed["fixed_root"] == cutover.BENCH_ROOT
+        assert reader_closed["fixed_expected_uid"] == os.getuid()
+        assert reader_closed["read_completion_locator_at"] is (
+            cutover._read_completion_locator_at
+        )
+
+    def test_the_ruled_entrypoint_has_no_injection_parameters(self) -> None:
         assert not inspect.signature(cutover.execute_cutover).parameters
 
     def test_nominal_provider_globals_cannot_bypass_the_block(
@@ -1786,29 +2172,34 @@ class TestUnruledConsumerIngress:
             _FabricatedPublication(),
             raising=False,
         )
+        monkeypatch.setattr(cutover, "BENCH_ROOT", Path("/tmp/forged-bench"))
+        monkeypatch.setattr(
+            cutover,
+            "_read_completion_locator_at",
+            lambda *_args: calls.append("locator") or "fabricated-terminal.json",
+        )
 
-        with pytest.raises(
-            cutover.CutoverRefusal,
-            match=r"^completion_locator_unavailable$",
-        ):
-            cutover.execute_cutover()
-
-        assert calls == []
-
-    def test_blocked_entrypoint_contains_no_executor_or_publication_call(self) -> None:
-        source = textwrap.dedent(inspect.getsource(cutover.execute_cutover))
-        function = ast.parse(source).body[0]
-        assert isinstance(function, ast.FunctionDef)
-        executable = [
-            statement
-            for statement in function.body
-            if not (
-                isinstance(statement, ast.Expr)
-                and isinstance(statement.value, ast.Constant)
-                and isinstance(statement.value.value, str)
+        closed = inspect.getclosurevars(cutover.execute_cutover).nonlocals
+        reader_closed = inspect.getclosurevars(
+            cutover._read_owner_completion_locator
+        ).nonlocals
+        assert closed["prepare_selected_cutover"] is cutover._prepare_selected_cutover
+        assert closed["publish_and_validate_burn"] is (
+            cutover.publish_and_validate_burn
+        )
+        assert reader_closed["fixed_root"] == Path(
+            "/home/rohit/maez/local/cuda_migration_bench"
+        )
+        assert reader_closed["read_completion_locator_at"] is not (
+            cutover._read_completion_locator_at
+        )
+        assert "_CUTOVER_PREPARER" not in cutover.execute_cutover.__code__.co_names
+        assert "_BURN_PUBLICATION" not in cutover.execute_cutover.__code__.co_names
+        assert all(
+            value not in closed.values()
+            for value in (
+                cutover._CUTOVER_PREPARER,
+                cutover._BURN_PUBLICATION,
             )
-        ]
-        assert len(executable) == 1
-        assert isinstance(executable[0], ast.Raise)
-        assert "completion_locator_unavailable" in source
-        assert "completion_locator_unavailable" in cutover.CUTOVER_REFUSALS
+        )
+        assert calls == []

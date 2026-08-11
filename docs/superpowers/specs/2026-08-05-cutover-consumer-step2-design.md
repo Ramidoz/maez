@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v27
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v33
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -41,6 +41,7 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
 | v31 | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery |
 | **v32** | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling** |
+| **v33** | **The owner rules the zero-parameter completion-locator ingress, the complete six-operation `affected_refs` manifest, and restoration of the burn boundary dormant by construction: no provider globals, capability parameters, or assignable activation slot** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -260,7 +261,7 @@ Nothing else. It does **not** name any command record.
 
 | record | how it is located |
 |---|---|
-| completion | the single owner-supplied relative locator |
+| completion | the private relative locator read from the one fixed owner selection artifact; never an entrypoint parameter |
 | admission | **exclusively** from the verified completion's `admission_ref` |
 | receipt | **exclusively** from the verified completion's `artifact_ref` |
 
@@ -337,7 +338,7 @@ restructured. The two assembly commands therefore differ in publication
 shape, deliberately, and that difference is documented rather than
 smoothed over.
 
-### The completion locator (v5)
+### The completion locator (v33; supersedes v5's caller-supplied form)
 
 Command records carry **runtime-allocated ordinals**, so their filenames
 cannot be constants known before the producer runs. The v4 authority
@@ -345,8 +346,24 @@ cannot be constants known before the producer runs. The v4 authority
 above) therefore could not name them as literals, and v4 was wrong to
 imply it could.
 
-Resolution: the consumer accepts **exactly one owner-supplied relative
-completion locator** under the canonical root.
+Resolution: the production entrypoint takes **zero parameters**. The owner
+selects exactly one relative completion document by placing one canonical,
+owner-owned `0600` artifact at the fixed path
+`/home/rohit/maez/local/cuda_migration_bench/cutover-completion-selection.json`:
+
+```json
+{"fields":{"completion_locator":"<private-relative-ref>"},"schema":"cuda_cutover.completion_selection.v1"}
+```
+
+The JSON is canonical compact sort-key encoding with one trailing newline.
+The reader walks the fixed root component by component with `O_NOFOLLOW`,
+requires the root to be owner-owned `0700`, opens the fixed leaf with
+`O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, and requires a stable, owner-owned,
+regular, single-link `0600` inode. Absent, malformed, noncanonical,
+unreadable, non-owner-owned, or redirected input refuses as
+`completion_locator_unavailable`; it never discovers a latest file or
+defaults a value. This slice deliberately adds no parameterized selection
+publisher: the owner writes the artifact; the entrypoint only reads it.
 
 * A locator is **not authority**. It selects which document to read;
   identity is established entirely by the anchored completion → admission
@@ -755,6 +772,17 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
+**v33 dormant construction.** The tracked module restores
+`PreparedCutover`, `publish_and_validate_burn()`, the pre-bound `begin`, and
+the single syntactic executor call required by the authoritative sequence.
+It does **not** restore the former assignable preparer or burn-publisher
+globals. The zero-parameter entrypoint is closed over the tracked fixed
+selection reader and tracked refusal implementations; assigning similarly
+named module attributes cannot arm it. Preparation remains
+`preparation_unavailable`, and burn publication remains
+`burn_content_invalid`, until a real bonded-runtime adapter can perform the
+founder tap and carry the R8/R9 evidence. No nominal adapter is introduced.
+
 ### R1 — RULED IN TWO PARTS
 
 **Part 1 — is a tap required?** Owner, 2026-08-06: *"Yes it is Maez's
@@ -1116,7 +1144,7 @@ Every envelope field, frozen:
 | `closed_symptom_code` | closed code for backend migration |
 | `proposed_change_class` | `model_routing_change` — the precedent's value |
 | `why_self_fix_failed_class` | closed code: owner-initiated migration, not a repair |
-| `affected_refs` | the override and runtime identity refs — **real** refs, which is what removing the classifier-bait `target` restored |
+| `affected_refs` | the exact sorted union of the six-operation mutation manifest (§ `affected_refs`); evidence-only runtime identity documents are excluded |
 | `content_exposure_risk` | closed low/none code |
 | `precondition_hash` | canonical hash over the stage-2 permit, the bench anchor and the rollback manifest |
 | `created_at` / `expires_at` | the cutover authorization's own window |
@@ -1257,7 +1285,7 @@ independently reservable; and a replay of the *same* attempt is refused.
 **If Maez objects, the cutover does not proceed.** That is the design, and
 it needs no exception path.
 
-#### `affected_refs` — DERIVED from the operation manifest (v18)
+#### `affected_refs` — DERIVED from the operation manifest (v33)
 
 v17 named "the production override unit ref" and "the runtime identity
 document ref". Both were wrong:
@@ -1270,19 +1298,23 @@ document ref". Both were wrong:
   prefixes `file:`, normalizes, de-duplicates and **sorts**. My "exact
   ordered tuple, in this order" was asserting something S7 discards.
 
-Frozen: the tuple is **derived from the executor's operation manifest**,
-so the approval covers what will actually be mutated. At minimum it names
-the installed drop-in and the affected service:
+Frozen: the tuple is **derived from the executor's six-operation manifest**,
+so the approval covers what will actually be mutated. No caller-supplied
+subset is canonical:
 
-```
-file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf
-service:llama-server.service
-```
+| operation | affected ref | exact denotation |
+|---|---|---|
+| `stage_recovery_copies` | `backup:cuda_cutover_recovery` | the logical frozen incumbent recovery set; preparation chooses and anchors its private physical staging destination at runtime because no honest destination exists before then |
+| `install_cuda_override` | `file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf` | the installed owner-user service override file |
+| `daemon_reload` | `systemd_manager:user` | the loaded unit/drop-in configuration state of the owner's user systemd manager |
+| `restart_llama_server` | `service:llama-server.service` | the owner-user llama server service runtime |
+| `restart_llama_judge` | `service:llama-judge.service` | the owner-user llama judge service runtime |
+| `host_reboot` | `host:local` | the current local host boot/runtime domain replaced by reboot |
 
-**Every other Act-2 mutation must be accounted for explicitly** —
-recovery staging, judge restart, and reboot — either by appearing in this
-tuple or by a stated reason it is represented elsewhere. An unlisted
-mutation is a mutation the tap did not approve.
+`systemd_manager:user` and `host:local` are exact closed refs, not broad
+prefix vocabularies. The canonical aggregate is the sorted de-duplicated
+union of this independent operation-to-ref manifest. An unlisted mutation
+is a mutation the tap did not approve.
 
 **A pin that makes this reachable at all:** `params` must contain **none**
 of `path`, `file`, `target`, `cmd`. `derive_affected_refs`
