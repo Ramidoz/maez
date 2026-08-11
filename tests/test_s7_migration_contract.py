@@ -543,8 +543,9 @@ class TestNoTestHereTouchesTheLiveStore:
 
 
 class TestNormalOpeningIsVerificationOnly:
-    """`daemon/maez_daemon.py` constructs the mutating store on the live
-    request path, so this must be structural rather than a convention."""
+    """The live request path constructs a store that vends mutating
+    transactions, so constructor verification-only posture must be
+    structural rather than a convention."""
 
     def test_opening_a_store_does_not_create_v2(self, tmp_path: Path) -> None:
         store = _store(tmp_path)

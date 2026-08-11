@@ -540,7 +540,9 @@ COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
 PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v2"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 CUTOVER_AUTHORIZATION_SCHEMA = "cuda_migration.cutover_authorization.v1"
-CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v1"
+CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v2"
+PRESENCE_MODES = ("founder_webauthn", "procedural")
+CUTOVER_PRESENCE_MODE = "founder_webauthn"
 S7_GRANT_PROJECTION_SCHEMA = "cuda_migration.s7_execution_grant_projection.v2"
 S7_GRANT_PROJECTION_FIELDS = (
     "artifact_id",
@@ -1156,6 +1158,8 @@ class CutoverConsumptionReceipt:
     boot_id: str
     stage_two_receipt_file_sha256: str
     stage_two_receipt_binding_sha256: str
+    presence_mode: str
+    presence_evidence_sha256: str
     consumed_at: str
     schema_version: str = field(default=CUTOVER_CONSUMPTION_SCHEMA, init=False)
 
@@ -1170,8 +1174,14 @@ class CutoverConsumptionReceipt:
             self.authorization_binding_sha256,
             self.stage_two_receipt_file_sha256,
             self.stage_two_receipt_binding_sha256,
+            self.presence_evidence_sha256,
         ):
             _validate_sha256(digest)
+        if (
+            type(self.presence_mode) is not str
+            or self.presence_mode not in PRESENCE_MODES
+        ):
+            raise ValueError("cutover_consumption_presence_mode")
         if type(self.nonce) is not str or _NONCE_RE.fullmatch(self.nonce) is None:
             raise ValueError("authorization_nonce")
         if (
@@ -1195,6 +1205,8 @@ class CutoverConsumptionReceipt:
                 "boot_id": self.boot_id,
                 "stage_two_receipt_file_sha256": self.stage_two_receipt_file_sha256,
                 "stage_two_receipt_binding_sha256": self.stage_two_receipt_binding_sha256,
+                "presence_mode": self.presence_mode,
+                "presence_evidence_sha256": self.presence_evidence_sha256,
                 "consumed_at": self.consumed_at,
             }
         )
@@ -3489,6 +3501,8 @@ def _decode_cutover_consumption(fields: object) -> CutoverConsumptionReceipt:
             "boot_id",
             "stage_two_receipt_file_sha256",
             "stage_two_receipt_binding_sha256",
+            "presence_mode",
+            "presence_evidence_sha256",
             "consumed_at",
         ),
     )

@@ -2,9 +2,10 @@
 
 Found while strengthening the migration matrix, and ruled a separate
 immediate prerequisite rather than part of a commit called "migration
-only": `S7AuthorizationStore.__init__` currently runs
-`CREATE TABLE IF NOT EXISTS` and COMMITS on every open. Opening the
-lockbox rebuilds parts of the lockbox.
+only": `S7AuthorizationStore.__init__` previously ran
+`CREATE TABLE IF NOT EXISTS` and committed on every open. Opening the
+lockbox rebuilt parts of the lockbox; the tests below pin the repaired
+verification-only shape.
 
 That matters beyond tidiness. The design requires normal opening to be
 verification-only -- it may read and verify a fingerprint, and may never
@@ -151,8 +152,8 @@ class TestOpeningPerformsNoWrite:
         assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
     def test_opening_creates_no_directory(self, tmp_path: Path) -> None:
-        """The constructor currently mkdirs. A store whose parent is absent
-        is a store that was never initialised."""
+        """The constructor used to mkdir. A store whose parent is absent is
+        a store that was never initialised."""
         target = tmp_path / "absent" / "ceremony.sqlite3"
         with pytest.raises((FileNotFoundError, ValueError)):
             s7.S7AuthorizationStore(target)

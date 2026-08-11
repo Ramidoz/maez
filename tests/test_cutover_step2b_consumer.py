@@ -27,11 +27,13 @@ Expected pre-implementation failure taxonomy:
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
+import os
 import sqlite3
 import textwrap
 from contextlib import closing
-from dataclasses import fields as dataclass_fields
+from dataclasses import fields as dataclass_fields, replace
 from pathlib import Path
 
 import pytest
@@ -54,7 +56,26 @@ FIXTURE_CUTOVER_AFFECTED_REFS = (
 )
 
 
-def _s7_grant_fixture() -> s7.S7ExecutionGrant:
+def _valid_existing_authorization_store(
+    tmp_path: Path, *, name: str = "valid-store"
+) -> Path:
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    root = tmp_path / name
+    store = bootstrap_with_authorization(root)
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        s7_v2_migration._migrate_authorization_store_to_v2_at(
+            store_dir_fd=dir_fd
+        )
+    finally:
+        os.close(dir_fd)
+    return store.db_path
+
+
+def _s7_grant_fixture(
+    *, credential_ref: str = "credential-1"
+) -> s7.S7ExecutionGrant:
     return s7.S7ExecutionGrant(
         artifact_id="artifact-1",
         request_id="request-1",
@@ -67,12 +88,41 @@ def _s7_grant_fixture() -> s7.S7ExecutionGrant:
         derived_work_class="self_modification",
         derived_aggregation_group="s7agg_fixture",
         nonce="nonce-1",
-        credential_ref="credential-1",
+        credential_ref=credential_ref,
         auth_method="founder_webauthn",
         grant_source="founder_webauthn",
         consumed_at="2000-01-01T00:01:00Z",
         ceremony_kind="founder_local_webauthn",
         _mint_token=s7._EXECUTION_GRANT_TOKEN,
+    )
+
+
+FIXTURE_PRESENCE_EVIDENCE_SHA256 = hashlib.sha256(
+    cm.s7_execution_grant_projection_bytes(_s7_grant_fixture())
+).hexdigest()
+FIXTURE_ALTERNATE_PRESENCE_EVIDENCE_SHA256 = hashlib.sha256(
+    cm.s7_execution_grant_projection_bytes(
+        _s7_grant_fixture(credential_ref="credential-2")
+    )
+).hexdigest()
+
+
+def _cutover_consumption_fixture(
+    *,
+    presence_mode: str = "founder_webauthn",
+    presence_evidence_sha256: str = FIXTURE_PRESENCE_EVIDENCE_SHA256,
+) -> cm.CutoverConsumptionReceipt:
+    return cm.CutoverConsumptionReceipt(
+        authorization_file_sha256="1" * 64,
+        authorization_binding_sha256="2" * 64,
+        nonce="3" * 64,
+        window_id="cutover-fixture",
+        boot_id="fixture-boot",
+        stage_two_receipt_file_sha256="4" * 64,
+        stage_two_receipt_binding_sha256="5" * 64,
+        presence_mode=presence_mode,
+        presence_evidence_sha256=presence_evidence_sha256,
+        consumed_at="2000-01-01T00:02:00Z",
     )
 
 
@@ -261,17 +311,53 @@ class TestConsumptionReceiptV2:
         assert "presence_mode" in names
         assert "presence_evidence_sha256" in names
 
+        founder = _cutover_consumption_fixture()
+        procedural = replace(founder, presence_mode="procedural")
+        different_evidence = replace(
+            founder,
+            presence_evidence_sha256=(
+                FIXTURE_ALTERNATE_PRESENCE_EVIDENCE_SHA256
+            ),
+        )
+        assert founder.binding_sha256 != procedural.binding_sha256
+        assert founder.binding_sha256 != different_evidence.binding_sha256
+
     def test_active_family_count_stays_twenty_six(self) -> None:
         """A REPLACEMENT, not an addition: v1 has no durable artifact."""
         assert len(cm.ACTIVE_SCHEMA_FAMILIES) == 26
+        assert cm.ACTIVE_SCHEMA_FAMILIES.count(cm.CUTOVER_CONSUMPTION_SCHEMA) == 1
+        assert "cuda_migration.cutover_consumption.v1" not in (
+            cm.ACTIVE_SCHEMA_FAMILIES
+        )
 
     def test_presence_mode_is_a_closed_value(self) -> None:
         assert cm.PRESENCE_MODES == ("founder_webauthn", "procedural")
+        procedural = _cutover_consumption_fixture(presence_mode="procedural")
+        with pytest.raises(ValueError, match="presence_mode"):
+            replace(procedural, presence_mode="fallback")
+        assert procedural.presence_mode == "procedural"
 
     def test_cutover_may_not_emit_procedural(self) -> None:
         """Part 3: zero usable credentials REFUSES; there is no fallback."""
         assert cm.CUTOVER_PRESENCE_MODE == "founder_webauthn"
         assert "presence_no_usable_credential" in cutover.CUTOVER_REFUSALS
+        source = textwrap.dedent(
+            inspect.getsource(cutover.consume_cutover_authorization)
+        )
+        function = ast.parse(source).body[0]
+        assert isinstance(function, ast.FunctionDef)
+        executable = [
+            statement
+            for statement in function.body
+            if not (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            )
+        ]
+        assert len(executable) == 1
+        assert isinstance(executable[0], ast.Raise)
+        assert "cuda_migration.cutover_consumption.v1" not in source
 
 
 class TestGrantProjection:
@@ -509,9 +595,47 @@ class TestStoreOpener:
         assert "create" not in params
         assert set(params) >= {"db_path", "expected_uid"}
 
-    def test_a_missing_store_refuses_and_creates_nothing(
+    def test_missing_and_wrong_stores_refuse_with_a_valid_control(
         self, tmp_path: Path
     ) -> None:
+        existing = _valid_existing_authorization_store(tmp_path)
+        with cutover.open_existing_authorization_store(
+            db_path=existing, expected_uid=os.getuid()
+        ) as opened:
+            assert opened.inspection_connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE name = 's7_authorization_artifacts_v2'"
+            ).fetchone() == ("s7_authorization_artifacts_v2",)
+
+        wrong = _valid_existing_authorization_store(
+            tmp_path, name="wrong-schema-store"
+        )
+        with closing(sqlite3.connect(wrong)) as conn:
+            conn.execute(
+                "ALTER TABLE s7_founder_webauthn_credentials "
+                "ADD COLUMN fixture INTEGER"
+            )
+            conn.commit()
+        with pytest.raises(
+            cutover.CutoverRefusal, match="presence_store_schema_drift"
+        ):
+            cutover.open_existing_authorization_store(
+                db_path=wrong, expected_uid=os.getuid()
+            )
+
+        missing_table = _valid_existing_authorization_store(
+            tmp_path, name="missing-table-store"
+        )
+        with closing(sqlite3.connect(missing_table)) as conn:
+            conn.execute("DROP TABLE s7_founder_webauthn_credentials")
+            conn.commit()
+        with pytest.raises(
+            cutover.CutoverRefusal, match="presence_store_table_missing"
+        ):
+            cutover.open_existing_authorization_store(
+                db_path=missing_table, expected_uid=os.getuid()
+            )
+
         missing = tmp_path / "absent.sqlite3"
         with pytest.raises(cutover.CutoverRefusal):
             cutover.open_existing_authorization_store(
@@ -520,9 +644,11 @@ class TestStoreOpener:
         assert not missing.exists()
 
     def test_it_never_constructs_the_mutating_stores(self) -> None:
-        """S7AuthorizationStore.__init__ mkdirs, executescripts, ALTERs and
-        commits; S7WebAuthnBootstrapStore likewise. Constructing either at
-        this seam would WRITE while merely asking who is present."""
+        """`S7AuthorizationStore.__init__` is verification-only, but the
+        class vends mutating authorization transactions;
+        `S7WebAuthnBootstrapStore` still creates and migrates on
+        construction. This presence seam opens the existing file directly
+        rather than constructing either broader store."""
         tree = ast.parse((REPO / "scripts" / "cuda_cutover.py").read_text())
         called = {
             node.func.attr if isinstance(node.func, ast.Attribute) else
@@ -586,37 +712,66 @@ class TestBurnStructure:
     def test_the_closed_publication_helper_exists(self) -> None:
         assert hasattr(cutover, "publish_and_validate_burn")
 
-    def test_prepare_returns_a_pinned_capability(self) -> None:
+    def test_prepare_exposes_the_pinned_capability_contract(self) -> None:
         assert hasattr(cutover, "prepare_cutover")
         assert hasattr(cutover, "PreparedCutover")
         assert hasattr(cutover.PreparedCutover, "begin")
+        assert (
+            inspect.signature(cutover.prepare_cutover).return_annotation
+            == "PreparedCutover"
+        )
+        assert not inspect.signature(cutover.execute_cutover).parameters
+        assert cutover._CUTOVER_PREPARER is None
+        assert cutover._BURN_PUBLICATION is None
+
+        source = textwrap.dedent(inspect.getsource(cutover.prepare_cutover))
+        function = ast.parse(source).body[0]
+        assert isinstance(function, ast.FunctionDef)
+        returns = [
+            node.value
+            for node in ast.walk(function)
+            if isinstance(node, ast.Return)
+        ]
+        assert len(returns) == 1
+        assert isinstance(returns[0], ast.Name)
+        assert returns[0].id == "prepared"
 
     def test_begin_is_pre_bound_before_the_burn(self) -> None:
         """An attribute lookup after the burn could run a descriptor or
         fail in the one region where nothing may happen."""
-        source = inspect.getsource(cutover.execute_cutover)
-        tree = ast.parse(source.lstrip())
-        binds: list[int] = []
-        burns: list[int] = []
-        calls: list[int] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and isinstance(
-                node.value, ast.Attribute
-            ):
-                if node.value.attr == "begin":
-                    binds.append(node.lineno)
-            if isinstance(node, ast.Call):
-                name = (
-                    node.func.attr
-                    if isinstance(node.func, ast.Attribute)
-                    else getattr(node.func, "id", None)
-                )
-                if name == "publish_and_validate_burn":
-                    burns.append(node.lineno)
-                if name == "begin":
-                    calls.append(node.lineno)
-        assert binds and burns and calls
-        assert binds[0] < burns[0] < calls[0]
+        source = textwrap.dedent(inspect.getsource(cutover.execute_cutover))
+        tree = ast.parse(source)
+        function = tree.body[0]
+        assert isinstance(function, ast.FunctionDef)
+
+        bind_index = next(
+            index
+            for index, statement in enumerate(function.body)
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "begin"
+            and isinstance(statement.value, ast.Attribute)
+            and statement.value.attr == "begin"
+        )
+        burn_index = next(
+            index
+            for index, statement in enumerate(function.body)
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id == "publish_and_validate_burn"
+        )
+        begin_index = next(
+            index
+            for index, statement in enumerate(function.body)
+            if isinstance(statement, ast.Return)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id == "begin"
+        )
+        assert bind_index < burn_index
+        assert begin_index == burn_index + 1
 
     def test_exactly_one_executor_call_site(self) -> None:
         source = inspect.getsource(cutover)
