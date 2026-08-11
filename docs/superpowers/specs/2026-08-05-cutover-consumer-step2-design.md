@@ -1705,40 +1705,39 @@ ruled `self_modification`, which **is** voice-seat guarded, so minting
 goes through the guarded store. Retained struck-through rather than
 deleted, because it was the load-bearing assumption of v11's S7 section.
 
-#### TWO single-use resources — the new ordering question
+#### SUPERSEDED (v13; replaced by v14/v15) — the ordering question
 
-This is the substantive new seam, and it did not exist before the ruling.
-There are now **two** one-use tokens:
+This subsection replaces, rather than silently deletes, v13's stale
+ordering. v13 modeled only the cutover nonce and S7 artifact and therefore
+called artifact consumption the last pre-burn act. The authoritative
+v14/v15 sequence above corrected that account: there are **two S7
+consumptions** around receipt staging.
 
-1. the **cutover nonce**, spent by the exclusive link;
-2. the **S7 artifact**, spent by `consumed_at`.
+1. `consume_for_execution()` consumes the **S7 artifact early**, before
+   receipt encoding, and mints the grant whose canonical hash the receipt
+   carries.
+2. `consume_execution_grant_for_action(...)` consumes the **action-edge
+   grant use as the last pre-burn act**, applying that exact grant to the
+   cutover action.
 
-Their order decides what a partial failure means:
+The cutover nonce is then spent by the exclusive link. A failure after the
+early artifact consumption but before the link leaves the tap spent and
+the cutover nonce reusable; the owner re-taps and nothing was burned.
+Consuming the artifact only after the link remains unsafe because a
+mutation would have proceeded beside a replayable tap.
 
-| order | failure between them | verdict |
-|---|---|---|
-| consume S7 **after** the link | burn published, tap still unconsumed | **UNSAFE** — a mutation proceeded on a replayable tap |
-| consume S7 **before** the link | tap spent, cutover nonce reusable | **SAFE** — owner re-taps; nothing mutated |
+#### The deliberate pre-burn S7 transitions, named
 
-**Frozen: consume the S7 artifact as the LAST pre-burn act**, immediately
-before the eligibility recheck and the link. The failure mode is a spent
-tap on a burn that never happened — an inconvenience, requiring a fresh
-tap — and never a mutation authorized by a tap that could be replayed.
+Both consumptions are deliberate one-use state transitions on a path this
+design otherwise forbids writes on. The first consumes the artifact early
+and mints the grant; the second consumes the action-edge grant use as the
+last pre-burn act. Their failures are pre-burn refusals.
 
-#### The one deliberate pre-burn write, named
-
-Consuming the artifact is a **write**, on a path this design otherwise
-forbids writes on. That is not an oversight and it is not in tension with
-v10's ruling: **inspection** is read-only (the collector never
-instantiates the bootstrap store, never migrates, never commits);
-**consumption** is a deliberate one-use state transition that must happen
-before the thing it authorizes.
-
-It is called out explicitly here because "no mutation before the burn" is
-a rule this design has enforced for eleven revisions, and an exception
-that is not named is an exception that later gets forgotten. The
-exception is exactly one write, to exactly one row, as the last pre-burn
-act, and its failure is a pre-burn refusal.
+This is not in tension with v10's ruling: **inspection** remains read-only
+(the collector never instantiates the bootstrap store, never migrates,
+never commits). The superseded v13 claim of exactly one write to exactly
+one row as the last pre-burn act no longer describes the authoritative
+sequence.
 
 **R4 — RULED (v13), retained historically.** ~~Carried for review: is a
 spent tap on a failed burn the acceptable cost, or should the artifact
@@ -1941,8 +1940,9 @@ claim to.
 
 ## A7. Total failure table — exact codes
 
-Families are not closed sets. Every concrete emitted code, each assigned a
-side of the linearization point:
+Families are not closed sets. Every concrete emitted code is assigned a
+side of the linearization point. Two R8-retained tuple-only codes are also
+listed and explicitly marked as having no producer:
 
 | # | failure | side | nonce | executor | exact code |
 |---|---|---|---|---|---|
@@ -1975,7 +1975,14 @@ side of the linearization point:
 | 27 | any S-join | pre | reusable | no | `join_mismatch` |
 | 28 | chronology | pre | reusable | no | `chronology_violation` |
 | 29 | clock or boot read | pre | reusable | no | `edge_state_unreadable` |
-| 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
+| 29a1 | consultation request binding invalid or ask unavailable | pre | reusable | **zero** | `consultation_unavailable` |
+| 29a2 | response absent, wrong type, oversized, or not UTF-8 | pre | reusable | **zero** | `response_unreadable` |
+| 29a3 | consultation explicitly withdrawn | pre | reusable | **zero** | `consultation_withdrawn` |
+| 29a4 | consultation evidence cannot be durably persisted | pre | reusable | **zero** | `bundle_unreservable` |
+| 29a5 | RETAINED IN THE FROZEN TUPLE WITH NO PRODUCER UNDER R8 | n/a | n/a | n/a | `semantic_reader_failed` |
+| 29a6 | RETAINED IN THE FROZEN TUPLE WITH NO PRODUCER UNDER R8 | n/a | n/a | n/a | `objection_recorded` |
+| 30 | bound `prepare()` returns a value that is not `PreparedCutover` | pre | reusable | no | `preparation_failed` |
+| 30a | no runtime preparer is bound | pre | reusable | no | `preparation_unavailable` |
 | 29b | founder credential enrolled, no valid assertion | pre | reusable | **zero** | `owner_presence_unattested` |
 | 29c | presence store missing/unreadable | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29d | presence store schema drift | pre | reusable | **zero** | `presence_store_schema_drift` |
@@ -2016,6 +2023,14 @@ side of the linearization point:
 | 43 | unexpected internal, pre-link | pre | reusable | **zero** | `consumer_internal_pre` |
 | 44 | unexpected internal, post-link **before** `begin()` | post | spent | **zero** | `consumer_internal_post_pre_begin` |
 | 45 | unexpected internal, **inside/after** `begin()` | post | spent | **one** | `consumer_internal_executor` |
+
+`preparation_failed` is intentionally narrower than its name suggests: it
+fires **only** when a bound preparer returns the wrong type. Arbitrary
+exceptions raised during preparation are not mapped to that code.
+
+**OWED GAP:** preparation currently has no runtime positive-control
+fixture; its present test coverage is structural. This reconciliation does
+not manufacture one.
 
 Rows 44–45 split v3's row 38, which left executor state "unknown". An
 unknown executor state is exactly the thing a terminal refusal must not
