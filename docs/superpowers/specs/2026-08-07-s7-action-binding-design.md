@@ -383,11 +383,12 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | call:S7ExecutionGrant | 2440 |
 | `core/governance/operator_user_boundary.py` | `_mint_s7_execution_grant` | constructor | definition | 2424 |
 | `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition | 2291 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3446 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3462 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3487 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3503 |
 | `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 3345 |
 | `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 3392 |
 | `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 3396 |
+| `core/governance/operator_user_boundary.py` | `build_cutover_work_request_envelope` | producer | call:build_work_request_envelope | 3437 |
 | `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash | 1269 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope | 1427 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition | 1389 |
@@ -400,10 +401,10 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 3223 |
 | `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 3207 |
 | `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition | 1505 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4568 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4579 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4608 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4539 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4609 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4620 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4649 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4580 |
 | `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1523 |
 | `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1184 |
 | `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 1703 |
@@ -441,7 +442,7 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 628 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 23, producer 8, renderer 3, source_bundle 7, validator 3 — **total 73**.
+**Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 23, producer 9, renderer 3, source_bundle 7, validator 3 — **total 74**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

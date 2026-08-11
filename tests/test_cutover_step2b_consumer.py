@@ -38,10 +38,20 @@ import pytest
 
 from core.governance import operator_user_boundary as s7
 from core.governance import s7_v2_migration
+from core.governance.operator_user_boundary import (
+    build_cutover_work_request_envelope,
+)
 from scripts import cuda_cutover as cutover
 from scripts import cuda_migration as cm
 
 REPO = Path(__file__).resolve().parents[1]
+FIXTURE_PRECONDITION_HASH = s7.canonical_hash(
+    {"fixture": "expired-cutover-action-contract-v1"}
+)
+FIXTURE_CUTOVER_AFFECTED_REFS = (
+    "file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf",
+    "service:llama-server.service",
+)
 
 
 def _s7_grant_fixture() -> s7.S7ExecutionGrant:
@@ -130,18 +140,110 @@ class TestActionContract:
         )
 
     def test_the_envelope_carries_the_real_mutation_targets(self) -> None:
-        """The refs the design freezes, checked where they actually live.
+        """The frozen fields, plus refs that are SUPPLIED, not frozen.
 
         POSITIVE CONTROL for the test above: empty derivation is only good
         news if the supplied refs genuinely survive into the envelope. This
         asserts they do, so 'derivation is empty' cannot be mistaken for
         'no refs anywhere'.
+
+        SCOPE, because the two halves differ. The closed values below --
+        work class, subsystem, change class, exposure risk -- ARE frozen in
+        the producer, and asserting them witnesses that. `affected_refs` is
+        NOT: the producer takes it as a parameter and this test hands it in,
+        so the ref assertion witnesses PASS-THROUGH, not that the envelope
+        names the true cutover targets.
+
+        That is deliberate rather than an omission. The refs are absolute
+        paths under the owner's home directory; freezing them here would
+        bake an owner-specific path into core governance, which is a worse
+        defect than the one it would close. The real targets are pinned
+        where they belong -- in the cutover executor's own steps -- and the
+        owner does not see `affected_refs` at the tap, since the renderer
+        does not project them.
         """
-        env = cm.build_cutover_work_request_envelope()
-        refs = set(env.affected_refs)
-        assert "service:llama-server.service" in refs, refs
-        assert any(r.startswith("file:") and "zz-b9596-cuda" in r for r in refs), refs
-        assert "file:model_routing" not in refs, refs
+        env = build_cutover_work_request_envelope(
+            request_id="fixture-cutover-action-contract-v1",
+            action=cm.CUTOVER_ACTION,
+            params=dict(cm.CUTOVER_ACTION_PARAMS),
+            affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+            precondition_hash=FIXTURE_PRECONDITION_HASH,
+            created_at="2000-01-01T00:00:00Z",
+            expires_at="2000-01-01T04:00:00Z",
+            maez_voice_consultation_id="fixture-cutover-consultation-v1",
+        )
+        assert env.affected_refs == FIXTURE_CUTOVER_AFFECTED_REFS
+        assert env.request_id == "fixture-cutover-action-contract-v1"
+        assert env.action == cm.CUTOVER_ACTION
+        assert env.claimed_work_class == "self_modification"
+        assert env.derived_work_class == "self_modification"
+        assert env.requesting_subsystem == "cuda_cutover"
+        assert env.closed_symptom_code == "self_mod_requested"
+        assert env.proposed_change_class == "model_routing_change"
+        assert env.why_self_fix_failed_class == "not_self_fix"
+        assert env.content_exposure_risk == "content_free"
+        assert env.precondition_hash == FIXTURE_PRECONDITION_HASH
+        assert env.created_at == "2000-01-01T00:00:00Z"
+        assert env.expires_at == "2000-01-01T04:00:00Z"
+        assert env.predicted_effect_class == "behavior_change"
+        assert env.rollback_path_class == "revert_patch"
+        assert (
+            env.maez_voice_consultation_id
+            == "fixture-cutover-consultation-v1"
+        )
+        assert env.free_text_ref_hash is None
+
+    def test_cutover_producer_rejects_the_wrong_action(self) -> None:
+        with pytest.raises(ValueError, match="must target"):
+            build_cutover_work_request_envelope(
+                request_id="fixture-cutover-action-contract-v1",
+                action="model_routing.not_the_cutover",
+                params=dict(cm.CUTOVER_ACTION_PARAMS),
+                affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+                precondition_hash=FIXTURE_PRECONDITION_HASH,
+                created_at="2000-01-01T00:00:00Z",
+                expires_at="2000-01-01T04:00:00Z",
+                maez_voice_consultation_id="fixture-cutover-consultation-v1",
+            )
+
+    @pytest.mark.parametrize(
+        "params",
+        (
+            {},
+            {"cutover_action": "model_routing.not_the_cutover"},
+            {
+                "cutover_action": cm.CUTOVER_ACTION,
+                "target": "forbidden-second-routing-target",
+            },
+        ),
+    )
+    def test_cutover_producer_rejects_non_frozen_params(
+        self, params: dict[str, str]
+    ) -> None:
+        with pytest.raises(ValueError, match="frozen action"):
+            build_cutover_work_request_envelope(
+                request_id="fixture-cutover-action-contract-v1",
+                action=cm.CUTOVER_ACTION,
+                params=params,
+                affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+                precondition_hash=FIXTURE_PRECONDITION_HASH,
+                created_at="2000-01-01T00:00:00Z",
+                expires_at="2000-01-01T04:00:00Z",
+                maez_voice_consultation_id="fixture-cutover-consultation-v1",
+            )
+
+    def test_cutover_producer_requires_a_consultation_id(self) -> None:
+        with pytest.raises(ValueError, match="requires a Maez consultation id"):
+            build_cutover_work_request_envelope(
+                request_id="fixture-cutover-action-contract-v1",
+                action=cm.CUTOVER_ACTION,
+                params=dict(cm.CUTOVER_ACTION_PARAMS),
+                affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+                precondition_hash=FIXTURE_PRECONDITION_HASH,
+                created_at="2000-01-01T00:00:00Z",
+                expires_at="2000-01-01T04:00:00Z",
+                maez_voice_consultation_id="",
+            )
 
 
 class TestConsumptionReceiptV2:
