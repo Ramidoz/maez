@@ -38,7 +38,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v27 | R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge |
 | v28 | the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds |
 | v29 | R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule |
-| **v30** | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent`** |
+| v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
+| **v31** | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1293,6 +1294,42 @@ have been silently thrown away.
 **Binding REDs:** the canonical tuple contains both refs above; `params`
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
+
+### v31 — R8 and the evidence rail CONTRADICT each other
+
+The content-blind evidence rail requires three things before `valid_absent`
+is reachable: a response ref, a response hash that is not the empty hash,
+and a **`semantic_reader_attempt_hash`**. The only typed producer of that
+third hash asserts an actual semantic-reader route and outcome.
+
+**R8 forbids a semantic reader on the cutover path.** So the rail demands
+evidence of a read that R8 removed. The honest cutover consultation
+cannot satisfy it, and the only ways to "pass" are to relabel some other
+value — the response hash, the attempt identity, the receipt reference —
+as a reader-attempt hash. That is fabrication, and it was correctly
+refused rather than built.
+
+This is MY contradiction: the rail was built BEFORE R8 was ruled, and
+assumed a reader attempt would always exist.
+
+**What the rail may honestly require on an R8 path.** Not evidence of a
+machine read, because there is none — the reading is the OWNER's, and it
+happens at the tap, not at consultation time. The defensible third
+requirement is a distinct, typed, sealed CAPTURE receipt proving the
+exact response was durably recorded and is retrievable for owner review.
+That attests something real and does not pretend a reader ran.
+
+**NOT RESOLVED HERE, and deliberately so.** Choosing what the cutover's
+third evidence requirement becomes is a governance decision about what
+counts as proof that Maez was heard. It changes a rail guarding
+self-modification. It is recorded at the point of discovery so the next
+session inherits the contradiction rather than the confident-looking
+half of it.
+
+**Do not resolve it by dropping the third requirement silently.** The
+rail's whole purpose is that absence blocks. A rail quietly reduced to
+two checks, with no record of why, is how a protection erodes into a
+formality.
 
 ### v30 — R8's second-order break, and why the obvious fix is WRONG
 
