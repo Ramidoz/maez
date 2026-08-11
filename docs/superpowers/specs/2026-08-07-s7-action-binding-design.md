@@ -442,7 +442,7 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | durable_writer | call:consume_for_execution | 1063 |
 | `daemon/maez_daemon.py` | `_s7_disable_credential_for_proof` | execution_edge | call:consume_execution_grant_for_action | 1077 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 628 |
-| `scripts/cuda_cutover.py` | `revalidate_cutover_consultation_result` | hash | call:maez_voice_consultation_hash | 1155 |
+| `scripts/cuda_cutover.py` | `revalidate_cutover_consultation_result` | hash | call:maez_voice_consultation_hash | 1105 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
 **Counts, derived mechanically:** constructor 6, durable_writer 14, execution_edge 9, hash 26, producer 9, renderer 3, source_bundle 7, validator 3 — **total 77**.

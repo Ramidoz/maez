@@ -1,8 +1,8 @@
-"""Cutover authority tooling — Act 1 minting and execution-edge consumption.
+"""Cutover authority tooling — Act 1 minting and dormant Act 2 contracts.
 
-Tracked and tested (unlike the retired local minter). Nothing here mutates
-a service: minting writes one authorization document; consumption burns its
-nonce atomically. Every mutating ceremony command remains owner-typed.
+Tracked and tested (unlike the retired local minter). Nothing here mutates a
+service. Act 2 remains blocked until its owner-selected completion locator has
+an authority-preserving input surface.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import os
 import secrets
 import sqlite3
 import stat as stat_module
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -40,6 +39,7 @@ CUTOVER_REFUSALS = frozenset(
         "authorization_missing",
         "authorization_wrong_type",
         "burn_content_invalid",
+        "completion_locator_unavailable",
         "mint_roundtrip_failed",
         "parent_receipt_malformed",
         "parent_receipt_noncanonical",
@@ -436,60 +436,10 @@ def open_existing_authorization_store(
             os.close(parent_fd)
 
 
-class PreparedCutover(ABC):
-    """A capability whose implementation already holds its pinned resources."""
-
-    @abstractmethod
-    def begin(self) -> object:
-        """Start the precomputed operation sequence without new resolution."""
-
-
-class _CutoverPreparer(ABC):
-    @abstractmethod
-    def prepare(self) -> PreparedCutover:
-        """Validate and pin every resource needed by ``begin``."""
-
-
-class _BurnPublication(ABC):
-    @abstractmethod
-    def publish_and_validate(self) -> None:
-        """Publish the staged burn and complete all post-link validation."""
-
-
-_CUTOVER_PREPARER: _CutoverPreparer | None = None
-_BURN_PUBLICATION: _BurnPublication | None = None
-
-
-def prepare_cutover() -> PreparedCutover:
-    """Return only a nominally typed, already-pinned executor capability."""
-
-    preparer = _CUTOVER_PREPARER
-    if preparer is None:
-        raise CutoverRefusal("preparation_unavailable")
-    prepared = preparer.prepare()
-    if not isinstance(prepared, PreparedCutover):
-        raise CutoverRefusal("preparation_failed")
-    return prepared
-
-
-def publish_and_validate_burn() -> None:
-    """Closed and dormant until the real burn publisher is hard-bound."""
-
-    publication = _BURN_PUBLICATION
-    if publication is None:
-        raise CutoverRefusal("burn_content_invalid")
-    result = publication.publish_and_validate()
-    if result is not None:
-        raise CutoverRefusal("burn_content_invalid")
-
-
 def execute_cutover() -> object:
-    """Compose prepared execution and burn with a closed adjacency boundary."""
+    """Refuse until the owner-selected completion locator has a ruled ingress."""
 
-    prepared = prepare_cutover()
-    begin = prepared.begin
-    publish_and_validate_burn()
-    return begin()
+    raise CutoverRefusal("completion_locator_unavailable")
 
 
 def _now_z() -> str:
@@ -1304,7 +1254,7 @@ def main() -> None:
     print(f"boot_id    {doc.boot_id}")
     print(f"parent     bench evidence {doc.parent_bench_evidence_sha256[:24]}…")
     print(f"actions    {', '.join(doc.actions)}")
-    print("single-use: consumed atomically at the execution edge.")
+    print("act 2: blocked pending the owner-selected completion locator ingress.")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Slice 1 covers the contracts that are unambiguous from the frozen design
 and testable without a live S7 ceremony: the receipt's v2 shape, the
 action contract measured against the real classifier, the grant
 projection, the store opener's refusals, the consultation producer's
-recorded-unjudged exchange behavior, and the burn's structural adjacency.
+recorded-unjudged exchange behavior, and the blocked consumer ingress.
 
 Deliberately NOT here: a full end-to-end ceremony. It needs a founder
 WebAuthn assertion, which cannot be produced without a physical key tap.
@@ -19,7 +19,7 @@ Expected pre-implementation failure taxonomy:
 * GrantProjection  -> the projection helper and schema literal are absent.
 * StoreOpener      -> open_existing_authorization_store is absent.
 * Consultation     -> implemented as a real ask with exact-byte evidence.
-* BurnStructure    -> publish_and_validate_burn / prepare_cutover absent.
+* ConsumerIngress  -> the unruled completion-locator surface stays blocked.
 * NoFallback       -> a GUARD: `procedural` must be unreachable for
   cutover, asserted on the closed value set.
 """
@@ -1746,80 +1746,69 @@ class TestCutoverVoiceGateAdmission:
         assert refused.body["error"] == "s7_voice_seat_unresolved"
 
 
-class TestBurnStructure:
-    """Nothing between the burn and the first mutation."""
+class TestUnruledConsumerIngress:
+    """The consumer stays unreachable until the owner selects its ingress."""
 
-    def test_the_closed_publication_helper_exists(self) -> None:
-        assert hasattr(cutover, "publish_and_validate_burn")
+    def test_execute_refuses_at_the_missing_locator_surface(self) -> None:
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^completion_locator_unavailable$",
+        ):
+            cutover.execute_cutover()
 
-    def test_prepare_exposes_the_pinned_capability_contract(self) -> None:
-        assert hasattr(cutover, "prepare_cutover")
-        assert hasattr(cutover, "PreparedCutover")
-        assert hasattr(cutover.PreparedCutover, "begin")
-        assert (
-            inspect.signature(cutover.prepare_cutover).return_annotation
-            == "PreparedCutover"
-        )
+    def test_the_unruled_entrypoint_has_no_injection_parameters(self) -> None:
         assert not inspect.signature(cutover.execute_cutover).parameters
-        assert cutover._CUTOVER_PREPARER is None
-        assert cutover._BURN_PUBLICATION is None
 
-        source = textwrap.dedent(inspect.getsource(cutover.prepare_cutover))
+    def test_nominal_provider_globals_cannot_bypass_the_block(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[str] = []
+
+        class _FabricatedPreparer:
+            def prepare(self):
+                calls.append("prepare")
+                return object()
+
+        class _FabricatedPublication:
+            def publish_and_validate(self):
+                calls.append("publish")
+
+        monkeypatch.setattr(
+            cutover,
+            "_CUTOVER_PREPARER",
+            _FabricatedPreparer(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            cutover,
+            "_BURN_PUBLICATION",
+            _FabricatedPublication(),
+            raising=False,
+        )
+
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^completion_locator_unavailable$",
+        ):
+            cutover.execute_cutover()
+
+        assert calls == []
+
+    def test_blocked_entrypoint_contains_no_executor_or_publication_call(self) -> None:
+        source = textwrap.dedent(inspect.getsource(cutover.execute_cutover))
         function = ast.parse(source).body[0]
         assert isinstance(function, ast.FunctionDef)
-        returns = [
-            node.value
-            for node in ast.walk(function)
-            if isinstance(node, ast.Return)
+        executable = [
+            statement
+            for statement in function.body
+            if not (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            )
         ]
-        assert len(returns) == 1
-        assert isinstance(returns[0], ast.Name)
-        assert returns[0].id == "prepared"
-
-    def test_begin_is_pre_bound_before_the_burn(self) -> None:
-        """An attribute lookup after the burn could run a descriptor or
-        fail in the one region where nothing may happen."""
-        source = textwrap.dedent(inspect.getsource(cutover.execute_cutover))
-        tree = ast.parse(source)
-        function = tree.body[0]
-        assert isinstance(function, ast.FunctionDef)
-
-        bind_index = next(
-            index
-            for index, statement in enumerate(function.body)
-            if isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == "begin"
-            and isinstance(statement.value, ast.Attribute)
-            and statement.value.attr == "begin"
-        )
-        burn_index = next(
-            index
-            for index, statement in enumerate(function.body)
-            if isinstance(statement, ast.Expr)
-            and isinstance(statement.value, ast.Call)
-            and isinstance(statement.value.func, ast.Name)
-            and statement.value.func.id == "publish_and_validate_burn"
-        )
-        begin_index = next(
-            index
-            for index, statement in enumerate(function.body)
-            if isinstance(statement, ast.Return)
-            and isinstance(statement.value, ast.Call)
-            and isinstance(statement.value.func, ast.Name)
-            and statement.value.func.id == "begin"
-        )
-        assert bind_index < burn_index
-        assert begin_index == burn_index + 1
-
-    def test_exactly_one_executor_call_site(self) -> None:
-        source = inspect.getsource(cutover)
-        tree = ast.parse(source)
-        sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and getattr(node.func, "id", None) == "begin"
-        ]
-        assert len(sites) == 1, sites
+        assert len(executable) == 1
+        assert isinstance(executable[0], ast.Raise)
+        assert "completion_locator_unavailable" in source
+        assert "completion_locator_unavailable" in cutover.CUTOVER_REFUSALS
