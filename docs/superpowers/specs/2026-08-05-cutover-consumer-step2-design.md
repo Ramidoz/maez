@@ -37,7 +37,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v26 | S7 does not bind the action — compensating control, stated as such |
 | v27 | R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge |
 | v28 | the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds |
-| **v29** | **R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule** |
+| v29 | R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule |
+| **v30** | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent`** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1292,6 +1293,45 @@ have been silently thrown away.
 **Binding REDs:** the canonical tuple contains both refs above; `params`
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
+
+### v30 — R8's second-order break, and why the obvious fix is WRONG
+
+R8 made the cutover producer honest: it records `not_determined`,
+because the machine may not conclude what Maez meant. The voice-seat
+gate blocks unless the state is exactly `absent`. So a genuine,
+correctly-recorded consultation is REFUSED and the honest path is a dead
+end. Fail-closed, therefore safe — but it cannot stay.
+
+**The obvious reconciliation is to let the gate accept
+`not_determined`. That is WRONG, and would open a hole.** The generic
+decision pipeline ALSO produces `not_determined` — when its semantic
+reader is UNCERTAIN. Dialog soul-writes and dream execution rely on that
+state blocking. Admitting it generically would let an uncertain reader
+authorize a soul write, which is the opposite of what this project
+wants. Measured, not assumed: the bridge blocks on `!= "absent"`, and the
+pipeline's reader emits the uncertain outcome.
+
+So `not_determined` carries two DIFFERENT meanings by path: "the machine
+deliberately reached no verdict, per R8" for the cutover, and "the reader
+could not tell" everywhere else. A gate reading the STATE STRING cannot
+distinguish them, and must not try.
+
+**Required shape:** admission is CUTOVER-SPECIFIC and keyed on EVIDENCE,
+never on the label. The canonical `model_routing.cutover_cuda` envelope
+plus the typed, revalidated R8 result — its durable receipt and its
+sealed response — must be carried to the gate. R8's typed result exists
+but is NOT carried into `authorize_finish` today; only the bare
+consultation is. That wiring is the work.
+
+**A pre-existing hole this exposed, recorded rather than fixed here.**
+The bare voice-seat gate accepts a hand-constructed, request-bound
+`absent` consultation WITHOUT ever seeing R8's sealed result. The gate
+reads a LABEL, not evidence — on every path, not just the cutover. The
+full guarded finish has a separate source-bundle check; the direct
+voice-seat helper does not. This is the same defect class as the
+original S7 bug and as the boolean R8 removed: a decision trusting a
+field that does not carry what it asserts. It is NOT closed by v30 and
+must not be assumed closed.
 
 ### R8 RULED (v29) — the consultation is RECORDED, never machine-interpreted
 
