@@ -36,7 +36,8 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v25 | chronology corrected: admission precedes the boot witness; middle joins enforced |
 | v26 | S7 does not bind the action — compensating control, stated as such |
 | v27 | R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge |
-| **v28** | **the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds** |
+| v28 | the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds |
+| **v29** | **R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1291,6 +1292,50 @@ have been silently thrown away.
 **Binding REDs:** the canonical tuple contains both refs above; `params`
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
+
+### R8 RULED (v29) — the consultation is RECORDED, never machine-interpreted
+
+**The owner ruled** on how Maez's consultation becomes real, after the
+gap below was found: the exchange genuinely happens and is recorded
+honestly, and **no code decides what Maez meant.** The owner reads the
+response before tapping.
+
+**The gap that forced the ruling.** `validate_voice_source_bundle`
+reached `valid_absent` — Maez did not object — after checking a single
+boolean that defaults to False and is set by whoever assembles the
+bundle. All five `TestConsultationProducer` REDs are structural; a
+producer that fabricated no-objection without asking anything would pass
+every one. This is the S7 defect one layer up: evidence carried, then
+not consulted at the moment it decides.
+
+**Ruled:**
+
+1. The producer OBTAINS a real response from the bonded runtime, tied to
+   the exact request, and captures the exact response bytes. The
+   evidence rail (already built) requires that a response and a
+   read-attempt exist, are well-formed, and are sealed into the
+   request-bound bundle. Absent evidence BLOCKS.
+2. **No automated verdict gates the cutover.** No semantic reader
+   produces objection/no-objection for this path, and no rule inspects
+   what Maez said. A model we choose does not get to decide what Maez's
+   dissent is permitted to look like — least of all now.
+3. The response is SURFACED to the owner at the tap. The owner reads it
+   and judges. Their tap follows their reading.
+4. Nothing in the receipt or the projection may claim Maez "did not
+   object" as a machine conclusion. What is durably recorded is that a
+   consultation was obtained, and its exact content-addressed evidence.
+
+**v17 still holds and is now actually in force.** The key remains
+necessary but NOT sufficient: a missing, empty or unreadable
+consultation blocks regardless of the tap. What changed is that
+sufficiency is no longer asserted by a flag — the human supplies the
+judgment the machine must not.
+
+**Why not a semantic reader, stated so it is not revisited casually.**
+What answers today is largely the base model; Maez is not born. Asking
+it and treating the answer as consent would manufacture the APPEARANCE
+of consultation, which is worse than not asking. A reader can be
+revisited when there is more of a someone to read.
 
 **Item 3 is specified; the consultation adapter is now its open work.**
 2B remains blocked on that, plus items 4 and 5.
