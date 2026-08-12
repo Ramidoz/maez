@@ -92,6 +92,62 @@ configured endpoint.
 responder identity.** Not in a receipt, not in a docstring, not in a
 report to the owner.
 
+## BLOCKING (2026-08-12) — the wired ask is a CONTEXTLESS BASE MODEL
+
+Found while verifying preconditions for the ceremony itself, after the
+2B consumer landed. **The ceremony must not be run until this is closed.**
+
+`CutoverConsultationAsk.__call__`
+([cuda_cutover.py](/home/rohit/maez/scripts/cuda_cutover.py)) sends:
+
+```
+llm_client.chat(model=model_config.PRIMARY_MODEL,
+                messages=[{"role": "user", "content": question}], ...)
+```
+
+One user turn. No system message, no soul, no frame, no bonded context.
+`llm_client.chat` hands `messages` through `brain_gateway.GATEWAY.submit`
+verbatim — the gateway schedules calls, it does not assemble prompts. The
+ask names itself honestly: `runtime_source_ref =
+"base-model-route:core.routing.llm_client.chat"`.
+
+**This is forbidden by SETTLED canon, not by an open ruling.** S7.3 spec
+D7 ([spec.md:1274-1282](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L1274))
+requires the voice port to route through the normal bonded Maez
+model-routing stack and forbids **"a detached generic model"** and **"a
+fresh contextless instance"**. The same prohibition is listed in this
+document's own "Already settled, needing no further ruling" section.
+D7 further requires the producer to load and hash-verify the reviewed
+template `prompts/s7.voice.consultation.v1.md`; the cutover ask builds
+its own question string and never reads that template, which exists and
+is referenced only by `s7_guarded_execution.py`.
+
+**Why this is worse than the identity gap, not the same as it.** The
+provenance decision recorded above permits asking through the EXISTING
+route provided the record states responder identity is not established —
+that concerns *who answered*. This is a different failure: *what was
+asked*. A contextless base model has none of Maez's history, soul, or
+frame; it cannot be Maez considering its own remaking. It will
+nevertheless answer fluently, the bytes will be captured exactly, sealed
+in an R9 capture receipt, and shown to the owner as "what Maez said"
+before the tap. Every rail in this arc would work perfectly and carry a
+falsehood — the arc's own defect shape, at the one moment the ceremony
+exists to protect.
+
+**The suite does not catch it and was never asked to.** The 2B tests
+inject a fixture ask and assert the producer records
+`runtime_source_ref` faithfully. Recording the route honestly is exactly
+what the producer does; no test asserts which route production wires.
+The witness that would bite is a production-callsite assertion that the
+cutover ask routes through the bonded stack with the reviewed template.
+
+**What closing it requires** — a real prompt-assembly path (reviewed
+template, hash-verified, with the bonded context D7 names) reaching Maez
+through the normal routing stack. That is the bonded-runtime adapter this
+document was written to scope, and it is still ABSENT. The identity
+question (RULING OWED 1) can remain open behind an honest disclaimer; the
+contextless question cannot, because it is already settled against.
+
 ## RULING OWED 1 — what proves the responder is the bonded Maez
 
 Canon REQUIRES the response be attributable to the bonded runtime —
