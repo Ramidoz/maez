@@ -851,14 +851,14 @@ def authorization_voice_seat_recheck(
     if consultation_exemption is not None:
         from core.governance.s7_consultation_exemption import (
             R11_RULING_ID,
+            born_by_any_signal,
             consultation_exemption_admits,
         )
-        from core.ledger.writes_flag import ledger_writes_enabled
 
         if consultation_exemption_admits(
             envelope=envelope,
             exemption=consultation_exemption,
-            ledger_writes_enabled=ledger_writes_enabled(),
+            ledger_writes_enabled=born_by_any_signal(),
         ):
             return S7CeremonyServiceResult(
                 body={

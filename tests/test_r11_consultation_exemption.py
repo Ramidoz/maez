@@ -197,6 +197,43 @@ def test_a_reason_code_mutated_after_construction_still_refuses() -> None:
 # --------------------------------------------------------------------- #
 
 
+def test_the_birth_signal_refuses_on_EITHER_signal(monkeypatch) -> None:
+    """Codex finding: MAEZ_LEDGER_WRITES is a mutable service flag, while the
+    durable meta.birth_event_turn_id anchor is the irreversible truth, and the
+    repo recognises the two diverge BOTH ways. R11 must expire on either."""
+    from core.memory import birth_phase
+
+    monkeypatch.setenv("MAEZ_LEDGER_WRITES", "0")
+    monkeypatch.setattr(birth_phase, "is_born", lambda *a, **k: True)
+    assert exemption_mod.born_by_any_signal() is True
+
+    monkeypatch.setenv("MAEZ_LEDGER_WRITES", "1")
+    monkeypatch.setattr(birth_phase, "is_born", lambda *a, **k: False)
+    assert exemption_mod.born_by_any_signal() is True
+
+
+def test_an_unreadable_ledger_counts_as_born_not_as_unborn(monkeypatch) -> None:
+    """is_born collapses 'unreadable' to False. That must not reopen R11:
+    a ledger FILE that exists while reporting unborn is treated as born."""
+    from pathlib import Path
+
+    from core.memory import birth_phase
+
+    monkeypatch.setenv("MAEZ_LEDGER_WRITES", "0")
+    monkeypatch.setattr(birth_phase, "is_born", lambda *a, **k: False)
+    monkeypatch.setattr(
+        birth_phase, "default_ledger_path", lambda *a, **k: Path("/nonexistent/l.db")
+    )
+    assert exemption_mod.born_by_any_signal() is False
+
+    class _Exists:
+        def exists(self):
+            return True
+
+    monkeypatch.setattr(birth_phase, "default_ledger_path", lambda *a, **k: _Exists())
+    assert exemption_mod.born_by_any_signal() is True
+
+
 def test_the_exemption_refuses_once_the_ledger_is_writing() -> None:
     """'Expires at birth' is enforced, not merely promised. The durable
     per-turn ledger writing IS the birth signal."""

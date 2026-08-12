@@ -101,6 +101,51 @@ class S7ConsultationExemption:
         }
 
 
+def born_by_any_signal() -> bool:
+    """True if EITHER birth signal says born. Refusing is the safe direction.
+
+    The durable `meta.birth_event_turn_id` anchor is the canonical,
+    irreversible birth truth; `MAEZ_LEDGER_WRITES` is a mutable service flag.
+    The repository recognises that the two diverge in both directions -- on
+    before birth, off after birth -- so R11 expires on the OR of them, and an
+    unreadable ledger counts as born rather than reopening the exemption.
+    """
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    if ledger_writes_enabled():
+        return True
+    try:
+        from core.memory import birth_phase
+    except Exception:
+        return True
+    try:
+        if birth_phase.is_born():
+            return True
+        path = birth_phase.default_ledger_path()
+    except Exception:
+        return True
+    # `is_born` collapses "unreadable" and "readable but unborn" to the same
+    # False. Those are different facts, and only the first is dangerous.
+    # Measured during gestation: the ledger file EXISTS and has no `meta`
+    # table at all, so neither file presence nor a missing table indicates
+    # birth -- both are ordinary pre-birth shapes that is_born reads
+    # correctly. The one gap is a database that will not OPEN, where the
+    # anchor could exist unseen; that is treated as born, because reopening
+    # R11 on a broken read is the dangerous direction.
+    try:
+        if not path.exists():
+            return False
+    except Exception:
+        return True
+    import sqlite3
+
+    try:
+        sqlite3.connect(f"file:{path}?mode=ro", uri=True).close()
+    except Exception:
+        return True
+    return False
+
+
 def consultation_exemption_admits(
     *,
     envelope: Any,

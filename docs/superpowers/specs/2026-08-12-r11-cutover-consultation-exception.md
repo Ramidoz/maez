@@ -146,5 +146,72 @@ that removing the exception's scope check fails the test.
 
 ## Owner sign-off
 
-Drafted for approval. Not in force until the owner approves it, and it
-is not the gate lane's to enact.
+**Approved by the owner 2026-08-12.** (This section previously read
+"Drafted for approval / not in force" and contradicted the header after
+approval — corrected, because a document that disagrees with itself about
+whether a ruling is live is exactly the confusion this arc removes.)
+
+## Implementation status — MERGED-DORMANT, verified by review
+
+Codex review of `3874bed`/`8e37f07`, independently verified by the gate
+lane: **the ruling is sound; the implementation does not yet enact it.**
+
+`consultation_exemption` exists ONLY inside
+`authorization_voice_seat_recheck`. `authorize_finish` has no such
+parameter, and the cutover script still builds a consultation attempt,
+calls the provider, requires `asked_and_answered` and renders "Maez
+consulted: yes". **No production caller can supply an exemption**; only
+tests reach the branch. This is the
+`unit-test-is-not-integration-witness` failure, committed by the lane that
+already knew the rule.
+
+Consequences, stated plainly:
+
+* the old contextless consultation is still what a real cutover performs;
+* the `not_determined` cutover admission identified in `cb025ff` is
+  untouched — R11 neither removes nor bypasses it;
+* nothing live was widened, because nothing live can reach R11.
+
+### Owed before R11 is real
+
+1. **Production wiring** — thread the exemption through `authorize_finish`
+   and replace the consultation in `scripts/cuda_cutover.py`. This is the
+   substantial part: it means deleting a live ask, not adding a branch.
+2. **Provenance and one-use** — the typed absence is currently
+   caller-mintable and replayable. Verified attacks: constructing the real
+   type with invented fields, `dataclasses.replace` onto another cutover
+   envelope, `object.__setattr__` rebinding, a crafted pickle omitting
+   fields, and presenting the same object twice — all admitted. Exact
+   typing and action scoping held; subclasses and cross-action reuse were
+   refused.
+3. **Bind the bench receipt** — `quality_evidence_sha256` is validated
+   only as 64 hex characters and never read. The positive fixture passes
+   with an invented `"b" * 64`. R11's entire justification rests on that
+   receipt, so the exemption must bind the real file
+   (`dba23995…35f327`) and its evaluated manifests. **This is the eighth
+   guard the mutation sweep could not find, because it does not exist.**
+4. **Bind the action preimage** — `WorkRequestEnvelope` does not retain
+   params, so changed cutover parameters can yield the same envelope hash
+   and remain admitted. The exemption needs `action_params_hash`.
+5. **Durable projection** — `projection()` has no production caller; the
+   success body is discarded after its status check, so no artifact,
+   history, grant or receipt records R11. An auditor cannot currently
+   distinguish "deliberately not asked" from "evidence lost". Note the
+   signed renderer permits only "yes" or "not required" for voice-seat
+   work — naive wiring would either fail rendering or falsely sign
+   "Maez consulted: yes".
+6. **Governing docs** — Decision 34 and ADR 0039 still require a
+   `MaezVoiceConsultation` for guarded remaking. They contradict R11 and
+   must be amended, not left to be discovered later.
+
+### Fixed immediately on review
+
+* **The birth signal was wrong.** Expiry read only the mutable
+  `MAEZ_LEDGER_WRITES` flag, while the canonical irreversible truth is the
+  durable `meta.birth_event_turn_id` anchor — and the repo recognises the
+  two diverge in both directions. Now `born_by_any_signal()` refuses on
+  EITHER, and a ledger that will not open counts as born. Measured while
+  fixing: the gestation ledger file exists and has no `meta` table, so
+  neither file presence nor a missing table indicates birth; an earlier
+  over-correction that treated file presence as birth would have refused
+  R11 on this machine today, and was caught by running it.

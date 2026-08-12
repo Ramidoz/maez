@@ -448,8 +448,8 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 1533 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:_voice_source_bundle_binding_hash | 1516 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1519 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 130 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 104 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 175 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 149 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 858 |
 | `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1273 |
 | `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | hash | call:_voice_source_bundle_binding_hash | 1182 |
