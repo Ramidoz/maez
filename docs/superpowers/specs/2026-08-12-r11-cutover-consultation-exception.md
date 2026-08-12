@@ -1,8 +1,25 @@
 # R11 — the cutover carries NO consultation. Environment, not entity.
 
-Status: **DRAFTED BY THE GATE LANE FOR OWNER APPROVAL. Not in force.**
-Nothing wired. Supersedes the consultation requirement on the cutover
-path only, if approved.
+Status: **IN FORCE. Owner-approved 2026-08-12.** Implemented at `3874bed`
+(`core/governance/s7_consultation_exemption.py`, gate wiring in
+`s7_webauthn_ceremony.py`, 22 witnesses in
+`tests/test_r11_consultation_exemption.py`, all seven guards
+mutation-checked). Supersedes the consultation requirement on the cutover
+path only.
+
+**A regression found while landing this, recorded not swept:** slice B
+(`8ab02e1`) routed voice-bundle persistence through the anchored
+authorization store, which now requires a real ACTIVATED v2 store —
+initialising alone is not enough, since creating the v2 table is not
+permission to write to it without a migration receipt. That tightening is
+correct and is production reality, but it broke
+`S73VoiceSourceBundleValidatorTests::test_persist_voice_source_bundle_is_write_once_for_unreserved_bundle`,
+whose fixture built no store at all. **My gating of slice B missed it
+because I never ran `tests/test_s7_3_guarded_execution.py`.** One attempt
+to repair the fixture cascaded to 19 failures and was reverted rather than
+forced; it needs its own pass. Measured floor in that suite: **3 failures
+pre-date this session entirely** (present at `488f37f`), and slice B added
+**exactly one**.
 
 ## The ruling, as the owner framed it
 
