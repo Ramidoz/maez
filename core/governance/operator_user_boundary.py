@@ -3263,8 +3263,14 @@ class S7AuthorizationStore:
             if artifact.consumed_at is not None
             else None
         )
-        with closing(sqlite3.connect(self.db_path)) as probe:
-            v2_present = _table_present(probe, _V2_AUTH_TABLE)
+        if connection is not None:
+            # A vended anchored connection is the store identity. Reopening
+            # ``self.db_path`` here can cross to a replacement inode during a
+            # human wait and makes the later write answer a different store.
+            v2_present = _table_present(connection, _V2_AUTH_TABLE)
+        else:
+            with closing(sqlite3.connect(self.db_path)) as probe:
+                v2_present = _table_present(probe, _V2_AUTH_TABLE)
 
         if v2_present:
             # A caller-supplied connection cannot be identity-bound: its

@@ -389,20 +389,20 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `_read_committed_grant_row_after_commit` | source_bundle | definition | 2909 |
 | `core/governance/operator_user_boundary.py` | `_require_verified_held_connection` | validator | definition | 2652 |
 | `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition | 2293 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3802 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3818 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 3660 |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 3707 |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 3711 |
-| `core/governance/operator_user_boundary.py` | `build_cutover_work_request_envelope` | producer | call:build_work_request_envelope | 3752 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3808 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3824 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 3666 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 3713 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 3717 |
+| `core/governance/operator_user_boundary.py` | `build_cutover_work_request_envelope` | producer | call:build_work_request_envelope | 3758 |
 | `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash | 1271 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope | 1429 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition | 1391 |
 | `core/governance/operator_user_boundary.py` | `committed_grant_row_proves_founder_self_modification` | validator | definition | 2486 |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 3511 |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 3504 |
-| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | call:consume_for_execution_on_connection | 3417 |
-| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition | 3401 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 3517 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 3510 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | call:consume_for_execution_on_connection | 3423 |
+| `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition | 3407 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_on_connection` | constructor | call:_mint_s7_execution_grant | 3071 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_on_connection` | validator | call:_require_verified_held_connection | 2971 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_on_connection` | durable_writer | definition | 2955 |
@@ -410,15 +410,15 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_with_committed_row` | source_bundle | call:_read_committed_grant_row_after_commit | 3135 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_with_committed_row` | durable_writer | call:consume_for_execution_on_connection | 3116 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_with_committed_row` | durable_writer | definition | 3100 |
-| `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution | 3384 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 3467 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 3538 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 3522 |
+| `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution | 3390 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 3473 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 3544 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 3528 |
 | `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition | 1507 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4924 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4935 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4964 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4895 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4930 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4941 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4970 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4901 |
 | `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1525 |
 | `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1186 |
 | `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 2044 |
@@ -466,10 +466,25 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 625 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:read_voice_source_bundle | 634 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | validator | call:validate_voice_source_bundle | 638 |
-| `scripts/cuda_cutover.py` | `revalidate_cutover_consultation_result` | hash | call:maez_voice_consultation_hash | 1235 |
+| `scripts/cuda_cutover.py` | `__init__` | hash | call:work_request_envelope_hash | 1261 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:build_work_request_envelope | 3860 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | renderer | call:render_request_statement | 3900 |
+| `scripts/cuda_cutover.py` | `_is_canonical_cutover_envelope` | producer | call:build_work_request_envelope | 3080 |
+| `scripts/cuda_cutover.py` | `anchored_transaction` | constructor | call:_open_s7_connection_from_held_store | 1039 |
+| `scripts/cuda_cutover.py` | `_conn` | constructor | call:_open_s7_connection_from_held_store | 1176 |
+| `scripts/cuda_cutover.py` | `_cutover_voice_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1372 |
+| `scripts/cuda_cutover.py` | `_cutover_voice_bundle` | source_bundle | call:S7VoiceConsultationBundle | 1341 |
+| `scripts/cuda_cutover.py` | `_cutover_voice_bundle` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 1334 |
+| `scripts/cuda_cutover.py` | `_persist_and_validate_cutover_voice_bundle` | durable_writer | call:put_voice_source_bundle_v2 | 1394 |
+| `scripts/cuda_cutover.py` | `_persist_and_validate_cutover_voice_bundle` | source_bundle | call:read_voice_source_bundle | 1412 |
+| `scripts/cuda_cutover.py` | `_persist_and_validate_cutover_voice_bundle` | validator | call:validate_voice_source_bundle | 1416 |
+| `scripts/cuda_cutover.py` | `open_existing_authorization_store` | constructor | call:_open_s7_connection_from_held_store | 976 |
+| `scripts/cuda_cutover.py` | `publish_and_validate_burn` | execution_edge | call:consume_execution_grant_for_action | 1905 |
+| `scripts/cuda_cutover.py` | `revalidate_cutover_consultation_result` | hash | call:maez_voice_consultation_hash | 3633 |
+| `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 799 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 9, durable_writer 18, execution_edge 9, hash 28, producer 9, renderer 3, source_bundle 15, validator 10 — **total 101**.
+**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 30, producer 11, renderer 4, source_bundle 18, validator 11 — **total 116**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

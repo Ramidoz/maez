@@ -260,7 +260,16 @@ class TestNoFollowAndStatStability:
             if isinstance(node, ast.Call)
         }
         assert "os.fstat" in calls, calls
-        assert "os.stat" not in calls, calls
+        assert "os.stat" in calls, calls
+        named_stat = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "os.stat"
+        )
+        keywords = {keyword.arg: keyword.value for keyword in named_stat.keywords}
+        assert "dir_fd" in keywords
+        assert ast.literal_eval(keywords["follow_symlinks"]) is False
 
 
 class TestWriteOrderingAndCompleteness:

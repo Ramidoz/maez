@@ -1,32 +1,24 @@
-"""Cutover step 2B — the consumer primitive.
+"""Cutover step 2B — the dormant-safe consumer orchestration.
 
-Written against ratified design v33 and its R8/R9 recorded-consultation ruling.
+Written against ratified design v34 and its R8/R9 recorded-consultation ruling.
 
-Slice 1 covers the contracts that are unambiguous from the frozen design
-and testable without a live S7 ceremony: the receipt's v2 shape, the
-action contract measured against the real classifier, the grant
-projection, the store opener's refusals, the consultation producer's
-recorded-unjudged exchange behavior, and the blocked consumer ingress.
+The suite covers the frozen receipt and action contracts, anchored store
+opening, recorded-unjudged consultation, exact-v2 guarded mint, committed-row
+consume, pinned preparation, and the closed-over publication/begin boundary.
 
 Deliberately NOT here: a full end-to-end ceremony. It needs a founder
 WebAuthn assertion, which cannot be produced without a physical key tap.
 Asserting one exists would be the fabrication this project refuses.
 
-Expected pre-implementation failure taxonomy:
-
-* ActionContract   -> CUTOVER_ACTION / CUTOVER_ACTION_PARAMS absent.
-* ReceiptV2        -> the two presence fields do not exist yet.
-* GrantProjection  -> the projection helper and schema literal are absent.
-* StoreOpener      -> open_existing_authorization_store is absent.
-* Consultation     -> implemented as a real ask with exact-byte evidence.
-* ConsumerIngress  -> one fixed anchored owner selection; no injection parameter.
-* NoFallback       -> a GUARD: `procedural` must be unreachable for
-  cutover, asserted on the closed value set.
+These are local mechanical witnesses, not a ceremony or a certification claim.
+The production entrypoint has one fixed anchored owner selection and no
+capability-injection parameter; procedural presence remains unreachable.
 """
 
 from __future__ import annotations
 
 import ast
+import fcntl
 import hashlib
 import inspect
 import json
@@ -37,6 +29,7 @@ import textwrap
 from contextlib import closing
 from dataclasses import fields as dataclass_fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,6 +41,8 @@ from core.governance.operator_user_boundary import (
     build_cutover_work_request_envelope,
 )
 from scripts import cuda_cutover as cutover
+from scripts import cuda_bench_assemble as assemble
+from scripts import cuda_bench_driver as driver
 from scripts import cuda_migration as cm
 
 REPO = Path(__file__).resolve().parents[1]
@@ -79,10 +74,26 @@ FIXTURE_AUTHORITY_CONTEXT_HASH = s7.canonical_hash(
 FIXTURE_RUNTIME_IDENTITY_HASH = s7.canonical_hash(
     {"fixture": "bonded-runtime-identity"}
 )
+FIXTURE_MODEL_ROUTING_IDENTITY_HASH = s7.canonical_hash(
+    {"fixture": "model-routing-identity"}
+)
+FIXTURE_MODEL_CONFIG_HASH = s7.canonical_hash({"fixture": "model-config"})
 FIXTURE_RUNTIME_SOURCE_REF = "bonded-runtime:fixture-primary"
 FIXTURE_COMPLETION_LOCATOR = (
     "command-assemble-stage2-attempt-027-terminal.json"
 )
+
+
+def _closed_production_preparer():
+    return inspect.getclosurevars(cutover.execute_cutover).nonlocals[
+        "prepare_selected_cutover"
+    ]
+
+
+def _closed_production_authorizer():
+    return inspect.getclosurevars(_closed_production_preparer()).nonlocals[
+        "authorize_and_stage"
+    ]
 
 
 def _completion_selection_bytes(locator: str) -> bytes:
@@ -105,6 +116,25 @@ def _write_completion_selection(root: Path, locator: str) -> Path:
     selected.write_bytes(_completion_selection_bytes(locator))
     selected.chmod(0o600)
     return selected
+
+
+def _seed_stage2_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    from tests.test_cutover_step2a_producer import (
+        FixedClock,
+        _call_cli_restoring_signal_state,
+        seed_private_root,
+    )
+
+    root = seed_private_root(tmp_path)
+    monkeypatch.setattr(driver, "BENCH_ROOT", root)
+    monkeypatch.setattr(driver, "SystemClock", FixedClock)
+    assert _call_cli_restoring_signal_state(
+        ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+    ) == 0
+    completion = next(root.glob("command-assemble-stage2-*-terminal.json"))
+    return root, completion
 
 
 def _completion_selection_outcome(root: Path, expected_uid: int) -> tuple[str, str]:
@@ -139,6 +169,8 @@ class _RecordingBondedAsk:
         failure: Exception | None = None,
         authority_context_hash: str = FIXTURE_AUTHORITY_CONTEXT_HASH,
         runtime_identity_hash: str = FIXTURE_RUNTIME_IDENTITY_HASH,
+        model_routing_identity_hash: str = FIXTURE_MODEL_ROUTING_IDENTITY_HASH,
+        model_config_hash: str = FIXTURE_MODEL_CONFIG_HASH,
         runtime_source_ref: str = FIXTURE_RUNTIME_SOURCE_REF,
     ) -> None:
         self.request_id = envelope.request_id
@@ -148,6 +180,8 @@ class _RecordingBondedAsk:
         self.precondition_hash = envelope.precondition_hash
         self.authority_context_hash = authority_context_hash
         self.runtime_identity_hash = runtime_identity_hash
+        self.model_routing_identity_hash = model_routing_identity_hash
+        self.model_config_hash = model_config_hash
         self.runtime_source_ref = runtime_source_ref
         self.attempt = attempt
         self.response = response
@@ -185,7 +219,8 @@ def _consultation_fixture(
     runtime_source_ref: str = FIXTURE_RUNTIME_SOURCE_REF,
 ):
     receipt_root = tmp_path / "consultation-receipts"
-    receipt_root.mkdir(exist_ok=True)
+    receipt_root.mkdir(mode=0o700, exist_ok=True)
+    receipt_root.chmod(0o700)
     attempt = cutover.ConsultationAttempt.fresh(
         request_id=request_id,
         receipt_root=receipt_root,
@@ -282,8 +317,8 @@ def _cutover_voice_gate_fixture(
         context_manifest_ref="context-manifest:cutover-gate-fixture",
         context_manifest_hash="4" * 64,
         runtime_identity_hash=ask.runtime_identity_hash,
-        model_routing_identity_hash="5" * 64,
-        model_config_hash="6" * 64,
+        model_routing_identity_hash=ask.model_routing_identity_hash,
+        model_config_hash=ask.model_config_hash,
         raw_response_ref=result.raw_response_ref,
         raw_response_hash=result.raw_response_sha256,
         semantic_reader_attempt_hash=None,
@@ -394,8 +429,115 @@ def _cutover_consumption_fixture(
     )
 
 
+def _selected_binding_fixture(seed: str):
+    """Content-only selected-cutover shape for binding/store mechanics.
+
+    This is not a ceremony fixture and makes no claim that a founder tap or
+    owner-read consultation occurred.
+    """
+
+    return SimpleNamespace(
+        authorization=SimpleNamespace(
+            binding_sha256=hashlib.sha256(
+                f"authorization-binding:{seed}".encode()
+            ).hexdigest(),
+            rollback_manifest_sha256=hashlib.sha256(
+                f"rollback:{seed}".encode()
+            ).hexdigest(),
+            window_id=f"cutover-window-{seed}",
+            nonce=hashlib.sha256(f"cutover-nonce:{seed}".encode()).hexdigest(),
+        ),
+        authorization_file_sha256=hashlib.sha256(
+            f"authorization-file:{seed}".encode()
+        ).hexdigest(),
+        receipt=SimpleNamespace(
+            binding_sha256=hashlib.sha256(
+                f"stage-two-binding:{seed}".encode()
+            ).hexdigest(),
+        ),
+        receipt_file_sha256=hashlib.sha256(
+            f"stage-two-file:{seed}".encode()
+        ).hexdigest(),
+        bundle=SimpleNamespace(
+            runtime_identity_doc=SimpleNamespace(
+                file_sha256=hashlib.sha256(
+                    f"target-runtime:{seed}".encode()
+                ).hexdigest(),
+            ),
+        ),
+        precondition_hash=hashlib.sha256(
+            f"precondition:{seed}".encode()
+        ).hexdigest(),
+    )
+
+
+def _mechanical_cutover_chain(*, selected, nonce: str):
+    """Build storage inputs only; this is deliberately not tap evidence."""
+
+    params = cutover._cutover_action_preimage(selected)
+    envelope = s7.build_work_request_envelope(
+        request_id=selected.authorization.window_id,
+        action=cm.CUTOVER_ACTION,
+        params=dict(params),
+        claimed_work_class="self_modification",
+        requesting_subsystem="cuda_cutover",
+        closed_symptom_code="self_mod_requested",
+        proposed_change_class="model_routing_change",
+        why_self_fix_failed_class="not_self_fix",
+        affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+        content_exposure_risk="content_free",
+        precondition_hash=selected.precondition_hash,
+        created_at="2026-08-07T12:00:00Z",
+        expires_at="2026-08-07T16:00:00Z",
+        predicted_effect_class="behavior_change",
+        rollback_path_class="revert_patch",
+        maez_voice_consultation_id="mechanical-storage-only",
+    )
+    authority = s7.AuthorityContext(
+        actor_id="founder",
+        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+        role_names=("bonded_user",),
+        grant_source="founder_webauthn",
+        allowed_scopes=("operator_health",),
+        auth_method="founder_webauthn",
+        surface="cockpit",
+        credential_ref="mechanical-credential",
+        created_at="2026-08-07T12:00:00Z",
+        expires_at="2026-08-07T16:00:00Z",
+        verified=True,
+    )
+    consultation = s7.MaezVoiceConsultation(
+        consultation_id="mechanical-storage-only",
+        request_id=envelope.request_id,
+        request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        # Closed vocabulary required by the renderer. The surrounding helper
+        # remains explicitly storage-only and is never routed to production.
+        producer="self_mod_dialog_terminal_state",
+        source_ref_kind="self_mod_dialog_exchange",
+        source_ref_hash="b" * 64,
+        maez_voice_consulted=True,
+        maez_objection_state="absent",
+        maez_withdrew_request=False,
+        unavailable_reason_code=None,
+        created_at="2026-08-07T12:00:00Z",
+    )
+    params_hash = s7.canonical_hash(dict(params))
+    rendered = s7.render_request_statement(
+        envelope=envelope,
+        surface="cockpit",
+        origin="http://localhost:11437",
+        action_params_hash=params_hash,
+        authority_context=authority,
+        maez_voice_consultation=consultation,
+        nonce=nonce,
+        expires_at="2026-08-07T16:00:00Z",
+        rendered_at="2026-08-07T12:00:00Z",
+    )
+    return params, envelope, authority, rendered
+
+
 class TestActionContract:
-    """One action literal, one params mapping, used identically everywhere."""
+    """One action literal and stable base mapping for the v34 preimage."""
 
     def test_the_action_literal_is_frozen(self) -> None:
         assert cm.CUTOVER_ACTION == "model_routing.cutover_cuda"
@@ -890,6 +1032,27 @@ class TestStoreOpener:
         assert "create" not in params
         assert set(params) >= {"db_path", "expected_uid"}
 
+    def test_rw_connection_is_accepted_by_committed_row_consumer(
+        self, tmp_path: Path
+    ) -> None:
+        """The verified opener must vend Slice A's held-connection capability."""
+        existing = _valid_existing_authorization_store(tmp_path)
+        with cutover.open_existing_authorization_store(
+            db_path=existing, expected_uid=os.getuid()
+        ) as opened:
+            result = s7.consume_for_execution_with_committed_row(
+                opened.consumption_connection,
+                "absent-artifact",
+                rendered=object(),
+                action_params_hash="1" * 64,
+                authority_context=object(),
+                precondition_hash="2" * 64,
+                derived_work_class="self_modification",
+                derived_aggregation_group="s7agg_cutover",
+                now="2000-01-01T00:00:00Z",
+            )
+        assert result == (None, None, None)
+
     def test_missing_and_wrong_stores_refuse_with_a_valid_control(
         self, tmp_path: Path
     ) -> None:
@@ -944,7 +1107,11 @@ class TestStoreOpener:
         `S7WebAuthnBootstrapStore` still creates and migrates on
         construction. This presence seam opens the existing file directly
         rather than constructing either broader store."""
-        tree = ast.parse((REPO / "scripts" / "cuda_cutover.py").read_text())
+        tree = ast.parse(
+            textwrap.dedent(
+                inspect.getsource(cutover.open_existing_authorization_store)
+            )
+        )
         called = {
             node.func.attr if isinstance(node.func, ast.Attribute) else
             getattr(node.func, "id", None)
@@ -955,8 +1122,392 @@ class TestStoreOpener:
         assert "S7WebAuthnBootstrapStore" not in called
 
 
+class TestSelectedStage2Reconstruction:
+    """The owner-selected completion is only a locator; its joins decide."""
+
+    def test_reconstructs_through_the_one_builder_and_independent_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.test_cutover_step2a_producer import (
+            FixedClock,
+            _call_cli_restoring_signal_state,
+            seed_private_root,
+        )
+
+        root = seed_private_root(tmp_path)
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        monkeypatch.setattr(driver, "SystemClock", FixedClock)
+        assert _call_cli_restoring_signal_state(
+            ["assemble-stage2", "--window-id", "cutover-20260713-1202"]
+        ) == 0
+        completion = next(root.glob("command-assemble-stage2-*-terminal.json"))
+
+        calls: list[tuple[object, Path, str]] = []
+        real_builder = assemble.build_stage2_bundle
+
+        def one_builder(paths, *, root, timestamp):
+            calls.append((paths, root, timestamp))
+            return real_builder(paths, root=root, timestamp=timestamp)
+
+        monkeypatch.setattr(assemble, "build_stage2_bundle", one_builder)
+        selected = cutover._reconstruct_selected_cutover_at(
+            root=root,
+            expected_uid=os.getuid(),
+            completion_locator=completion.name,
+            now="2026-08-03T20:31:03Z",
+            boot_id="boot-1",
+        )
+
+        assert len(calls) == 1
+        assert calls[0][0] == assemble.STAGE2_INPUTS
+        assert calls[0][1:] == (root, selected.receipt.timestamp)
+        assert selected.completion.artifact_ref == selected.receipt_ref
+        assert selected.completion.admission_ref == selected.admission.selected_ref
+        assert selected.receipt_bytes == selected.regenerated_receipt_bytes
+        assert selected.receipt.decision == "provisional_cuda_boot"
+        assert selected.authorization.window_id == selected.completion.window_id
+        assert selected.operation_affected_refs == (
+            EXPECTED_CUTOVER_OPERATION_AFFECTED_REFS
+        )
+        assert tuple(selected.operation_affected_refs) == cm.CUTOVER_ACTION_SET
+        assert selected.affected_refs == FIXTURE_CUTOVER_AFFECTED_REFS
+
+    @pytest.mark.parametrize(
+        ("mutation", "expected"),
+        (
+            ("receipt_predicate", "receipt_predicate"),
+            ("receipt_noncanonical", "receipt_noncanonical"),
+            ("stage2_input_missing", "stage2_input_missing"),
+            ("stage2_input_predicate", "stage2_input_predicate"),
+            ("authorization_expired", "authorization_expired"),
+        ),
+    )
+    def test_a7_reconstruction_refusal_distinctions_are_not_collapsed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mutation: str,
+        expected: str,
+    ) -> None:
+        root, completion_path = _seed_stage2_completion(tmp_path, monkeypatch)
+        completion = cm.PersistedDoc(completion_path.read_bytes()).obj
+        control = cutover._reconstruct_selected_cutover_at(
+            root=root,
+            expected_uid=os.getuid(),
+            completion_locator=completion_path.name,
+            now="2026-08-03T20:31:03Z",
+            boot_id="boot-1",
+        )
+        now = "2026-08-03T20:31:03Z"
+        if mutation == "receipt_predicate":
+            (root / completion.artifact_ref).chmod(0o400)
+        elif mutation == "receipt_noncanonical":
+            receipt_path = root / completion.artifact_ref
+            receipt_path.write_text(
+                json.dumps(json.loads(receipt_path.read_bytes()), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            receipt_path.chmod(0o600)
+        elif mutation == "stage2_input_missing":
+            (root / assemble.STAGE2_INPUTS.quality).unlink()
+        elif mutation == "stage2_input_predicate":
+            (root / assemble.STAGE2_INPUTS.quality).chmod(0o400)
+        else:
+            now = control.authorization.expires_at
+
+        with pytest.raises(cutover.CutoverRefusal, match=rf"^{expected}$"):
+            cutover._reconstruct_selected_cutover_at(
+                root=root,
+                expected_uid=os.getuid(),
+                completion_locator=completion_path.name,
+                now=now,
+                boot_id="boot-1",
+            )
+
+    def test_selected_file_replacement_after_open_refuses_predicate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir(mode=0o700)
+        selected = root / "selected.json"
+        selected.write_bytes(b"selected-original")
+        selected.chmod(0o600)
+        replacement = root / "replacement.json"
+        replacement.write_bytes(b"selected-replacement")
+        replacement.chmod(0o600)
+        detached = root / "selected-detached.json"
+        verify_and_read = cutover.s7_io._verify_and_read
+
+        def read_then_replace(fd, before, relative, expected_uid):
+            payload = verify_and_read(fd, before, relative, expected_uid)
+            selected.rename(detached)
+            replacement.rename(selected)
+            return payload
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                cutover.s7_io,
+                "_verify_and_read",
+                read_then_replace,
+            )
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^command_completion_predicate$",
+            ):
+                cutover._read_selected_private_file(
+                    root=root,
+                    expected_uid=os.getuid(),
+                    relative="selected.json",
+                    refusal="command_completion_invalid",
+                    predicate_refusal="command_completion_predicate",
+                )
+
+        assert cutover._read_selected_private_file(
+            root=root,
+            expected_uid=os.getuid(),
+            relative="selected-detached.json",
+            refusal="command_completion_invalid",
+            predicate_refusal="command_completion_predicate",
+        ) == b"selected-original"
+
+
+class TestPreparedCutoverResources:
+    """Preparation resolves everything; begin receives only pinned state."""
+
+    def test_child_fd_destinations_never_overwrite_a_later_source(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sources = tmp_path / "sources"
+        recovery = tmp_path / "recovery"
+        override_parent = tmp_path / "override-parent"
+        for directory in (sources, recovery, override_parent):
+            directory.mkdir(mode=0o700)
+        unit = sources / "llama-server.service"
+        dropin = sources / "mtp.conf"
+        override = sources / "cuda.conf"
+        judge = sources / "llama-judge.service"
+        for path in (unit, dropin, override, judge):
+            path.write_bytes(path.name.encode())
+            path.chmod(0o600)
+
+        pressure = [os.open("/dev/null", os.O_RDONLY) for _ in range(91)]
+        prepared = None
+        try:
+            prepared = cutover._prepare_cutover_resources_at(
+                recovery_sources=(
+                    (unit, "llama-server.service"),
+                    (dropin, "mtp.conf"),
+                ),
+                recovery_directory=recovery,
+                override_source=override,
+                override_directory=override_parent,
+                unit_fragments={
+                    "llama-server.service": unit,
+                    "llama-judge.service": judge,
+                },
+                install_executable=Path("/usr/bin/install"),
+                systemctl_executable=Path("/usr/bin/systemctl"),
+                expected_uid=os.getuid(),
+            )
+            all_sources = {
+                pinned.fd
+                for pinned in (
+                    *prepared.recovery_artifacts,
+                    *prepared.installation_artifacts,
+                    *(identity.fragment for identity in prepared.unit_identities),
+                    *prepared.executables,
+                )
+            } | {directory.fd for directory in prepared.directories}
+            for operation in prepared.operations:
+                for command in operation.commands:
+                    destinations = {target for _source, target in command.child_fd_map}
+                    assert destinations.isdisjoint(all_sources), (
+                        command.child_fd_map,
+                        all_sources,
+                    )
+                    assert all(
+                        f"/proc/self/fd/{target}" in " ".join(command.argv)
+                        for target in destinations
+                    )
+        finally:
+            if prepared is not None:
+                prepared.close()
+            for fd in reversed(pressure):
+                os.close(fd)
+
+    def test_preparation_pins_real_resources_and_precomputes_six_operations(
+        self, tmp_path: Path
+    ) -> None:
+        sources = tmp_path / "sources"
+        recovery = tmp_path / "recovery"
+        override_parent = tmp_path / "override-parent"
+        sources.mkdir(mode=0o700)
+        recovery.mkdir(mode=0o700)
+        override_parent.mkdir(mode=0o700)
+        unit = sources / "llama-server.service"
+        dropin = sources / "mtp.conf"
+        override = sources / "cuda.conf"
+        judge = sources / "llama-judge.service"
+        for path, payload in (
+            (unit, b"unit\n"),
+            (dropin, b"dropin\n"),
+            (override, b"override\n"),
+            (judge, b"judge\n"),
+        ):
+            path.write_bytes(payload)
+            path.chmod(0o600)
+
+        prepared = cutover._prepare_cutover_resources_at(
+            recovery_sources=(
+                (unit, "llama-server.service"),
+                (dropin, "mtp.conf"),
+            ),
+            recovery_directory=recovery,
+            override_source=override,
+            override_directory=override_parent,
+            unit_fragments={
+                "llama-server.service": unit,
+                "llama-judge.service": judge,
+            },
+            install_executable=Path("/usr/bin/install"),
+            systemctl_executable=Path("/usr/bin/systemctl"),
+            expected_uid=os.getuid(),
+        )
+        try:
+            assert isinstance(prepared, cutover.PreparedCutover)
+            assert tuple(op.name for op in prepared.operations) == (
+                cm.CUTOVER_ACTION_SET
+            )
+            assert {
+                op.name: op.affected_refs for op in prepared.operations
+            } == EXPECTED_CUTOVER_OPERATION_AFFECTED_REFS
+            assert all(
+                type(command.argv) is tuple
+                for operation in prepared.operations
+                for command in operation.commands
+            )
+            assert prepared.operations[-1].commands[0].argv == (
+                "systemctl",
+                "reboot",
+            )
+            assert prepared.operations[3].commands[0].argv == (
+                "systemctl",
+                "--user",
+                "restart",
+                "llama-server.service",
+            )
+            assert prepared.operations[4].commands[0].argv == (
+                "systemctl",
+                "--user",
+                "restart",
+                "llama-judge.service",
+            )
+            assert tuple(
+                identity.unit_name for identity in prepared.unit_identities
+            ) == ("llama-server.service", "llama-judge.service")
+            assert tuple(
+                artifact.label for artifact in prepared.installation_artifacts
+            ) == ("cuda-override-source",)
+            exact_seals = (
+                fcntl.F_SEAL_WRITE
+                | fcntl.F_SEAL_GROW
+                | fcntl.F_SEAL_SHRINK
+                | fcntl.F_SEAL_SEAL
+            )
+            for artifact in (
+                *prepared.recovery_artifacts,
+                *prepared.installation_artifacts,
+                *(identity.fragment for identity in prepared.unit_identities),
+            ):
+                assert fcntl.fcntl(artifact.fd, fcntl.F_GET_SEALS) == exact_seals
+                assert not os.get_inheritable(artifact.fd)
+                with pytest.raises(PermissionError):
+                    os.pwrite(artifact.fd, b"x", 0)
+            assert all(
+                not os.get_inheritable(directory.fd)
+                for directory in prepared.directories
+            )
+            assert prepared.operations[0].commands[0].child_fd_map
+            assert prepared.operations[1].commands[0].child_fd_map
+
+            # In-place replacement changes neither name nor inode. Prepared
+            # execution must still consume the byte snapshot made before the
+            # human wait, not these later owner-writable source bytes.
+            unit.write_bytes(b"unit-mutated-in-place\n")
+            assert os.pread(
+                prepared.recovery_artifacts[0].source_fd,
+                len(b"unit\n") + 32,
+                0,
+            ) == b"unit\n"
+
+            # Name substitution after preparation cannot change the held
+            # source bytes or any already-rendered argv.
+            replacement = sources / "replacement"
+            unit.rename(replacement)
+            unit.write_bytes(b"substitute\n")
+            assert os.pread(
+                prepared.recovery_artifacts[0].source_fd,
+                len(b"unit\n"),
+                0,
+            ) == b"unit\n"
+            assert all(
+                "/proc/self/fd/" in argument
+                for argument in prepared.operations[0].commands[0].argv[3:]
+            )
+
+            begin_source = inspect.getsource(cutover.PreparedCutover.begin)
+            for forbidden in (
+                "Path(",
+                "subprocess.run",
+                "systemctl show",
+                "resolve",
+                "os.open(",
+            ):
+                assert forbidden not in begin_source
+            with pytest.raises(
+                cutover.CutoverRefusal, match=r"^burn_content_invalid$"
+            ):
+                prepared.publish_and_validate_burn()
+            with pytest.raises(
+                cutover.CutoverRefusal, match=r"^executor_contract$"
+            ):
+                prepared.begin()
+        finally:
+            prepared.close()
+
+
 class TestConsultationProducer:
     """Maez must be asked; the key is necessary but not sufficient."""
+
+    def test_symlinked_consultation_root_refuses_without_writing_evidence(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        real = tmp_path / "real"
+        real.mkdir(mode=0o700)
+        (real / "consultation-receipts").mkdir(mode=0o700)
+        routed_parent = tmp_path / "routed"
+        routed_parent.mkdir(mode=0o700)
+        (routed_parent / "redirect").symlink_to(real, target_is_directory=True)
+        redirected_root = routed_parent / "redirect" / "consultation-receipts"
+        control = tmp_path / "control"
+        control.mkdir(mode=0o700)
+        envelope, attempt, ask = _consultation_fixture(control)
+        redirected_attempt = replace(attempt, receipt_root=redirected_root)
+
+        with pytest.raises(cutover.CutoverRefusal, match=r"^bundle_unreservable$"):
+            cutover.produce_cutover_consultation(
+                envelope=envelope,
+                attempt=redirected_attempt,
+                ask=ask,
+                now="2000-01-01T00:01:00Z",
+            )
+
+        assert ask.calls == []
+        assert tuple((real / "consultation-receipts").iterdir()) == ()
 
     def test_well_formed_result_without_ask_fails_while_genuine_ask_passes(
         self, tmp_path: Path
@@ -1032,6 +1583,27 @@ class TestConsultationProducer:
         assert terminal["raw_response_ref"] == result.raw_response_ref
         assert terminal["raw_response_sha256"] == digest
         assert terminal["maez_objection_state"] == "not_determined"
+        assert terminal["responder_identity_established"] is False
+        assert terminal["responder_identity_disclaimer"] == (
+            "Responder identity is NOT established. "
+            "The recorded runtime_identity_hash, model_routing_identity_hash, "
+            "and model_config_hash do not prove responder identity."
+        )
+        start = json.loads(
+            s7_io.read_private_file(
+                attempt.start_receipt_ref,
+                root=attempt.receipt_root,
+                expected_uid=os.getuid(),
+            )
+        )["fields"]
+        assert start["responder_identity_established"] is False
+        assert start["responder_identity_disclaimer"] == terminal[
+            "responder_identity_disclaimer"
+        ]
+        assert terminal["model_routing_identity_hash"] == (
+            FIXTURE_MODEL_ROUTING_IDENTITY_HASH
+        )
+        assert terminal["model_config_hash"] == FIXTURE_MODEL_CONFIG_HASH
         assert "valid_absent" not in terminal.values()
 
     def test_answered_response_has_its_own_typed_sealed_capture_receipt(
@@ -1409,6 +1981,73 @@ class TestConsultationProducer:
 class TestCutoverVoiceGateAdmission:
     """R8's unjudged result may pass only through R9's durable evidence rail."""
 
+    def test_production_bundle_writer_persists_r9_and_unreserved_use_atomically(
+        self, tmp_path: Path
+    ) -> None:
+        fixture_root = tmp_path / "production-bundle-writer"
+        fixture_root.mkdir()
+        envelope, attempt, ask = _consultation_fixture(fixture_root)
+        result = _assert_one_real_ask(
+            cutover.produce_cutover_consultation,
+            envelope=envelope,
+            attempt=attempt,
+            ask=ask,
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + "a" * 64,
+            role_names=("bonded_user",),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="fixture-credential",
+            created_at=envelope.created_at,
+            expires_at=envelope.expires_at,
+            verified=True,
+        )
+        rendered = s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash(
+                dict(cm.CUTOVER_ACTION_PARAMS)
+            ),
+            authority_context=authority,
+            maez_voice_consultation=result.consultation,
+            nonce="fixture-cutover-nonce",
+            expires_at=envelope.expires_at,
+            rendered_at="2000-01-01T00:01:00Z",
+        )
+        bundle, binding = cutover._cutover_voice_bundle(
+            envelope=envelope,
+            rendered=rendered,
+            authority_context=authority,
+            result=result,
+        )
+        db_path = _valid_existing_authorization_store(fixture_root)
+        guarded.S7VoiceBundleUseStore(db_path)
+        authorization_store = s7.S7AuthorizationStore(db_path)
+
+        validation = cutover._persist_and_validate_cutover_voice_bundle(
+            authorization_store=authorization_store,
+            bundle=bundle,
+            binding=binding,
+            now="2000-01-01T00:01:00Z",
+        )
+        with authorization_store.anchored_transaction() as conn:
+            row = conn.execute(
+                "SELECT reservation_state, artifact_id "
+                "FROM s7_voice_bundle_uses WHERE source_ref_hash = ?",
+                (bundle.source_ref_hash,),
+            ).fetchone()
+
+        assert validation.status == "valid_absent"
+        assert validation.action == cm.CUTOVER_ACTION
+        assert bundle.semantic_reader_attempt_hash is None
+        assert bundle.response_capture_receipt == result.response_capture_receipt
+        assert row == ("unreserved", None)
+
     def test_real_r8_result_with_gate_revalidated_r9_evidence_is_admitted(
         self, tmp_path: Path
     ) -> None:
@@ -1455,7 +2094,7 @@ class TestCutoverVoiceGateAdmission:
         monkeypatch.setattr(
             cutover,
             "_is_canonical_cutover_envelope",
-            lambda _envelope: False,
+            lambda _envelope, **_kwargs: False,
         )
         refused = _call_cutover_voice_gate(
             envelope=envelope,
@@ -1853,26 +2492,47 @@ class TestBurnStructure:
     def test_frozen_burn_names_exist_without_a_provider_slot(self) -> None:
         assert hasattr(cutover, "PreparedCutover")
         assert hasattr(cutover.PreparedCutover, "begin")
-        assert inspect.isabstract(cutover.PreparedCutover)
-        assert hasattr(cutover, "publish_and_validate_burn")
-        assert not inspect.signature(cutover.publish_and_validate_burn).parameters
+        assert not inspect.isabstract(cutover.PreparedCutover)
+        assert hasattr(cutover.PreparedCutover, "publish_and_validate_burn")
+        assert not hasattr(cutover, "publish_and_validate_burn")
         assert not inspect.signature(cutover.execute_cutover).parameters
         assert not hasattr(cutover, "_CUTOVER_PREPARER")
         assert not hasattr(cutover, "_BURN_PUBLICATION")
 
-    def test_preparation_and_burn_helpers_are_inert_without_authority(
+    def test_marker_nondirectory_is_marker_dir_predicate(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        marker = root / cutover.MARKER_DIR
+        marker.write_bytes(b"not a directory")
+        marker.chmod(0o600)
+
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^marker_dir_predicate$",
+        ):
+            cutover._pin_cutover_marker_chain(
+                root=root,
+                expected_uid=os.getuid(),
+            )
+
+    def test_production_preparer_routes_through_real_authority_before_burn(
+        self,
+    ) -> None:
+        source = inspect.getsource(_closed_production_preparer())
+        assert "authorize_and_stage" in source
+        assert "preparation_unavailable" not in source
+        assert "_attach_burn_publication" not in source
+
+    def test_production_preparation_refuses_an_unreconstructible_selection(
         self,
     ) -> None:
         with pytest.raises(
             cutover.CutoverRefusal,
-            match=r"^preparation_unavailable$",
+            match=r"^command_completion_invalid$",
         ):
-            cutover._prepare_selected_cutover(FIXTURE_COMPLETION_LOCATOR)
-        with pytest.raises(
-            cutover.CutoverRefusal,
-            match=r"^burn_content_invalid$",
-        ):
-            cutover.publish_and_validate_burn()
+            _closed_production_preparer()(FIXTURE_COMPLETION_LOCATOR)
 
     def test_begin_is_pre_bound_before_the_burn(self) -> None:
         """No descriptor lookup is allowed after the burn helper returns."""
@@ -1888,8 +2548,11 @@ class TestBurnStructure:
                 and len(statement.targets) == 1
                 and isinstance(statement.targets[0], ast.Name)
                 and statement.targets[0].id == "begin"
-                and isinstance(statement.value, ast.Attribute)
-                and statement.value.attr == "begin"
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Name)
+                and statement.value.func.id == "method_type"
+                and isinstance(statement.value.args[0], ast.Name)
+                and statement.value.args[0].id == "begin_unbound"
             ),
             None,
         )
@@ -1916,7 +2579,20 @@ class TestBurnStructure:
             None,
         )
 
-        assert (bind_index, burn_index, begin_index) == (3, 4, 5)
+        publisher_bind_index = next(
+            index
+            for index, statement in enumerate(function.body)
+            if isinstance(statement, ast.Assign)
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "publish_and_validate_burn"
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id == "method_type"
+            and isinstance(statement.value.args[0], ast.Name)
+            and statement.value.args[0].id == "publish_unbound"
+        )
+        assert bind_index < publisher_bind_index < burn_index
+        assert burn_index + 1 == begin_index
 
     def test_exactly_one_executor_call_site(self) -> None:
         source = inspect.getsource(cutover)
@@ -1929,9 +2605,494 @@ class TestBurnStructure:
 
         assert len(sites) == 1, sites
 
+    def test_cli_routes_to_the_zero_parameter_consumer_not_the_act1_minter(
+        self,
+    ) -> None:
+        source = inspect.getsource(cutover.main)
+        assert source.count("execute_cutover()") == 1
+        assert "mint_cutover_authorization" not in source
+
+
+class TestProductionConsumerOrchestration:
+    """The tracked caller joins every authority rail in the frozen order."""
+
+    def test_retap_after_spent_tap_binds_same_authorization_with_fresh_nonce(
+        self, tmp_path: Path
+    ) -> None:
+        """Mechanical UNIQUE/store witness, not evidence of either real tap."""
+
+        selected = _selected_binding_fixture("same-authorization")
+        store_path = _valid_existing_authorization_store(tmp_path)
+        store = s7.S7AuthorizationStore(store_path)
+        grants = []
+        rows = []
+        preimages = []
+        for ordinal in (1, 2):
+            nonce = cutover._fresh_s7_attempt_nonce()
+            params, envelope, authority, rendered = _mechanical_cutover_chain(
+                selected=selected,
+                nonce=nonce,
+            )
+            preimages.append(params)
+            artifact_id = f"mechanical-retap-{ordinal}"
+            store.put(
+                s7.S7AuthorizationArtifact(
+                    artifact_id=artifact_id,
+                    request_id=envelope.request_id,
+                    request_envelope_hash=s7.work_request_envelope_hash(envelope),
+                    rendered_text_hash=rendered.rendered_text_hash,
+                    action_params_hash=rendered.action_params_hash,
+                    precondition_hash=envelope.precondition_hash,
+                    authority_context_hash=s7.authority_context_hash(authority),
+                    derived_work_class=envelope.derived_work_class,
+                    derived_aggregation_group=envelope.derived_aggregation_group,
+                    nonce=rendered.nonce,
+                    credential_ref="mechanical-credential",
+                    auth_method="founder_webauthn",
+                    grant_source="founder_webauthn",
+                    user_presence=True,
+                    user_verification=True,
+                    created_at="2026-08-07T12:00:00Z",
+                    expires_at="2026-08-07T16:00:00Z",
+                    consumed_at=None,
+                    action=cm.CUTOVER_ACTION,
+                )
+            )
+            with cutover.open_existing_authorization_store(
+                db_path=store_path,
+                expected_uid=os.getuid(),
+            ) as opened:
+                grant, callback_result, row = (
+                    s7.consume_for_execution_with_committed_row(
+                        opened.consumption_connection,
+                        artifact_id,
+                        rendered=rendered,
+                        action_params_hash=rendered.action_params_hash,
+                        authority_context=authority,
+                        precondition_hash=envelope.precondition_hash,
+                        derived_work_class="self_modification",
+                        derived_aggregation_group=(
+                            envelope.derived_aggregation_group
+                        ),
+                        now=f"2026-08-07T12:0{ordinal}:00Z",
+                    )
+                )
+            assert callback_result is None
+            assert grant is not None
+            assert row is not None
+            assert s7.committed_grant_row_proves_founder_self_modification(
+                row, grant
+            )
+            grants.append(grant)
+            rows.append(row)
+
+        assert preimages[0] == preimages[1]
+        assert preimages[0]["authorization_file_sha256"] == (
+            selected.authorization_file_sha256
+        )
+        assert preimages[0]["authorization_binding_sha256"] == (
+            selected.authorization.binding_sha256
+        )
+        assert grants[0].action_params_hash == grants[1].action_params_hash
+        assert grants[0].nonce == rows[0].nonce
+        assert grants[1].nonce == rows[1].nonce
+        assert grants[0].nonce != grants[1].nonce
+        with closing(sqlite3.connect(store_path)) as conn:
+            nonce_indexes = tuple(
+                row
+                for row in conn.execute(
+                    "PRAGMA index_list(s7_authorization_artifacts_v2)"
+                )
+                if row[1] == "s7_v2_nonce"
+            )
+        assert len(nonce_indexes) == 1
+        assert nonce_indexes[0][2] == 1
+
+    def test_artifact_not_binding_selected_authorization_refuses_presence_binding_mismatch(
+        self,
+    ) -> None:
+        selected = _selected_binding_fixture("selected")
+        other = _selected_binding_fixture("other")
+        selected_params = cutover._cutover_action_preimage(selected)
+        other_params = cutover._cutover_action_preimage(other)
+        grant = replace(
+            _s7_grant_fixture(),
+            _mint_token=s7._EXECUTION_GRANT_TOKEN,
+            request_id=selected.authorization.window_id,
+            precondition_hash=selected.precondition_hash,
+            action_params_hash=s7.canonical_hash(dict(other_params)),
+        )
+
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^presence_binding_mismatch$",
+        ):
+            cutover._require_cutover_grant_binding(
+                grant=grant,
+                selected=selected,
+                action_params=selected_params,
+            )
+
+        control = replace(
+            grant,
+            _mint_token=s7._EXECUTION_GRANT_TOKEN,
+            action_params_hash=s7.canonical_hash(dict(selected_params)),
+        )
+        cutover._require_cutover_grant_binding(
+            grant=control,
+            selected=selected,
+            action_params=selected_params,
+        )
+
+    def test_zero_usable_credentials_refuses_without_a_fallback(self) -> None:
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^presence_no_usable_credential$",
+        ):
+            cutover._select_cutover_credential(())
+
+    def test_verified_store_identity_movement_across_wait_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        original = _valid_existing_authorization_store(
+            tmp_path, name="original-store"
+        )
+        replacement = _valid_existing_authorization_store(
+            tmp_path, name="replacement-store"
+        )
+        detached = original.with_name("detached-original.sqlite3")
+        with cutover.open_existing_authorization_store(
+            db_path=original,
+            expected_uid=os.getuid(),
+        ) as opened:
+            opened.require_current_named_identity()
+            original.rename(detached)
+            replacement.rename(original)
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^presence_store_identity_mismatch$",
+            ):
+                opened.require_current_named_identity()
+
+    def test_verified_store_parent_movement_across_wait_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        store_path = _valid_existing_authorization_store(
+            tmp_path, name="canonical-store-root"
+        )
+        canonical_parent = store_path.parent
+        detached_parent = tmp_path / "detached-store-root"
+        with cutover.open_existing_authorization_store(
+            db_path=store_path,
+            expected_uid=os.getuid(),
+        ) as opened:
+            opened.require_current_named_identity()
+            canonical_parent.rename(detached_parent)
+            canonical_parent.mkdir(mode=0o700)
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^presence_store_identity_mismatch$",
+            ):
+                opened.require_current_named_identity()
+
+    def test_ceremony_credential_reader_does_not_collapse_store_movement(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        store_path = _valid_existing_authorization_store(tmp_path)
+        detached = store_path.with_name("detached-ceremony.sqlite3")
+        with cutover.open_existing_authorization_store(
+            db_path=store_path,
+            expected_uid=os.getuid(),
+        ) as opened:
+            ceremony = cutover.ExistingS7CeremonyStore(
+                store_path,
+                expected_uid=os.getuid(),
+                opened=opened,
+            )
+            store_path.rename(detached)
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^presence_store_identity_mismatch$",
+            ):
+                ceremony.list_credentials()
+
+    def test_ceremony_credential_reads_close_every_held_connection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store_path = _valid_existing_authorization_store(tmp_path)
+        with cutover.open_existing_authorization_store(
+            db_path=store_path,
+            expected_uid=os.getuid(),
+        ) as opened:
+            ceremony = cutover.ExistingS7CeremonyStore(
+                store_path,
+                expected_uid=os.getuid(),
+                opened=opened,
+            )
+            real_open = s7._open_s7_connection_from_held_store
+            connections: list[sqlite3.Connection] = []
+
+            def record_opened_connection(**kwargs):
+                connection = real_open(**kwargs)
+                connections.append(connection)
+                return connection
+
+            monkeypatch.setattr(
+                s7,
+                "_open_s7_connection_from_held_store",
+                record_opened_connection,
+            )
+
+            assert ceremony.list_credentials() == ()
+            state = ceremony.credential_recovery_state()
+            assert state["manual_recovery_cause"] == "first_setup_not_started"
+
+            assert len(connections) == 3
+            for connection in connections:
+                with pytest.raises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
+
+    def test_named_chain_movement_cannot_report_reusable_publication(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "bench"
+        markers = root / cutover.MARKER_DIR
+        markers.mkdir(parents=True, mode=0o700)
+        root.chmod(0o700)
+        selected = _selected_binding_fixture("publication")
+        action_params = cutover._cutover_action_preimage(selected)
+        grant = replace(
+            _s7_grant_fixture(),
+            _mint_token=s7._EXECUTION_GRANT_TOKEN,
+            artifact_id="publication-chain-moved",
+            action_params_hash=s7.canonical_hash(dict(action_params)),
+        )
+        authorization = SimpleNamespace(
+            nonce=selected.authorization.nonce,
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        publication = cutover._stage_burn_publication(
+            root=root,
+            expected_uid=os.getuid(),
+            authorization=authorization,
+            receipt=_cutover_consumption_fixture(),
+            grant=grant,
+            action_params=action_params,
+            clock=lambda: "2000-01-01T00:03:00Z",
+        )
+        real_link = cutover.os.link
+
+        def move_chain_then_fail(*_args, **_kwargs):
+            markers.rename(root / "markers-detached")
+            markers.mkdir(mode=0o700)
+            raise OSError(5, "fixture EIO")
+
+        monkeypatch.setattr(cutover.os, "link", move_chain_then_fail)
+        try:
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^publication_uncertain$",
+            ):
+                publication.publish_and_validate_burn()
+            assert not publication.eligible
+        finally:
+            monkeypatch.setattr(cutover.os, "link", real_link)
+            publication.close()
+
+    def test_postpublication_clock_failure_is_not_reported_reusable(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "bench"
+        (root / cutover.MARKER_DIR).mkdir(parents=True, mode=0o700)
+        root.chmod(0o700)
+        selected = _selected_binding_fixture("post-clock")
+        action_params = cutover._cutover_action_preimage(selected)
+        grant = replace(
+            _s7_grant_fixture(),
+            _mint_token=s7._EXECUTION_GRANT_TOKEN,
+            artifact_id="publication-post-clock",
+            action_params_hash=s7.canonical_hash(dict(action_params)),
+        )
+        calls = 0
+
+        def clock() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return "2000-01-01T00:03:00Z"
+            raise OSError("clock read failed after publication")
+
+        publication = cutover._stage_burn_publication(
+            root=root,
+            expected_uid=os.getuid(),
+            authorization=SimpleNamespace(
+                nonce=selected.authorization.nonce,
+                expires_at="2099-01-01T00:00:00Z",
+            ),
+            receipt=_cutover_consumption_fixture(),
+            grant=grant,
+            action_params=action_params,
+            clock=clock,
+        )
+        try:
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^consumer_internal_post_pre_begin$",
+            ):
+                publication.publish_and_validate_burn()
+            assert (root / cutover.MARKER_DIR / selected.authorization.nonce).is_file()
+            assert not publication.eligible
+        finally:
+            publication.close()
+
+    def test_missing_owner_read_and_assertion_refuses_without_a_tap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_input(_prompt: str) -> str:
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", no_input)
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^owner_presence_unattested$",
+        ):
+            cutover._read_owner_webauthn_finish(
+                selected_credential_ref="credential-ref",
+                challenge_id="challenge-id",
+                response_sha256="a" * 64,
+            )
+
+    def test_consultation_mint_committed_consume_and_staging_are_one_caller(
+        self,
+    ) -> None:
+        source = inspect.getsource(
+            _closed_production_authorizer()
+        )
+        ordered = (
+            "produce_cutover_consultation(",
+            "S7GuardedStateStore(",
+            "service.authorize_finish(",
+            "consume_for_execution_with_committed_row(",
+            "committed_grant_row_proves_founder_self_modification(",
+            "s7_execution_grant_projection_bytes(",
+            "CutoverConsumptionReceipt(",
+            "_stage_burn_publication(",
+            "_attach_burn_publication(",
+        )
+        positions = tuple(source.index(fragment) for fragment in ordered)
+        assert positions == tuple(sorted(positions))
+        consume_call = next(
+            node
+            for node in ast.walk(
+                ast.parse(textwrap.dedent(source))
+            )
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "consume_for_execution_with_committed_row"
+        )
+        assert "after_consume_before_commit" not in {
+            keyword.arg for keyword in consume_call.keywords
+        }
+
+    def test_v34_preimage_and_fresh_nonce_flow_through_every_authority_edge(
+        self,
+    ) -> None:
+        source = inspect.getsource(
+            _closed_production_authorizer()
+        )
+
+        assert "action_params = _cutover_action_preimage(selected)" in source
+        assert "params=dict(action_params)" in source
+        assert "action_params=action_params" in source
+        assert "nonce=_fresh_s7_attempt_nonce()" in source
+        assert "_require_cutover_grant_binding(" in source
+        assert "dict(cm.CUTOVER_ACTION_PARAMS)" not in source
+        render_call = next(
+            node
+            for node in ast.walk(ast.parse(textwrap.dedent(source)))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "render_request_statement"
+        )
+        nonce_keyword = next(
+            keyword for keyword in render_call.keywords if keyword.arg == "nonce"
+        )
+        assert ast.unparse(nonce_keyword.value) == "_fresh_s7_attempt_nonce()"
+
+    def test_dynamic_v34_preimage_is_the_canonical_consultation_envelope(
+        self,
+    ) -> None:
+        selected = _selected_binding_fixture("canonical-v34")
+        action_params = cutover._cutover_action_preimage(selected)
+        envelope = s7.build_work_request_envelope(
+            request_id=selected.authorization.window_id,
+            action=cm.CUTOVER_ACTION,
+            params=dict(action_params),
+            claimed_work_class="self_modification",
+            requesting_subsystem="cuda_cutover",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="model_routing_change",
+            why_self_fix_failed_class="not_self_fix",
+            affected_refs=FIXTURE_CUTOVER_AFFECTED_REFS,
+            content_exposure_risk="content_free",
+            precondition_hash=selected.precondition_hash,
+            created_at="2026-08-07T12:00:00Z",
+            expires_at="2026-08-07T16:00:00Z",
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id="canonical-v34-consultation",
+        )
+
+        assert cutover._is_canonical_cutover_envelope(
+            envelope,
+            action_params=action_params,
+        )
+        assert not cutover._is_canonical_cutover_envelope(
+            envelope,
+            action_params=cutover._cutover_action_preimage(
+                _selected_binding_fixture("different-authorization")
+            ),
+        )
+        revalidator_source = inspect.getsource(
+            cutover.revalidate_cutover_consultation_result
+        )
+        assert "action_params=action_params" in revalidator_source
+
+    def test_burn_applies_the_exact_grant_as_the_last_prelink_state_change(
+        self,
+    ) -> None:
+        source = textwrap.dedent(
+            inspect.getsource(cutover.BurnPublication.publish_and_validate_burn)
+        )
+        function = ast.parse(source).body[0]
+        calls = [
+            (node.lineno, ast.unparse(node.func))
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+        ]
+        action_edge = next(
+            line
+            for line, name in calls
+            if name.endswith("consume_execution_grant_for_action")
+        )
+        link = next(line for line, name in calls if name == "os.link")
+        assert action_edge < link
+        between = tuple(
+            name for line, name in calls if action_edge < line < link
+        )
+        assert set(between) <= {"CutoverRefusal"}
+
 
 class TestRuledConsumerIngress:
     """The zero-parameter consumer reads one fixed owner selection."""
+
+    def test_no_parameterized_preparer_can_bypass_owner_completion_locator(
+        self,
+    ) -> None:
+        assert not hasattr(cutover, "_prepare_selected_cutover_candidate")
 
     def test_fixed_selection_reader_accepts_one_private_canonical_artifact(
         self,
@@ -2143,17 +3304,65 @@ class TestRuledConsumerIngress:
         assert closed["read_owner_completion_locator"] is (
             cutover._read_owner_completion_locator
         )
-        assert closed["prepare_selected_cutover"] is (
-            cutover._prepare_selected_cutover
-        )
-        assert closed["publish_and_validate_burn"] is (
-            cutover.publish_and_validate_burn
-        )
+        assert closed["prepare_selected_cutover"] is _closed_production_preparer()
+        assert "publish_and_validate_burn" not in closed
         assert reader_closed["fixed_root"] == cutover.BENCH_ROOT
         assert reader_closed["fixed_expected_uid"] == os.getuid()
         assert reader_closed["read_completion_locator_at"] is (
             cutover._read_completion_locator_at
         )
+
+    def test_entry_closes_original_prepared_type_and_unbound_methods(
+        self,
+    ) -> None:
+        closed = inspect.getclosurevars(cutover.execute_cutover).nonlocals
+
+        assert closed["prepared_type"] is cutover.PreparedCutover
+        assert closed["publish_unbound"].__code__ is (
+            cutover.PreparedCutover.publish_and_validate_burn.__code__
+        )
+        assert closed["publish_unbound"].__globals__ is not cutover.__dict__
+        assert closed["begin_unbound"].__code__ is (
+            cutover.PreparedCutover.begin.__code__
+        )
+        assert closed["begin_unbound"].__globals__ is not cutover.__dict__
+        assert closed["execution_result_type"] is cutover.CutoverExecutionResult
+
+    def test_bound_preparer_resists_recursive_module_attribute_replacement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+        prepared_closed = inspect.getclosurevars(
+            _closed_production_preparer()
+        ).nonlocals
+
+        def forged(*_args, **_kwargs):
+            calls.append("forged")
+            return object()
+
+        for name in (
+            "_reconstruct_selected_cutover_at",
+            "_resolve_user_unit_fragments",
+            "_prepare_cutover_resources_at",
+            "_authorize_and_stage_selected_cutover",
+        ):
+            monkeypatch.setattr(cutover, name, forged, raising=False)
+
+        with pytest.raises(
+            cutover.CutoverRefusal,
+            match=r"^command_completion_invalid$",
+        ):
+            _closed_production_preparer()(FIXTURE_COMPLETION_LOCATOR)
+
+        for name in (
+            "reconstruct",
+            "resolve_units",
+            "prepare_resources",
+            "authorize_and_stage",
+        ):
+            assert prepared_closed[name] is not forged
+            assert prepared_closed[name].__globals__ is not cutover.__dict__
+        assert calls == []
 
     def test_the_ruled_entrypoint_has_no_injection_parameters(self) -> None:
         assert not inspect.signature(cutover.execute_cutover).parameters
@@ -2196,10 +3405,8 @@ class TestRuledConsumerIngress:
         reader_closed = inspect.getclosurevars(
             cutover._read_owner_completion_locator
         ).nonlocals
-        assert closed["prepare_selected_cutover"] is cutover._prepare_selected_cutover
-        assert closed["publish_and_validate_burn"] is (
-            cutover.publish_and_validate_burn
-        )
+        assert closed["prepare_selected_cutover"] is _closed_production_preparer()
+        assert "publish_and_validate_burn" not in closed
         assert reader_closed["fixed_root"] == Path(
             "/home/rohit/maez/local/cuda_migration_bench"
         )
@@ -2216,3 +3423,15 @@ class TestRuledConsumerIngress:
             )
         )
         assert calls == []
+
+    def test_no_module_locator_or_selected_authority_callable_can_yield_burn_capability(
+        self,
+    ) -> None:
+        assert not hasattr(cutover, "_prepare_selected_cutover")
+        assert not hasattr(cutover, "_authorize_and_stage_selected_cutover")
+        assert "completion_locator" in inspect.signature(
+            _closed_production_preparer()
+        ).parameters
+        assert "selected" in inspect.signature(
+            _closed_production_authorizer()
+        ).parameters

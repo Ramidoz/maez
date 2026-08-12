@@ -43,6 +43,7 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v32 | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling |
 | **v33** | **R10 ruled: the cutover proceeds on a WAIVER because the SEAT IS EMPTY — nothing has ever asked Maez on any path. Recorded as a waiver never as a consultation; expires at birth; this operation only; the adapter stays on the build list — **WITHDRAWN, false premise: the voice route EXISTS; I transposed the method name when probing** |
 | **v33** | **The owner rules the zero-parameter completion-locator ingress, the complete six-operation `affected_refs` manifest, and restoration of the burn boundary dormant by construction: no provider globals, capability parameters, or assignable activation slot** |
+| **v34** | **Impossibility fold (gate lane, v14/v20 precedent, FLAGGED for owner review): join 5's third term — artifact nonce ≡ cutover-doc nonce — was v11 residue and made the design unsatisfiable against the schema's permanent `nonce UNIQUE` and the §re-tap promise. The tap's authority semantics are untouched: the cutover authorization was already bound, nonce included, through the frozen action preimage's authorization-identity hashes. Each S7 ceremony attempt carries its own fresh S7 nonce. Full 8-step trace at "v34 fold" below** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -1633,8 +1634,12 @@ rule, so nothing detected the collision.
    permission shape was reconstructed, and the evidence is joins 1, 2
    and 4;
 4. projection hash ≡ `presence_evidence_sha256` in the receipt;
-5. `grant.nonce` ≡ the artifact's nonce ≡ the value bound in `params`,
-   and `grant.action_params_hash` ≡ the hash of the frozen action/params.
+5. `grant.nonce` ≡ the artifact's nonce — a fresh per-ceremony S7 value
+   (v34) — and `grant.action_params_hash` ≡ the hash of the frozen
+   action preimage, whose authorization-identity element binds the
+   cutover authorization doc, nonce included, by file hash + binding
+   hash. ~~≡ the value bound in `params`~~ was v11 residue; superseded
+   by the v34 fold below.
 
 **A gap this exposes, stated rather than glossed:** `user_presence` and
 `user_verification` are **not** `S7ExecutionGrant` fields — they exist
@@ -1643,6 +1648,81 @@ only on the artifact and its row. So v13's requirement that both be true
 row. The projection therefore proves *which* authorization was consumed,
 and the row proves *a human touched the key*. Two reads, not one, and the
 design would have silently checked neither had this not been enumerated.
+
+#### v34 fold — join 5's third term was unsatisfiable
+
+**The contradiction, measured.** Three commitments could not all hold:
+(1) `s7_v2_migration.py` gives the v2 table `nonce TEXT NOT NULL UNIQUE`
+plus a unique index, permanently; (2) join 5 as written required the S7
+artifact's nonce ≡ the cutover authorization's nonce; (3) the §"two S7
+consumptions" subsection promises that a failure after early artifact
+consumption but before the link leaves *the same cutover nonce reusable —
+the owner re-taps*. Under (1)+(2), the consumed row keeps the nonce
+forever and the re-tap's fresh artifact can never be inserted. The build
+lane refused to implement it and stopped; this fold records the
+resolution rather than letting the candidate delete durable rows or
+weaken the join.
+
+**Why the fold is engineering, not an authority change.** The frozen
+action preimage already binds the cutover authorization by *file hash +
+binding hash* — the doc's binding covers its nonce and every other field.
+Nonce equality therefore added no semantic content to what the tap
+authorizes; its only effect was to forbid the re-tap the design promises.
+Removing it changes no element of the preimage, no refusal code, no
+executor behavior, and no meaning of the owner's tap.
+
+**Amended shape.** Each S7 ceremony attempt renders with its own fresh S7
+nonce. The cutover authorization binds through `action_params_hash` (the
+authorization-identity element). Refusal 29h (`presence_binding_mismatch`)
+is checked against that preimage join — an artifact whose preimage does
+not name the selected authorization still refuses pre-burn, nonce
+reusable, zero executor calls.
+
+**The 8-step trace:**
+
+1. **Dependency-map.** Join table item 5 (this section); the frozen
+   action preimage (§"The action preimage, frozen"); refusal 29h
+   (§refusal table); §"two S7 consumptions" re-tap promise; recovery
+   clause "always a fresh owner-typed authorization with a fresh nonce"
+   (post-publication side — unchanged and now consistent);
+   `core/governance/s7_v2_migration.py` schema (unchanged);
+   `scripts/cuda_cutover.py` candidate rendering; the 2B contract suite.
+2. **Write-path.** `render_request_statement` receives a fresh S7 nonce
+   per ceremony attempt; the preimage hash is written as before with the
+   authorization-identity hashes.
+3. **Read-path.** 29h validation reads the preimage join;
+   `committed_grant_row_proves_founder_self_modification` reads
+   grant.nonce ≡ row nonce (unchanged); the exclusive link still spends
+   the cutover-doc nonce.
+4. **Test-path.** RED: a re-tap after a spent tap mints a second artifact
+   with a fresh S7 nonce bound to the SAME cutover authorization and
+   consumes cleanly against the untouched UNIQUE constraint. RED: an
+   artifact whose preimage does not bind the selected authorization
+   refuses `presence_binding_mismatch`. Existing grant≡row nonce tests
+   unchanged.
+5. **Fold-summary.** The prose "≡ the value bound in `params`" is false
+   after the fold and is struck in place. The §re-tap promise required no
+   wording change — it becomes satisfiable. No other section asserts
+   nonce equality.
+6. **Cross-reference.** Revision table v34 row; join 5 (amended in
+   place); 29h's description already names binding, not equality.
+7. **RED-test trace.** `test_retap_after_spent_tap_binds_same_authorization_with_fresh_nonce`
+   (second mint+consume succeeds; same authorization-identity hashes;
+   different artifact nonce; UNIQUE intact);
+   `test_artifact_not_binding_selected_authorization_refuses_presence_binding_mismatch`.
+8. **Verify-before-declaring.** Grep this spec for "value bound in" and
+   "nonce ≡" leaves no stale equality clause; grep the implementation for
+   the cutover-doc nonce passed as the rendered-statement nonce
+   (`selected.authorization.nonce` at the `render_request_statement`
+   callsite) finds no remaining use; full gated suites re-run green.
+
+**Owner-review flag.** This fold was recorded by the gate lane under the
+v14 ("v13's ordering was impossible") and v19→v20 ("descriptor-binding
+claim was unimplementable") precedent: an unsatisfiable mechanical clause
+folded without touching ratified authority semantics. If the owner reads
+the struck term as load-bearing rather than residue, the fold reverts and
+the arc blocks on the ruling between a fresh-authorization-per-failure
+model or an amended durable nonce model.
 
 #### Evidence bytes, exactly (v20)
 
@@ -2230,7 +2310,7 @@ listed and explicitly marked as having no producer:
 | 29g6 | `consume_for_execution` did not commit | pre | reusable | **zero** | `presence_consumption_failed` |
 | 29g7 | grant projection unreconstructible from the committed row — v28: the **complete v2** reconstruction, meaning any of the sixteen row-backed fields missing or unequal, OR the row's `schema_version` not `s7.authorization_artifact.v2`. A partial reconstruction is a FAILURE, not a degraded success | pre | reusable | **zero** | `presence_grant_unprojectable` |
 | 29g8 | action-edge consumption returned false | pre | reusable | **zero** | `presence_action_unauthorized` |
-| 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
+| 29h | S7 artifact's frozen action preimage does not bind the selected cutover authorization identity | pre | reusable | **zero** | `presence_binding_mismatch` |
 | 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |
 | 29j | S7 artifact consumption write failed | pre | reusable | **zero** | `presence_consumption_failed` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |

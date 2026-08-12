@@ -52,9 +52,27 @@ PRIVATE_FILE_MODE = 0o600
 
 @contextlib.contextmanager
 def _open_directory(path: str | os.PathLike[str]):
-    """Open a directory WITHOUT following a symlink at its final component."""
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    """Walk and hold a directory without following any path component."""
+
+    text = os.fspath(path)
+    if not os.path.isabs(text):
+        raise ValueError("anchored private-file root must be absolute")
+    parts = [part for part in Path(text).parts[1:] if part not in ("", ".")]
+    if any(part == ".." or "\x00" in part for part in parts):
+        raise ValueError("anchored private-file root is unsafe")
+    fd = os.open(
+        "/",
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
     try:
+        for component in parts:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = next_fd
         yield fd
     finally:
         os.close(fd)
@@ -141,7 +159,7 @@ def _anchored_leaf(dir_fd: int, relative: str):
         for component in parts[:-1]:
             nxt = os.open(
                 component,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent_fd,
             )
             if owned:
@@ -170,11 +188,31 @@ def read_private_file(
         try:
             fd = os.open(
                 leaf,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                 dir_fd=parent_fd,
             )
             try:
-                return _verify_and_read(fd, os.fstat(fd), relative, expected_uid)
+                before = os.fstat(fd)
+                payload = _verify_and_read(fd, before, relative, expected_uid)
+                after = os.fstat(fd)
+                named = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+                for field in (
+                    "st_dev",
+                    "st_ino",
+                    "st_mode",
+                    "st_uid",
+                    "st_nlink",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                ):
+                    if getattr(after, field) != getattr(named, field):
+                        raise OSError(
+                            f"{relative} name no longer identifies held file"
+                        )
+                if len(payload) != before.st_size == after.st_size:
+                    raise OSError(f"{relative} read length does not match held file")
+                return payload
             finally:
                 os.close(fd)
         finally:
