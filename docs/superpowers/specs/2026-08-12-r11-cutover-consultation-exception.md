@@ -174,9 +174,52 @@ Consequences, stated plainly:
 
 ### Owed before R11 is real
 
-1. **Production wiring** — thread the exemption through `authorize_finish`
-   and replace the consultation in `scripts/cuda_cutover.py`. This is the
-   substantial part: it means deleting a live ask, not adding a branch.
+1. **Production wiring — SURVEYED, NOT BUILT.** It is not a parameter
+   thread; it is a slice the size of slice B, and this survey is the
+   deliverable rather than a half-applied edit. Five seams, each verified
+   in source:
+
+   1. **The guarded mint demands consultation evidence.** For voice-seat
+      work `authorize_finish` requires an exact, token-verified
+      `S7VoiceSourceBundleValidationResultV2`
+      ([s7_webauthn_ceremony.py:549](/home/rohit/maez/core/governance/s7_webauthn_ceremony.py#L549))
+      and the mint re-requires it
+      ([s7_guarded_execution.py:2980](/home/rohit/maez/core/governance/s7_guarded_execution.py#L2980)).
+      Under R11 there is no consultation, so no bundle, so **the ceremony
+      refuses**. Bypassing this for the exemption would reopen precisely
+      the hole slice B closed. The correct shape is a SECOND lawful
+      evidence type — an exemption-shaped artifact, persisted and
+      validated with the same discipline — not a hole in the first.
+   2. **The owner's tap is bound to Maez's response.**
+      `_read_owner_webauthn_finish` takes
+      `response_sha256=consultation_result.raw_response_sha256`
+      ([cuda_cutover.py:3975](/home/rohit/maez/scripts/cuda_cutover.py#L3975)),
+      so the founder assertion currently proves the owner saw *the
+      answer*. Under R11 there is no answer. That binding must be
+      REPLACED, not dropped: bind the tap to the exemption's projection
+      hash, so it proves the owner saw the stated ABSENCE. Dropping it
+      would quietly weaken what the tap attests.
+   3. **The owner-facing gate print** (`_print_owner_cutover_gate`) shows
+      the consultation result and must instead show the absence and its
+      grounds — this is the text the owner reads beside the signed
+      statement.
+   4. **The producer chain** — `_cutover_action_preimage`,
+      `ConsultationAttempt`, `CutoverConsultationAsk`,
+      `produce_cutover_consultation`, `_cutover_voice_bundle`,
+      `_persist_and_validate_cutover_voice_bundle` and the revalidator —
+      is the live ask. Wiring means DELETING it from this path, and the
+      revalidator reconstructs the old question, so a partial removal
+      leaves a replay of a question nobody asked.
+   5. **The preimage join closes here.** The gate can finally derive the
+      ceremony preimage from the selected durable evidence rather than
+      accepting it, which retires the tripwire test
+      `test_KNOWN_GAP_a_consistently_cited_preimage_is_admitted_today`.
+
+   **Why this was not attempted in the same pass:** two errors tonight —
+   the frozen preimage constant, and a table row landed in the superseded
+   table — both came from moving quickly through mechanical work. This
+   step deletes a live authority path, and it earns its own session and an
+   xhigh review rather than the tail of a long one.
 2. **Provenance — LANDED. One-use — analysed, and deliberately not built.**
 
    Provenance: the exemption now carries an `InitVar` mint token, the same
