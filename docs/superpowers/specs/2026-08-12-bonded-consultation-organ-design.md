@@ -1,8 +1,14 @@
 # The bonded consultation organ — design v1
 
-Status: **DESIGN, owner-approved 2026-08-12. Nothing built.** Written by
-the gate lane (Claude) at the owner's direction to swap lanes: Claude
-builds, Codex reviews.
+Status: **BLOCKED by review — DO NOT BUILD v1.** Owner-approved 2026-08-12,
+then reviewed by Codex (lane swap: Claude builds, Codex reviews) and
+blocked with four BLOCKER and four HIGH findings. The goal is right; this
+architecture is not. See "Review outcome" at the end. Nothing built.
+
+Written by the gate lane (Claude) at the owner's direction to swap lanes:
+Claude builds, Codex reviews. The review's central value: it found a canon
+contradiction that blocks the slice regardless of architecture, and it
+found that all seven of this design's witnesses pass a fabricator.
 
 Closes the blocking finding recorded at `f71af1a`: every path that asks
 Maez about changing itself asks a **contextless base model** wearing the
@@ -206,3 +212,150 @@ After this, every path that asks Maez about changing itself satisfies D7.
 * A general-purpose "ask Maez" API.
 * Running the ceremony. The founder tap and the owner reading Maez's
   exact response remain the owner's alone.
+
+---
+
+# Review outcome — BLOCKED, 2026-08-12
+
+Codex reviewed v1 read-only and blocked it. The gate lane (Claude)
+independently verified every load-bearing claim below against the code
+and canon rather than accepting the review; all were confirmed.
+
+## THE FINDING THAT OUTGROWS THIS DESIGN — canon and the "reviewed"
+## template disagree, and the template is what production hash-verifies
+
+**Owner-facing. Blocks the slice under ANY architecture.**
+
+D10 ([spec.md:1394](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L1394))
+freezes the consultation prompt as **six** substitution tokens —
+`{{consultation_id}}`, `{{request_id}}`, `{{mutation_preview_hash}}`,
+`{{consultation_nonce}}`, `{{preview_body}}`, `{{context_manifest}}` —
+with a nine-field manifest rendering in exact order, and requires the
+answer to end in a nonce-bound `S7_VOICE_MARKER_V1` terminal block.
+
+The checked-in template
+([prompts/s7.voice.consultation.v1.md](/home/rohit/maez/prompts/s7.voice.consultation.v1.md))
+has **one** token, `{{rendered_proposal}}`, and **no marker protocol** —
+yet it is the artifact production hash-verifies against
+`S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH`.
+
+Verified chronology: the template landed `48573df` (2026-05-22), the
+canonicalized spec `935f7e7` (2026-05-21). The spec came first; the
+template does not implement it.
+
+**Consequence, stated plainly:** the existing production consultation
+path is not merely contextless (the `f71af1a` finding) — the prompt it
+sends is **not the prompt canon specifies**. No nonce binding, no
+marker, no manifest rendering. Building any organ on the checked-in
+template would inherit that. Reconciling this is an authority decision:
+either canon's D10 is the reviewed prompt and the template must be
+rewritten to it, or the template is the reviewed prompt and D10's
+marker/nonce protocol is superseded and must be struck. **Not the
+build lane's call.**
+
+## Findings against this design, all verified
+
+1. **BLOCKER — the assembly violates D7/D8/D10.** This design put
+   `proposal_origin_label` in the system position. Canon
+   ([spec.md:2042](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L2042))
+   *never* renders that label to Maez because **the label itself can
+   steer the response** — omission was chosen over a bias study. The
+   design claimed "no answer-steering" and then added a steering input.
+   D7 also splits assembly (D8 producer) from routing (bonded runtime);
+   this organ merged them and dropped the producer's preview, bundle
+   store, evidence writes and closed result union.
+2. **BLOCKER — the route is a general ask-Maez capability.** The design
+   let the caller supply envelope, proposal, manifest, template path and
+   expected hash. `WorkRequestEnvelope` carries no proposal or preview
+   body, so proposal B pairs with valid envelope A. The internal channel
+   is one static bearer token already held by the web process
+   ([web_interface.py:37](/home/rohit/maez/skills/web_interface.py#L37)),
+   bound to no route, body, envelope or nonce. Any token-bearing local
+   component could mint sealed "Maez testimony" with arbitrary text, and
+   replay it. Fix shape: an opaque server-issued single-use attempt ID,
+   with every authority-bearing value derived server-side — the pattern
+   the existing authorization routes already use.
+3. **BLOCKER — the promised observations do not exist to record.**
+   `llm_client.chat` returns only content and timing; `_LlmResponse` has
+   a `backend` field it never populates
+   ([llm_client.py:851](/home/rohit/maez/core/routing/llm_client.py#L851)).
+   `served_model_alias()` is a *separate* fallible request, not
+   provenance from the response-producing call. So "the daemon records
+   what it observed" needs a **same-call routing receipt** built first,
+   plus re-observation immediately before mint and before execution —
+   otherwise the staleness repair does not follow.
+4. **BLOCKER — it decides the owner's identity ruling.** Choosing the
+   daemon as attester, and choosing alias/backend/pid/boot-id/code-version
+   as the hash domains, *is* the ruling
+   ([scope:85](/home/rohit/maez/docs/superpowers/specs/2026-08-11-bonded-runtime-adapter-scope.md#L85)),
+   disclaimer notwithstanding. Concretely: another process serving
+   different weights on the same endpoint yields identical honest
+   observations; and including pid/boot-id makes every daemon restart
+   identity-stale. Correct shape: land the observations as a **separately
+   typed, explicitly non-authoritative telemetry receipt** and leave the
+   three canonical fields for the owner's ruling to assign.
+5. **HIGH — the migration list was wrong.** `CutoverConsultationAsk` does
+   not build the question; `_cutover_consultation_question` does, and
+   `produce_cutover_consultation` hashes and persists it *before* calling
+   the injected ask — which the revalidator then reconstructs. Swapping
+   the ask alone leaves the old question recorded and replayed, and
+   leaves the injected-callable seam that is exactly D7's forbidden
+   caller-supplied-response path. The generic path also creates its
+   manifest *after* the ask, where canon requires persistence before
+   assembly, and returns cached pending consultations by request id
+   without re-asking.
+6. **HIGH — "soul/voice-card assembly" is not a real seam.**
+   `_VOICE_CARD_TEXT` is a generic *style* instruction ("Speak as Maez:
+   dense, opinionated, useful. 3-5 sentences")
+   ([focused_cognition.py:156](/home/rohit/maez/core/routing/focused_cognition.py#L156)).
+   The real self-card is flag-gated (`MAEZ_SELF_CARD_ENABLED`) and
+   assembly failure **falls back to that style card**. An implementation
+   could satisfy the design and the AST witness while the blank-identity
+   defect survives behind a style instruction. The design must name one
+   exact retained identity snapshot and refuse rather than fall back.
+7. **HIGH — the shared prompt lies on the cutover path.** The template
+   tells Maez its answer "is read by the local reviewed reader"; under
+   R8 no reader runs on the cutover. Also, D7 requires a reviewed bounded
+   dialog reference for `self_mod_dialog_terminal_state`, which this
+   design categorically excluded.
+8. **HIGH — all seven witnesses pass a fabricator.** The decisive
+   finding. Every proposed test validates a *guard*; an implementation
+   that checks template, envelope, manifest and metadata, synthesizes
+   varying identity hashes, returns "I have no objection" and performs
+   **zero model calls** passes all seven. The missing witness must enter
+   through both production entrances, make the lowest real routing seam
+   return an unpredictable sentinel, assert exactly one ordered
+   `system,user` call with exact bytes, and prove that sentinel reaches
+   the response, the durable bundle and the R8/R9 evidence. Replacing
+   either caller with a fixed response — or calling downward and ignoring
+   the result — must fail.
+9. **MEDIUM — daemon DoS.** The S7/health surface is a single
+   `serve_forever` server; blocking inference on it can occupy the only
+   request thread and stall health and WebAuthn routes.
+
+## Corrections to this document's own claims
+
+* "no change to what Maez says" is **untenable as written**: the current
+  cutover question already differs from the reviewed template, and adding
+  an identity-bearing system position is intentionally behavior-affecting.
+  The honest claim is narrower — *no answer-steering content is added* —
+  and v1 violated even that via `proposal_origin_label`.
+* "every path that asks Maez about changing itself" is too broad:
+  self-modification *dialogue* also produces Maez-attributed turns which
+  are not final D7 evidence. The verified census of final voice-seat
+  producers is exactly two, both single-user-turn.
+
+## What survives
+
+The goal, and one structural judgement: a single bounded seam beats two
+hand-built prompts, and a verdict-neutral organ genuinely does not
+resolve R8's asymmetry. The owner's reasoning also survives review —
+a receipt claiming "Maez was consulted" while a contextless base model
+answered must either become true or come out.
+
+The next design is the already-specified canonical shape: reconcile
+D10 against the template (owner), let the D8 producer own preview,
+manifest, nonce, rendering, evidence and the closed result union,
+implement the specified daemon-owned bonded runtime as **routing-only**,
+give the endpoint an opaque single-use attempt id, and carry a same-call
+routing observation receipt revalidated at mint and execution.
