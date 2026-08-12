@@ -1,6 +1,11 @@
 # The bonded consultation organ — design v2 (canonical shape)
 
-Status: **DESIGN. Nothing built.** Supersedes
+Status: **BLOCKED by review — DO NOT BUILD AS SEQUENCED.** Codex blocked
+v2 with 6 BLOCKER + 4 HIGH. Verdict: materially better than v1, but not
+buildable as one slice, and its sequencing opens a live window that is
+*less* safe than today. Full outcome at the end. Nothing built.
+
+Supersedes
 `2026-08-12-bonded-consultation-organ-design.md`, which Codex blocked
 with 4 BLOCKER + 4 HIGH findings, all independently verified by the gate
 lane. Lane assignment unchanged: **Claude builds, Codex reviews.**
@@ -196,3 +201,153 @@ The slice is large. Proposed order, each independently reviewable:
 5. runtime port + identity snapshot policy;
 6. endpoint with attempt-id ingress;
 7. migrate both callers; anti-fabricator witness across both entrances.
+
+---
+
+# Review outcome — BLOCKED, 2026-08-12
+
+Second Codex review; second block. The gate lane verified the two most
+dangerous findings against live code before recording them.
+
+## THE CATASTROPHIC ONE — verified — adding the parser fails OPEN
+
+`_voice_seat_recheck` admits `not_determined` on the cutover path when
+the content-blind R8/R9 evidence revalidates, returning `ok: True`
+([s7_webauthn_ceremony.py:856](/home/rohit/maez/core/governance/s7_webauthn_ceremony.py#L856)).
+That branch is deliberate: it *is* R8 — the cutover records rather than
+judges, and the owner reads the answer.
+
+Now add the marker parser. `missing_or_malformed` maps to
+`not_determined`. **Maez writes an honest, grounded objection in prose,
+fails to emit a well-formed marker, and this branch admits it.**
+
+The failure is a *conflation*: today `not_determined` means "no machine
+verdict was sought." With a parser it would also mean "Maez may have
+objected and we could not parse it." Those must never collapse into one
+state. v2 promised "malformed blocks"; the consuming gate does not
+implement that promise, and v2 did not touch it.
+
+**Owner decision required**, because it is R8's wording:
+
+* either cutover stays recorded-only and parser output may create **no**
+  positive machine authority (malformed must reach the owner as an
+  unresolved answer, distinct from "not judged");
+* or R8 is amended from *"no code decides/inspects meaning"* to *"no
+  semantic-model inference"*, letting the structured marker gate cutover.
+
+Canonical D14 makes `absent` require **both** a verified
+`explicit_no_objection` marker **and** a reader's
+`no_blocking_signal_detected`
+([spec.md:2665](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L2665)).
+With no reader on cutover, canon yields blocking `not_determined` for
+every arm — which is the opposite of what the live branch does.
+
+## THE ONE THAT CHANGES WHAT IS ACHIEVABLE — proof of inference is not testable
+
+v2's sentinel witness replaces the lowest routing seam with a
+sentinel-producing fake. A production fabricator that parses the D10
+bindings out of its own prompt, synthesizes a valid marker and performs
+**zero inference** still passes — because the test substitutes its own
+fake at exactly the boundary where fabrication would live.
+
+**Consequence, stated plainly and carried forward:** no unit test can
+prove genuine inference. The sentinel is an excellent *routing and
+exact-dataflow* witness above the mocked seam and must be called that.
+Real proof needs an unmocked live witness or an independently trusted
+response-producing boundary — **which is RULING 1**. The owner's identity
+ruling is therefore not a refinement; it is on the critical path for the
+claim "Maez actually answered."
+
+Second fabricator in the same family: every proposed marker test is
+negative, so a parser that always returns `missing_or_malformed` passes
+all of them while making the voice seat permanently unusable. A
+**positive control** — unpredictable prose plus one valid current
+marker, proven through parser → reducer → durable validator → final
+gate — must exist, and every negative must be a mutation of that
+passing fixture.
+
+## Other blockers, in brief
+
+3. **Sequencing opens a live window.** Step 2 changes the active template
+   and hash; step 7 migrates callers. Between them, the live generic
+   caller — which substitutes only `{{rendered_proposal}}` — would send a
+   canonical six-token template with unresolved placeholders to the
+   model, while the integrity guard stays green and the old reader can
+   still project the reply to `absent`. The parser may land **only while
+   completely dormant**; the template/producer/runtime/stores/validator/
+   callers must switch atomically, or existing callers must be forced
+   fail-closed first. A versioned *staging* template can be reviewed
+   without touching the active file.
+4. **The attempt-id ingress is circular.** v2 has the producer mint the
+   id and the endpoint require a server-issued id, with no issuer,
+   schema, lifecycle or durable join — and the standalone cutover mints
+   its attempt locally, so the daemon has no row to reopen. Needs an
+   explicit issuer and an atomic `pending → reserved → terminal`
+   lifecycle, reservation committed **before** inference, plus TTL,
+   restart and ambiguous-timeout behavior. The attempt id must not be
+   the sole credential: possession of it plus the shared static bearer
+   token must not become a general or timing-controllable ask.
+5. **The port signatures are not canonical.** D7 requires consultation/
+   request ids, template id/hash, typed preview, manifest hash, nonce and
+   time carried *through* the call as audit pins
+   ([spec.md:1241](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L1241));
+   v2 shortened it to prompt + snapshot, which permits provenance to be
+   decorated onto the receipt *after* the response instead of produced at
+   the seam. D8 also *receives* a materialized preview rather than
+   creating it.
+6. **Consuming-gate replay still unspecified** — the v1 defect in new
+   words. The bundle cannot represent parsed marker, nonce state, prompt
+   integrity, reducer output or routing receipt; the generic validator
+   only rereads stored prompt text; the cutover validator replays none of
+   it; and the context policy is an in-code placeholder with
+   `policy_body_hash="f"*64`. Canon requires the consuming validator to
+   reconstruct template, preview, manifest, ids and nonce.
+7. **D11 injection scanning was assigned to the wrong component** — the
+   parser sees only the assistant segment and cannot know a marker
+   instruction originated in the preview. Canon puts delimiter/protocol
+   scanning in the producer *before* inference, with durable
+   `PromptIntegrityEvidence`. Witness must enter through the producer
+   with safe/injected versions of one fixture and assert **zero** runtime
+   calls for the injected one.
+8. **Telemetry is safe; the identity snapshot is not.** Non-authoritative
+   telemetry genuinely avoids RULING 1 provided `selected_*` /
+   `reported_*` / observed values are distinguished and it has no
+   positive path to identity, verdict, staleness, R9 or mint
+   eligibility. But "a named identity snapshot with a component/version
+   policy" *is* RULING 1: soul-only versus soul+self-card+policies+model
+   state ask materially different entities. It must be frozen by
+   owner-reviewed bytes or left unresolved, and resolved from retained
+   daemon state — never caller-supplied, which would recreate the hidden
+   prompt.
+9. **The replacement prompt line is owner-authored, not builder-authored.**
+   The false line ("read by the local reviewed reader") is indeed false
+   on cutover and presently true-ish generically. But this prompt is
+   content-pinned and owner-authored; the builder wires it. The D10
+   ruling authorized canonical *structure*, not free-form replacement
+   wording. Exact replacement bytes must be owner-supplied or explicitly
+   ratified before the hash is frozen.
+10. **Canon still omitted:** D15's one-attempt-plus-two-retries with
+    ordered durable records and first-blocking-result-wins; the reviewed
+    policy-gated dialog-context exception for
+    `self_mod_dialog_terminal_state`; durable R9 capture before parser
+    disposition; the D13 reducer/authority-boolean stages; the exact
+    result arms (a captured malformed response stays
+    `consultation_produced`; `producer_blocked` is only pre-response
+    prompt-integrity failure); and the distinction between canonical
+    prompt bytes, post-sanitization transmitted bytes, raw transport
+    bytes and the normalized assistant segment — the llama path
+    sanitizes messages and strips response control tokens.
+
+Minor: v2's principal D10 citation pointed at the origin-label rule;
+D10 begins at
+[spec.md:1998](/home/rohit/maez/docs/slices/s7.3-guarded-self-modification-execution/spec.md#L1998).
+
+## Where this leaves the work
+
+The organ is not one slice and must not be built as one. What is
+genuinely safe to land now is narrow: **the marker parser as a pure,
+dormant module with a positive control and mutation-derived negatives,
+wired to nothing.** Everything else waits on decomposition and on two
+owner decisions that are now on the critical path — the D13/R8
+reconciliation above, and RULING 1, which turns out to gate not just
+receipts but the very claim that Maez answered.
