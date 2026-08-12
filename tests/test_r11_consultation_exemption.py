@@ -698,6 +698,104 @@ def test_the_exempt_mint_still_goes_THROUGH_the_guarded_store() -> None:
     assert seen["artifact"].action == cm.CUTOVER_ACTION
 
 
+# --------------------------------------------------------------------- #
+#  The owner's tap: it proves WHAT the owner saw, not merely presence.   #
+# --------------------------------------------------------------------- #
+
+
+def _finish_input(monkeypatch, payload):
+    import json as _json
+
+    monkeypatch.setattr("builtins.input", lambda *_a: _json.dumps(payload))
+
+
+def _tap(**kwargs):
+    from scripts import cuda_cutover
+
+    return cuda_cutover._read_owner_webauthn_finish(
+        selected_credential_ref="cred-1", challenge_id="chal-1", **kwargs
+    )
+
+
+def test_the_tap_binds_to_the_exemption_projection_when_nothing_was_asked(
+    monkeypatch,
+) -> None:
+    envelope = _envelope()
+    projection_hash = s7.canonical_hash(_exemption(envelope).projection())
+    _finish_input(
+        monkeypatch,
+        {
+            "challenge_id": "chal-1",
+            "credential_ref": "cred-1",
+            "consultation_exemption_projection_hash": projection_hash,
+            "authentication_response": {"id": "x"},
+        },
+    )
+    request = _tap(exemption_projection_sha256=projection_hash)
+    assert request["consultation_exemption_projection_hash"] == projection_hash
+
+
+def test_the_tap_refuses_a_wrong_projection_hash(monkeypatch) -> None:
+    from scripts import cuda_cutover
+
+    _finish_input(
+        monkeypatch,
+        {
+            "challenge_id": "chal-1",
+            "credential_ref": "cred-1",
+            "consultation_exemption_projection_hash": "9" * 64,
+            "authentication_response": {"id": "x"},
+        },
+    )
+    with pytest.raises(cuda_cutover.CutoverRefusal, match="owner_presence_unattested"):
+        _tap(exemption_projection_sha256="8" * 64)
+
+
+def test_the_tap_refuses_BOTH_bindings_or_neither(monkeypatch) -> None:
+    from scripts import cuda_cutover
+
+    with pytest.raises(cuda_cutover.CutoverRefusal, match="binding_ambiguous"):
+        _tap(response_sha256="a" * 64, exemption_projection_sha256="b" * 64)
+    with pytest.raises(cuda_cutover.CutoverRefusal, match="binding_ambiguous"):
+        _tap()
+
+
+def test_an_assertion_cannot_be_REPLAYED_across_ceremony_kinds(monkeypatch) -> None:
+    """An assertion produced for a consultation ceremony must not satisfy an
+    exemption ceremony, or the reverse: the other binding must be ABSENT."""
+    from scripts import cuda_cutover
+
+    projection_hash = "c" * 64
+    _finish_input(
+        monkeypatch,
+        {
+            "challenge_id": "chal-1",
+            "credential_ref": "cred-1",
+            "consultation_exemption_projection_hash": projection_hash,
+            "maez_voice_raw_response_hash": "d" * 64,
+            "authentication_response": {"id": "x"},
+        },
+    )
+    with pytest.raises(cuda_cutover.CutoverRefusal, match="owner_presence_unattested"):
+        _tap(exemption_projection_sha256=projection_hash)
+
+
+def test_the_consultation_tap_binding_is_unchanged(monkeypatch) -> None:
+    """Seam 2 must not alter the existing path while the live ask remains."""
+    response_hash = "e" * 64
+    _finish_input(
+        monkeypatch,
+        {
+            "challenge_id": "chal-1",
+            "credential_ref": "cred-1",
+            "maez_voice_raw_response_hash": response_hash,
+            "authentication_response": {"id": "x"},
+        },
+    )
+    request = _tap(response_sha256=response_hash)
+    assert request["maez_voice_raw_response_hash"] == response_hash
+
+
 def test_none_is_not_an_exemption() -> None:
     envelope = _envelope()
     assert not consultation_exemption_admits(

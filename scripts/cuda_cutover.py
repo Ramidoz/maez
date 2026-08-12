@@ -3711,10 +3711,31 @@ def _read_owner_webauthn_finish(
     *,
     selected_credential_ref: str,
     challenge_id: str,
-    response_sha256: str,
+    response_sha256: str | None = None,
+    exemption_projection_sha256: str | None = None,
 ) -> dict[str, object]:
-    """Read the actual browser-produced assertion after owner review."""
+    """Read the actual browser-produced assertion after owner review.
 
+    The tap does not merely prove presence; it proves the owner saw the thing
+    being attested. Normally that is Maez's exact response. Under R11 there
+    is no response, so the binding is REPLACED rather than dropped: the
+    assertion must carry the hash of the exemption projection, proving the
+    owner read the stated ABSENCE and its grounds. Dropping the binding
+    entirely would quietly weaken what the founder key attests.
+
+    Exactly one binding may be supplied, for the same reason the mint admits
+    exactly one evidence shape: with both, nothing could say which the owner
+    actually saw.
+    """
+    supplied = [s for s in (response_sha256, exemption_projection_sha256) if s is not None]
+    if len(supplied) != 1:
+        raise CutoverRefusal("owner_presence_binding_ambiguous")
+    if exemption_projection_sha256 is not None:
+        expected_field = "consultation_exemption_projection_hash"
+        expected_value: str = exemption_projection_sha256
+    else:
+        expected_field = "maez_voice_raw_response_hash"
+        expected_value = str(response_sha256)
     try:
         raw = input("webauthn_finish_json> ")
         request = json.loads(raw)
@@ -3724,9 +3745,18 @@ def _read_owner_webauthn_finish(
         type(request) is not dict
         or request.get("challenge_id") != challenge_id
         or request.get("credential_ref") != selected_credential_ref
-        or request.get("maez_voice_raw_response_hash") != response_sha256
+        or request.get(expected_field) != expected_value
         or type(request.get("authentication_response")) is not dict
     ):
+        raise CutoverRefusal("owner_presence_unattested")
+    # The other binding must be ABSENT, so an assertion cannot be replayed
+    # from a consultation ceremony into an exemption one or the reverse.
+    other_field = (
+        "maez_voice_raw_response_hash"
+        if exemption_projection_sha256 is not None
+        else "consultation_exemption_projection_hash"
+    )
+    if other_field in request:
         raise CutoverRefusal("owner_presence_unattested")
     return request
 

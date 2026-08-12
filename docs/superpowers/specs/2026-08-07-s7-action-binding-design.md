@@ -474,8 +474,8 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:read_voice_source_bundle | 634 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | validator | call:validate_voice_source_bundle | 638 |
 | `scripts/cuda_cutover.py` | `__init__` | hash | call:work_request_envelope_hash | 1261 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:build_work_request_envelope | 3860 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | renderer | call:render_request_statement | 3900 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:build_work_request_envelope | 3890 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | renderer | call:render_request_statement | 3930 |
 | `scripts/cuda_cutover.py` | `_is_canonical_cutover_envelope` | producer | call:build_work_request_envelope | 3080 |
 | `scripts/cuda_cutover.py` | `anchored_transaction` | constructor | call:_open_s7_connection_from_held_store | 1039 |
 | `scripts/cuda_cutover.py` | `_conn` | constructor | call:_open_s7_connection_from_held_store | 1176 |
