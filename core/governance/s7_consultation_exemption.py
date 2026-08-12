@@ -311,6 +311,10 @@ def exemption_admits_for_artifact(
         artifact, "request_envelope_hash", None
     ):
         return False
+    # The preimage join was missing here: the exemption could excuse an
+    # artifact whose action params differ from the ones it was minted for.
+    if exemption.action_params_hash != getattr(artifact, "action_params_hash", None):
+        return False
     if not _quality_receipt_still_matches():
         return False
     return True

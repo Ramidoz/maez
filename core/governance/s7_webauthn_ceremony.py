@@ -570,6 +570,25 @@ class S7LocalWebAuthnCeremonyService:
                     },
                     status_code=409,
                 )
+            # THE OWNER MUST NOT TAP ON A FALSE PICTURE. Without this the
+            # exemption admits beside a statement that says "Maez consulted:
+            # yes" -- the signed text and the authority would disagree, and
+            # the human reads the text. The rendered statement must itself
+            # carry the absence, with no consultation hash and no objection.
+            if (
+                getattr(rendered_statement, "maez_consulted_state", None)
+                != s7.MAEZ_CONSULTED_NOT_PERFORMED_R11
+                or getattr(rendered_statement, "maez_voice_consultation_hash", "x")
+                is not None
+                or getattr(rendered_statement, "maez_objection_state", None) != "none"
+            ):
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_signed_statement_contradicts_exemption",
+                    },
+                    status_code=409,
+                )
             if not consultation_exemption_admits(
                 envelope=envelope,
                 exemption=consultation_exemption,

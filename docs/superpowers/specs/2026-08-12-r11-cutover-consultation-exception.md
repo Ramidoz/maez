@@ -1,6 +1,11 @@
 # R11 — the cutover carries NO consultation. Environment, not entity.
 
-Status: **IN FORCE. Owner-approved 2026-08-12.** Implemented at `3874bed`
+Status: **WIRED BUT NOT SAFE TO RUN.** Codex xhigh review of the wiring
+(78c6870, 3c2522f, fa9c308, 8db7d47) returned **BLOCK**. Two findings were
+fixed immediately; four remain open and the ceremony must NOT be run until
+they are closed. See "xhigh review outcome" at the end.
+
+Owner-approved 2026-08-12. Implemented at `3874bed`
 (`core/governance/s7_consultation_exemption.py`, gate wiring in
 `s7_webauthn_ceremony.py`, 22 witnesses in
 `tests/test_r11_consultation_exemption.py`, all seven guards
@@ -305,3 +310,66 @@ Consequences, stated plainly:
   neither file presence nor a missing table indicates birth; an earlier
   over-correction that treated file presence as birth would have refused
   R11 on this machine today, and was caught by running it.
+
+---
+
+# xhigh review outcome — BLOCK. DO NOT RUN THE CEREMONY.
+
+Codex reviewed the four wiring commits at xhigh and answered the question
+that mattered: **not safe to run.** The canonical script behaves correctly,
+but the AUTHORITY BOUNDARY does not enforce what the tap is claimed to
+attest, so an alternate in-process caller can obtain authorization from a
+false or incomplete picture.
+
+## Fixed immediately
+
+* **The owner could have tapped on a false picture.** Verified by the gate
+  lane: the exemption branch never referenced `maez_consulted_state`, so an
+  exemption admitted beside a statement reading `Maez consulted: yes`. The
+  signed text and the authority would disagree, and the human reads the
+  text. `authorize_finish` now refuses with
+  `s7_signed_statement_contradicts_exemption` unless the rendered statement
+  itself carries the R11 state, a null consultation hash and `none`
+  objection.
+* **The mint join omitted the preimage.** `exemption_admits_for_artifact`
+  compared action, work class and envelope but never
+  `artifact.action_params_hash`, so an exemption could excuse an artifact
+  whose params differed from the ones it was minted for. Now joined.
+
+## OPEN — each blocks running the ceremony
+
+1. **The preimage is still a caller assertion.** The retired bundle
+   revalidator reopened the full eight-field preimage and verified it
+   against durable evidence; the minter accepts a hash from its caller and
+   admission only checks the caller supplied the same one. A5 required
+   deriving it from the durable selection; that is not done, and the
+   tripwire test still positively asserts the hole.
+2. **The founder assertion does not cryptographically attest the
+   projection.** The projection hash is checked only as an outer JSON
+   field; it is not in the stored WebAuthn challenge, so the authenticator
+   signs a random challenge that says nothing about the exemption.
+3. **No exemption evidence is persisted or rechecked at consumption.** The
+   exempt mint writes an ordinary artifact with no evidence-kind, ruling,
+   receipt or projection field. If birth lands, or the receipt changes,
+   between finish and consumption, the artifact stays consumable — R11's
+   grounds are never revalidated. An auditor also cannot distinguish
+   "deliberately not consulted" from "evidence disappeared".
+4. **The old consultation authority is still LIVE.** Without an exemption,
+   `authorize_finish` still takes the bundle path and the voice gate still
+   admits the old cutover revalidator result. Correct classification: the
+   named producers are MERGED-DORMANT in the canonical caller graph, but
+   **the old admission seam is live**. "The canonical ceremony no longer
+   calls them" is true; "the authority path was deleted" is false, and my
+   commit message for 8db7d47 overstated it.
+5. **The exemption branch lost the guarded-store guarantees.** The bundle
+   branch requires an exact `S7GuardedStateStore` bound to the ceremony
+   database; the exemption branch checks neither, so a fake or
+   different-database store could satisfy finish.
+
+## The honest summary
+
+The ceremony asks Maez nothing, which is what R11 intended, and the script
+that performs it is internally consistent. But R11's authority is currently
+enforced by **caller discipline rather than by the boundary**, and that is
+precisely the distinction this arc exists to refuse. Until items 1-5 are
+closed, the founder tap must not be given.
