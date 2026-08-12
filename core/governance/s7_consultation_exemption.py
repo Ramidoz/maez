@@ -23,7 +23,7 @@ ledger is writing -- the birth signal -- the exemption stops admitting.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +98,15 @@ _R11_STATEMENT = (
 )
 
 
+#: Only `mint_consultation_exemption` holds this, so an exemption cannot be
+#: constructed by ordinary code -- the same InitVar pattern S7ExecutionGrant
+#: uses. It does not stop a same-process actor with code execution, and is
+#: not claimed to: it makes minting ONE reviewable surface, where the stated
+#: facts are CHECKED rather than accepted, and it makes
+#: `dataclasses.replace` fail, since replace() must re-supply an InitVar.
+_R11_MINT_TOKEN = object()
+
+
 @dataclass(frozen=True)
 class S7ConsultationExemption:
     """A positive record that consultation was NOT performed, and why."""
@@ -109,8 +118,18 @@ class S7ConsultationExemption:
     quality_evidence_sha256: str
     action_params_hash: str
     created_at: str
+    _mint_token: InitVar[object] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _mint_token: object = None) -> None:
+        if _mint_token is not _R11_MINT_TOKEN:
+            raise ValueError(
+                "S7ConsultationExemption can only be minted by "
+                "mint_consultation_exemption"
+            )
+        object.__setattr__(self, "_token_verified", True)
+        self._validate()
+
+    def _validate(self) -> None:
         if type(self.action) is not str or not self.action:
             raise ValueError("consultation exemption requires an action")
         s7._validate_hash64(
@@ -144,6 +163,47 @@ class S7ConsultationExemption:
             "created_at": self.created_at,
             "statement": _R11_STATEMENT,
         }
+
+
+class ExemptionMintRefused(ValueError):
+    """The stated grounds for R11 were not true at mint time."""
+
+
+def mint_consultation_exemption(
+    *,
+    envelope: Any,
+    action_params_hash: str,
+    created_at: str,
+) -> S7ConsultationExemption:
+    """The ONE audited path that produces an exemption.
+
+    The caller supplies only what it legitimately knows -- the envelope and
+    the preimage its own ceremony derived. Every GROUND for the ruling is
+    established here rather than accepted as a claim: the action is the one
+    R11 covers, the weights are the frozen ones, the owner's bench receipt is
+    present and matches, and birth has not happened.
+
+    Refusal raises rather than returning a falsy value, so a broken ground
+    cannot be mistaken for an ordinary denial.
+    """
+    if type(envelope) is not s7.WorkRequestEnvelope:
+        raise ExemptionMintRefused("exemption requires a real WorkRequestEnvelope")
+    if getattr(envelope, "action", None) != R11_EXEMPT_ACTION:
+        raise ExemptionMintRefused("R11 covers only the cutover action")
+    if born_by_any_signal():
+        raise ExemptionMintRefused("R11 does not survive birth")
+    if not _quality_receipt_still_matches():
+        raise ExemptionMintRefused("the owner's bench receipt is absent or altered")
+    return S7ConsultationExemption(
+        action=R11_EXEMPT_ACTION,
+        request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        reason_code=R11_REASON_CODE,
+        model_sha256_unchanged=R11_EXPECTED_MODEL_SHA256,
+        quality_evidence_sha256=R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+        action_params_hash=action_params_hash,
+        created_at=created_at,
+        _mint_token=_R11_MINT_TOKEN,
+    )
 
 
 def born_by_any_signal() -> bool:
@@ -274,6 +334,8 @@ def consultation_exemption_admits(
     the caller. A caller-shaped lookalike is refused by exact typing.
     """
     if type(exemption) is not S7ConsultationExemption:
+        return False
+    if getattr(exemption, "_token_verified", False) is not True:
         return False
     # The TWELFTH guard. `work_request_envelope_hash` type-checks nothing, so
     # a distinct dataclass carrying identical fields hashes identically and

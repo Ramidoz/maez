@@ -66,7 +66,9 @@ def _exemption(envelope, **overrides) -> S7ConsultationExemption:
         "created_at": "2026-08-12T12:00:00Z",
     }
     fields.update(overrides)
-    return S7ConsultationExemption(**fields)
+    return S7ConsultationExemption(
+        **fields, _mint_token=exemption_mod._R11_MINT_TOKEN
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -140,6 +142,7 @@ def test_an_exemption_claiming_cutover_but_BOUND_to_a_soul_write_refuses() -> No
         quality_evidence_sha256=exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
         action_params_hash=_CEREMONY_PREIMAGE_HASH,
         created_at="2026-08-12T12:00:00Z",
+        _mint_token=exemption_mod._R11_MINT_TOKEN,
     )
     assert not consultation_exemption_admits(
         envelope=soul_envelope,
@@ -382,6 +385,107 @@ def test_a_ledger_carrying_the_birth_anchor_reads_as_born(monkeypatch, tmp_path)
     conn.close()
     monkeypatch.setattr(birth_phase, "default_ledger_path", lambda *a, **k: born)
     assert exemption_mod.born_by_any_signal() is True
+
+
+# --------------------------------------------------------------------- #
+#  Provenance: one audited minting path, which CHECKS rather than trusts. #
+# --------------------------------------------------------------------- #
+
+
+def test_ordinary_construction_is_refused() -> None:
+    """Codex finding: the public frozen dataclass accepted caller-provided
+    authority fields. Only the minter may produce one now."""
+    envelope = _envelope()
+    with pytest.raises(ValueError, match="mint_consultation_exemption"):
+        S7ConsultationExemption(
+            action=cm.CUTOVER_ACTION,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            reason_code=R11_REASON_CODE,
+            model_sha256_unchanged=exemption_mod.R11_EXPECTED_MODEL_SHA256,
+            quality_evidence_sha256=exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            created_at="2026-08-12T12:00:00Z",
+        )
+
+
+def test_dataclasses_replace_can_no_longer_rebind_an_exemption() -> None:
+    """Codex's verified attack: replace() onto another cutover envelope was
+    ADMITTED. An InitVar must be re-supplied, so replace() now refuses."""
+    envelope = _envelope()
+    minted = _exemption(envelope)
+    other = replace(envelope, request_id="req-r11-other")
+    # replace() re-runs __post_init__ with the InitVar defaulted to None, so
+    # the mint check fires and names the only path that may produce one.
+    with pytest.raises(ValueError, match="mint_consultation_exemption"):
+        replace(minted, request_envelope_hash=s7.work_request_envelope_hash(other))
+
+
+def test_the_minter_establishes_the_grounds_instead_of_trusting_them() -> None:
+    envelope = _envelope()
+    minted = exemption_mod.mint_consultation_exemption(
+        envelope=envelope,
+        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        created_at="2026-08-12T12:00:00Z",
+    )
+    # The caller supplied neither the model sha nor the receipt hash.
+    assert minted.model_sha256_unchanged == exemption_mod.R11_EXPECTED_MODEL_SHA256
+    assert (
+        minted.quality_evidence_sha256
+        == exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256
+    )
+    assert consultation_exemption_admits(
+        envelope=envelope,
+        exemption=minted,
+        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_the_minter_refuses_a_non_cutover_action() -> None:
+    with pytest.raises(exemption_mod.ExemptionMintRefused, match="cutover"):
+        exemption_mod.mint_consultation_exemption(
+            envelope=_envelope(action="edit_soul_section"),
+            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            created_at="2026-08-12T12:00:00Z",
+        )
+
+
+def test_the_minter_refuses_when_the_receipt_is_absent(monkeypatch, tmp_path) -> None:
+    """A broken ground RAISES rather than returning falsy, so it cannot be
+    mistaken for an ordinary denial."""
+    monkeypatch.setattr(
+        exemption_mod, "R11_QUALITY_EVIDENCE_PATH", tmp_path / "gone.json"
+    )
+    with pytest.raises(exemption_mod.ExemptionMintRefused, match="bench receipt"):
+        exemption_mod.mint_consultation_exemption(
+            envelope=_envelope(),
+            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            created_at="2026-08-12T12:00:00Z",
+        )
+
+
+def test_the_minter_refuses_after_birth(monkeypatch) -> None:
+    monkeypatch.setenv("MAEZ_LEDGER_WRITES", "1")
+    with pytest.raises(exemption_mod.ExemptionMintRefused, match="birth"):
+        exemption_mod.mint_consultation_exemption(
+            envelope=_envelope(),
+            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            created_at="2026-08-12T12:00:00Z",
+        )
+
+
+def test_a_stripped_token_flag_refuses_at_the_gate() -> None:
+    """The flag is defence in depth, not a proof: a same-process actor can
+    still strip it. Asserting it bites keeps the check honest."""
+    envelope = _envelope()
+    minted = _exemption(envelope)
+    object.__setattr__(minted, "_token_verified", False)
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=minted,
+        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        ledger_writes_enabled=False,
+    )
 
 
 def test_none_is_not_an_exemption() -> None:
@@ -645,6 +749,7 @@ def test_a_soul_write_cannot_be_exempted_at_the_gate() -> None:
         quality_evidence_sha256=exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
         action_params_hash=_CEREMONY_PREIMAGE_HASH,
         created_at="2026-08-12T12:00:00Z",
+        _mint_token=exemption_mod._R11_MINT_TOKEN,
     )
     result = _gate(soul_envelope, forged)
 

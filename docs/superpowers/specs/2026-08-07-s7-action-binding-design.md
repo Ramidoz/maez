@@ -448,8 +448,10 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 1533 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:_voice_source_bundle_binding_hash | 1516 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1519 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 312 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 264 |
+| `core/governance/s7_consultation_exemption.py` | `mint_consultation_exemption` | hash | call:work_request_envelope_hash | 199 |
+| `core/governance/s7_consultation_exemption.py` | `mint_consultation_exemption` | producer | definition | 172 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 374 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 324 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 859 |
 | `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1275 |
 | `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | hash | call:_voice_source_bundle_binding_hash | 1184 |
@@ -487,7 +489,7 @@ now emitted by the same generator and counted with everything else.
 | `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 799 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 31, producer 11, renderer 4, source_bundle 18, validator 13 — **total 119**.
+**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 32, producer 12, renderer 4, source_bundle 18, validator 13 — **total 121**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

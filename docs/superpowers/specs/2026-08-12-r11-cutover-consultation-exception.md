@@ -177,13 +177,31 @@ Consequences, stated plainly:
 1. **Production wiring** — thread the exemption through `authorize_finish`
    and replace the consultation in `scripts/cuda_cutover.py`. This is the
    substantial part: it means deleting a live ask, not adding a branch.
-2. **Provenance and one-use** — the typed absence is currently
-   caller-mintable and replayable. Verified attacks: constructing the real
-   type with invented fields, `dataclasses.replace` onto another cutover
-   envelope, `object.__setattr__` rebinding, a crafted pickle omitting
-   fields, and presenting the same object twice — all admitted. Exact
-   typing and action scoping held; subclasses and cross-action reuse were
-   refused.
+2. **Provenance — LANDED. One-use — analysed, and deliberately not built.**
+
+   Provenance: the exemption now carries an `InitVar` mint token, the same
+   pattern `S7ExecutionGrant` uses, so ordinary construction refuses and
+   `dataclasses.replace` — Codex's verified rebinding attack — refuses with
+   it. `mint_consultation_exemption` is the one audited path, and it
+   **establishes** the grounds rather than accepting them: it derives the
+   envelope hash itself, supplies the model and receipt hashes from the
+   frozen constants, re-reads the receipt, and refuses after birth. A broken
+   ground RAISES (`ExemptionMintRefused`) so it cannot be mistaken for an
+   ordinary denial. The token flag remains defeatable by a same-process
+   actor with `object.__setattr__`, which is not claimed otherwise and has
+   its own witness.
+
+   One-use: **measured, then judged unnecessary rather than built.** The
+   exemption is not a capability that can be spent — it stands in for the
+   *consultation*, never for the tap. Every attempt still renders a fresh S7
+   nonce (v34), the v2 table holds `nonce TEXT NOT NULL UNIQUE`, consumption
+   matches `consumed_at IS NULL`, and minting runs through the guarded store
+   behind a founder WebAuthn assertion. So replaying an exemption buys
+   nothing without a second physical tap, and the one-use property that
+   matters is already carried by the artifact. Building a second one-use
+   store here would have been another binding that binds nothing — the
+   mistake A1 already made once. **If wiring shows the exemption can be
+   presented where no tap follows, this must be revisited.**
 3. **Bind the bench receipt** — `quality_evidence_sha256` is validated
    only as 64 hex characters and never read. The positive fixture passes
    with an invented `"b" * 64`. R11's entire justification rests on that
