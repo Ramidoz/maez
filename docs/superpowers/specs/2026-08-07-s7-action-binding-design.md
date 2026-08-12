@@ -368,13 +368,13 @@ now emitted by the same generator and counted with everything else.
 | file | function | role | syntactic role | line |
 |---|---|---|---|---|
 | `core/actions/action_engine.py` | `_s7_invocation_gate` | execution_edge | call:consume_execution_grant_for_action | 616 |
-| `core/decision/decision_pipeline.py` | `_consume_s7_execution_authorization` | durable_writer | call:consume_for_execution | 1569 |
-| `core/decision/decision_pipeline.py` | `_on_approve` | execution_edge | call:execution_grant_authorizes_card_transition | 1876 |
-| `core/decision/decision_pipeline.py` | `_s7_request_envelope_for_card` | producer | call:build_work_request_envelope | 1069 |
-| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1152 |
-| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1178 |
-| `core/decision/decision_pipeline.py` | `handle_action` | hash | call:work_request_envelope_hash | 677 |
-| `core/decision/pending_cards.py` | `approve_and_mark_running` | execution_edge | call:execution_grant_authorizes_card_transition | 851 |
+| `core/decision/decision_pipeline.py` | `_consume_s7_execution_authorization` | durable_writer | call:consume_for_execution | 1578 |
+| `core/decision/decision_pipeline.py` | `_on_approve` | execution_edge | call:execution_grant_authorizes_card_transition | 1929 |
+| `core/decision/decision_pipeline.py` | `_s7_request_envelope_for_card` | producer | call:build_work_request_envelope | 1072 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1155 |
+| `core/decision/decision_pipeline.py` | `_s7_voice_consultation_for_card` | hash | call:work_request_envelope_hash | 1181 |
+| `core/decision/decision_pipeline.py` | `handle_action` | hash | call:work_request_envelope_hash | 680 |
+| `core/decision/pending_cards.py` | `approve_and_mark_running` | execution_edge | call:execution_grant_authorizes_card_transition | 854 |
 | `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | durable_writer | call:consume_for_execution | 1186 |
 | `core/evolution/dream_state.py` | `_consume_s7_execution_authorization_for_envelope` | hash | call:work_request_envelope_hash | 1179 |
 | `core/evolution/dream_state.py` | `build_apply_s7_envelope` | producer | call:build_work_request_envelope | 1054 |

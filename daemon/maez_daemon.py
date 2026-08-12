@@ -12524,6 +12524,17 @@ class MaezDaemon:
                     return jsonify({"ok": False, "error": "s7_execution_unrelated"}), 409
                 status = getattr(getattr(result, "status", None), "value", str(getattr(result, "status", "")))
                 ok = status == "executed" and bool(getattr(result, "execution_success", False))
+                if status == "error":
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "status": status,
+                            "message": getattr(result, "message", ""),
+                            "output": (getattr(result, "execution_output", "") or "")[:2000],
+                            "error": getattr(result, "message", "") or "s7_execution_edge_broken",
+                            "detail": getattr(result, "execution_error", None),
+                        }
+                    ), 500
                 status_code = 200 if ok else 409
                 return jsonify(
                     {

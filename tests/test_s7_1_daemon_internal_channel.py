@@ -1337,6 +1337,123 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_row[3], "revert_patch")
         self.assertEqual(target_text, "# after")
 
+    def test_daemon_s7_execute_surfaces_broken_seam_as_structured_500_not_refusal(self):
+        from core.governance import operator_user_boundary as s7
+
+        request_id = "req-s7-execute-broken-seam"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = bootstrap_with_authorization(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, pipeline, engine, card, target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        with patch.object(
+                            pipeline,
+                            "_consume_s7_execution_authorization",
+                            side_effect=s7.S7GuardedExecutionUnavailable(
+                                "injected daemon consume seam break"
+                            ),
+                        ):
+                            with self.assertLogs(
+                                "core.decision.decision_pipeline",
+                                level="ERROR",
+                            ) as logs:
+                                execute = client.post(
+                                    f"/internal/s7/cards/{request_id}/execute",
+                                    json={
+                                        "session_binding": "session-auth",
+                                        "authorization_challenge_id": begin.get_json()[
+                                            "challenge_id"
+                                        ],
+                                        "authorization_credential_ref": "cred-primary",
+                                        "s7_authorization_artifact_id": finish.get_json()[
+                                            "artifact_id"
+                                        ],
+                                        "text": "yes",
+                                    },
+                                    headers={
+                                        "X-Maez-S7-Internal-Channel": "test-channel-secret"
+                                    },
+                                )
+                                after_failure = client.get("/")
+            with sqlite3.connect(store.db_path) as conn:
+                consumed_at = conn.execute(
+                    "SELECT consumed_at FROM s7_authorization_artifacts_v2 "
+                    "WHERE artifact_id = ?",
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()[0]
+                trace_row = conn.execute(
+                    "SELECT execution_status, execution_success, error_hash "
+                    "FROM s7_guarded_execution_traces WHERE artifact_id = ?",
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()
+            fresh = pipeline.card_store.get(request_id)
+            dialog = pipeline._dialog_store.get_for_card(request_id)
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(execute.status_code, 500, execute.get_data(as_text=True))
+        self.assertEqual(
+            execute.get_json(),
+            {
+                "ok": False,
+                "status": "error",
+                "message": "s7_approval_seam_broken",
+                "output": "",
+                "error": "s7_approval_seam_broken",
+                "detail": "s7_approval_seam_broken:S7GuardedExecutionUnavailable",
+            },
+        )
+        self.assertEqual(after_failure.status_code, 200)
+        self.assertEqual(after_failure.get_json()["status"], "running")
+        self.assertIn("S7GuardedExecutionUnavailable", "\n".join(logs.output))
+        self.assertEqual(len(engine.calls), 0)
+        self.assertIsNone(consumed_at)
+        self.assertEqual(
+            trace_row,
+            (
+                "error",
+                0,
+                s7.canonical_hash(
+                    "s7_approval_seam_broken:S7GuardedExecutionUnavailable"
+                ),
+            ),
+        )
+        self.assertEqual(target_text, "# before")
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, "failed")
+        self.assertEqual(
+            fresh.execution_error,
+            "s7_approval_seam_broken:S7GuardedExecutionUnavailable",
+        )
+        self.assertIsNotNone(dialog)
+        assert dialog is not None
+        self.assertEqual(dialog.stage, "failed")
+        self.assertIsNone(dialog.s7_block_reason)
+
     def test_daemon_s7_execute_blocks_wrong_expected_post_hash_before_mutation(self):
 
         request_id = "req-s7-execute-post-hash-mismatch"

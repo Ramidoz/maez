@@ -58,6 +58,8 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+_S7_APPROVAL_SEAM_BROKEN = "s7_approval_seam_broken"
+
 from core.action_classifier import classify_action, ClassificationResult
 from core.audit import audit_action, AuditVerdict, Decision
 from core.audit_log import AuditLog
@@ -65,6 +67,7 @@ from core.injection_patterns import scan as scan_injection, InjectionMatch, high
 from core.pending_cards import (
     CardRecord,
     CardStoreError,
+    S7CardTransitionRefused,
     PendingCardStore,
     CardStatus,
     compute_state_hash,
@@ -1512,6 +1515,12 @@ class DecisionPipeline:
                         DialogStage.FAILED.value,
                         execution_error=result.execution_error,
                     )
+            elif result and result.status == PipelineStatus.ERROR:
+                dialog_store.set_stage(
+                    turn.dialog.dialog_id,
+                    DialogStage.FAILED.value,
+                    execution_error=result.execution_error,
+                )
             return result
 
         if turn.kind in ("denied", "cancelled", "cap_reached"):
@@ -1757,6 +1766,44 @@ class DecisionPipeline:
             card=blocked,
         )
 
+    def _fail_s7_approval_seam(
+        self,
+        card: CardRecord,
+        *,
+        seam: str,
+        error: Exception,
+    ) -> PipelineResult:
+        exception_type = type(error).__name__
+        detail = f"{_S7_APPROVAL_SEAM_BROKEN}:{exception_type}"
+        logger.error(
+            "S7 approval seam broken for card %s at %s (%s)",
+            card.request_id,
+            seam,
+            exception_type,
+            exc_info=True,
+        )
+        try:
+            failed = self.card_store.mark_s7_seam_failed(
+                card.request_id,
+                reason_code=_S7_APPROVAL_SEAM_BROKEN,
+                exception_type=exception_type,
+            )
+        except Exception:
+            logger.error(
+                "S7 approval seam failure state could not be persisted for card %s",
+                card.request_id,
+                exc_info=True,
+            )
+            failed = card
+        return PipelineResult(
+            status=PipelineStatus.ERROR,
+            message=_S7_APPROVAL_SEAM_BROKEN,
+            card=failed,
+            execution_success=False,
+            execution_output="",
+            execution_error=detail,
+        )
+
     # -------------------------------------------------------------- #
     #  Intent handlers                                                #
     # -------------------------------------------------------------- #
@@ -1860,8 +1907,14 @@ class DecisionPipeline:
 
             try:
                 pre_execute_result = pre_execute_hook(_mark_running_after_s7_verification)
-            except Exception:
-                pre_execute_result = (False, None)
+            except S7CardTransitionRefused:
+                return self._block_s7_card(card, reason=pre_execute_block_reason)
+            except Exception as exc:
+                return self._fail_s7_approval_seam(
+                    card,
+                    seam="pre_execute_hook",
+                    error=exc,
+                )
             if isinstance(pre_execute_result, tuple):
                 execution_grant = pre_execute_result[0]
                 transitioned_card = pre_execute_result[1] if len(pre_execute_result) > 1 else None
@@ -1870,9 +1923,9 @@ class DecisionPipeline:
                 transitioned_card = None
             if not isinstance(transitioned_card, CardRecord):
                 return self._block_s7_card(card, reason="S7 transition did not return a running card")
-            try:
-                from core.governance import operator_user_boundary as s7
+            from core.governance import operator_user_boundary as s7
 
+            try:
                 pre_execute_ok = s7.execution_grant_authorizes_card_transition(
                     execution_grant,
                     request_id=card.request_id,
@@ -1880,8 +1933,12 @@ class DecisionPipeline:
                     params=self._execution_params_for_card(card),
                     artifact_id=s7_artifact_id,
                 )
-            except Exception:
-                pre_execute_ok = False
+            except Exception as exc:
+                return self._fail_s7_approval_seam(
+                    transitioned_card,
+                    seam="grant_authorization_check",
+                    error=exc,
+                )
             if not pre_execute_ok:
                 failed_card = transitioned_card if isinstance(transitioned_card, CardRecord) else card
                 return self._block_s7_card(failed_card, reason=pre_execute_block_reason)
