@@ -190,8 +190,8 @@ def scanned(table):
 class TestTheTableIsInternallyConsistent:
     """One table, one count."""
 
-    def test_the_row_count_is_one_hundred_twenty_two(self, table) -> None:
-        assert len(table) == 122
+    def test_the_row_count_is_one_hundred_twenty_three(self, table) -> None:
+        assert len(table) == 123
 
     def test_the_prose_counts_agree_with_the_table(self, table) -> None:
         """v4's headings totalled 30 while its rows totalled something else.
@@ -212,7 +212,7 @@ class TestTheTableIsInternallyConsistent:
         assert len(all_counts) > 1, "expected a superseded counts line to exist"
         assert any(i < anchor for i in all_counts), "no pre-anchor line to confuse"
         _per_role, total = _prose_counts()
-        assert total == 122
+        assert total == 123
 
     def test_the_role_counts_sum_to_the_row_count(self, table) -> None:
         from_table = collections.Counter(row[2] for row in table)
@@ -316,7 +316,7 @@ class TestTheAllowlistMatchesTheCode:
         assert not extra, f"unpinned sites present in the code: {sorted(extra)}"
 
     def test_the_totals_match_exactly(self, table, scanned) -> None:
-        assert sum(scanned.values()) == len(table) == 122
+        assert sum(scanned.values()) == len(table) == 123
 
     def test_multiplicity_is_carried_not_collapsed(self, table, scanned) -> None:
         """A second call to the same target in the same function must be
@@ -530,7 +530,7 @@ class TestRepoWideDiscoveryGuard:
         # The sweep looks for CALL targets only; definitions are not call
         # sites. So the floor is the table's call-row count, not its total.
         call_rows = sum(1 for r in table if r[3].startswith("call:"))
-        assert call_rows == 96
+        assert call_rows == 97
         assert len(sites) >= call_rows, (len(sites), call_rows)
 
     def test_no_tracked_call_lives_outside_the_allowlisted_files(

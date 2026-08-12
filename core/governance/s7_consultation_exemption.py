@@ -275,6 +275,47 @@ def born_by_any_signal() -> bool:
     return bool(row and str(row[0] or "").strip())
 
 
+def exemption_admits_for_artifact(
+    *,
+    artifact: Any,
+    exemption: Any,
+    ledger_writes_enabled: bool,
+) -> bool:
+    """The mint-side join: an exemption must match the artifact it excuses.
+
+    The mint holds the artifact, not the envelope, so this binds to the
+    artifact's own action and envelope hash. Every ground is re-derived here
+    exactly as at the gate -- this is a SECOND lawful evidence shape, never a
+    hole in the first, so it must be as strict as the bundle path it stands
+    beside.
+    """
+    if type(exemption) is not S7ConsultationExemption:
+        return False
+    if getattr(exemption, "_token_verified", False) is not True:
+        return False
+    if ledger_writes_enabled is not False:
+        return False
+    if exemption.action != R11_EXEMPT_ACTION:
+        return False
+    if getattr(artifact, "action", None) != R11_EXEMPT_ACTION:
+        return False
+    if getattr(artifact, "derived_work_class", None) != "self_modification":
+        return False
+    if exemption.reason_code not in _R11_REASON_CODES:
+        return False
+    if exemption.model_sha256_unchanged != R11_EXPECTED_MODEL_SHA256:
+        return False
+    if exemption.quality_evidence_sha256 != R11_EXPECTED_QUALITY_EVIDENCE_SHA256:
+        return False
+    if exemption.request_envelope_hash != getattr(
+        artifact, "request_envelope_hash", None
+    ):
+        return False
+    if not _quality_receipt_still_matches():
+        return False
+    return True
+
+
 def _quality_receipt_still_matches() -> bool:
     """Re-read the owner's bench receipt and byte-compare it at admit time.
 

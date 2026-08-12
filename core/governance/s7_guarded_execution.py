@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
@@ -3019,6 +3020,34 @@ class S7GuardedStateStore:
         self.authorization_store = authorization_store
         self.voice_bundle_use_store = voice_bundle_use_store
 
+    def put_artifact_under_consultation_exemption(
+        self,
+        *,
+        artifact: s7.S7AuthorizationArtifact,
+        consultation_exemption: Any,
+    ) -> None:
+        """Mint a voice-seat artifact whose authority is a TYPED ABSENCE.
+
+        Still through the guarded store -- the artifact never reaches the raw
+        authorization store -- but there is no bundle to reserve, because
+        under R11 no consultation was produced. The exemption is re-validated
+        against this artifact by the caller before arriving here; this method
+        re-checks rather than trusting, for the same reason every other seam
+        in this arc re-derives instead of accepting.
+        """
+        from core.governance.s7_consultation_exemption import (
+            born_by_any_signal,
+            exemption_admits_for_artifact,
+        )
+
+        if not exemption_admits_for_artifact(
+            artifact=artifact,
+            exemption=consultation_exemption,
+            ledger_writes_enabled=born_by_any_signal(),
+        ):
+            raise ValueError("S7 consultation exemption does not admit this artifact")
+        self.authorization_store.put(artifact)
+
     def put_artifact_with_bundle_reservation(
         self,
         *,
@@ -3068,6 +3097,7 @@ def mint_authorization_artifact(
     source_ref_hash: str | None = None,
     reservation_token: str | None = None,
     now: str | None = None,
+    consultation_exemption: Any | None = None,
 ) -> None:
     """Sole authorization-artifact mint entry point.
 
@@ -3084,6 +3114,39 @@ def mint_authorization_artifact(
                 "S7.3 guarded work-class artifact must be minted through the guarded "
                 "state store, not the raw authorization store"
             )
+        if consultation_exemption is not None:
+            # R11: a SECOND lawful evidence shape, never a hole in the first.
+            # The two are mutually exclusive on purpose -- an artifact that
+            # arrived with both would let a weak exemption ride beside real
+            # bundle evidence, or the reverse, with no way to say which
+            # authorized it.
+            from core.governance.s7_consultation_exemption import (
+                born_by_any_signal,
+                exemption_admits_for_artifact,
+            )
+
+            if (
+                source_bundle_validation is not None
+                or source_ref_hash is not None
+                or reservation_token is not None
+            ):
+                raise ValueError(
+                    "S7 artifact carries both a consultation exemption and "
+                    "voice-bundle evidence; exactly one must authorize a mint"
+                )
+            if not exemption_admits_for_artifact(
+                artifact=artifact,
+                exemption=consultation_exemption,
+                ledger_writes_enabled=born_by_any_signal(),
+            ):
+                raise ValueError(
+                    "S7 consultation exemption does not admit this artifact"
+                )
+            guarded_store.put_artifact_under_consultation_exemption(
+                artifact=artifact,
+                consultation_exemption=consultation_exemption,
+            )
+            return
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=artifact,
             source_bundle_validation=source_bundle_validation,

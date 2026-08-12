@@ -422,37 +422,38 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4912 |
 | `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1536 |
 | `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1197 |
-| `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 2044 |
-| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 2622 |
-| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 2595 |
-| `core/governance/s7_guarded_execution.py` | `_voice_bundle_from_row` | source_bundle | call:S7VoiceConsultationBundle | 1296 |
-| `core/governance/s7_guarded_execution.py` | `_voice_validation_result_v2` | hash | call:s7_voice_consultation_bundle_hash | 1430 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 708 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 707 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 724 |
-| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 688 |
-| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 2145 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 3062 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:authorization_store.put | 3095 |
-| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 3087 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:attempt_store.put | 804 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put_voice_source_bundle_v2 | 860 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | hash | call:s7_voice_consultation_bundle_hash | 857 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 828 |
-| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 786 |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 3059 |
-| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 3022 |
-| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 2050 |
-| `core/governance/s7_guarded_execution.py` | `put_voice_source_bundle_v2` | hash | call:s7_voice_consultation_bundle_hash | 1342 |
-| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 1133 |
-| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2846 |
-| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 1533 |
-| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:_voice_source_bundle_binding_hash | 1516 |
-| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1519 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_under_consultation_exemption` | durable_writer | call:self.authorization_store.put | 3049 |
+| `core/governance/s7_guarded_execution.py` | `S7VoiceConsultationBundleStore.put_bundle` | durable_writer | definition | 2045 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_content_hash_valid` | hash | call:s7_voice_consultation_bundle_hash | 2623 |
+| `core/governance/s7_guarded_execution.py` | `_bundle_matches_expected_hash_binding` | validator | definition | 2596 |
+| `core/governance/s7_guarded_execution.py` | `_voice_bundle_from_row` | source_bundle | call:S7VoiceConsultationBundle | 1297 |
+| `core/governance/s7_guarded_execution.py` | `_voice_validation_result_v2` | hash | call:s7_voice_consultation_bundle_hash | 1431 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:maez_voice_consultation_hash | 709 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | hash | call:work_request_envelope_hash | 708 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | call:S7VoiceSourceBundleHashBinding | 725 |
+| `core/governance/s7_guarded_execution.py` | `derive_s7_voice_source_bundle_hash_binding` | source_bundle | definition | 689 |
+| `core/governance/s7_guarded_execution.py` | `get_for_source_ref` | source_bundle | call:S7VoiceConsultationBundle | 2146 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | constructor | definition | 3091 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:authorization_store.put | 3158 |
+| `core/governance/s7_guarded_execution.py` | `mint_authorization_artifact` | durable_writer | call:put_artifact_with_bundle_reservation | 3150 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:attempt_store.put | 805 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put_voice_source_bundle_v2 | 861 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | hash | call:s7_voice_consultation_bundle_hash | 858 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:S7VoiceConsultationBundle | 829 |
+| `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 787 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | call:self.authorization_store.put | 3088 |
+| `core/governance/s7_guarded_execution.py` | `put_artifact_with_bundle_reservation` | durable_writer | definition | 3051 |
+| `core/governance/s7_guarded_execution.py` | `put_bundle` | hash | call:s7_voice_consultation_bundle_hash | 2051 |
+| `core/governance/s7_guarded_execution.py` | `put_voice_source_bundle_v2` | hash | call:s7_voice_consultation_bundle_hash | 1343 |
+| `core/governance/s7_guarded_execution.py` | `s7_voice_consultation_bundle_hash` | hash | definition | 1134 |
+| `core/governance/s7_guarded_execution.py` | `validate_s7_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 2847 |
+| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 1534 |
+| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:_voice_source_bundle_binding_hash | 1517 |
+| `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1520 |
 | `core/governance/s7_consultation_exemption.py` | `mint_consultation_exemption` | hash | call:work_request_envelope_hash | 199 |
 | `core/governance/s7_consultation_exemption.py` | `mint_consultation_exemption` | producer | definition | 172 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 374 |
-| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 324 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 415 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 365 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 859 |
 | `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1275 |
 | `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | hash | call:_voice_source_bundle_binding_hash | 1184 |
@@ -490,7 +491,7 @@ now emitted by the same generator and counted with everything else.
 | `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 799 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 32, producer 12, renderer 4, source_bundle 18, validator 14 — **total 122**.
+**Counts, derived mechanically:** constructor 13, durable_writer 20, execution_edge 10, hash 32, producer 12, renderer 4, source_bundle 18, validator 14 — **total 123**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

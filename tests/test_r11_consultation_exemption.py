@@ -566,6 +566,138 @@ def test_the_consulted_vocabulary_is_exactly_three_states() -> None:
     assert s7.MAEZ_CONSULTED_NOT_PERFORMED_R11 == "no -- not performed under R11"
 
 
+# --------------------------------------------------------------------- #
+#  The mint: a SECOND lawful evidence shape, never a hole in the first.  #
+# --------------------------------------------------------------------- #
+
+
+def _artifact(envelope, **overrides):
+    fields = {
+        "artifact_id": "artifact-r11-1",
+        "request_id": envelope.request_id,
+        "request_envelope_hash": s7.work_request_envelope_hash(envelope),
+        "rendered_text_hash": "d" * 64,
+        "action_params_hash": _CEREMONY_PREIMAGE_HASH,
+        "precondition_hash": envelope.precondition_hash,
+        "authority_context_hash": "c" * 64,
+        "derived_work_class": envelope.derived_work_class,
+        "derived_aggregation_group": envelope.derived_aggregation_group,
+        "nonce": "n" * 64,
+        "credential_ref": "cred-1",
+        "auth_method": "founder_webauthn",
+        "grant_source": "founder_webauthn",
+        "user_presence": True,
+        "user_verification": True,
+        "created_at": "2026-08-12T12:00:00Z",
+        "expires_at": "2026-08-12T16:00:00Z",
+        "consumed_at": None,
+        "action": envelope.action,
+    }
+    fields.update(overrides)
+    return s7.S7AuthorizationArtifact(**fields)
+
+
+def test_the_exemption_admits_for_its_own_artifact() -> None:
+    envelope = _envelope()
+    assert exemption_mod.exemption_admits_for_artifact(
+        artifact=_artifact(envelope),
+        exemption=_exemption(envelope),
+        ledger_writes_enabled=False,
+    )
+
+
+def test_the_exemption_refuses_an_artifact_for_a_different_envelope() -> None:
+    envelope = _envelope()
+    other = replace(envelope, request_id="req-r11-other")
+    assert not exemption_mod.exemption_admits_for_artifact(
+        artifact=_artifact(other),
+        exemption=_exemption(envelope),
+        ledger_writes_enabled=False,
+    )
+
+
+def test_the_exemption_refuses_an_artifact_for_a_different_action() -> None:
+    envelope = _envelope()
+    assert not exemption_mod.exemption_admits_for_artifact(
+        artifact=_artifact(envelope, action="edit_soul_section"),
+        exemption=_exemption(envelope),
+        ledger_writes_enabled=False,
+    )
+
+
+def test_the_two_evidence_shapes_are_MUTUALLY_EXCLUSIVE() -> None:
+    """The safety property that keeps R11 a second door rather than a hole in
+    the first: an artifact arriving with both an exemption and voice-bundle
+    evidence has no way to say which authorized it, so the mint refuses."""
+    from core.governance import s7_guarded_execution as guarded
+
+    envelope = _envelope()
+
+    class _Store:
+        def put_artifact_under_consultation_exemption(self, **_kwargs):
+            raise AssertionError("must not reach the store")
+
+        def put_artifact_with_bundle_reservation(self, **_kwargs):
+            raise AssertionError("must not reach the store")
+
+    for extra in (
+        {"source_ref_hash": "a" * 64},
+        {"reservation_token": "t" * 64},
+    ):
+        with pytest.raises(ValueError, match="exactly one must authorize"):
+            guarded.mint_authorization_artifact(
+                artifact=_artifact(envelope),
+                authorization_store=None,
+                guarded_store=_Store(),
+                consultation_exemption=_exemption(envelope),
+                **extra,
+            )
+
+
+def test_the_mint_refuses_an_exemption_that_does_not_admit() -> None:
+    from core.governance import s7_guarded_execution as guarded
+
+    envelope = _envelope()
+    other = replace(envelope, request_id="req-r11-other")
+
+    class _Store:
+        def put_artifact_under_consultation_exemption(self, **_kwargs):
+            raise AssertionError("must not reach the store")
+
+    with pytest.raises(ValueError, match="does not admit"):
+        guarded.mint_authorization_artifact(
+            artifact=_artifact(other),
+            authorization_store=None,
+            guarded_store=_Store(),
+            consultation_exemption=_exemption(envelope),
+        )
+
+
+def test_the_exempt_mint_still_goes_THROUGH_the_guarded_store() -> None:
+    """It must never reach the raw authorization store, exemption or not."""
+    from core.governance import s7_guarded_execution as guarded
+
+    envelope = _envelope()
+    seen = {}
+
+    class _Store:
+        def put_artifact_under_consultation_exemption(self, *, artifact, consultation_exemption):
+            seen["artifact"] = artifact
+            seen["exemption"] = consultation_exemption
+
+    class _RawStore:
+        def put(self, _artifact):
+            raise AssertionError("the raw store must never be reached")
+
+    guarded.mint_authorization_artifact(
+        artifact=_artifact(envelope),
+        authorization_store=_RawStore(),
+        guarded_store=_Store(),
+        consultation_exemption=_exemption(envelope),
+    )
+    assert seen["artifact"].action == cm.CUTOVER_ACTION
+
+
 def test_none_is_not_an_exemption() -> None:
     envelope = _envelope()
     assert not consultation_exemption_admits(
