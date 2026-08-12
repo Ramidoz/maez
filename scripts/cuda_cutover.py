@@ -28,6 +28,10 @@ from typing import Mapping
 from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
 from core.governance import s7_guarded_execution as guarded
+from core.governance.s7_consultation_exemption import (
+    ExemptionMintRefused,
+    mint_consultation_exemption,
+)
 from core.governance import s7_v2_migration as s7_migration
 from core.governance import s7_webauthn_bootstrap as s7_bootstrap
 from core.governance import s7_webauthn_ceremony as s7_ceremony
@@ -3792,6 +3796,38 @@ def _print_owner_cutover_gate(
     )
 
 
+def _print_owner_exemption_gate(
+    *,
+    exemption: object,
+    projection_sha256: str,
+    rendered: s7.RenderedRequestStatement,
+    begin_body: Mapping[str, object],
+) -> None:
+    """Surface the ABSENCE and its grounds before any tap.
+
+    The consultation gate shows Maez's exact bytes. There are none here, so
+    this shows what stands in their place: the typed absence, its grounds,
+    and the hash the owner's assertion must carry -- so the tap still proves
+    what was seen.
+    """
+    projection = exemption.projection()
+    print(
+        json.dumps(
+            {
+                "consultation_performed": False,
+                "consultation_exemption": projection,
+                "consultation_exemption_projection_hash": projection_sha256,
+                "public_key_options": begin_body.get("public_key_options"),
+                "rendered_authorization": rendered.rendered_text,
+                "responder_identity_disclaimer": RESPONDER_IDENTITY_DISCLAIMER,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+
 def _map_presence_finish_refusal(
     result: s7_ceremony.S7CeremonyServiceResult,
 ) -> CutoverRefusal:
@@ -3883,10 +3919,6 @@ def _authorize_and_stage_selected_cutover(
                 now=consultation_now,
                 expires_at=selected.authorization.expires_at,
             )
-            attempt = ConsultationAttempt.fresh(
-                request_id=selected.authorization.window_id,
-                receipt_root=BENCH_ROOT,
-            )
             envelope = s7.build_work_request_envelope(
                 request_id=selected.authorization.window_id,
                 action=cm.CUTOVER_ACTION,
@@ -3903,63 +3935,45 @@ def _authorize_and_stage_selected_cutover(
                 expires_at=selected.authorization.expires_at,
                 predicted_effect_class="behavior_change",
                 rollback_path_class="revert_patch",
-                maez_voice_consultation_id=attempt.consultation_id,
+                maez_voice_consultation_id=None,
                 free_text_ref_hash=None,
             )
-            ask = CutoverConsultationAsk(
-                envelope=envelope,
-                authority_context=authority_context,
-                action_params=action_params,
-            )
-            consultation_result = produce_cutover_consultation(
-                envelope=envelope,
-                attempt=attempt,
-                ask=ask,
-                now=consultation_now,
-                action_params=action_params,
-            )
-            if consultation_result.outcome != "asked_and_answered":
-                raise CutoverRefusal(
-                    consultation_result.failure_reason_code
-                    or "consultation_unavailable"
+            # R11: nothing is asked. The exemption is minted here, where the
+            # consultation used to be produced, and every ground is
+            # established by the minter rather than asserted by this script.
+            action_params_hash = s7.canonical_hash(dict(action_params))
+            try:
+                exemption = mint_consultation_exemption(
+                    envelope=envelope,
+                    action_params_hash=action_params_hash,
+                    created_at=consultation_now,
                 )
-            consultation = consultation_result.consultation
-            if type(consultation) is not s7.MaezVoiceConsultation:
-                raise CutoverRefusal("consultation_unavailable")
+            except ExemptionMintRefused as exc:
+                raise CutoverRefusal("consultation_exemption_unavailable") from exc
+            exemption_projection_sha256 = s7.canonical_hash(exemption.projection())
             rendered_at = _now_z()
             rendered = s7.render_request_statement(
                 envelope=envelope,
                 surface="cockpit",
                 origin="http://localhost:11437",
-                action_params_hash=s7.canonical_hash(dict(action_params)),
+                action_params_hash=action_params_hash,
                 authority_context=authority_context,
-                maez_voice_consultation=consultation,
+                maez_voice_consultation=None,
+                consultation_exemption=exemption,
                 nonce=_fresh_s7_attempt_nonce(),
                 expires_at=selected.authorization.expires_at,
                 rendered_at=rendered_at,
-            )
-            bundle, binding = _cutover_voice_bundle(
-                envelope=envelope,
-                rendered=rendered,
-                authority_context=authority_context,
-                result=consultation_result,
             )
             authorization_store = _HeldS7AuthorizationStore(
                 opened=opened,
                 db_path=db_path,
             )
-            validation = _persist_and_validate_cutover_voice_bundle(
-                authorization_store=authorization_store,
-                bundle=bundle,
-                binding=binding,
-                now=rendered_at,
-            )
-            voice_use_store = _existing_voice_bundle_use_store(db_path)
+            # No bundle to build, persist, reserve or validate: the exemption
+            # IS the evidence, and the two shapes are mutually exclusive.
             guarded_store = guarded.S7GuardedStateStore(
                 authorization_store=authorization_store,
-                voice_bundle_use_store=voice_use_store,
+                voice_bundle_use_store=_existing_voice_bundle_use_store(db_path),
             )
-            reservation_token = secrets.token_hex(32)
             session_binding = "cutover-session-" + secrets.token_hex(32)
             internal_channel_binding = (
                 "cutover-internal-" + secrets.token_hex(32)
@@ -3995,16 +4009,16 @@ def _authorize_and_stage_selected_cutover(
                 or not challenge_id
             ):
                 raise CutoverRefusal("presence_credential_unscoped")
-            _print_owner_cutover_gate(
-                result=consultation_result,
+            _print_owner_exemption_gate(
+                exemption=exemption,
+                projection_sha256=exemption_projection_sha256,
                 rendered=rendered,
                 begin_body=begin_result.body,
             )
-            assert consultation_result.raw_response_sha256 is not None
             finish_request = _read_owner_webauthn_finish(
                 selected_credential_ref=credential.credential_ref,
                 challenge_id=challenge_id,
-                response_sha256=consultation_result.raw_response_sha256,
+                exemption_projection_sha256=exemption_projection_sha256,
             )
             opened.require_current_named_identity()
             finish_now = _now_z()
@@ -4013,16 +4027,12 @@ def _authorize_and_stage_selected_cutover(
                 envelope=envelope,
                 rendered_statement=rendered,
                 precondition_hash=selected.precondition_hash,
-                maez_voice_consultation=consultation,
+                maez_voice_consultation=None,
                 session_binding=session_binding,
                 internal_channel_binding=internal_channel_binding,
                 request_json=finish_request,
                 guarded_store=guarded_store,
-                source_bundle_validation=validation,
-                source_bundle_binding=binding,
-                source_ref_hash=bundle.source_ref_hash,
-                reservation_token=reservation_token,
-                cutover_consultation_result=consultation_result,
+                consultation_exemption=exemption,
             )
             if finish_result.status_code != 200:
                 raise _map_presence_finish_refusal(finish_result)

@@ -2972,7 +2972,11 @@ class TestProductionConsumerOrchestration:
             _closed_production_authorizer()
         )
         ordered = (
-            "produce_cutover_consultation(",
+            # R11: the ceremony mints a TYPED ABSENCE where it used to
+            # produce a consultation. The ordering property is unchanged --
+            # evidence first, then guarded store, finish, consume, prove,
+            # project, receipt, stage, attach.
+            "mint_consultation_exemption(",
             "S7GuardedStateStore(",
             "service.authorize_finish(",
             "consume_for_execution_with_committed_row(",
