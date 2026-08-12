@@ -1683,6 +1683,8 @@ class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
 
     TARGET = "_verify_held_store_activation"
     ALLOWED = [
+        "core/governance/s7_guarded_execution.py::"
+        "_provision_r11_exemption_evidence_at",
         "core/governance/operator_user_boundary.py::"
         "S7AuthorizationStore.anchored_transaction",
         "core/governance/operator_user_boundary.py::"

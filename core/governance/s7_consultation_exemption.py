@@ -82,11 +82,10 @@ _R11_RECEIPT_MAX_BYTES = 64 * 1024
 #: closing it. The constant is deleted rather than corrected.
 #:
 #: What remains here is the JOIN only: the exemption must carry the same
-#: preimage hash the ceremony derived from its durable selection. The gate
-#: cannot yet derive that hash itself, so this one value is a caller
-#: assertion, and closing it belongs with the production wiring, where the
-#: gate will hold the selection. Until then R11 is dormant and no live path
-#: relies on it.
+#: preimage hash the ceremony derives from its token-bearing durable
+#: selection. Mint, statement rendering, finish, artifact persistence and
+#: consumption all re-derive that value; no caller-supplied preimage hash is
+#: an R11 authority input.
 R11_ACTION_PREIMAGE_IS_PER_CEREMONY = True
 
 _R11_STATEMENT = (
@@ -98,12 +97,13 @@ _R11_STATEMENT = (
 )
 
 
-#: Only `mint_consultation_exemption` holds this, so an exemption cannot be
-#: constructed by ordinary code -- the same InitVar pattern S7ExecutionGrant
-#: uses. It does not stop a same-process actor with code execution, and is
-#: not claimed to: it makes minting ONE reviewable surface, where the stated
-#: facts are CHECKED rather than accepted, and it makes
-#: `dataclasses.replace` fail, since replace() must re-supply an InitVar.
+#: Only `mint_consultation_exemption` and the exact persisted-projection
+#: reader hold this, so an exemption cannot be constructed by ordinary code
+#: -- the same InitVar pattern S7ExecutionGrant uses. It does not stop a
+#: same-process actor with code execution, and is not claimed to: it makes
+#: minting and durable reconstruction reviewable surfaces where the stated
+#: facts are CHECKED rather than accepted, and it makes `dataclasses.replace`
+#: fail, since replace() must re-supply an InitVar.
 _R11_MINT_TOKEN = object()
 
 
@@ -169,16 +169,43 @@ class ExemptionMintRefused(ValueError):
     """The stated grounds for R11 were not true at mint time."""
 
 
+def _exemption_from_persisted_projection(
+    projection: Any,
+) -> S7ConsultationExemption | None:
+    """Rebuild only the one canonical R11 projection shape."""
+
+    if type(projection) is not dict:
+        return None
+    try:
+        exemption = S7ConsultationExemption(
+            action=projection["action"],
+            request_envelope_hash=projection["request_envelope_hash"],
+            reason_code=projection["reason_code"],
+            model_sha256_unchanged=projection["model_sha256_unchanged"],
+            quality_evidence_sha256=projection["quality_evidence_sha256"],
+            action_params_hash=projection["action_params_hash"],
+            created_at=projection["created_at"],
+            _mint_token=_R11_MINT_TOKEN,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if exemption.projection() != projection:
+        return None
+    return exemption
+
+
 def mint_consultation_exemption(
     *,
     envelope: Any,
-    action_params_hash: str,
+    durable_cutover_selection: Any,
     created_at: str,
 ) -> S7ConsultationExemption:
     """The ONE audited path that produces an exemption.
 
-    The caller supplies only what it legitimately knows -- the envelope and
-    the preimage its own ceremony derived. Every GROUND for the ruling is
+    The caller supplies only what it legitimately holds -- the envelope and
+    the durable selection independently reconstructed from the owner's
+    completion.  This boundary derives the eight-field preimage itself;
+    no caller-supplied hash can stand in for that evidence. Every GROUND is
     established here rather than accepted as a claim: the action is the one
     R11 covers, the weights are the frozen ones, the owner's bench receipt is
     present and matches, and birth has not happened.
@@ -190,10 +217,21 @@ def mint_consultation_exemption(
         raise ExemptionMintRefused("exemption requires a real WorkRequestEnvelope")
     if getattr(envelope, "action", None) != R11_EXEMPT_ACTION:
         raise ExemptionMintRefused("R11 covers only the cutover action")
+    if not _envelope_matches_durable_selection(envelope, durable_cutover_selection):
+        raise ExemptionMintRefused(
+            "exemption envelope does not match the durable selection"
+        )
     if born_by_any_signal():
         raise ExemptionMintRefused("R11 does not survive birth")
     if not _quality_receipt_still_matches():
         raise ExemptionMintRefused("the owner's bench receipt is absent or altered")
+    action_params_hash = _action_params_hash_from_durable_selection(
+        durable_cutover_selection
+    )
+    if action_params_hash is None:
+        raise ExemptionMintRefused(
+            "exemption requires the reconstructed durable cutover selection"
+        )
     return S7ConsultationExemption(
         action=R11_EXEMPT_ACTION,
         request_envelope_hash=s7.work_request_envelope_hash(envelope),
@@ -279,6 +317,7 @@ def exemption_admits_for_artifact(
     *,
     artifact: Any,
     exemption: Any,
+    durable_cutover_selection: Any,
     ledger_writes_enabled: bool,
 ) -> bool:
     """The mint-side join: an exemption must match the artifact it excuses.
@@ -311,9 +350,42 @@ def exemption_admits_for_artifact(
         artifact, "request_envelope_hash", None
     ):
         return False
+    expected_envelope = _envelope_from_durable_selection(durable_cutover_selection)
+    if expected_envelope is None:
+        return False
+    if artifact.request_envelope_hash != s7.work_request_envelope_hash(
+        expected_envelope
+    ):
+        return False
+    # The envelope hash on the exemption is not a substitute for joining the
+    # artifact's own authority-bearing projections.  An alternate caller can
+    # otherwise cite the canonical hash while consistently relabelling the
+    # request, precondition, or aggregation carried by the artifact.
+    artifact_envelope_fields = (
+        ("request_id", expected_envelope.request_id),
+        ("action", expected_envelope.action),
+        ("precondition_hash", expected_envelope.precondition_hash),
+        ("derived_work_class", expected_envelope.derived_work_class),
+        (
+            "derived_aggregation_group",
+            expected_envelope.derived_aggregation_group,
+        ),
+    )
+    if any(
+        getattr(artifact, field, None) != expected
+        for field, expected in artifact_envelope_fields
+    ):
+        return False
     # The preimage join was missing here: the exemption could excuse an
     # artifact whose action params differ from the ones it was minted for.
-    if exemption.action_params_hash != getattr(artifact, "action_params_hash", None):
+    derived_action_params_hash = _action_params_hash_from_durable_selection(
+        durable_cutover_selection
+    )
+    if derived_action_params_hash is None:
+        return False
+    if exemption.action_params_hash != derived_action_params_hash:
+        return False
+    if derived_action_params_hash != getattr(artifact, "action_params_hash", None):
         return False
     if not _quality_receipt_still_matches():
         return False
@@ -370,7 +442,7 @@ def consultation_exemption_admits(
     *,
     envelope: Any,
     exemption: Any,
-    action_params_hash: str | None,
+    durable_cutover_selection: Any,
     ledger_writes_enabled: bool,
 ) -> bool:
     """True only for a valid R11 exemption on the one action, pre-birth.
@@ -396,6 +468,8 @@ def consultation_exemption_admits(
         return False
     if getattr(envelope, "action", None) != R11_EXEMPT_ACTION:
         return False
+    if not _envelope_matches_durable_selection(envelope, durable_cutover_selection):
+        return False
     if exemption.reason_code not in _R11_REASON_CODES:
         return False
     if exemption.model_sha256_unchanged != R11_EXPECTED_MODEL_SHA256:
@@ -405,11 +479,10 @@ def consultation_exemption_admits(
     # frozen cutover preimage, and the exemption must cite that same preimage.
     if exemption.quality_evidence_sha256 != R11_EXPECTED_QUALITY_EVIDENCE_SHA256:
         return False
-    if type(action_params_hash) is not str:
-        return False
-    try:
-        s7._validate_hash64(action_params_hash, field="action_params_hash")
-    except ValueError:
+    action_params_hash = _action_params_hash_from_durable_selection(
+        durable_cutover_selection
+    )
+    if action_params_hash is None:
         return False
     if exemption.action_params_hash != action_params_hash:
         return False
@@ -422,3 +495,39 @@ def consultation_exemption_admits(
     if exemption.request_envelope_hash != expected_envelope_hash:
         return False
     return True
+
+
+def _action_params_hash_from_durable_selection(selected: Any) -> str | None:
+    """Cross the script boundary only to derive from its verified selection."""
+
+    try:
+        from scripts import cuda_cutover
+    except (ImportError, RuntimeError):
+        return None
+    try:
+        value = cuda_cutover._action_params_hash_from_durable_selection(selected)
+        s7._validate_hash64(value, field="action_params_hash")
+    except (AttributeError, TypeError, ValueError, cuda_cutover.CutoverRefusal):
+        return None
+    return value
+
+
+def _envelope_from_durable_selection(selected: Any) -> Any | None:
+    """Rebuild the complete cutover request shape from durable evidence."""
+
+    try:
+        from scripts import cuda_cutover
+    except (ImportError, RuntimeError):
+        return None
+    try:
+        envelope = cuda_cutover._cutover_envelope_from_durable_selection(selected)
+    except (AttributeError, TypeError, ValueError, cuda_cutover.CutoverRefusal):
+        return None
+    if type(envelope) is not s7.WorkRequestEnvelope:
+        return None
+    return envelope
+
+
+def _envelope_matches_durable_selection(envelope: Any, selected: Any) -> bool:
+    expected = _envelope_from_durable_selection(selected)
+    return type(envelope) is s7.WorkRequestEnvelope and envelope == expected

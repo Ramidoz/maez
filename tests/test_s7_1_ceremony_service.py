@@ -228,6 +228,80 @@ class S71CeremonyServiceTests(unittest.TestCase):
             rendered_at=NOW,
         )
 
+    def _r11_envelope(self):
+        from scripts import cuda_cutover
+
+        return cuda_cutover._cutover_envelope_from_durable_selection(
+            self._r11_selection()
+        )
+
+    def _r11_exemption(self, envelope, *, created_at: str = NOW):
+        from core.governance import operator_user_boundary as s7
+        from core.governance import s7_consultation_exemption as r11
+        from scripts import cuda_cutover
+
+        selection = self._r11_selection()
+        return r11.S7ConsultationExemption(
+            action=r11.R11_EXEMPT_ACTION,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            reason_code=r11.R11_REASON_CODE,
+            model_sha256_unchanged=r11.R11_EXPECTED_MODEL_SHA256,
+            quality_evidence_sha256=r11.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+            action_params_hash=(
+                cuda_cutover._action_params_hash_from_durable_selection(selection)
+            ),
+            created_at=created_at,
+            _mint_token=r11._R11_MINT_TOKEN,
+        )
+
+    def _r11_selection(self):
+        from tests.test_r11_consultation_exemption import _durable_selection
+
+        return _durable_selection("s7-1-service")
+
+    def _r11_rendered_statement(self, envelope, exemption):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=exemption.action_params_hash,
+            authority_context=self._authority_context(),
+            maez_voice_consultation=None,
+            consultation_exemption=exemption,
+            nonce="nonce-r11-auth",
+            expires_at=envelope.expires_at,
+            rendered_at=NOW,
+            durable_cutover_selection=self._r11_selection(),
+        )
+
+    def _replace_r11_rendered_envelope_field(self, rendered, field, value):
+        from core.governance import operator_user_boundary as s7
+
+        visible_prefix = {
+            "request_id": "Request id: ",
+            "derived_work_class": "Work class: ",
+            "proposed_change_class": "Change class: ",
+            "predicted_effect_class": "Predicted effect class: ",
+            "rollback_path_class": "Rollback path class: ",
+            "derived_aggregation_group": "Aggregation group: ",
+            "expires_at": "Expires at: ",
+        }[field]
+        old_value = getattr(rendered, field)
+        replaced_text = rendered.rendered_text.replace(
+            f"{visible_prefix}{old_value}",
+            f"{visible_prefix}{value}",
+        )
+        return replace(
+            rendered,
+            **{
+                field: value,
+                "rendered_text": replaced_text,
+                "rendered_text_hash": s7.rendered_text_hash(replaced_text),
+            },
+        )
+
     def _voice_bundle_binding(
         self,
         rendered,
@@ -1673,6 +1747,700 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(challenge["rendered_text_hash"], rendered.rendered_text_hash)
         self.assertEqual(challenge["request_envelope_hash"], rendered.request_envelope_hash)
 
+    def test_authorize_begin_persists_r11_projection_hash_in_durable_challenge(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._r11_envelope()
+            exemption = self._r11_exemption(envelope)
+            rendered = self._r11_rendered_statement(envelope, exemption)
+            projection_hash = s7.canonical_hash(exemption.projection())
+
+            result = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                consultation_exemption=exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+            challenge = store.authorization_challenge_for_finish(
+                challenge_id=result.body["challenge_id"],
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                now=NOW,
+            )
+
+        self.assertEqual(result.status_code, 200)
+        assert challenge is not None
+        self.assertEqual(
+            challenge["consultation_exemption_projection_hash"],
+            projection_hash,
+        )
+        self.assertEqual(
+            result.body["consultation_exemption_projection_hash"],
+            projection_hash,
+        )
+
+    def test_authorize_begin_refuses_r11_precondition_not_in_durable_selection(self):
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_ValidRegistrationVerifier(),
+            store_factory=_ExplodingFactory(),
+        )
+
+        result = service.authorize_begin(
+            now=NOW,
+            rendered_statement=rendered,
+            precondition_hash="f" * 64,
+            session_binding="session-r11",
+            internal_channel_binding="daemon-channel",
+            consultation_exemption=exemption,
+            durable_cutover_selection=self._r11_selection(),
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["error"], "s7_consultation_exemption_invalid")
+
+    def test_authorize_begin_refuses_r11_rendered_request_id_not_in_selection(self):
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        replaced_rendered = self._replace_r11_rendered_envelope_field(
+            rendered,
+            "request_id",
+            "alternate-window",
+        )
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_ValidRegistrationVerifier(),
+            store_factory=_ExplodingFactory(),
+        )
+
+        result = service.authorize_begin(
+            now=NOW,
+            rendered_statement=replaced_rendered,
+            precondition_hash=envelope.precondition_hash,
+            session_binding="session-r11",
+            internal_channel_binding="daemon-channel",
+            consultation_exemption=exemption,
+            durable_cutover_selection=self._r11_selection(),
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["error"], "s7_consultation_exemption_invalid")
+
+    def test_authorize_begin_joins_every_rendered_r11_envelope_field(self):
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_ValidRegistrationVerifier(),
+            store_factory=_ExplodingFactory(),
+        )
+        mutations = (
+            ("derived_work_class", "covenant_touching_change"),
+            ("proposed_change_class", "code_change"),
+            ("predicted_effect_class", "protection_change"),
+            ("rollback_path_class", "manual_review"),
+            ("derived_aggregation_group", "s7agg_alternate"),
+            ("expires_at", "2026-08-12T15:59:59Z"),
+        )
+
+        for field, value in mutations:
+            with self.subTest(field=field):
+                result = service.authorize_begin(
+                    now=NOW,
+                    rendered_statement=self._replace_r11_rendered_envelope_field(
+                        rendered,
+                        field,
+                        value,
+                    ),
+                    precondition_hash=envelope.precondition_hash,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    consultation_exemption=exemption,
+                    durable_cutover_selection=self._r11_selection(),
+                )
+
+                self.assertEqual(result.status_code, 409)
+                self.assertEqual(
+                    result.body["error"],
+                    "s7_consultation_exemption_invalid",
+                )
+
+    def test_authorization_challenge_fingerprint_commits_to_r11_projection(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        with tempfile.TemporaryDirectory() as tmp:
+            left = S7WebAuthnBootstrapStore(Path(tmp) / "left")
+            right = S7WebAuthnBootstrapStore(Path(tmp) / "right")
+            kwargs = {
+                "rendered_statement": rendered,
+                "precondition_hash": envelope.precondition_hash,
+                "session_binding": "session-r11",
+                "internal_channel_binding": "daemon-channel",
+                "now": NOW,
+                "expires_at": "2026-05-18T11:05:00+00:00",
+                "uv_required": True,
+            }
+            with (
+                patch(
+                    "core.governance.s7_webauthn_bootstrap.uuid.uuid4",
+                    return_value=SimpleNamespace(hex="fixed"),
+                ),
+                patch(
+                    "core.governance.s7_webauthn_bootstrap.secrets.token_bytes",
+                    return_value=b"r" * 32,
+                ),
+            ):
+                first = left.create_authorization_challenge(
+                    **kwargs,
+                    consultation_exemption_projection_hash="1" * 64,
+                )
+                second = right.create_authorization_challenge(
+                    **kwargs,
+                    consultation_exemption_projection_hash="2" * 64,
+                )
+
+        self.assertEqual(first["challenge_b64"], second["challenge_b64"])
+        self.assertNotEqual(first["challenge_hash"], second["challenge_hash"])
+
+    def test_challenge_store_refuses_voice_and_r11_projection_together(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = S7WebAuthnBootstrapStore(Path(tmp) / "challenge-mutual-exclusion")
+            rendered = self._rendered_statement()
+            with self.assertRaisesRegex(ValueError, "both voice and R11"):
+                store.create_authorization_challenge(
+                    rendered_statement=rendered,
+                    precondition_hash="a" * 64,
+                    session_binding="session-auth",
+                    internal_channel_binding="daemon-channel",
+                    now=NOW,
+                    expires_at="2026-05-18T11:05:00+00:00",
+                    uv_required=True,
+                    consultation_exemption_projection_hash="1" * 64,
+                )
+
+    def test_authorize_finish_refuses_a_different_r11_projection_before_verifier(self):
+        from core.governance import s7_guarded_execution as guarded
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            authorization_store = fresh_store_at(store.db_path)
+            self._migrate_private_store(store.db_path)
+            guarded_store = guarded.S7GuardedStateStore(
+                authorization_store=authorization_store,
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ExplodingAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._r11_envelope()
+            signed_exemption = self._r11_exemption(envelope)
+            different_exemption = self._r11_exemption(
+                envelope,
+                created_at="2026-05-18T11:00:01+00:00",
+            )
+            rendered = self._r11_rendered_statement(envelope, signed_exemption)
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                consultation_exemption=signed_exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=None,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "must-not-verify"},
+                },
+                guarded_store=guarded_store,
+                consultation_exemption=different_exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"],
+            "s7_consultation_exemption_challenge_mismatch",
+        )
+
+    def test_authorize_finish_refuses_r11_fields_not_in_durable_selection(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        for mutation in ("precondition_hash", "request_id"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                store, _intent = self._store_with_bootstrap(tmp)
+                store.store_credential(
+                    self._credential_record("cred-primary", kind="primary")
+                )
+                store.store_credential(
+                    self._credential_record("cred-backup", kind="backup")
+                )
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=_ExplodingAuthenticationVerifier(),
+                    store_factory=lambda store=store: store,
+                )
+                envelope = self._r11_envelope()
+                exemption = self._r11_exemption(envelope)
+                rendered = self._r11_rendered_statement(envelope, exemption)
+                precondition_hash = envelope.precondition_hash
+                if mutation == "precondition_hash":
+                    precondition_hash = "f" * 64
+                else:
+                    rendered = self._replace_r11_rendered_envelope_field(
+                        rendered,
+                        "request_id",
+                        "alternate-window",
+                    )
+                challenge = store.create_authorization_challenge(
+                    rendered_statement=rendered,
+                    now=NOW,
+                    expires_at="2026-05-18T11:05:00+00:00",
+                    precondition_hash=precondition_hash,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    uv_required=True,
+                    consultation_exemption_projection_hash=s7.canonical_hash(
+                        exemption.projection()
+                    ),
+                )
+
+                finish = service.authorize_finish(
+                    now=NOW,
+                    envelope=envelope,
+                    rendered_statement=rendered,
+                    precondition_hash=precondition_hash,
+                    maez_voice_consultation=None,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    request_json={
+                        "challenge_id": challenge["challenge_id"],
+                        "credential_ref": "cred-primary",
+                        "authentication_response": {
+                            "clientDataJSON": "must-not-verify"
+                        },
+                    },
+                    guarded_store=None,
+                    consultation_exemption=exemption,
+                    durable_cutover_selection=self._r11_selection(),
+                )
+
+                self.assertEqual(finish.status_code, 409)
+                self.assertEqual(
+                    finish.body["error"],
+                    "s7_consultation_exemption_invalid",
+                )
+
+    def test_authorize_finish_joins_every_rendered_r11_envelope_field(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        mutations = (
+            ("derived_work_class", "covenant_touching_change"),
+            ("proposed_change_class", "code_change"),
+            ("predicted_effect_class", "protection_change"),
+            ("rollback_path_class", "manual_review"),
+            ("derived_aggregation_group", "s7agg_alternate"),
+            ("expires_at", "2026-08-12T15:59:59Z"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                store, _intent = self._store_with_bootstrap(tmp)
+                store.store_credential(
+                    self._credential_record("cred-primary", kind="primary")
+                )
+                store.store_credential(
+                    self._credential_record("cred-backup", kind="backup")
+                )
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=_ExplodingAuthenticationVerifier(),
+                    store_factory=lambda store=store: store,
+                )
+                envelope = self._r11_envelope()
+                exemption = self._r11_exemption(envelope)
+                rendered = self._replace_r11_rendered_envelope_field(
+                    self._r11_rendered_statement(envelope, exemption),
+                    field,
+                    value,
+                )
+                challenge = store.create_authorization_challenge(
+                    rendered_statement=rendered,
+                    now=NOW,
+                    expires_at="2026-05-18T11:05:00+00:00",
+                    precondition_hash=envelope.precondition_hash,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    uv_required=True,
+                    consultation_exemption_projection_hash=s7.canonical_hash(
+                        exemption.projection()
+                    ),
+                )
+
+                finish = service.authorize_finish(
+                    now=NOW,
+                    envelope=envelope,
+                    rendered_statement=rendered,
+                    precondition_hash=envelope.precondition_hash,
+                    maez_voice_consultation=None,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    request_json={
+                        "challenge_id": challenge["challenge_id"],
+                        "credential_ref": "cred-primary",
+                        "authentication_response": {
+                            "clientDataJSON": "must-not-verify"
+                        },
+                    },
+                    guarded_store=None,
+                    consultation_exemption=exemption,
+                    durable_cutover_selection=self._r11_selection(),
+                )
+
+                self.assertEqual(finish.status_code, 409)
+                self.assertEqual(
+                    finish.body["error"],
+                    "s7_consultation_exemption_invalid",
+                )
+
+    def test_authorize_finish_refuses_a_statement_that_contradicts_r11(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(
+                self._credential_record("cred-primary", kind="primary")
+            )
+            store.store_credential(
+                self._credential_record("cred-backup", kind="backup")
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ExplodingAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._r11_envelope()
+            exemption = self._r11_exemption(envelope)
+            rendered = self._r11_rendered_statement(envelope, exemption)
+            dishonest_text = rendered.rendered_text.replace(
+                f"Maez consulted: {rendered.maez_consulted_state}",
+                "Maez consulted: yes",
+            )
+            dishonest_rendered = replace(
+                rendered,
+                rendered_text=dishonest_text,
+                rendered_text_hash=s7.rendered_text_hash(dishonest_text),
+                maez_consulted_state="yes",
+            )
+            # Create the durable challenge directly to model an alternate
+            # caller presenting a self-consistent but dishonest statement.
+            # authorize_begin rejects it too; authorize_finish remains an
+            # independent authority boundary and must not trust that caller.
+            challenge = store.create_authorization_challenge(
+                rendered_statement=dishonest_rendered,
+                now=NOW,
+                expires_at="2026-05-18T11:05:00+00:00",
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                uv_required=True,
+                consultation_exemption_projection_hash=s7.canonical_hash(
+                    exemption.projection()
+                ),
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=dishonest_rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=None,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": challenge["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {
+                        "clientDataJSON": "must-not-verify"
+                    },
+                },
+                guarded_store=None,
+                consultation_exemption=exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+
+            from unittest.mock import patch
+
+            with patch(
+                "core.governance.s7_webauthn_ceremony."
+                "_r11_challenge_projection_hash",
+                return_value=s7.canonical_hash(exemption.projection()),
+            ):
+                downstream_finish = service.authorize_finish(
+                    now=NOW,
+                    envelope=envelope,
+                    rendered_statement=dishonest_rendered,
+                    precondition_hash=envelope.precondition_hash,
+                    maez_voice_consultation=None,
+                    session_binding="session-r11",
+                    internal_channel_binding="daemon-channel",
+                    request_json={
+                        "challenge_id": challenge["challenge_id"],
+                        "credential_ref": "cred-primary",
+                        "authentication_response": {
+                            "clientDataJSON": "must-not-verify"
+                        },
+                    },
+                    guarded_store=None,
+                    consultation_exemption=exemption,
+                    durable_cutover_selection=self._r11_selection(),
+                )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"],
+            "s7_signed_statement_contradicts_exemption",
+        )
+        self.assertEqual(downstream_finish.status_code, 409)
+        self.assertEqual(
+            downstream_finish.body["error"],
+            "s7_signed_statement_contradicts_exemption",
+        )
+
+    def test_authorize_begin_refuses_a_statement_that_contradicts_r11(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        dishonest_text = rendered.rendered_text.replace(
+            f"Maez consulted: {rendered.maez_consulted_state}",
+            "Maez consulted: yes",
+        )
+        dishonest_rendered = replace(
+            rendered,
+            rendered_text=dishonest_text,
+            rendered_text_hash=s7.rendered_text_hash(dishonest_text),
+            maez_consulted_state="yes",
+        )
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_ValidRegistrationVerifier(),
+            store_factory=_ExplodingFactory(),
+        )
+
+        result = service.authorize_begin(
+            now=NOW,
+            rendered_statement=dishonest_rendered,
+            precondition_hash=envelope.precondition_hash,
+            session_binding="session-r11",
+            internal_channel_binding="daemon-channel",
+            consultation_exemption=exemption,
+            durable_cutover_selection=self._r11_selection(),
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(
+            result.body["error"],
+            "s7_signed_statement_contradicts_exemption",
+        )
+
+    def test_authorize_finish_refuses_exemption_and_voice_evidence_together(self):
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(
+                self._credential_record("cred-primary", kind="primary")
+            )
+            store.store_credential(
+                self._credential_record("cred-backup", kind="backup")
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ExplodingAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._r11_envelope()
+            exemption = self._r11_exemption(envelope)
+            rendered = self._r11_rendered_statement(envelope, exemption)
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                consultation_exemption=exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {
+                        "clientDataJSON": "must-not-verify"
+                    },
+                },
+                guarded_store=None,
+                consultation_exemption=exemption,
+                durable_cutover_selection=self._r11_selection(),
+            )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"],
+            "s7_exemption_and_consultation_both_present",
+        )
+
+    def test_authorize_finish_persists_typed_r11_evidence_atomically(self):
+        import json
+
+        from core.governance import operator_user_boundary as s7
+        from core.governance import s7_guarded_execution as guarded
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            authorization_store = fresh_store_at(store.db_path)
+            self._migrate_private_store(store.db_path)
+            dir_fd = os.open(
+                store.db_path.parent,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            try:
+                guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+            finally:
+                os.close(dir_fd)
+            guarded_store = guarded.S7GuardedStateStore(
+                authorization_store=authorization_store,
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._r11_envelope()
+            exemption = self._r11_exemption(envelope)
+            selection = self._r11_selection()
+            rendered = self._r11_rendered_statement(envelope, exemption)
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                consultation_exemption=exemption,
+                durable_cutover_selection=selection,
+            )
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=None,
+                session_binding="session-r11",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+                guarded_store=guarded_store,
+                consultation_exemption=exemption,
+                durable_cutover_selection=selection,
+            )
+            with closing(sqlite3.connect(store.db_path)) as connection:
+                evidence_rows = connection.execute(
+                    f"SELECT evidence_kind, ruling_id, exemption_schema, "
+                    "quality_evidence_sha256, action, projection_json, "
+                    "projection_sha256, artifact_binding_sha256 "
+                    f"FROM {guarded.R11_EXEMPTION_EVIDENCE_TABLE} "
+                    "WHERE artifact_id = ?",
+                    (finish.body.get("artifact_id"),),
+                ).fetchall()
+                artifact_count = connection.execute(
+                    "SELECT count(*) FROM s7_authorization_artifacts_v2 "
+                    "WHERE artifact_id = ?",
+                    (finish.body.get("artifact_id"),),
+                ).fetchone()[0]
+
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(artifact_count, 1)
+        self.assertEqual(len(evidence_rows), 1)
+        row = evidence_rows[0]
+        self.assertEqual(row[0], guarded.R11_EXEMPTION_EVIDENCE_KIND)
+        self.assertEqual(row[1], "R11")
+        self.assertEqual(row[2], "s7.consultation_exemption.r11.v1")
+        self.assertEqual(row[3], exemption.quality_evidence_sha256)
+        self.assertEqual(row[4], "model_routing.cutover_cuda")
+        self.assertEqual(json.loads(row[5]), exemption.projection())
+        self.assertEqual(row[6], s7.canonical_hash(exemption.projection()))
+        self.assertRegex(row[7], r"^[0-9a-f]{64}$")
+
     def test_authorize_finish_for_voice_seat_blocks_when_sealed_evidence_is_unreachable(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -1840,7 +2608,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(artifact_count, 0)
         self.assertEqual(history, ())
 
-    def test_authorize_finish_carries_cutover_result_to_the_voice_gate(self):
+    def test_authorize_finish_carries_generic_bundle_binding_to_the_voice_gate(self):
         from unittest.mock import patch
 
         from core.governance.s7_webauthn_ceremony import (
@@ -1866,7 +2634,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 session_binding="session-auth",
                 internal_channel_binding="daemon-channel",
             )
-            carried_result = object()
             carried_binding = evidence["binding"]
             gate_stop = S7CeremonyServiceResult(
                 body={"ok": False, "error": "fixture_gate_stop"},
@@ -1890,7 +2657,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
                         "authentication_response": {"clientDataJSON": "valid-auth"},
                     },
                     "source_ref_hash": "c" * 64,
-                    "cutover_consultation_result": carried_result,
                     "guarded_store": evidence["guarded_store"],
                     "source_bundle_validation": evidence["validation"],
                 }
@@ -1901,10 +2667,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 finish = service.authorize_finish(**finish_kwargs)
 
         self.assertEqual(finish, gate_stop)
-        self.assertIs(
-            gate.call_args.kwargs["cutover_consultation_result"],
-            carried_result,
-        )
         self.assertIs(
             gate.call_args.kwargs.get("source_bundle_binding"),
             carried_binding,

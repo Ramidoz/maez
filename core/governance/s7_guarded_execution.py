@@ -6,6 +6,7 @@ from contextlib import closing
 from dataclasses import InitVar, dataclass, replace
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -65,6 +66,395 @@ S7_VOICE_CONSULTATION_PROMPT_PATH = _REPO_ROOT / "prompts" / "s7.voice.consultat
 S7_VOICE_SEMANTIC_READER_PROMPT_PATH = (
     _REPO_ROOT / "prompts" / "s7.voice.semantic_reader_v1.md"
 )
+
+R11_EXEMPTION_EVIDENCE_TABLE = "s7_consultation_exemption_evidence_v1"
+R11_EXEMPTION_EVIDENCE_SCHEMA = "s7.consultation_exemption_evidence.r11.v1"
+R11_EXEMPTION_EVIDENCE_KIND = "consultation_exemption"
+_R11_EXEMPTION_EVIDENCE_DDL = f"""
+CREATE TABLE {R11_EXEMPTION_EVIDENCE_TABLE} (
+    artifact_id TEXT PRIMARY KEY,
+    evidence_kind TEXT NOT NULL CHECK (evidence_kind = 'consultation_exemption'),
+    ruling_id TEXT NOT NULL CHECK (ruling_id = 'R11'),
+    schema_version TEXT NOT NULL
+        CHECK (schema_version = 's7.consultation_exemption_evidence.r11.v1'),
+    exemption_schema TEXT NOT NULL
+        CHECK (exemption_schema = 's7.consultation_exemption.r11.v1'),
+    quality_evidence_sha256 TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action = 'model_routing.cutover_cuda'),
+    request_envelope_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    projection_json TEXT NOT NULL,
+    projection_sha256 TEXT NOT NULL,
+    artifact_binding_sha256 TEXT NOT NULL UNIQUE,
+    recorded_at TEXT NOT NULL
+)
+"""
+
+
+def _r11_exemption_evidence_contract(
+    connection: sqlite3.Connection,
+) -> tuple[object, ...] | None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (R11_EXEMPTION_EVIDENCE_TABLE,),
+    ).fetchone()
+    if row is None:
+        return None
+    sql = re.sub(r"\s+", " ", str(row[0])).strip().rstrip(";")
+    columns = tuple(
+        tuple(item)
+        for item in connection.execute(
+            f"PRAGMA table_info({R11_EXEMPTION_EVIDENCE_TABLE})"
+        )
+    )
+    indexes = tuple(
+        sorted(
+            tuple(item)
+            for item in connection.execute(
+                f"PRAGMA index_list({R11_EXEMPTION_EVIDENCE_TABLE})"
+            )
+        )
+    )
+    return (sql, columns, indexes)
+
+
+def _expected_r11_exemption_evidence_contract() -> tuple[object, ...]:
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.execute(_R11_EXEMPTION_EVIDENCE_DDL)
+        contract = _r11_exemption_evidence_contract(connection)
+    assert contract is not None
+    return contract
+
+
+def _provision_r11_exemption_evidence_at(*, store_dir_fd: int) -> None:
+    """Explicit setup authority; open/mint paths only verify this table."""
+
+    store_fd = os.open(
+        "ceremony.sqlite3",
+        os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=store_dir_fd,
+    )
+    connection = None
+    try:
+        connection = s7._open_s7_connection_from_held_store(
+            dir_fd=store_dir_fd,
+            store_fd=store_fd,
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        s7._verify_held_store_activation(store_dir_fd, store_fd, connection)
+        challenge_columns = {
+            str(row[1]): tuple(row)
+            for row in connection.execute(
+                "PRAGMA table_info(s7_ceremony_challenges)"
+            )
+        }
+        if not challenge_columns:
+            raise ValueError("R11 provisioning requires the ceremony challenge table")
+        projection_column = challenge_columns.get(
+            "consultation_exemption_projection_hash"
+        )
+        if projection_column is None:
+            connection.execute(
+                "ALTER TABLE s7_ceremony_challenges ADD COLUMN "
+                "consultation_exemption_projection_hash TEXT"
+            )
+        elif projection_column[2:] != ("TEXT", 0, None, 0):
+            raise ValueError("R11 challenge projection column contract drifted")
+        actual = _r11_exemption_evidence_contract(connection)
+        if actual is None:
+            connection.execute(_R11_EXEMPTION_EVIDENCE_DDL)
+        elif actual != _expected_r11_exemption_evidence_contract():
+            raise ValueError(
+                "R11 exemption evidence table does not match its frozen contract"
+            )
+        if (
+            _r11_exemption_evidence_contract(connection)
+            != _expected_r11_exemption_evidence_contract()
+        ):
+            raise ValueError("R11 exemption evidence provisioning failed")
+        projection_column = next(
+            (
+                tuple(row)
+                for row in connection.execute(
+                    "PRAGMA table_info(s7_ceremony_challenges)"
+                )
+                if row[1] == "consultation_exemption_projection_hash"
+            ),
+            None,
+        )
+        if projection_column is None or projection_column[2:] != (
+            "TEXT",
+            0,
+            None,
+            0,
+        ):
+            raise ValueError("R11 challenge projection provisioning failed")
+        connection.commit()
+        os.fsync(store_fd)
+        os.fsync(store_dir_fd)
+    except BaseException:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        os.close(store_fd)
+
+
+def provision_r11_exemption_evidence() -> None:
+    """Provision the canonical store through a zero-parameter setup seam."""
+
+    with s7_io._open_canonical_s7_dir() as store_dir_fd:
+        _provision_r11_exemption_evidence_at(store_dir_fd=store_dir_fd)
+
+
+def _r11_artifact_projection(
+    artifact: s7.S7AuthorizationArtifact,
+    *,
+    exemption_projection_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact.artifact_id,
+        "request_id": artifact.request_id,
+        "request_envelope_hash": artifact.request_envelope_hash,
+        "rendered_text_hash": artifact.rendered_text_hash,
+        "action": artifact.action,
+        "action_params_hash": artifact.action_params_hash,
+        "precondition_hash": artifact.precondition_hash,
+        "authority_context_hash": artifact.authority_context_hash,
+        "derived_work_class": artifact.derived_work_class,
+        "derived_aggregation_group": artifact.derived_aggregation_group,
+        "nonce": artifact.nonce,
+        "credential_ref": artifact.credential_ref,
+        "auth_method": artifact.auth_method,
+        "grant_source": artifact.grant_source,
+        "user_presence": artifact.user_presence,
+        "user_verification": artifact.user_verification,
+        "created_at": s7._timestamp_text(artifact.created_at, field="created_at"),
+        "expires_at": s7._timestamp_text(artifact.expires_at, field="expires_at"),
+        "ceremony_kind": artifact.ceremony_kind,
+        "schema_version": artifact.schema_version,
+        "exemption_projection_sha256": exemption_projection_sha256,
+    }
+
+
+def _insert_r11_exemption_evidence(
+    connection: sqlite3.Connection,
+    *,
+    artifact: s7.S7AuthorizationArtifact,
+    consultation_exemption: Any,
+) -> None:
+    if (
+        _r11_exemption_evidence_contract(connection)
+        != _expected_r11_exemption_evidence_contract()
+    ):
+        raise ValueError(
+            "R11 exemption evidence table is absent or does not match its contract"
+        )
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='s7_voice_bundle_uses'"
+    ).fetchone() is not None:
+        collision = connection.execute(
+            "SELECT 1 FROM s7_voice_bundle_uses WHERE artifact_id = ? LIMIT 1",
+            (artifact.artifact_id,),
+        ).fetchone()
+        if collision is not None:
+            raise ValueError(
+                "R11 artifact cannot also carry voice-bundle evidence"
+            )
+    projection = consultation_exemption.projection()
+    projection_json = json.dumps(
+        projection,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    projection_sha256 = s7.canonical_hash(projection)
+    artifact_binding_sha256 = s7.canonical_hash(
+        _r11_artifact_projection(
+            artifact,
+            exemption_projection_sha256=projection_sha256,
+        )
+    )
+    connection.execute(
+        f"""
+        INSERT INTO {R11_EXEMPTION_EVIDENCE_TABLE} (
+            artifact_id, evidence_kind, ruling_id, schema_version,
+            exemption_schema, quality_evidence_sha256, action,
+            request_envelope_hash, action_params_hash, projection_json,
+            projection_sha256, artifact_binding_sha256, recorded_at
+        ) VALUES (?, ?, 'R11', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            artifact.artifact_id,
+            R11_EXEMPTION_EVIDENCE_KIND,
+            R11_EXEMPTION_EVIDENCE_SCHEMA,
+            str(projection["schema"]),
+            consultation_exemption.quality_evidence_sha256,
+            artifact.action,
+            artifact.request_envelope_hash,
+            artifact.action_params_hash,
+            projection_json,
+            projection_sha256,
+            artifact_binding_sha256,
+            s7._timestamp_text(artifact.created_at, field="created_at"),
+        ),
+    )
+
+
+def revalidate_r11_exemption_for_consumption(
+    *,
+    connection: sqlite3.Connection,
+    grant: s7.S7ExecutionGrant,
+    durable_cutover_selection: Any,
+) -> Any:
+    """Re-read R11 evidence inside the consuming transaction or refuse."""
+
+    s7._require_verified_held_connection(connection)
+    if connection.in_transaction is not True:
+        raise ValueError("R11 evidence must be checked before consume commit")
+    if type(grant) is not s7.S7ExecutionGrant:
+        raise ValueError("R11 consumption requires the freshly minted grant")
+    if (
+        _r11_exemption_evidence_contract(connection)
+        != _expected_r11_exemption_evidence_contract()
+    ):
+        raise ValueError("R11 exemption evidence is absent or malformed")
+    try:
+        evidence_rows = connection.execute(
+            f"""
+            SELECT artifact_id, evidence_kind, ruling_id, schema_version,
+                   exemption_schema, quality_evidence_sha256, action,
+                   request_envelope_hash, action_params_hash, projection_json,
+                   projection_sha256, artifact_binding_sha256, recorded_at
+            FROM {R11_EXEMPTION_EVIDENCE_TABLE}
+            WHERE artifact_id = ?
+            """,
+            (grant.artifact_id,),
+        ).fetchall()
+        artifact_rows = connection.execute(
+            """
+            SELECT artifact_id, request_id, request_envelope_hash,
+                   rendered_text_hash, action_params_hash, precondition_hash,
+                   authority_context_hash, action, derived_work_class,
+                   derived_aggregation_group, nonce, credential_ref,
+                   auth_method, grant_source, user_presence, user_verification,
+                   created_at, expires_at, consumed_at, schema_version,
+                   ceremony_kind, consumed_by_request_id
+            FROM s7_authorization_artifacts_v2
+            WHERE artifact_id = ?
+            """,
+            (grant.artifact_id,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError("R11 exemption evidence is unreadable") from exc
+    if len(evidence_rows) != 1 or len(artifact_rows) != 1:
+        raise ValueError("R11 exemption evidence is absent or ambiguous")
+    evidence = evidence_rows[0]
+    stored = artifact_rows[0]
+    try:
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id=str(stored[0]),
+            request_id=str(stored[1]),
+            request_envelope_hash=str(stored[2]),
+            rendered_text_hash=str(stored[3]),
+            action_params_hash=str(stored[4]),
+            precondition_hash=str(stored[5]),
+            authority_context_hash=str(stored[6]),
+            action=str(stored[7]),
+            derived_work_class=str(stored[8]),
+            derived_aggregation_group=str(stored[9]),
+            nonce=str(stored[10]),
+            credential_ref=str(stored[11]),
+            auth_method=str(stored[12]),
+            grant_source=str(stored[13]),
+            user_presence=bool(stored[14]),
+            user_verification=bool(stored[15]),
+            created_at=str(stored[16]),
+            expires_at=str(stored[17]),
+            consumed_at=None if stored[18] is None else str(stored[18]),
+            schema_version=str(stored[19]),
+            ceremony_kind=str(stored[20]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("R11 artifact row is malformed") from exc
+    if (
+        stored[21] != artifact.request_id
+        or artifact.artifact_id != grant.artifact_id
+        or artifact.request_id != grant.request_id
+        or artifact.request_envelope_hash != grant.request_envelope_hash
+        or artifact.rendered_text_hash != grant.rendered_text_hash
+        or artifact.action_params_hash != grant.action_params_hash
+        or artifact.precondition_hash != grant.precondition_hash
+        or artifact.authority_context_hash != grant.authority_context_hash
+        or artifact.action != grant.action
+        or artifact.derived_work_class != grant.derived_work_class
+        or artifact.derived_aggregation_group != grant.derived_aggregation_group
+        or artifact.nonce != grant.nonce
+        or artifact.credential_ref != grant.credential_ref
+        or artifact.auth_method != grant.auth_method
+        or artifact.grant_source != grant.grant_source
+        or artifact.consumed_at != grant.consumed_at
+        or artifact.ceremony_kind != grant.ceremony_kind
+    ):
+        raise ValueError("R11 evidence is not bound to the consuming grant")
+    try:
+        projection = json.loads(str(evidence[9]))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("R11 exemption projection is malformed") from exc
+    canonical_projection = json.dumps(
+        projection,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    from core.governance import s7_consultation_exemption as r11
+
+    exemption = r11._exemption_from_persisted_projection(projection)
+    if exemption is None:
+        raise ValueError("R11 exemption projection is not canonical")
+    projection_sha256 = s7.canonical_hash(projection)
+    expected_binding = s7.canonical_hash(
+        _r11_artifact_projection(
+            artifact,
+            exemption_projection_sha256=projection_sha256,
+        )
+    )
+    if (
+        str(evidence[0]) != artifact.artifact_id
+        or str(evidence[1]) != R11_EXEMPTION_EVIDENCE_KIND
+        or str(evidence[2]) != r11.R11_RULING_ID
+        or str(evidence[3]) != R11_EXEMPTION_EVIDENCE_SCHEMA
+        or str(evidence[4]) != r11.R11_EXEMPTION_SCHEMA
+        or str(evidence[5]) != exemption.quality_evidence_sha256
+        or str(evidence[6]) != artifact.action
+        or str(evidence[7]) != artifact.request_envelope_hash
+        or str(evidence[8]) != artifact.action_params_hash
+        or str(evidence[9]) != canonical_projection
+        or str(evidence[10]) != projection_sha256
+        or str(evidence[11]) != expected_binding
+        or str(evidence[12]) != artifact.created_at
+    ):
+        raise ValueError("R11 exemption evidence binding is invalid")
+    voice_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='s7_voice_bundle_uses'"
+    ).fetchone()
+    if voice_table is not None and connection.execute(
+        "SELECT 1 FROM s7_voice_bundle_uses WHERE artifact_id = ? LIMIT 1",
+        (artifact.artifact_id,),
+    ).fetchone() is not None:
+        raise ValueError("R11 artifact also carries voice-bundle evidence")
+    if not r11.exemption_admits_for_artifact(
+        artifact=artifact,
+        exemption=exemption,
+        durable_cutover_selection=durable_cutover_selection,
+        ledger_writes_enabled=r11.born_by_any_signal(),
+    ):
+        raise ValueError("R11 exemption grounds no longer admit at consumption")
+    return exemption
 
 
 def _hash_file_bytes(path: Path) -> str:
@@ -2526,8 +2916,20 @@ class S7VoiceBundleUseStore:
         reserved_at: str,
         commit: bool,
     ) -> S7VoiceBundleUse:
+        r11_contract = _r11_exemption_evidence_contract(conn)
+        if (
+            r11_contract is not None
+            and r11_contract != _expected_r11_exemption_evidence_contract()
+        ):
+            raise ValueError("R11 exemption evidence contract is malformed")
+        r11_exclusion = (
+            f"AND NOT EXISTS (SELECT 1 FROM {R11_EXEMPTION_EVIDENCE_TABLE} "
+            "WHERE artifact_id = ?)"
+            if r11_contract is not None
+            else ""
+        )
         cursor = conn.execute(
-            """
+            f"""
             UPDATE s7_voice_bundle_uses
             SET artifact_id = ?,
                 reservation_token_hash = ?,
@@ -2539,10 +2941,25 @@ class S7VoiceBundleUseStore:
               AND reservation_state = 'unreserved'
               AND reserved_at IS NULL
               AND consumed_at IS NULL
+              {r11_exclusion}
             """,
-            (artifact_id, reservation_token_hash, reserved_at, source_ref_hash),
+            (
+                artifact_id,
+                reservation_token_hash,
+                reserved_at,
+                source_ref_hash,
+                *((artifact_id,) if r11_contract is not None else ()),
+            ),
         )
         if cursor.rowcount != 1:
+            if r11_contract is not None and conn.execute(
+                f"SELECT 1 FROM {R11_EXEMPTION_EVIDENCE_TABLE} "
+                "WHERE artifact_id = ? LIMIT 1",
+                (artifact_id,),
+            ).fetchone() is not None:
+                raise ValueError(
+                    "voice reservation conflicts with R11 exemption evidence"
+                )
             raise ValueError("S7 voice bundle use must be unreserved before artifact mint")
         if commit:
             conn.commit()
@@ -3025,6 +3442,7 @@ class S7GuardedStateStore:
         *,
         artifact: s7.S7AuthorizationArtifact,
         consultation_exemption: Any,
+        durable_cutover_selection: Any,
     ) -> None:
         """Mint a voice-seat artifact whose authority is a TYPED ABSENCE.
 
@@ -3043,10 +3461,21 @@ class S7GuardedStateStore:
         if not exemption_admits_for_artifact(
             artifact=artifact,
             exemption=consultation_exemption,
+            durable_cutover_selection=durable_cutover_selection,
             ledger_writes_enabled=born_by_any_signal(),
         ):
             raise ValueError("S7 consultation exemption does not admit this artifact")
-        self.authorization_store.put(artifact)
+        # One transaction owns BOTH rows.  An ordinary artifact without its
+        # evidence row would make "R11" indistinguishable from disappeared
+        # consultation evidence; an evidence row without an artifact would
+        # be unattached authority.  Either insert failing rolls both back.
+        with self.authorization_store.anchored_transaction() as connection:
+            self.authorization_store.put(artifact, connection=connection)
+            _insert_r11_exemption_evidence(
+                connection,
+                artifact=artifact,
+                consultation_exemption=consultation_exemption,
+            )
 
     def put_artifact_with_bundle_reservation(
         self,
@@ -3098,6 +3527,7 @@ def mint_authorization_artifact(
     reservation_token: str | None = None,
     now: str | None = None,
     consultation_exemption: Any | None = None,
+    durable_cutover_selection: Any | None = None,
 ) -> None:
     """Sole authorization-artifact mint entry point.
 
@@ -3137,6 +3567,7 @@ def mint_authorization_artifact(
             if not exemption_admits_for_artifact(
                 artifact=artifact,
                 exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
                 ledger_writes_enabled=born_by_any_signal(),
             ):
                 raise ValueError(
@@ -3145,6 +3576,7 @@ def mint_authorization_artifact(
             guarded_store.put_artifact_under_consultation_exemption(
                 artifact=artifact,
                 consultation_exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
             )
             return
         guarded_store.put_artifact_with_bundle_reservation(

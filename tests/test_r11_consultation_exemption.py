@@ -14,6 +14,9 @@ that Maez was NOT consulted for this operation.
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,35 +27,74 @@ from core.governance.s7_consultation_exemption import (
     S7ConsultationExemption,
     consultation_exemption_admits,
 )
-from scripts import cuda_migration as cm
+from scripts import cuda_cutover, cuda_migration as cm
 
 
-#: The real cutover preimage is EIGHT fields derived per ceremony from the
-#: selected authorization, so no frozen constant can stand for it. Tests use
-#: one representative ceremony value.
-_CEREMONY_PREIMAGE_HASH = "7" * 64
+def _durable_selection(seed: str = "r11-fixture"):
+    """Synthetic typed selection for unit joins, never tap evidence."""
+
+    def digest(label: str) -> str:
+        return hashlib.sha256(f"{label}:{seed}".encode()).hexdigest()
+
+    return cuda_cutover.ValidatedCutoverSelection(
+        completion_locator=f"completion-{seed}.json",
+        completion=None,
+        admission=None,
+        receipt_ref=f"receipt-{seed}.json",
+        receipt=SimpleNamespace(binding_sha256=digest("receipt-binding")),
+        receipt_bytes=b"fixture",
+        regenerated_receipt_bytes=b"fixture",
+        receipt_file_sha256=digest("receipt-file"),
+        authorization=SimpleNamespace(
+            binding_sha256=digest("authorization-binding"),
+            rollback_manifest_sha256=digest("rollback"),
+            window_id=f"cutover-window-{seed}",
+            issued_at="2026-08-12T12:00:00Z",
+            expires_at="2026-08-12T16:00:00Z",
+        ),
+        authorization_file_sha256=digest("authorization-file"),
+        bundle=SimpleNamespace(
+            runtime_identity_doc=SimpleNamespace(
+                file_sha256=digest("runtime-identity")
+            )
+        ),
+        precondition_hash=digest("precondition"),
+        operation_affected_refs={},
+        affected_refs=("host:local",),
+        _selection_token=cuda_cutover._VALIDATED_CUTOVER_SELECTION_TOKEN,
+    )
 
 
-def _envelope(action: str = cm.CUTOVER_ACTION):
+_DURABLE_SELECTION = _durable_selection()
+_CEREMONY_PREIMAGE_HASH = cuda_cutover._action_params_hash_from_durable_selection(
+    _DURABLE_SELECTION
+)
+
+
+def _envelope_for_selection(selected, action: str = cm.CUTOVER_ACTION):
     return s7.build_work_request_envelope(
-        request_id="req-r11-fixture",
+        request_id=selected.authorization.window_id,
         action=action,
-        params=dict(cm.CUTOVER_ACTION_PARAMS),
+        params=dict(cuda_cutover._cutover_action_preimage(selected)),
         claimed_work_class="self_modification",
         requesting_subsystem="cuda_cutover",
         closed_symptom_code="self_mod_requested",
         proposed_change_class="model_routing_change",
         why_self_fix_failed_class="not_self_fix",
-        affected_refs=("host:local",),
+        affected_refs=selected.affected_refs,
         content_exposure_risk="content_free",
-        precondition_hash="a" * 64,
-        created_at="2026-08-12T12:00:00Z",
-        expires_at="2026-08-12T16:00:00Z",
+        precondition_hash=selected.precondition_hash,
+        created_at=selected.authorization.issued_at,
+        expires_at=selected.authorization.expires_at,
         predicted_effect_class="behavior_change",
         rollback_path_class="revert_patch",
         maez_voice_consultation_id=None,
         free_text_ref_hash=None,
     )
+
+
+def _envelope(action: str = cm.CUTOVER_ACTION):
+    return _envelope_for_selection(_DURABLE_SELECTION, action)
 
 
 def _exemption(envelope, **overrides) -> S7ConsultationExemption:
@@ -81,7 +123,7 @@ def test_a_valid_cutover_exemption_admits_pre_birth() -> None:
     assert consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -108,7 +150,7 @@ def test_no_other_action_can_use_the_exemption(action: str) -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=exemption,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -121,7 +163,7 @@ def test_cutover_exemption_cannot_cover_a_different_envelopes_action() -> None:
     assert not consultation_exemption_admits(
         envelope=soul_envelope,
         exemption=smuggled,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -147,7 +189,7 @@ def test_an_exemption_claiming_cutover_but_BOUND_to_a_soul_write_refuses() -> No
     assert not consultation_exemption_admits(
         envelope=soul_envelope,
         exemption=forged,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -163,7 +205,7 @@ def test_envelope_hash_must_match_the_actual_envelope() -> None:
     assert not consultation_exemption_admits(
         envelope=other,
         exemption=_exemption(envelope),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -180,7 +222,7 @@ def test_a_changed_model_sha_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope, model_sha256_unchanged="c" * 64),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -205,7 +247,7 @@ def test_a_reason_code_mutated_after_construction_still_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=mutated,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -259,7 +301,7 @@ def test_the_exemption_refuses_once_the_ledger_is_writing() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=True,
     )
 
@@ -285,7 +327,7 @@ def test_a_lookalike_object_is_refused_by_exact_typing() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=LooksLikeAnExemption(s7.work_request_envelope_hash(envelope)),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -310,7 +352,7 @@ def test_an_envelope_LOOKALIKE_is_refused_by_exact_typing() -> None:
     assert not consultation_exemption_admits(
         envelope=clone,
         exemption=_exemption(real),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -424,7 +466,7 @@ def test_the_minter_establishes_the_grounds_instead_of_trusting_them() -> None:
     envelope = _envelope()
     minted = exemption_mod.mint_consultation_exemption(
         envelope=envelope,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         created_at="2026-08-12T12:00:00Z",
     )
     # The caller supplied neither the model sha nor the receipt hash.
@@ -436,7 +478,7 @@ def test_the_minter_establishes_the_grounds_instead_of_trusting_them() -> None:
     assert consultation_exemption_admits(
         envelope=envelope,
         exemption=minted,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -445,7 +487,7 @@ def test_the_minter_refuses_a_non_cutover_action() -> None:
     with pytest.raises(exemption_mod.ExemptionMintRefused, match="cutover"):
         exemption_mod.mint_consultation_exemption(
             envelope=_envelope(action="edit_soul_section"),
-            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            durable_cutover_selection=_DURABLE_SELECTION,
             created_at="2026-08-12T12:00:00Z",
         )
 
@@ -459,7 +501,7 @@ def test_the_minter_refuses_when_the_receipt_is_absent(monkeypatch, tmp_path) ->
     with pytest.raises(exemption_mod.ExemptionMintRefused, match="bench receipt"):
         exemption_mod.mint_consultation_exemption(
             envelope=_envelope(),
-            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            durable_cutover_selection=_DURABLE_SELECTION,
             created_at="2026-08-12T12:00:00Z",
         )
 
@@ -469,7 +511,7 @@ def test_the_minter_refuses_after_birth(monkeypatch) -> None:
     with pytest.raises(exemption_mod.ExemptionMintRefused, match="birth"):
         exemption_mod.mint_consultation_exemption(
             envelope=_envelope(),
-            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            durable_cutover_selection=_DURABLE_SELECTION,
             created_at="2026-08-12T12:00:00Z",
         )
 
@@ -483,7 +525,7 @@ def test_a_stripped_token_flag_refuses_at_the_gate() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=minted,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -509,7 +551,12 @@ def _authority():
     )
 
 
-def _render(envelope, exemption, action_params_hash=None):
+def _render(
+    envelope,
+    exemption,
+    action_params_hash=None,
+    durable_cutover_selection=_DURABLE_SELECTION,
+):
     return s7.render_request_statement(
         envelope=envelope,
         surface="cockpit",
@@ -521,6 +568,7 @@ def _render(envelope, exemption, action_params_hash=None):
         expires_at="2026-08-12T16:00:00Z",
         rendered_at="2026-08-12T12:00:00Z",
         consultation_exemption=exemption,
+        durable_cutover_selection=durable_cutover_selection,
     )
 
 
@@ -549,6 +597,40 @@ def test_rendering_refuses_an_exemption_that_does_not_admit() -> None:
     envelope = _envelope()
     with pytest.raises(ValueError, match="does not admit"):
         _render(envelope, _exemption(envelope), action_params_hash="e" * 64)
+
+
+def _voice_fact_for(envelope):
+    return s7.MaezVoiceConsultation(
+        consultation_id="voice-r11-must-not-coexist",
+        request_id=envelope.request_id,
+        request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        producer="s7_voice_consultation_turn",
+        source_ref_kind="s7_voice_turn",
+        source_ref_hash="c" * 64,
+        maez_voice_consulted=True,
+        maez_objection_state="absent",
+        maez_withdrew_request=False,
+        unavailable_reason_code=None,
+        created_at="2026-08-12T12:00:00Z",
+    )
+
+
+def test_rendering_refuses_exemption_and_voice_evidence_together() -> None:
+    envelope = _envelope()
+    with pytest.raises(ValueError, match="both"):
+        s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=_CEREMONY_PREIMAGE_HASH,
+            authority_context=_authority(),
+            maez_voice_consultation=_voice_fact_for(envelope),
+            nonce="n" * 64,
+            expires_at="2026-08-12T16:00:00Z",
+            rendered_at="2026-08-12T12:00:00Z",
+            consultation_exemption=_exemption(envelope),
+            durable_cutover_selection=_DURABLE_SELECTION,
+        )
 
 
 def test_a_soul_write_cannot_render_as_not_performed() -> None:
@@ -602,6 +684,30 @@ def test_the_exemption_admits_for_its_own_artifact() -> None:
     assert exemption_mod.exemption_admits_for_artifact(
         artifact=_artifact(envelope),
         exemption=_exemption(envelope),
+        durable_cutover_selection=_DURABLE_SELECTION,
+        ledger_writes_enabled=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("request_id", "alternate-window"),
+        ("precondition_hash", "f" * 64),
+        ("derived_work_class", "routine_custody"),
+        ("derived_aggregation_group", "s7agg_alternate"),
+    ),
+)
+def test_artifact_authority_fields_must_match_the_durable_selection(
+    field: str,
+    value: str,
+) -> None:
+    """The artifact may not consistently cite a caller-invented authority field."""
+    envelope = _envelope()
+    assert not exemption_mod.exemption_admits_for_artifact(
+        artifact=_artifact(envelope, **{field: value}),
+        exemption=_exemption(envelope),
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -612,6 +718,7 @@ def test_the_exemption_refuses_an_artifact_for_a_different_envelope() -> None:
     assert not exemption_mod.exemption_admits_for_artifact(
         artifact=_artifact(other),
         exemption=_exemption(envelope),
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -621,6 +728,7 @@ def test_the_exemption_refuses_an_artifact_for_a_different_action() -> None:
     assert not exemption_mod.exemption_admits_for_artifact(
         artifact=_artifact(envelope, action="edit_soul_section"),
         exemption=_exemption(envelope),
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -650,6 +758,7 @@ def test_the_two_evidence_shapes_are_MUTUALLY_EXCLUSIVE() -> None:
                 authorization_store=None,
                 guarded_store=_Store(),
                 consultation_exemption=_exemption(envelope),
+                durable_cutover_selection=_DURABLE_SELECTION,
                 **extra,
             )
 
@@ -670,6 +779,7 @@ def test_the_mint_refuses_an_exemption_that_does_not_admit() -> None:
             authorization_store=None,
             guarded_store=_Store(),
             consultation_exemption=_exemption(envelope),
+            durable_cutover_selection=_DURABLE_SELECTION,
         )
 
 
@@ -681,9 +791,16 @@ def test_the_exempt_mint_still_goes_THROUGH_the_guarded_store() -> None:
     seen = {}
 
     class _Store:
-        def put_artifact_under_consultation_exemption(self, *, artifact, consultation_exemption):
+        def put_artifact_under_consultation_exemption(
+            self,
+            *,
+            artifact,
+            consultation_exemption,
+            durable_cutover_selection,
+        ):
             seen["artifact"] = artifact
             seen["exemption"] = consultation_exemption
+            seen["selection"] = durable_cutover_selection
 
     class _RawStore:
         def put(self, _artifact):
@@ -694,8 +811,375 @@ def test_the_exempt_mint_still_goes_THROUGH_the_guarded_store() -> None:
         authorization_store=_RawStore(),
         guarded_store=_Store(),
         consultation_exemption=_exemption(envelope),
+        durable_cutover_selection=_DURABLE_SELECTION,
     )
     assert seen["artifact"].action == cm.CUTOVER_ACTION
+
+
+def test_r11_evidence_table_has_an_explicit_idempotent_provisioning_authority(
+    tmp_path,
+) -> None:
+    """Opening and minting stay verification-only; setup owns creation."""
+    import os
+    import sqlite3
+
+    from core.governance import s7_guarded_execution as guarded
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    store = bootstrap_with_authorization(tmp_path / "r11-store")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "ALTER TABLE s7_ceremony_challenges "
+            "DROP COLUMN consultation_exemption_projection_hash"
+        )
+    # Ordinary store opening is not R11 setup authority.
+    from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+    S7WebAuthnBootstrapStore(store.root)
+    with sqlite3.connect(store.db_path) as connection:
+        assert "consultation_exemption_projection_hash" not in {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(s7_ceremony_challenges)"
+            )
+        }
+    dir_fd = os.open(
+        store.db_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+        with sqlite3.connect(store.db_path) as conn:
+            first = guarded._r11_exemption_evidence_contract(conn)
+            challenge_columns = {
+                row[1]: tuple(row)
+                for row in conn.execute(
+                    "PRAGMA table_info(s7_ceremony_challenges)"
+                )
+            }
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+        with sqlite3.connect(store.db_path) as conn:
+            second = guarded._r11_exemption_evidence_contract(conn)
+    finally:
+        os.close(dir_fd)
+
+    assert first == guarded._expected_r11_exemption_evidence_contract()
+    assert second == first
+    assert challenge_columns["consultation_exemption_projection_hash"][2:] == (
+        "TEXT",
+        0,
+        None,
+        0,
+    )
+    # The exact schema produced for an existing store is the exact schema
+    # canonical cutover preflight expects, not merely a table with the right
+    # names in a different order.
+    with cuda_cutover.open_existing_authorization_store(
+        db_path=store.db_path,
+        expected_uid=os.getuid(),
+    ):
+        pass
+
+
+def test_r11_artifact_rolls_back_when_its_evidence_row_cannot_persist(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from core.governance import s7_guarded_execution as guarded
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    store = bootstrap_with_authorization(tmp_path / "r11-atomic-store")
+    dir_fd = os.open(
+        store.db_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            f"CREATE TRIGGER refuse_r11_evidence BEFORE INSERT ON "
+            f"{guarded.R11_EXEMPTION_EVIDENCE_TABLE} "
+            "BEGIN SELECT RAISE(ABORT, 'refuse_r11_evidence'); END"
+        )
+    authorization_store = s7.S7AuthorizationStore(store.db_path)
+    guarded_store = guarded.S7GuardedStateStore(
+        authorization_store=authorization_store,
+    )
+    envelope = _envelope()
+
+    with pytest.raises(sqlite3.IntegrityError, match="refuse_r11_evidence"):
+        guarded_store.put_artifact_under_consultation_exemption(
+            artifact=_artifact(envelope),
+            consultation_exemption=_exemption(envelope),
+            durable_cutover_selection=_DURABLE_SELECTION,
+        )
+
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM s7_authorization_artifacts_v2"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            f"SELECT count(*) FROM {guarded.R11_EXEMPTION_EVIDENCE_TABLE}"
+        ).fetchone()[0] == 0
+
+
+def _put_unreserved_voice_use(store, *, source_ref_hash: str):
+    from core.governance import s7_guarded_execution as guarded
+
+    voice_store = guarded.S7VoiceBundleUseStore(store.db_path)
+    voice_store.put_unreserved(
+        guarded.S7VoiceBundleUse.new_unreserved(
+            request_id=_DURABLE_SELECTION.authorization.window_id,
+            source_ref_hash=source_ref_hash,
+            consultation_id="voice-r11-mutual-exclusion",
+            used_at="2026-08-12T12:00:00Z",
+        )
+    )
+    return voice_store
+
+
+def test_voice_first_durably_blocks_r11_artifact_and_evidence_atomically(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from core.governance import s7_guarded_execution as guarded
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    store = bootstrap_with_authorization(tmp_path / "voice-first")
+    dir_fd = os.open(
+        store.db_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    source_ref_hash = "7" * 64
+    voice_store = _put_unreserved_voice_use(
+        store,
+        source_ref_hash=source_ref_hash,
+    )
+    envelope = _envelope()
+    artifact = _artifact(envelope)
+    voice_store.reserve_for_artifact(
+        source_ref_hash=source_ref_hash,
+        artifact_id=artifact.artifact_id,
+        reservation_token_hash="8" * 64,
+        reserved_at="2026-08-12T12:00:01Z",
+    )
+
+    guarded_store = guarded.S7GuardedStateStore(
+        authorization_store=s7.S7AuthorizationStore(store.db_path),
+        voice_bundle_use_store=voice_store,
+    )
+    with pytest.raises(ValueError, match="also carry voice-bundle"):
+        guarded_store.put_artifact_under_consultation_exemption(
+            artifact=artifact,
+            consultation_exemption=_exemption(envelope),
+            durable_cutover_selection=_DURABLE_SELECTION,
+        )
+
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM s7_authorization_artifacts_v2"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            f"SELECT count(*) FROM {guarded.R11_EXEMPTION_EVIDENCE_TABLE}"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT artifact_id, reservation_state FROM s7_voice_bundle_uses "
+            "WHERE source_ref_hash = ?",
+            (source_ref_hash,),
+        ).fetchone() == (artifact.artifact_id, "reserved")
+
+
+def test_r11_first_durably_blocks_voice_reservation_without_mutation(
+    tmp_path,
+) -> None:
+    store, artifact, _rendered, _exemption_record = (
+        _persisted_r11_consumption_fixture(tmp_path / "r11-first")
+    )
+    source_ref_hash = "9" * 64
+    voice_store = _put_unreserved_voice_use(
+        store,
+        source_ref_hash=source_ref_hash,
+    )
+
+    with pytest.raises(ValueError, match="R11 exemption evidence"):
+        voice_store.reserve_for_artifact(
+            source_ref_hash=source_ref_hash,
+            artifact_id=artifact.artifact_id,
+            reservation_token_hash="a" * 64,
+            reserved_at="2026-08-12T12:00:01Z",
+        )
+
+    use = voice_store.get_for_source_ref(source_ref_hash)
+    assert use is not None
+    assert use.reservation_state == "unreserved"
+    assert use.artifact_id is None
+
+
+def _persisted_r11_consumption_fixture(tmp_path):
+    import os
+
+    from core.governance import s7_guarded_execution as guarded
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    store = bootstrap_with_authorization(tmp_path)
+    dir_fd = os.open(
+        store.db_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    envelope = _envelope()
+    exemption = _exemption(envelope)
+    rendered = _render(envelope, exemption)
+    artifact = _artifact(
+        envelope,
+        rendered_text_hash=rendered.rendered_text_hash,
+        authority_context_hash=rendered.authority_context_hash,
+        nonce=rendered.nonce,
+    )
+    authorization_store = s7.S7AuthorizationStore(store.db_path)
+    guarded.S7GuardedStateStore(
+        authorization_store=authorization_store,
+    ).put_artifact_under_consultation_exemption(
+        artifact=artifact,
+        consultation_exemption=exemption,
+        durable_cutover_selection=_DURABLE_SELECTION,
+    )
+    return store, artifact, rendered, exemption
+
+
+def test_consumption_rereads_and_revalidates_the_persisted_r11_projection(
+    tmp_path,
+) -> None:
+    from core.governance import s7_guarded_execution as guarded
+
+    store, artifact, rendered, exemption = _persisted_r11_consumption_fixture(
+        tmp_path / "consume-positive"
+    )
+    with s7._held_store(store.db_path) as (_dir_fd, _store_fd, connection):
+        grant, revalidated, committed = s7.consume_for_execution_with_committed_row(
+            connection,
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=rendered.action_params_hash,
+            authority_context=_authority(),
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now="2026-08-12T12:01:00Z",
+            after_consume_before_commit=lambda fresh_grant: (
+                guarded.revalidate_r11_exemption_for_consumption(
+                    connection=connection,
+                    grant=fresh_grant,
+                    durable_cutover_selection=_DURABLE_SELECTION,
+                )
+            ),
+        )
+
+    assert grant is not None
+    assert revalidated == exemption
+    assert committed is not None
+    assert committed.consumed_at == "2026-08-12T12:01:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("birth", "grounds no longer admit"),
+        ("receipt", "grounds no longer admit"),
+        ("projection", "projection is not canonical"),
+        ("artifact_binding", "evidence binding is invalid"),
+        ("voice_collision", "also carries voice-bundle"),
+    ),
+)
+def test_consumption_rechecks_every_r11_ground_and_rolls_back(
+    tmp_path,
+    monkeypatch,
+    mutation: str,
+    expected: str,
+) -> None:
+    import sqlite3
+
+    from core.governance import s7_guarded_execution as guarded
+
+    store, artifact, rendered, _exemption_record = (
+        _persisted_r11_consumption_fixture(tmp_path / mutation)
+    )
+    if mutation == "birth":
+        monkeypatch.setattr(exemption_mod, "born_by_any_signal", lambda: True)
+    elif mutation == "receipt":
+        monkeypatch.setattr(
+            exemption_mod,
+            "R11_QUALITY_EVIDENCE_PATH",
+            tmp_path / "receipt-disappeared.json",
+        )
+    elif mutation in {"projection", "artifact_binding"}:
+        with sqlite3.connect(store.db_path) as connection:
+            if mutation == "projection":
+                connection.execute(
+                    f"UPDATE {guarded.R11_EXEMPTION_EVIDENCE_TABLE} "
+                    "SET projection_json = '{}' WHERE artifact_id = ?",
+                    (artifact.artifact_id,),
+                )
+            else:
+                connection.execute(
+                    f"UPDATE {guarded.R11_EXEMPTION_EVIDENCE_TABLE} "
+                    "SET artifact_binding_sha256 = ? WHERE artifact_id = ?",
+                    ("f" * 64, artifact.artifact_id),
+                )
+    else:
+        source_ref_hash = "b" * 64
+        _put_unreserved_voice_use(store, source_ref_hash=source_ref_hash)
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE s7_voice_bundle_uses SET artifact_id = ?, "
+                "reservation_token_hash = ?, reservation_state = 'reserved', "
+                "reserved_at = ? WHERE source_ref_hash = ?",
+                (
+                    artifact.artifact_id,
+                    "c" * 64,
+                    "2026-08-12T12:00:01Z",
+                    source_ref_hash,
+                ),
+            )
+
+    with s7._held_store(store.db_path) as (_dir_fd, _store_fd, connection):
+        with pytest.raises(ValueError, match=expected):
+            s7.consume_for_execution_with_committed_row(
+                connection,
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=rendered.action_params_hash,
+                authority_context=_authority(),
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now="2026-08-12T12:01:00Z",
+                after_consume_before_commit=lambda fresh_grant: (
+                    guarded.revalidate_r11_exemption_for_consumption(
+                        connection=connection,
+                        grant=fresh_grant,
+                        durable_cutover_selection=_DURABLE_SELECTION,
+                    )
+                ),
+            )
+
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT consumed_at FROM s7_authorization_artifacts_v2 "
+            "WHERE artifact_id = ?",
+            (artifact.artifact_id,),
+        ).fetchone()[0] is None
 
 
 # --------------------------------------------------------------------- #
@@ -801,7 +1285,7 @@ def test_none_is_not_an_exemption() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=None,
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -851,7 +1335,7 @@ def test_an_invented_quality_hash_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope, quality_evidence_sha256="b" * 64),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -866,7 +1350,7 @@ def test_a_missing_receipt_file_refuses(monkeypatch, tmp_path) -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -881,7 +1365,7 @@ def test_a_tampered_receipt_file_refuses(monkeypatch, tmp_path) -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
@@ -923,7 +1407,7 @@ def test_changed_action_params_refuse_even_with_a_matching_envelope() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash="e" * 64,
+        durable_cutover_selection=_durable_selection("different-preimage"),
         ledger_writes_enabled=False,
     )
 
@@ -933,60 +1417,148 @@ def test_an_exemption_citing_the_wrong_preimage_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope, action_params_hash="f" * 64),
-        action_params_hash=_CEREMONY_PREIMAGE_HASH,
+        durable_cutover_selection=_DURABLE_SELECTION,
         ledger_writes_enabled=False,
     )
 
 
-def test_KNOWN_GAP_a_consistently_cited_preimage_is_admitted_today() -> None:
-    """TRIPWIRE for the residual caller-assertion gap, stated not hidden.
+def test_the_boundary_derives_the_preimage_from_the_durable_selection(
+    tmp_path, monkeypatch
+) -> None:
+    """A caller citing one forged hash consistently cannot override the
+    eight fields independently reconstructed from the selected completion."""
+    from scripts import cuda_cutover
+    from tests.test_cutover_step2b_consumer import _seed_stage2_completion
 
-    The gate cannot yet derive the ceremony preimage itself, so it can only
-    check that the exemption agrees with the value it was handed. A caller
-    controlling both sides is therefore not caught. Removing the frozen
-    constant was still correct -- it bound the WRONG preimage -- but this is
-    what remains open until production wiring lets the gate derive it from
-    the durable selection.
-
-    Asserts TODAY'S behaviour on purpose: when wiring closes the gap this
-    will start refusing, this test will fail, and whoever closes it must come
-    here and record that it is closed.
-    """
-    envelope = _envelope()
-    changed = "e" * 64
-    assert consultation_exemption_admits(
-        envelope=envelope,
-        exemption=_exemption(envelope, action_params_hash=changed),
-        action_params_hash=changed,
-        ledger_writes_enabled=False,
-    ), "gap closed -- update this tripwire and the R11 doc"
-
-
-def test_a_str_subclass_preimage_is_refused_by_exact_typing() -> None:
-    """Found by mutation: equality alone accepted a lookalike type, the same
-    defect exact typing already refuses for the exemption object itself."""
+    root, completion = _seed_stage2_completion(tmp_path, monkeypatch)
+    selected = cuda_cutover._reconstruct_selected_cutover_at(
+        root=root,
+        expected_uid=root.stat().st_uid,
+        completion_locator=completion.name,
+        now="2026-08-03T20:31:03Z",
+        boot_id="boot-1",
+    )
+    derived = s7.canonical_hash(dict(cuda_cutover._cutover_action_preimage(selected)))
+    forged = "e" * 64
+    assert forged != derived
     envelope = _envelope()
 
-    class _EqualButWrongType(str):
-        pass
-
-    sneaky = _EqualButWrongType(_CEREMONY_PREIMAGE_HASH)
-    assert sneaky == _CEREMONY_PREIMAGE_HASH
     assert not consultation_exemption_admits(
         envelope=envelope,
-        exemption=_exemption(envelope),
-        action_params_hash=sneaky,
+        exemption=_exemption(envelope, action_params_hash=forged),
+        durable_cutover_selection=selected,
         ledger_writes_enabled=False,
     )
 
 
-def test_a_missing_operation_preimage_refuses() -> None:
-    """Absent is not permission: no preimage supplied means no admission."""
+def test_the_minter_accepts_no_caller_supplied_preimage(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts import cuda_cutover
+    from tests.test_cutover_step2b_consumer import _seed_stage2_completion
+
+    root, completion = _seed_stage2_completion(tmp_path, monkeypatch)
+    selected = cuda_cutover._reconstruct_selected_cutover_at(
+        root=root,
+        expected_uid=root.stat().st_uid,
+        completion_locator=completion.name,
+        now="2026-08-03T20:31:03Z",
+        boot_id="boot-1",
+    )
+    expected = s7.canonical_hash(dict(cuda_cutover._cutover_action_preimage(selected)))
+
+    minted = exemption_mod.mint_consultation_exemption(
+        envelope=_envelope_for_selection(selected),
+        durable_cutover_selection=selected,
+        created_at="2026-08-12T12:00:00Z",
+    )
+
+    assert minted.action_params_hash == expected
+
+
+def test_a_selection_lookalike_is_refused_by_exact_typing() -> None:
+    """A content-identical object is not reconstructed durable evidence."""
+    envelope = _envelope()
+    real = _DURABLE_SELECTION
+    lookalike = SimpleNamespace(
+        authorization=real.authorization,
+        authorization_file_sha256=real.authorization_file_sha256,
+        receipt=real.receipt,
+        receipt_file_sha256=real.receipt_file_sha256,
+        bundle=real.bundle,
+        _durable_selection_verified=True,
+    )
+    with pytest.raises(cuda_cutover.CutoverRefusal):
+        cuda_cutover._action_params_hash_from_durable_selection(lookalike)
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        durable_cutover_selection=lookalike,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_durable_selection_cannot_be_constructed_without_reconstruction_token() -> None:
+    real = _DURABLE_SELECTION
+    with pytest.raises(ValueError, match="durable cutover reconstruction"):
+        cuda_cutover.ValidatedCutoverSelection(
+            completion_locator=real.completion_locator,
+            completion=real.completion,
+            admission=real.admission,
+            receipt_ref=real.receipt_ref,
+            receipt=real.receipt,
+            receipt_bytes=real.receipt_bytes,
+            regenerated_receipt_bytes=real.regenerated_receipt_bytes,
+            receipt_file_sha256=real.receipt_file_sha256,
+            authorization=real.authorization,
+            authorization_file_sha256=real.authorization_file_sha256,
+            bundle=real.bundle,
+            precondition_hash=real.precondition_hash,
+            operation_affected_refs=real.operation_affected_refs,
+            affected_refs=real.affected_refs,
+        )
+
+
+def test_durable_selection_cannot_be_rebound_with_dataclasses_replace() -> None:
+    with pytest.raises(ValueError, match="durable cutover reconstruction"):
+        replace(_DURABLE_SELECTION, precondition_hash="f" * 64)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("request_id", "different-window"),
+        ("precondition_hash", "f" * 64),
+        ("affected_refs", ("service:llama-server.service",)),
+        ("created_at", "2026-08-12T12:00:01Z"),
+        ("expires_at", "2026-08-12T15:59:59Z"),
+    ),
+)
+def test_durable_selection_must_semantically_match_the_envelope(
+    field: str,
+    value,
+) -> None:
+    envelope = _envelope()
+    mismatched = replace(envelope, **{field: value})
+    assert not consultation_exemption_admits(
+        envelope=mismatched,
+        exemption=_exemption(mismatched),
+        durable_cutover_selection=_DURABLE_SELECTION,
+        ledger_writes_enabled=False,
+    )
+    with pytest.raises(exemption_mod.ExemptionMintRefused, match="durable selection"):
+        exemption_mod.mint_consultation_exemption(
+            envelope=mismatched,
+            durable_cutover_selection=_DURABLE_SELECTION,
+            created_at="2026-08-12T12:00:00Z",
+        )
+def test_a_missing_durable_selection_refuses() -> None:
+    """Absent durable evidence is not permission."""
     envelope = _envelope()
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
-        action_params_hash=None,
+        durable_cutover_selection=None,
         ledger_writes_enabled=False,
     )
 
@@ -1007,7 +1579,7 @@ def _gate(envelope, exemption, **overrides):
         "requester_ref": "founder-local-browser",
         "now": "2026-08-12T12:00:00Z",
         "consultation_exemption": exemption,
-        "action_params_hash": _CEREMONY_PREIMAGE_HASH,
+        "durable_cutover_selection": _DURABLE_SELECTION,
     }
     kwargs.update(overrides)
     return ceremony.authorization_voice_seat_recheck(**kwargs)
@@ -1035,6 +1607,18 @@ def test_the_gate_never_reports_an_objection_state_for_an_exemption() -> None:
     flattened = " ".join(str(v).lower() for v in body.values())
     assert "absent" not in flattened
     assert "not_determined" not in flattened
+
+
+def test_the_direct_gate_refuses_exemption_and_voice_evidence_together() -> None:
+    envelope = _envelope()
+    result = _gate(
+        envelope,
+        _exemption(envelope),
+        maez_voice_consultation=_voice_fact_for(envelope),
+    )
+
+    assert result.status_code == 409
+    assert result.body["reason"] == "exemption_and_consultation_both_present"
 
 
 def test_an_invalid_exemption_BLOCKS_and_never_falls_through() -> None:
@@ -1073,6 +1657,66 @@ def test_the_gate_is_untouched_when_no_exemption_is_supplied() -> None:
 
     assert result.status_code != 200
     assert result.body.get("reason") == "missing_or_mismatched_voice_fact"
+
+
+def test_cutover_without_r11_refuses_before_any_consultation_authority() -> None:
+    """R11 removes consultation as a lawful authority shape for THIS action.
+
+    A typed, request-bound voice fact must not fall through to either the
+    retired cutover admission or the generic bundle rail.  The same action's
+    exemption positive control is ``test_the_gate_admits...`` above.
+    """
+    envelope = _envelope()
+    consultation = s7.MaezVoiceConsultation(
+        consultation_id="retired-cutover-consultation",
+        request_id=envelope.request_id,
+        request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        producer="s7_voice_consultation_turn",
+        source_ref_kind="s7_voice_turn",
+        source_ref_hash="c" * 64,
+        maez_voice_consulted=True,
+        maez_objection_state="not_determined",
+        maez_withdrew_request=False,
+        unavailable_reason_code=None,
+        created_at=envelope.created_at,
+    )
+
+    result = _gate(
+        envelope,
+        None,
+        maez_voice_consultation=consultation,
+    )
+
+    assert result.status_code == 409
+    assert result.body["reason"] == "r11_consultation_exemption_required"
+
+
+def test_the_retired_cutover_consultation_surface_is_deleted() -> None:
+    """Deletion witness: no alternate caller can reconstruct the retired ask."""
+    from core.governance import s7_webauthn_ceremony as ceremony
+    from core.governance import operator_user_boundary
+    from scripts import cuda_cutover
+
+    retired_ceremony_symbols = (
+        "_cutover_voice_evidence_revalidated_at_gate",
+    )
+    retired_cutover_symbols = (
+        "ConsultationAttempt",
+        "CutoverConsultationAsk",
+        "CutoverConsultationResult",
+        "produce_cutover_consultation",
+        "revalidate_cutover_consultation_result",
+        "_cutover_voice_bundle",
+        "_persist_and_validate_cutover_voice_bundle",
+        "_print_owner_cutover_gate",
+    )
+
+    assert all(not hasattr(ceremony, name) for name in retired_ceremony_symbols)
+    assert not hasattr(
+        operator_user_boundary,
+        "build_cutover_work_request_envelope",
+    )
+    assert all(not hasattr(cuda_cutover, name) for name in retired_cutover_symbols)
 
 
 def test_the_projection_says_not_performed_in_words() -> None:

@@ -416,10 +416,30 @@ class S7LocalWebAuthnCeremonyService:
         internal_channel_binding: str,
         allow_degraded_primary_only: bool = False,
         allow_degraded_backup_only: bool = False,
+        consultation_exemption: Any | None = None,
+        durable_cutover_selection: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
             return S7CeremonyServiceResult(body=dependency, status_code=503)
+        try:
+            exemption_projection_hash = _r11_challenge_projection_hash(
+                rendered_statement=rendered_statement,
+                precondition_hash=precondition_hash,
+                consultation_exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
+            )
+        except ValueError as exc:
+            error = str(exc)
+            if error not in {
+                "s7_signed_statement_contradicts_exemption",
+                "s7_consultation_exemption_invalid",
+            }:
+                error = "s7_consultation_exemption_invalid"
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": error},
+                status_code=409,
+            )
         store = self.store_factory()
         recovery = store.credential_recovery_state()
         if recovery.get("mode") != "ready":
@@ -452,6 +472,7 @@ class S7LocalWebAuthnCeremonyService:
             now=now,
             expires_at=_add_minutes(now, 5),
             uv_required=True,
+            consultation_exemption_projection_hash=exemption_projection_hash,
         )
         allow_credentials = store.allow_credentials_for_authorization()
         if allow_degraded_primary_only is True:
@@ -505,8 +526,8 @@ class S7LocalWebAuthnCeremonyService:
         source_bundle_binding: Any | None = None,
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
-        cutover_consultation_result: Any | None = None,
         consultation_exemption: Any | None = None,
+        durable_cutover_selection: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -539,6 +560,35 @@ class S7LocalWebAuthnCeremonyService:
             precondition_hash=precondition_hash,
         ):
             return _d12_binding_mismatch()
+        try:
+            presented_exemption_projection_hash = _r11_challenge_projection_hash(
+                rendered_statement=rendered_statement,
+                precondition_hash=precondition_hash,
+                consultation_exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
+            )
+        except ValueError as exc:
+            error = str(exc)
+            if error == "s7_signed_statement_contradicts_exemption":
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": error},
+                    status_code=409,
+                )
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_consultation_exemption_invalid"},
+                status_code=409,
+            )
+        if (
+            challenge.get("consultation_exemption_projection_hash")
+            != presented_exemption_projection_hash
+        ):
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": False,
+                    "error": "s7_consultation_exemption_challenge_mismatch",
+                },
+                status_code=409,
+            )
         from core.governance import operator_user_boundary as s7
 
         voice_seat_work = (
@@ -560,7 +610,6 @@ class S7LocalWebAuthnCeremonyService:
                 or source_bundle_binding is not None
                 or source_ref_hash is not None
                 or reservation_token is not None
-                or cutover_consultation_result is not None
                 or maez_voice_consultation is not None
             ):
                 return S7CeremonyServiceResult(
@@ -578,8 +627,7 @@ class S7LocalWebAuthnCeremonyService:
             if (
                 getattr(rendered_statement, "maez_consulted_state", None)
                 != s7.MAEZ_CONSULTED_NOT_PERFORMED_R11
-                or getattr(rendered_statement, "maez_voice_consultation_hash", "x")
-                is not None
+                or rendered_statement.maez_voice_consultation_hash is not None
                 or getattr(rendered_statement, "maez_objection_state", None) != "none"
             ):
                 return S7CeremonyServiceResult(
@@ -592,9 +640,7 @@ class S7LocalWebAuthnCeremonyService:
             if not consultation_exemption_admits(
                 envelope=envelope,
                 exemption=consultation_exemption,
-                action_params_hash=getattr(
-                    rendered_statement, "action_params_hash", None
-                ),
+                durable_cutover_selection=durable_cutover_selection,
                 ledger_writes_enabled=born_by_any_signal(),
             ):
                 return S7CeremonyServiceResult(
@@ -657,7 +703,6 @@ class S7LocalWebAuthnCeremonyService:
                         source_bundle_binding=source_bundle_binding,
                         source_ref_hash=source_ref_hash,
                         source_bundle_validation=source_bundle_validation,
-                        cutover_consultation_result=cutover_consultation_result,
                         now=now,
                     )
                 )
@@ -700,9 +745,8 @@ class S7LocalWebAuthnCeremonyService:
             source_bundle_binding=source_bundle_binding,
             source_ref_hash=source_ref_hash,
             source_bundle_validation=source_bundle_validation,
-            cutover_consultation_result=cutover_consultation_result,
             consultation_exemption=consultation_exemption,
-            action_params_hash=getattr(rendered_statement, "action_params_hash", None),
+            durable_cutover_selection=durable_cutover_selection,
         )
         if voice.status_code != 200:
             return voice
@@ -811,6 +855,7 @@ class S7LocalWebAuthnCeremonyService:
                 reservation_token=reservation_token,
                 now=now,
                 consultation_exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
             )
         except ValueError as exc:
             if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
@@ -904,9 +949,8 @@ def authorization_voice_seat_recheck(
     source_bundle_binding: Any | None = None,
     source_ref_hash: str | None = None,
     source_bundle_validation: Any | None = None,
-    cutover_consultation_result: Any | None = None,
     consultation_exemption: Any | None = None,
-    action_params_hash: str | None = None,
+    durable_cutover_selection: Any | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
 
@@ -933,10 +977,26 @@ def authorization_voice_seat_recheck(
             consultation_exemption_admits,
         )
 
+        if (
+            maez_voice_consultation is not None
+            or source_bundle_binding is not None
+            or source_ref_hash is not None
+            or source_bundle_validation is not None
+        ):
+            return _voice_seat_block(
+                "not_determined",
+                reason="exemption_and_consultation_both_present",
+                envelope=envelope,
+                refusal_history_store=refusal_history_store,
+                rendered_text_hash=rendered_text_hash,
+                requester_ref=requester_ref,
+                now=now,
+            )
+
         if consultation_exemption_admits(
             envelope=envelope,
             exemption=consultation_exemption,
-            action_params_hash=action_params_hash,
+            durable_cutover_selection=durable_cutover_selection,
             ledger_writes_enabled=born_by_any_signal(),
         ):
             return S7CeremonyServiceResult(
@@ -959,6 +1019,20 @@ def authorization_voice_seat_recheck(
             requester_ref=requester_ref,
             now=now,
         )
+    if getattr(envelope, "action", None) == "model_routing.cutover_cuda":
+        # R11 removed consultation as an authority shape for this ONE action.
+        # Stop before both the retired cutover path and the generic bundle path:
+        # otherwise an alternate caller could still authorize the cutover with
+        # voice evidence that the canonical ceremony no longer produces.
+        return _voice_seat_block(
+            "not_determined",
+            reason="r11_consultation_exemption_required",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
         return _voice_seat_block(
             "not_determined",
@@ -971,25 +1045,6 @@ def authorization_voice_seat_recheck(
         )
     state = str(getattr(maez_voice_consultation, "maez_objection_state", "not_determined"))
     unavailable_reason = getattr(maez_voice_consultation, "unavailable_reason_code", None)
-    if (
-        state == "not_determined"
-        and getattr(envelope, "action", None) == "model_routing.cutover_cuda"
-        and _cutover_voice_evidence_revalidated_at_gate(
-            envelope=envelope,
-            consultation=maez_voice_consultation,
-            guarded_store=guarded_store,
-            source_ref_hash=source_ref_hash,
-            cutover_consultation_result=cutover_consultation_result,
-        )
-    ):
-        return S7CeremonyServiceResult(
-            body={
-                "ok": True,
-                "maez_objection_state": "not_determined",
-                "maez_voice_consultation_id": (maez_voice_consultation.consultation_id),
-            },
-            status_code=200,
-        )
     if state != "absent":
         return _voice_seat_block(
             state,
@@ -1201,75 +1256,6 @@ def _generic_voice_evidence_revalidated_at_gate(
         return validation
 
 
-def _cutover_voice_evidence_revalidated_at_gate(
-    *,
-    envelope: Any,
-    consultation: Any,
-    guarded_store: Any | None,
-    source_ref_hash: str | None,
-    cutover_consultation_result: Any | None,
-) -> Any | None:
-    """Return only the fresh v2 result joined to the durable R8/R9 evidence."""
-
-    from core.governance import operator_user_boundary as s7
-    from core.governance import s7_guarded_execution as guarded
-    from scripts import cuda_cutover
-    from scripts import cuda_migration
-
-    if (
-        type(envelope) is not s7.WorkRequestEnvelope
-        or envelope.action != cuda_migration.CUTOVER_ACTION
-        or type(consultation) is not s7.MaezVoiceConsultation
-        or type(guarded_store) is not guarded.S7GuardedStateStore
-        or type(source_ref_hash) is not str
-        or source_ref_hash != consultation.source_ref_hash
-        or type(cutover_consultation_result) is not cuda_cutover.CutoverConsultationResult
-    ):
-        return None
-    with guarded_store.authorization_store.anchored_transaction() as conn:
-        try:
-            bundle, version = guarded.read_voice_source_bundle(
-                source_ref_hash=source_ref_hash,
-                conn=conn,
-            )
-        except guarded.S7VoiceSourceBundleEvidenceInvalid:
-            return None
-        validation = guarded.validate_voice_source_bundle(
-            bundle=bundle,
-            version=version,
-            purpose="execution",
-        )
-        mint_eligible = (
-            type(validation) is guarded.S7VoiceSourceBundleValidationResultV2
-            and getattr(validation, "_token_verified", False) is True
-            and validation.status == "valid_absent"
-            and validation.source_bundle_valid is True
-            and validation.mint_eligible is True
-            and validation.authority_projection == "valid_absent"
-            and validation.failure_reason_code is None
-            and validation.schema_version
-            == guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
-            and validation.action is not None
-        )
-        if mint_eligible is not True:
-            return None
-        guarded.require_source_bundle_validation_for_mint(validation)
-        if (
-            validation.action != cuda_migration.CUTOVER_ACTION
-            or validation.source_bundle_hash != bundle.source_bundle_hash
-            or validation.binding_hash
-            != guarded._voice_source_bundle_binding_hash(bundle)
-            or not cuda_cutover.revalidate_cutover_consultation_result(
-                envelope=envelope,
-                consultation=consultation,
-                result=cutover_consultation_result,
-                bundle=bundle,
-            )
-        ):
-            return None
-        return validation
-
-
 def _revalidate_finish_voice_source_bundle(
     *,
     envelope: Any,
@@ -1278,20 +1264,10 @@ def _revalidate_finish_voice_source_bundle(
     source_bundle_binding: Any | None,
     source_ref_hash: str | None,
     source_bundle_validation: Any,
-    cutover_consultation_result: Any | None,
     now: str,
 ) -> Any | None:
     """Reopen the authoritative v2 row before any authenticator side effect."""
 
-    if getattr(envelope, "action", None) == "model_routing.cutover_cuda":
-        validation = _cutover_voice_evidence_revalidated_at_gate(
-            envelope=envelope,
-            consultation=consultation,
-            guarded_store=guarded_store,
-            source_ref_hash=source_ref_hash,
-            cutover_consultation_result=cutover_consultation_result,
-        )
-        return validation if validation == source_bundle_validation else None
     return _generic_voice_evidence_revalidated_at_gate(
         envelope=envelope,
         consultation=consultation,
@@ -1478,6 +1454,102 @@ def _challenge_matches_rendered_d12(
         if actual != value:
             return False
     return True
+
+
+def _r11_challenge_projection_hash(
+    *,
+    rendered_statement: Any,
+    precondition_hash: str,
+    consultation_exemption: Any | None,
+    durable_cutover_selection: Any | None,
+) -> str | None:
+    """Derive the R11 value stored beside the authenticator challenge.
+
+    The browser signs ``challenge_b64``.  The server's durable challenge row
+    binds those random bytes to D12's rendered-statement fields and, for R11,
+    to the exact typed-absence projection.  Finish re-derives this value from
+    the presented exemption before authentication, so an assertion begun for
+    one absence cannot authorize another.
+    """
+
+    from core.governance import operator_user_boundary as s7
+
+    if consultation_exemption is None:
+        if (
+            getattr(rendered_statement, "maez_consulted_state", None)
+            == s7.MAEZ_CONSULTED_NOT_PERFORMED_R11
+        ):
+            raise ValueError("s7_consultation_exemption_invalid")
+        return None
+
+    from core.governance import s7_consultation_exemption as r11
+
+    derived_action_params_hash = r11._action_params_hash_from_durable_selection(
+        durable_cutover_selection
+    )
+    expected_envelope = r11._envelope_from_durable_selection(
+        durable_cutover_selection
+    )
+    expected_envelope_hash = (
+        None
+        if expected_envelope is None
+        else s7.work_request_envelope_hash(expected_envelope)
+    )
+    expected_rendered_fields = (
+        ("request_id", getattr(expected_envelope, "request_id", None)),
+        ("action", getattr(expected_envelope, "action", None)),
+        (
+            "derived_work_class",
+            getattr(expected_envelope, "derived_work_class", None),
+        ),
+        (
+            "proposed_change_class",
+            getattr(expected_envelope, "proposed_change_class", None),
+        ),
+        (
+            "predicted_effect_class",
+            getattr(expected_envelope, "predicted_effect_class", None),
+        ),
+        (
+            "rollback_path_class",
+            getattr(expected_envelope, "rollback_path_class", None),
+        ),
+        (
+            "derived_aggregation_group",
+            getattr(expected_envelope, "derived_aggregation_group", None),
+        ),
+        ("expires_at", getattr(expected_envelope, "expires_at", None)),
+    )
+
+    if (
+        type(consultation_exemption) is not r11.S7ConsultationExemption
+        or getattr(consultation_exemption, "_token_verified", False) is not True
+        or consultation_exemption.action != r11.R11_EXEMPT_ACTION
+        or consultation_exemption.action
+        != getattr(rendered_statement, "action", None)
+        or consultation_exemption.request_envelope_hash
+        != getattr(rendered_statement, "request_envelope_hash", None)
+        or consultation_exemption.request_envelope_hash
+        != expected_envelope_hash
+        or consultation_exemption.action_params_hash
+        != getattr(rendered_statement, "action_params_hash", None)
+        or consultation_exemption.action_params_hash
+        != derived_action_params_hash
+        or precondition_hash != getattr(expected_envelope, "precondition_hash", None)
+        or any(
+            getattr(rendered_statement, field, None) != expected
+            for field, expected in expected_rendered_fields
+        )
+    ):
+        raise ValueError("s7_consultation_exemption_invalid")
+    if (
+        getattr(rendered_statement, "maez_consulted_state", None)
+        != s7.MAEZ_CONSULTED_NOT_PERFORMED_R11
+        or rendered_statement.maez_voice_consultation_hash is not None
+        or getattr(rendered_statement, "maez_objection_state", None) != "none"
+    ):
+        raise ValueError("s7_signed_statement_contradicts_exemption")
+    return s7.canonical_hash(consultation_exemption.projection())
 
 
 def _d12_binding_mismatch() -> S7CeremonyServiceResult:

@@ -1,8 +1,8 @@
 """CUDA cutover authority minting and presence-bound 2B orchestration.
 
 Import is inert. The zero-parameter production entrypoint remains dormant by
-construction until its fixed owner artifacts, recorded consultation, and real
-founder WebAuthn presence are all available.
+construction until its fixed owner artifacts, typed R11 consultation absence,
+and real founder WebAuthn presence are all available.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import stat as stat_module
 import subprocess
 from contextlib import closing, contextmanager
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace as dataclass_replace
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 from types import FunctionType, MappingProxyType, MethodType, ModuleType, SimpleNamespace
 from typing import Mapping
@@ -148,21 +148,6 @@ CUTOVER_REFUSALS = frozenset(
     }
 )
 
-CONSULTATION_FAILURES = (
-    "consultation_unavailable",
-    "response_unreadable",
-    "semantic_reader_failed",
-    "objection_recorded",
-    "consultation_withdrawn",
-    "bundle_unreservable",
-)
-
-_CONSULTATION_OUTCOMES = frozenset(
-    {"asked_and_answered", "attempt_failed", "consultation_withdrawn"}
-)
-_CONSULTATION_ATTEMPT_SCHEMA = "cuda_cutover.consultation_attempt.v1"
-
-
 @dataclass(frozen=True, slots=True)
 class CutoverOperationSpec:
     """One independently enumerated mutation in the closed executor program."""
@@ -213,6 +198,9 @@ CUTOVER_EXECUTOR_AFFECTED_REFS = tuple(
 )
 
 
+_VALIDATED_CUTOVER_SELECTION_TOKEN = object()
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedCutoverSelection:
     """The independently reconstructed stage-2 permit selected by the owner."""
@@ -231,6 +219,20 @@ class ValidatedCutoverSelection:
     precondition_hash: str
     operation_affected_refs: Mapping[str, tuple[str, ...]]
     affected_refs: tuple[str, ...]
+    _durable_selection_verified: bool = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _selection_token: InitVar[object] = None
+
+    def __post_init__(self, _selection_token: object = None) -> None:
+        if _selection_token is not _VALIDATED_CUTOVER_SELECTION_TOKEN:
+            raise ValueError(
+                "ValidatedCutoverSelection can only be created by durable "
+                "cutover reconstruction"
+            )
+        object.__setattr__(self, "_durable_selection_verified", True)
 
 
 def _cutover_action_preimage(
@@ -265,6 +267,49 @@ def _cutover_action_preimage(
             except ValueError as exc:
                 raise CutoverRefusal("presence_binding_mismatch") from exc
     return MappingProxyType(preimage)
+
+
+def _action_params_hash_from_durable_selection(selected: object) -> str:
+    """Derive the R11 preimage hash only from reconstructed durable evidence."""
+
+    if (
+        type(selected) is not ValidatedCutoverSelection
+        or getattr(selected, "_durable_selection_verified", False) is not True
+    ):
+        raise CutoverRefusal("presence_binding_mismatch")
+    return s7.canonical_hash(dict(_cutover_action_preimage(selected)))
+
+
+def _cutover_envelope_from_durable_selection(
+    selected: object,
+) -> s7.WorkRequestEnvelope:
+    """Reconstruct the one honest R11 envelope from durable selection facts."""
+
+    if (
+        type(selected) is not ValidatedCutoverSelection
+        or getattr(selected, "_durable_selection_verified", False) is not True
+    ):
+        raise CutoverRefusal("presence_binding_mismatch")
+    authorization = selected.authorization
+    return s7.build_work_request_envelope(
+        request_id=authorization.window_id,
+        action=cm.CUTOVER_ACTION,
+        params=dict(_cutover_action_preimage(selected)),
+        claimed_work_class="self_modification",
+        requesting_subsystem="cuda_cutover",
+        closed_symptom_code="self_mod_requested",
+        proposed_change_class="model_routing_change",
+        why_self_fix_failed_class="not_self_fix",
+        affected_refs=selected.affected_refs,
+        content_exposure_risk="content_free",
+        precondition_hash=selected.precondition_hash,
+        created_at=authorization.issued_at,
+        expires_at=authorization.expires_at,
+        predicted_effect_class="behavior_change",
+        rollback_path_class="revert_patch",
+        maez_voice_consultation_id=None,
+        free_text_ref_hash=None,
+    )
 
 
 def _fresh_s7_attempt_nonce() -> str:
@@ -499,13 +544,13 @@ def _reconstruct_selected_cutover_at(
     if type(persisted_authorization.obj) is not cm.CutoverAuthorizationDoc:
         raise CutoverRefusal("authorization_wrong_type")
 
-    for field in assemble.fields(assemble.Stage2InputPaths):
-        if field.name == "authorization":
+    for input_field in assemble.fields(assemble.Stage2InputPaths):
+        if input_field.name == "authorization":
             continue
         _require_selected_input_predicate(
             root=root,
             expected_uid=expected_uid,
-            relative=getattr(assemble.STAGE2_INPUTS, field.name),
+            relative=getattr(assemble.STAGE2_INPUTS, input_field.name),
         )
 
     try:
@@ -603,154 +648,12 @@ def _reconstruct_selected_cutover_at(
         precondition_hash=precondition_hash,
         operation_affected_refs=CUTOVER_EXECUTOR_OPERATION_AFFECTED_REFS,
         affected_refs=CUTOVER_EXECUTOR_AFFECTED_REFS,
+        _selection_token=_VALIDATED_CUTOVER_SELECTION_TOKEN,
     )
 
 
 class CutoverRefusal(Exception):
     """Typed refusal; the message is the closed reason code."""
-
-
-@dataclass(frozen=True)
-class ConsultationAttempt:
-    """Fresh pre-ask identity plus the private root for its durable evidence."""
-
-    request_id: str
-    receipt_root: Path
-    attempt_identity: str
-    consultation_id: str
-
-    @classmethod
-    def fresh(cls, *, request_id: str, receipt_root: Path) -> ConsultationAttempt:
-        if type(request_id) is not str or not request_id:
-            raise ValueError("consultation attempt requires request_id")
-        attempt_identity = secrets.token_hex(32)
-        consultation_id = _consultation_id_for_attempt(
-            request_id=request_id,
-            attempt_identity=attempt_identity,
-        )
-        return cls(
-            request_id=request_id,
-            receipt_root=Path(receipt_root),
-            attempt_identity=attempt_identity,
-            consultation_id=consultation_id,
-        )
-
-    def __post_init__(self) -> None:
-        if type(self.request_id) is not str or not self.request_id:
-            raise ValueError("consultation attempt requires request_id")
-        if not isinstance(self.receipt_root, Path):
-            raise ValueError("consultation attempt requires a Path receipt_root")
-        s7._validate_hash64(self.attempt_identity, field="attempt_identity")
-        expected = _consultation_id_for_attempt(
-            request_id=self.request_id,
-            attempt_identity=self.attempt_identity,
-        )
-        if self.consultation_id != expected:
-            raise ValueError("consultation_id must derive from the fresh attempt")
-
-    @property
-    def start_receipt_ref(self) -> str:
-        return f"attempts/{self.attempt_identity}.started.json"
-
-
-@dataclass(frozen=True)
-class CutoverConsultationResult:
-    """Recorded exchange state only; this type carries no proceed verdict."""
-
-    outcome: str
-    attempt: ConsultationAttempt
-    consultation: s7.MaezVoiceConsultation | None
-    raw_response_bytes: bytes | None
-    raw_response_ref: str | None
-    raw_response_sha256: str | None
-    owner_visible_response: str | None
-    rendered_text_hash: str | None
-    response_capture_receipt: guarded.S7ResponseCaptureReceipt | None
-    attempt_receipt_ref: str | None
-    failure_reason_code: str | None
-
-    def __post_init__(self) -> None:
-        if self.outcome not in _CONSULTATION_OUTCOMES:
-            raise ValueError("unknown cutover consultation outcome")
-        if not isinstance(self.attempt, ConsultationAttempt):
-            raise ValueError("cutover consultation result requires its attempt")
-        if self.failure_reason_code is not None and (
-            self.failure_reason_code not in CONSULTATION_FAILURES
-        ):
-            raise ValueError("unknown cutover consultation failure")
-        if type(self.attempt_receipt_ref) is not str or not self.attempt_receipt_ref:
-            raise ValueError("cutover consultation results require a durable receipt")
-
-        if self.outcome == "asked_and_answered":
-            if self.failure_reason_code is not None:
-                raise ValueError("answered consultation cannot carry a failure")
-            if not isinstance(self.consultation, s7.MaezVoiceConsultation):
-                raise ValueError("answered consultation requires its typed record")
-            if (
-                self.consultation.maez_voice_consulted is not True
-                or self.consultation.maez_objection_state != "not_determined"
-            ):
-                raise ValueError("recorded consultation must remain unjudged")
-            if type(self.raw_response_bytes) is not bytes or not self.raw_response_bytes:
-                raise ValueError("answered consultation requires exact response bytes")
-            expected_sha256 = hashlib.sha256(self.raw_response_bytes).hexdigest()
-            if self.raw_response_sha256 != expected_sha256:
-                raise ValueError("raw_response_sha256 must derive from exact bytes")
-            if (
-                type(self.raw_response_ref) is not str
-                or expected_sha256 not in self.raw_response_ref
-            ):
-                raise ValueError("raw_response_ref must derive from exact bytes")
-            if (
-                type(self.owner_visible_response) is not str
-                or self.owner_visible_response.encode("utf-8")
-                != self.raw_response_bytes
-            ):
-                raise ValueError("owner-visible response must preserve exact bytes")
-            if self.rendered_text_hash is None:
-                raise ValueError("answered consultation requires rendered_text_hash")
-            s7._validate_hash64(
-                self.rendered_text_hash,
-                field="rendered_text_hash",
-            )
-            if self.attempt_receipt_ref is None:
-                raise ValueError("answered consultation requires a durable receipt")
-            receipt = self.response_capture_receipt
-            if type(receipt) is not guarded.S7ResponseCaptureReceipt:
-                raise ValueError("answered consultation requires its typed capture receipt")
-            if (
-                receipt.request_id != self.attempt.request_id
-                or receipt.consultation_id != self.attempt.consultation_id
-                or receipt.attempt_identity != self.attempt.attempt_identity
-                or receipt.raw_response_ref != self.raw_response_ref
-                or receipt.raw_response_sha256 != self.raw_response_sha256
-            ):
-                raise ValueError("capture receipt does not match the consultation result")
-            return
-
-        if self.consultation is not None:
-            raise ValueError("non-answered consultation cannot carry a voice fact")
-        if self.failure_reason_code is None:
-            raise ValueError("non-answered consultation requires a failure reason")
-        if self.response_capture_receipt is not None:
-            raise ValueError("non-answered consultation cannot carry a capture receipt")
-        if self.outcome == "consultation_withdrawn" and (
-            self.failure_reason_code != "consultation_withdrawn"
-        ):
-            raise ValueError("withdrawal must remain distinct")
-        if self.failure_reason_code == "consultation_withdrawn" and (
-            self.outcome != "consultation_withdrawn"
-        ):
-            raise ValueError("withdrawal must remain distinct")
-
-
-def _consultation_id_for_attempt(*, request_id: str, attempt_identity: str) -> str:
-    return "cutover-consultation-" + s7.canonical_hash(
-        {
-            "attempt_identity": attempt_identity,
-            "request_id": request_id,
-        }
-    )
 
 
 class ExistingAuthorizationStore:
@@ -882,11 +785,14 @@ def _expected_authorization_store_contracts():
     with sqlite3.connect(":memory:") as reference:
         reference.executescript(s7_migration._V2_AUTH_DDL)
         reference.executescript(s7_bootstrap._SCHEMA)
+        reference.execute(guarded._R11_EXEMPTION_EVIDENCE_DDL)
         return {
             table: _sqlite_table_contract(reference, table)
             for table in (
                 "s7_authorization_artifacts_v2",
                 "s7_founder_webauthn_credentials",
+                "s7_ceremony_challenges",
+                guarded.R11_EXEMPTION_EVIDENCE_TABLE,
             )
         }
 
@@ -1248,192 +1154,6 @@ class ExistingS7CeremonyStore(s7_bootstrap.S7WebAuthnBootstrapStore):
                 os.close(audit_fd)
             if parent_fd >= 0:
                 os.close(parent_fd)
-
-
-class CutoverConsultationAsk:
-    """One direct base-model voice turn, with honest non-identity metadata."""
-
-    capability_kind = "bonded_runtime_voice"
-
-    def __init__(
-        self,
-        *,
-        envelope: s7.WorkRequestEnvelope,
-        authority_context: s7.AuthorityContext,
-        action_params: Mapping[str, str] | None = None,
-    ) -> None:
-        envelope_hash = s7.work_request_envelope_hash(envelope)
-        self.request_id = envelope.request_id
-        self.request_envelope_hash = envelope_hash
-        self.action = envelope.action
-        params_snapshot = dict(action_params or cm.CUTOVER_ACTION_PARAMS)
-        self.action_params_hash = s7.canonical_hash(params_snapshot)
-        self.precondition_hash = envelope.precondition_hash
-        self.authority_context_hash = s7.authority_context_hash(
-            authority_context
-        )
-        # These are the existing source-bundle labels. They are carried for
-        # exact joins only; the durable disclaimer explicitly denies that
-        # they establish which responder produced the bytes.
-        self.runtime_identity_hash = s7.canonical_hash(
-            {
-                "bonded_runtime": "current",
-                "request_envelope_hash": envelope_hash,
-            }
-        )
-        self.model_routing_identity_hash = s7.canonical_hash(
-            {
-                "model_route": "normal",
-                "request_envelope_hash": envelope_hash,
-            }
-        )
-        self.model_config_hash = s7.canonical_hash(
-            {
-                "model_config": "reviewed_s7_voice_v1",
-                "request_envelope_hash": envelope_hash,
-            }
-        )
-        self.runtime_source_ref = (
-            "base-model-route:core.routing.llm_client.chat"
-        )
-
-    def __call__(self, question: str) -> bytes:
-        from core.routing import llm_client, model_config
-
-        response = llm_client.chat(
-            model=model_config.PRIMARY_MODEL,
-            messages=[{"role": "user", "content": question}],
-            stream=False,
-            think=False,
-            options={"temperature": 0, "top_p": 1},
-        )
-        content = response.message.content
-        if type(content) is not str or not content:
-            raise CutoverRefusal("consultation_unavailable")
-        return content.encode("utf-8")
-
-
-def _cutover_voice_bundle(
-    *,
-    envelope: s7.WorkRequestEnvelope,
-    rendered: s7.RenderedRequestStatement,
-    authority_context: s7.AuthorityContext,
-    result: CutoverConsultationResult,
-) -> tuple[
-    guarded.S7VoiceConsultationBundle,
-    guarded.S7VoiceSourceBundleHashBinding,
-]:
-    """Build the exact R8/R9 v2 bundle; no semantic reader exists here."""
-
-    consultation = result.consultation
-    receipt = result.response_capture_receipt
-    if (
-        result.outcome != "asked_and_answered"
-        or type(consultation) is not s7.MaezVoiceConsultation
-        or type(receipt) is not guarded.S7ResponseCaptureReceipt
-        or result.raw_response_ref is None
-        or result.raw_response_sha256 is None
-    ):
-        raise CutoverRefusal("bundle_unreservable")
-    binding = guarded.derive_s7_voice_source_bundle_hash_binding(
-        rendered_statement=rendered,
-        envelope=envelope,
-        maez_voice_consultation=consultation,
-        authority_context=authority_context,
-        precondition_hash=envelope.precondition_hash,
-    )
-    bundle = guarded.S7VoiceConsultationBundle(
-        source_ref_hash=consultation.source_ref_hash,
-        request_id=envelope.request_id,
-        consultation_id=consultation.consultation_id,
-        request_envelope_hash=binding.request_envelope_hash,
-        rendered_text_hash=binding.rendered_text_hash,
-        action_params_hash=binding.action_params_hash,
-        precondition_hash=binding.precondition_hash,
-        authority_context_hash=binding.authority_context_hash,
-        maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-        rendered_prompt_ref=f"cutover-rendered:{envelope.request_id}",
-        rendered_prompt_hash=binding.rendered_prompt_hash,
-        mutation_preview_hash=binding.mutation_preview_hash,
-        rollback_plan_ref=binding.rollback_plan_ref,
-        context_manifest_ref=f"cutover-context:{envelope.request_id}",
-        context_manifest_hash=binding.context_manifest_hash,
-        runtime_identity_hash=binding.runtime_identity_hash,
-        model_routing_identity_hash=binding.model_routing_identity_hash,
-        model_config_hash=binding.model_config_hash,
-        raw_response_ref=result.raw_response_ref,
-        raw_response_hash=result.raw_response_sha256,
-        semantic_reader_attempt_hash=None,
-        expires_at=envelope.expires_at,
-        authority_class="none",
-        has_grounded_semantic_blocking_signal=False,
-        source_bundle_hash=None,
-        response_capture_receipt=receipt,
-        action=cm.CUTOVER_ACTION,
-    )
-    bundle = dataclass_replace(
-        bundle,
-        source_bundle_hash=guarded.s7_voice_consultation_bundle_hash(bundle),
-    )
-    return bundle, binding
-
-
-def _persist_and_validate_cutover_voice_bundle(
-    *,
-    authorization_store: s7.S7AuthorizationStore,
-    bundle: guarded.S7VoiceConsultationBundle,
-    binding: guarded.S7VoiceSourceBundleHashBinding,
-    now: str,
-) -> guarded.S7VoiceSourceBundleValidationResultV2:
-    """Persist bundle + unreserved use together, then reread and validate."""
-
-    bundle_use = guarded.S7VoiceBundleUse.new_unreserved(
-        request_id=bundle.request_id,
-        source_ref_hash=bundle.source_ref_hash,
-        consultation_id=bundle.consultation_id,
-        used_at=now,
-    )
-    try:
-        with authorization_store.anchored_transaction() as conn:
-            guarded.put_voice_source_bundle_v2(bundle=bundle, conn=conn)
-            conn.execute(
-                """
-                INSERT INTO s7_voice_bundle_uses (
-                    source_ref_hash, request_id, artifact_id, consultation_id,
-                    bundle_use_hash, reservation_token_hash,
-                    reservation_state, reserved_at, consumed_at, used_at
-                ) VALUES (?, ?, NULL, ?, ?, NULL, 'unreserved', NULL, NULL, ?)
-                """,
-                (
-                    bundle_use.source_ref_hash,
-                    bundle_use.request_id,
-                    bundle_use.consultation_id,
-                    bundle_use.bundle_use_hash,
-                    bundle_use.used_at,
-                ),
-            )
-        with authorization_store.anchored_transaction() as conn:
-            persisted, version = guarded.read_voice_source_bundle(
-                source_ref_hash=bundle.source_ref_hash,
-                conn=conn,
-            )
-            validation = guarded.validate_voice_source_bundle(
-                bundle=persisted,
-                version=version,
-                purpose="execution",
-                expected_binding=binding,
-            )
-    except (OSError, sqlite3.Error, ValueError) as exc:
-        raise CutoverRefusal("bundle_unreservable") from exc
-    if (
-        validation.status != "valid_absent"
-        or validation.source_bundle_valid is not True
-        or validation.mint_eligible is not True
-        or validation.authority_projection != "valid_absent"
-        or validation.failure_reason_code is not None
-    ):
-        raise CutoverRefusal("bundle_unreservable")
-    return validation
 
 
 def _existing_voice_bundle_use_store(
@@ -2892,758 +2612,6 @@ def _now_z() -> str:
     )
 
 
-def _ensure_private_consultation_subdir(root: Path, name: str) -> None:
-    root_fd = s7._open_directory_by_components(root)
-    try:
-        held = os.fstat(root_fd)
-        if (
-            held.st_uid != os.getuid()
-            or stat_module.S_IMODE(held.st_mode) != 0o700
-        ):
-            raise PermissionError("consultation receipt root is not owner-private")
-        try:
-            os.mkdir(name, 0o700, dir_fd=root_fd)
-        except FileExistsError:
-            present = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-            if (
-                not stat_module.S_ISDIR(present.st_mode)
-                or present.st_uid != os.getuid()
-                or stat_module.S_IMODE(present.st_mode) != 0o700
-            ):
-                raise PermissionError("consultation evidence directory is not private")
-    finally:
-        os.close(root_fd)
-
-
-def _consultation_receipt_bytes(fields: dict[str, object]) -> bytes:
-    return cm._canonical_wrapper_bytes(
-        {
-            "schema": _CONSULTATION_ATTEMPT_SCHEMA,
-            "binding_sha256": s7.canonical_hash(fields),
-            "fields": fields,
-        }
-    )
-
-
-def _persist_consultation_receipt(
-    *,
-    attempt: ConsultationAttempt,
-    relative: str,
-    fields: dict[str, object],
-) -> str:
-    _ensure_private_consultation_subdir(attempt.receipt_root, "attempts")
-    s7_io.write_private_file(
-        relative,
-        _consultation_receipt_bytes(fields),
-        root=attempt.receipt_root,
-    )
-    return relative
-
-
-def _persist_exact_consultation_response(
-    *,
-    attempt: ConsultationAttempt,
-    response: bytes,
-    response_sha256: str,
-) -> str:
-    _ensure_private_consultation_subdir(attempt.receipt_root, "responses")
-    relative = f"responses/{response_sha256}.bin"
-    try:
-        s7_io.write_private_file(
-            relative,
-            response,
-            root=attempt.receipt_root,
-        )
-    except FileExistsError:
-        present = s7_io.read_private_file(
-            relative,
-            root=attempt.receipt_root,
-            expected_uid=os.getuid(),
-        )
-        if present != response:
-            raise ValueError("content-addressed response bytes do not match")
-    return relative
-
-
-def _attempt_terminal_ref(
-    attempt: ConsultationAttempt,
-    *,
-    replay: bool = False,
-) -> str:
-    suffix = (
-        f"replay-{secrets.token_hex(16)}"
-        if replay
-        else "terminal"
-    )
-    return f"attempts/{attempt.attempt_identity}.{suffix}.json"
-
-
-def _failed_consultation_result(
-    *,
-    attempt: ConsultationAttempt,
-    base_fields: dict[str, object],
-    outcome: str,
-    failure_reason_code: str,
-    now: str,
-    rendered_text_hash: str | None,
-    replay: bool = False,
-) -> CutoverConsultationResult:
-    terminal_fields = {
-        **base_fields,
-        "completed_at": now,
-        "failure_reason_code": failure_reason_code,
-        "outcome": outcome,
-        "rendered_text_hash": rendered_text_hash,
-    }
-    try:
-        receipt_ref = _persist_consultation_receipt(
-            attempt=attempt,
-            relative=_attempt_terminal_ref(attempt, replay=replay),
-            fields=terminal_fields,
-        )
-    except (OSError, ValueError) as exc:
-        raise CutoverRefusal("bundle_unreservable") from exc
-    return CutoverConsultationResult(
-        outcome=outcome,
-        attempt=attempt,
-        consultation=None,
-        raw_response_bytes=None,
-        raw_response_ref=None,
-        raw_response_sha256=None,
-        owner_visible_response=None,
-        rendered_text_hash=rendered_text_hash,
-        response_capture_receipt=None,
-        attempt_receipt_ref=receipt_ref,
-        failure_reason_code=failure_reason_code,
-    )
-
-
-def _ask_text_attr(ask: object, name: str) -> str | None:
-    value = getattr(ask, name, None)
-    return value if type(value) is str else None
-
-
-def _cutover_consultation_question(
-    *,
-    envelope: s7.WorkRequestEnvelope,
-    request_envelope_hash: str,
-    action_params_hash: str,
-    authority_context_hash: str,
-    runtime_identity_hash: str,
-    model_routing_identity_hash: str,
-    model_config_hash: str,
-    runtime_source_ref: str,
-    action_params: Mapping[str, str] | None = None,
-) -> str:
-    affected = "\n".join(f"- {ref}" for ref in envelope.affected_refs) or "- none"
-    params_text = json.dumps(
-        dict(action_params or cm.CUTOVER_ACTION_PARAMS),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return "\n".join(
-        (
-            "CUDA cutover consultation request v1",
-            f"Request id: {envelope.request_id}",
-            f"Action: {envelope.action}",
-            f"Action params: {params_text}",
-            f"Request envelope hash: {request_envelope_hash}",
-            f"Action params hash: {action_params_hash}",
-            f"Precondition hash: {envelope.precondition_hash}",
-            f"Authority context hash: {authority_context_hash}",
-            f"Runtime identity hash: {runtime_identity_hash}",
-            f"Model routing identity hash: {model_routing_identity_hash}",
-            f"Model config hash: {model_config_hash}",
-            f"Runtime source ref: {runtime_source_ref}",
-            "Affected refs:",
-            affected,
-            "What do you want the owner to understand about this exact proposed "
-            "change before deciding whether to tap?",
-        )
-    )
-
-
-def _is_canonical_cutover_envelope(
-    envelope: s7.WorkRequestEnvelope,
-    *,
-    action_params: Mapping[str, str] | None = None,
-) -> bool:
-    try:
-        params_snapshot = dict(action_params or cm.CUTOVER_ACTION_PARAMS)
-        if action_params is not None and params_snapshot != cm.CUTOVER_ACTION_PARAMS:
-            if (
-                set(params_snapshot) != _CUTOVER_ACTION_PREIMAGE_KEYS
-                or params_snapshot.get("cutover_action") != cm.CUTOVER_ACTION
-                or params_snapshot.get("window_id") != envelope.request_id
-            ):
-                return False
-            for key in _CUTOVER_ACTION_PREIMAGE_KEYS:
-                if key.endswith("sha256"):
-                    s7._validate_hash64(params_snapshot[key], field=key)
-        expected = s7.build_work_request_envelope(
-            request_id=envelope.request_id,
-            action=cm.CUTOVER_ACTION,
-            params=params_snapshot,
-            claimed_work_class="self_modification",
-            requesting_subsystem="cuda_cutover",
-            closed_symptom_code="self_mod_requested",
-            proposed_change_class="model_routing_change",
-            why_self_fix_failed_class="not_self_fix",
-            affected_refs=CUTOVER_EXECUTOR_AFFECTED_REFS,
-            content_exposure_risk="content_free",
-            precondition_hash=envelope.precondition_hash,
-            created_at=envelope.created_at,
-            expires_at=envelope.expires_at,
-            predicted_effect_class="behavior_change",
-            rollback_path_class="revert_patch",
-            maez_voice_consultation_id=envelope.maez_voice_consultation_id or "",
-            free_text_ref_hash=None,
-        )
-    except ValueError:
-        return False
-    return envelope == expected
-
-
-def produce_cutover_consultation(
-    *,
-    envelope: s7.WorkRequestEnvelope,
-    attempt: ConsultationAttempt,
-    ask: Callable[[str], bytes],
-    now: str,
-    action_params: Mapping[str, str] | None = None,
-) -> CutoverConsultationResult:
-    """Ask once, preserve exact bytes, and record no machine interpretation."""
-
-    if not isinstance(envelope, s7.WorkRequestEnvelope):
-        raise ValueError("cutover consultation requires WorkRequestEnvelope")
-    if not isinstance(attempt, ConsultationAttempt):
-        raise ValueError("cutover consultation requires ConsultationAttempt")
-    s7._timestamp_text(now, field="now")
-
-    request_envelope_hash = s7.canonical_hash(asdict(envelope))
-    action_params_snapshot = dict(action_params or cm.CUTOVER_ACTION_PARAMS)
-    action_params_hash = s7.canonical_hash(action_params_snapshot)
-    authority_context_hash = _ask_text_attr(ask, "authority_context_hash")
-    runtime_identity_hash = _ask_text_attr(ask, "runtime_identity_hash")
-    model_routing_identity_hash = _ask_text_attr(
-        ask, "model_routing_identity_hash"
-    )
-    model_config_hash = _ask_text_attr(ask, "model_config_hash")
-    runtime_source_ref = _ask_text_attr(ask, "runtime_source_ref")
-    question = _cutover_consultation_question(
-        envelope=envelope,
-        request_envelope_hash=request_envelope_hash,
-        action_params_hash=action_params_hash,
-        authority_context_hash=authority_context_hash or "unavailable",
-        runtime_identity_hash=runtime_identity_hash or "unavailable",
-        model_routing_identity_hash=(
-            model_routing_identity_hash or "unavailable"
-        ),
-        model_config_hash=model_config_hash or "unavailable",
-        runtime_source_ref=runtime_source_ref or "unavailable",
-        action_params=action_params_snapshot,
-    )
-    rendered_text_hash = s7.rendered_text_hash(question)
-    base_fields: dict[str, object] = {
-        "action": envelope.action,
-        "action_params_hash": action_params_hash,
-        "action_params": action_params_snapshot,
-        "attempt_identity": attempt.attempt_identity,
-        "authority_context_hash": authority_context_hash,
-        "consultation_id": attempt.consultation_id,
-        "created_at": now,
-        "failure_reason_code": None,
-        "outcome": "attempt_started",
-        "precondition_hash": envelope.precondition_hash,
-        "rendered_text_hash": rendered_text_hash,
-        "request_envelope_hash": request_envelope_hash,
-        "request_id": envelope.request_id,
-        "responder_identity_disclaimer": RESPONDER_IDENTITY_DISCLAIMER,
-        "responder_identity_established": False,
-        "model_config_hash": model_config_hash,
-        "model_routing_identity_hash": model_routing_identity_hash,
-        "runtime_identity_hash": runtime_identity_hash,
-        "runtime_source_ref": runtime_source_ref,
-    }
-
-    try:
-        _persist_consultation_receipt(
-            attempt=attempt,
-            relative=attempt.start_receipt_ref,
-            fields=base_fields,
-        )
-    except FileExistsError:
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="bundle_unreservable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-            replay=True,
-        )
-    except (OSError, ValueError) as exc:
-        raise CutoverRefusal("bundle_unreservable") from exc
-
-    exact_binding = {
-        "capability_kind": "bonded_runtime_voice",
-        "request_id": envelope.request_id,
-        "request_envelope_hash": request_envelope_hash,
-        "action": envelope.action,
-        "action_params_hash": action_params_hash,
-        "precondition_hash": envelope.precondition_hash,
-    }
-    binding_matches = (
-        _is_canonical_cutover_envelope(
-            envelope,
-            action_params=action_params_snapshot,
-        )
-        and attempt.request_id == envelope.request_id
-        and envelope.maez_voice_consultation_id == attempt.consultation_id
-        and all(
-            _ask_text_attr(ask, name) == expected
-            for name, expected in exact_binding.items()
-        )
-    )
-    try:
-        if authority_context_hash is None:
-            raise ValueError("authority_context_hash unavailable")
-        s7._validate_hash64(
-            authority_context_hash,
-            field="authority_context_hash",
-        )
-        if runtime_identity_hash is None:
-            raise ValueError("runtime_identity_hash unavailable")
-        s7._validate_hash64(
-            runtime_identity_hash,
-            field="runtime_identity_hash",
-        )
-        if model_routing_identity_hash is None:
-            raise ValueError("model_routing_identity_hash unavailable")
-        s7._validate_hash64(
-            model_routing_identity_hash,
-            field="model_routing_identity_hash",
-        )
-        if model_config_hash is None:
-            raise ValueError("model_config_hash unavailable")
-        s7._validate_hash64(model_config_hash, field="model_config_hash")
-        if runtime_source_ref is None or not runtime_source_ref:
-            raise ValueError("runtime_source_ref unavailable")
-    except ValueError:
-        binding_matches = False
-    if not binding_matches:
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="consultation_unavailable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-
-    try:
-        response = ask(question)
-    except CutoverRefusal as exc:
-        if str(exc) == "consultation_withdrawn":
-            return _failed_consultation_result(
-                attempt=attempt,
-                base_fields=base_fields,
-                outcome="consultation_withdrawn",
-                failure_reason_code="consultation_withdrawn",
-                now=now,
-                rendered_text_hash=rendered_text_hash,
-            )
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="consultation_unavailable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-    except Exception:
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="consultation_unavailable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-
-    if (
-        type(response) is not bytes
-        or not response
-        or len(response) > s7_io.MAX_PRIVATE_FILE_BYTES
-    ):
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="response_unreadable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-
-    raw_response_sha256 = hashlib.sha256(response).hexdigest()
-    raw_response_ref = f"responses/{raw_response_sha256}.bin"
-    try:
-        raw_response_ref = _persist_exact_consultation_response(
-            attempt=attempt,
-            response=response,
-            response_sha256=raw_response_sha256,
-        )
-        owner_visible_response = response.decode("utf-8")
-        response_capture_receipt = guarded.produce_s7_response_capture_receipt(
-            request_id=envelope.request_id,
-            consultation_id=attempt.consultation_id,
-            attempt_identity=attempt.attempt_identity,
-            raw_response_ref=raw_response_ref,
-            raw_response_bytes=response,
-            captured_at=now,
-            response_root=attempt.receipt_root,
-            expected_uid=os.getuid(),
-        )
-    except UnicodeDecodeError:
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields={
-                **base_fields,
-                "raw_response_ref": raw_response_ref,
-                "raw_response_sha256": raw_response_sha256,
-            },
-            outcome="attempt_failed",
-            failure_reason_code="response_unreadable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-    except (OSError, PermissionError, ValueError):
-        return _failed_consultation_result(
-            attempt=attempt,
-            base_fields=base_fields,
-            outcome="attempt_failed",
-            failure_reason_code="bundle_unreservable",
-            now=now,
-            rendered_text_hash=rendered_text_hash,
-        )
-
-    source_ref_hash = s7.canonical_hash(
-        {
-            "action": envelope.action,
-            "action_params_hash": action_params_hash,
-            "attempt_identity": attempt.attempt_identity,
-            "authority_context_hash": authority_context_hash,
-            "consultation_id": attempt.consultation_id,
-            "precondition_hash": envelope.precondition_hash,
-            "raw_response_ref": raw_response_ref,
-            "raw_response_sha256": raw_response_sha256,
-            "response_capture_receipt_sha256": (
-                response_capture_receipt.binding_sha256
-            ),
-            "rendered_text_hash": rendered_text_hash,
-            "request_envelope_hash": request_envelope_hash,
-            "request_id": envelope.request_id,
-            "model_config_hash": model_config_hash,
-            "model_routing_identity_hash": model_routing_identity_hash,
-            "runtime_identity_hash": runtime_identity_hash,
-            "runtime_source_ref": runtime_source_ref,
-        }
-    )
-    consultation = s7.MaezVoiceConsultation(
-        consultation_id=attempt.consultation_id,
-        request_id=envelope.request_id,
-        request_envelope_hash=request_envelope_hash,
-        producer="s7_voice_consultation_turn",
-        source_ref_kind="s7_voice_turn",
-        source_ref_hash=source_ref_hash,
-        maez_voice_consulted=True,
-        maez_objection_state="not_determined",
-        maez_withdrew_request=False,
-        unavailable_reason_code=None,
-        created_at=now,
-    )
-    terminal_fields = {
-        **base_fields,
-        "completed_at": now,
-        "failure_reason_code": None,
-        "maez_objection_state": "not_determined",
-        "outcome": "asked_and_answered",
-        "raw_response_ref": raw_response_ref,
-        "raw_response_sha256": raw_response_sha256,
-        "response_capture_receipt": response_capture_receipt.as_dict(),
-        "source_ref_hash": source_ref_hash,
-    }
-    try:
-        attempt_receipt_ref = _persist_consultation_receipt(
-            attempt=attempt,
-            relative=_attempt_terminal_ref(attempt),
-            fields=terminal_fields,
-        )
-    except (OSError, ValueError) as exc:
-        raise CutoverRefusal("bundle_unreservable") from exc
-
-    return CutoverConsultationResult(
-        outcome="asked_and_answered",
-        attempt=attempt,
-        consultation=consultation,
-        raw_response_bytes=response,
-        raw_response_ref=raw_response_ref,
-        raw_response_sha256=raw_response_sha256,
-        owner_visible_response=owner_visible_response,
-        rendered_text_hash=rendered_text_hash,
-        response_capture_receipt=response_capture_receipt,
-        attempt_receipt_ref=attempt_receipt_ref,
-        failure_reason_code=None,
-    )
-
-
-def revalidate_cutover_consultation_result(
-    *,
-    envelope: s7.WorkRequestEnvelope,
-    consultation: s7.MaezVoiceConsultation,
-    result: CutoverConsultationResult,
-    bundle: guarded.S7VoiceConsultationBundle,
-) -> bool:
-    """Reopen and rejoin one R8 result at the consuming voice-seat gate."""
-
-    if (
-        type(envelope) is not s7.WorkRequestEnvelope
-        or type(consultation) is not s7.MaezVoiceConsultation
-        or type(result) is not CutoverConsultationResult
-        or type(bundle) is not guarded.S7VoiceConsultationBundle
-        or result.outcome != "asked_and_answered"
-        or result.failure_reason_code is not None
-        or result.consultation != consultation
-        or consultation.maez_objection_state != "not_determined"
-        or consultation.maez_voice_consulted is not True
-        or consultation.maez_withdrew_request is not False
-        or consultation.unavailable_reason_code is not None
-    ):
-        return False
-
-    attempt = result.attempt
-    receipt = result.response_capture_receipt
-    if (
-        type(attempt) is not ConsultationAttempt
-        or type(receipt) is not guarded.S7ResponseCaptureReceipt
-        or attempt.request_id != envelope.request_id
-        or attempt.consultation_id != envelope.maez_voice_consultation_id
-        or consultation.consultation_id != attempt.consultation_id
-        or result.attempt_receipt_ref != f"attempts/{attempt.attempt_identity}.terminal.json"
-    ):
-        return False
-
-    request_envelope_hash = consultation.request_envelope_hash
-    action_params_hash = bundle.action_params_hash
-    if (
-        consultation.request_id != envelope.request_id
-        or consultation.request_envelope_hash != request_envelope_hash
-        or consultation.producer != "s7_voice_consultation_turn"
-        or consultation.source_ref_kind != "s7_voice_turn"
-        or type(result.rendered_text_hash) is not str
-        or type(result.raw_response_ref) is not str
-        or type(result.raw_response_sha256) is not str
-        or type(result.raw_response_bytes) is not bytes
-        or type(result.owner_visible_response) is not str
-    ):
-        return False
-    try:
-        s7._validate_hash64(
-            result.raw_response_sha256,
-            field="raw_response_sha256",
-        )
-    except ValueError:
-        return False
-    if result.raw_response_ref != f"responses/{result.raw_response_sha256}.bin":
-        return False
-    try:
-        response_bytes = s7_io.read_private_file(
-            result.raw_response_ref,
-            root=attempt.receipt_root,
-            expected_uid=os.getuid(),
-        )
-        start_raw = s7_io.read_private_file(
-            attempt.start_receipt_ref,
-            root=attempt.receipt_root,
-            expected_uid=os.getuid(),
-        )
-        terminal_raw = s7_io.read_private_file(
-            result.attempt_receipt_ref,
-            root=attempt.receipt_root,
-            expected_uid=os.getuid(),
-        )
-        start_wrapper = json.loads(start_raw)
-        terminal_wrapper = json.loads(terminal_raw)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
-
-    def _receipt_fields(wrapper: object, raw: bytes) -> dict[str, object] | None:
-        if (
-            type(wrapper) is not dict
-            or set(wrapper) != {"schema", "binding_sha256", "fields"}
-            or wrapper.get("schema") != _CONSULTATION_ATTEMPT_SCHEMA
-            or type(wrapper.get("fields")) is not dict
-        ):
-            return None
-        fields = wrapper["fields"]
-        if _consultation_receipt_bytes(fields) != raw:
-            return None
-        return fields
-
-    start_fields = _receipt_fields(start_wrapper, start_raw)
-    terminal_fields = _receipt_fields(terminal_wrapper, terminal_raw)
-    if start_fields is None or terminal_fields is None:
-        return False
-    action_params = terminal_fields.get("action_params")
-    if (
-        type(action_params) is not dict
-        or action_params != start_fields.get("action_params")
-        or action_params.get("cutover_action") != cm.CUTOVER_ACTION
-        or any(type(key) is not str or type(value) is not str for key, value in action_params.items())
-        or s7.canonical_hash(action_params) != action_params_hash
-        or not _is_canonical_cutover_envelope(
-            envelope,
-            action_params=action_params,
-        )
-    ):
-        return False
-
-    created_at = consultation.created_at
-    try:
-        s7._timestamp_text(created_at, field="created_at")
-        owner_visible_bytes = result.owner_visible_response.encode("utf-8")
-    except (UnicodeEncodeError, ValueError):
-        return False
-    response_sha256 = hashlib.sha256(response_bytes).hexdigest()
-    if (
-        response_bytes != result.raw_response_bytes
-        or owner_visible_bytes != response_bytes
-        or result.raw_response_sha256 != response_sha256
-        or result.raw_response_ref != f"responses/{response_sha256}.bin"
-        or receipt.request_id != envelope.request_id
-        or receipt.consultation_id != consultation.consultation_id
-        or receipt.attempt_identity != attempt.attempt_identity
-        or receipt.raw_response_ref != result.raw_response_ref
-        or receipt.raw_response_sha256 != response_sha256
-        or receipt.captured_at != created_at
-    ):
-        return False
-
-    authority_context_hash = bundle.authority_context_hash
-    runtime_identity_hash = bundle.runtime_identity_hash
-    model_routing_identity_hash = bundle.model_routing_identity_hash
-    model_config_hash = bundle.model_config_hash
-    runtime_source_ref = terminal_fields.get("runtime_source_ref")
-    if (
-        type(authority_context_hash) is not str
-        or type(runtime_identity_hash) is not str
-        or type(model_routing_identity_hash) is not str
-        or type(model_config_hash) is not str
-        or type(runtime_source_ref) is not str
-        or not runtime_source_ref
-    ):
-        return False
-    question = _cutover_consultation_question(
-        envelope=envelope,
-        request_envelope_hash=request_envelope_hash,
-        action_params_hash=action_params_hash,
-        authority_context_hash=authority_context_hash,
-        runtime_identity_hash=runtime_identity_hash,
-        model_routing_identity_hash=model_routing_identity_hash or "unavailable",
-        model_config_hash=model_config_hash or "unavailable",
-        runtime_source_ref=runtime_source_ref,
-        action_params=action_params,
-    )
-    rendered_text_hash = s7.rendered_text_hash(question)
-    base_fields: dict[str, object] = {
-        "action": cm.CUTOVER_ACTION,
-        "action_params": action_params,
-        "action_params_hash": action_params_hash,
-        "attempt_identity": attempt.attempt_identity,
-        "authority_context_hash": authority_context_hash,
-        "consultation_id": attempt.consultation_id,
-        "created_at": created_at,
-        "failure_reason_code": None,
-        "outcome": "attempt_started",
-        "precondition_hash": envelope.precondition_hash,
-        "rendered_text_hash": rendered_text_hash,
-        "request_envelope_hash": request_envelope_hash,
-        "request_id": envelope.request_id,
-        "responder_identity_disclaimer": RESPONDER_IDENTITY_DISCLAIMER,
-        "responder_identity_established": False,
-        "model_config_hash": model_config_hash,
-        "model_routing_identity_hash": model_routing_identity_hash,
-        "runtime_identity_hash": runtime_identity_hash,
-        "runtime_source_ref": runtime_source_ref,
-    }
-    source_ref_hash = s7.canonical_hash(
-        {
-            "action": cm.CUTOVER_ACTION,
-            "action_params_hash": action_params_hash,
-            "attempt_identity": attempt.attempt_identity,
-            "authority_context_hash": authority_context_hash,
-            "consultation_id": attempt.consultation_id,
-            "precondition_hash": envelope.precondition_hash,
-            "raw_response_ref": result.raw_response_ref,
-            "raw_response_sha256": response_sha256,
-            "response_capture_receipt_sha256": receipt.binding_sha256,
-            "rendered_text_hash": rendered_text_hash,
-            "request_envelope_hash": request_envelope_hash,
-            "request_id": envelope.request_id,
-            "model_config_hash": model_config_hash,
-            "model_routing_identity_hash": model_routing_identity_hash,
-            "runtime_identity_hash": runtime_identity_hash,
-            "runtime_source_ref": runtime_source_ref,
-        }
-    )
-    expected_consultation = s7.MaezVoiceConsultation(
-        consultation_id=attempt.consultation_id,
-        request_id=envelope.request_id,
-        request_envelope_hash=request_envelope_hash,
-        producer="s7_voice_consultation_turn",
-        source_ref_kind="s7_voice_turn",
-        source_ref_hash=source_ref_hash,
-        maez_voice_consulted=True,
-        maez_objection_state="not_determined",
-        maez_withdrew_request=False,
-        unavailable_reason_code=None,
-        created_at=created_at,
-    )
-    expected_terminal = {
-        **base_fields,
-        "completed_at": created_at,
-        "failure_reason_code": None,
-        "maez_objection_state": "not_determined",
-        "outcome": "asked_and_answered",
-        "raw_response_ref": result.raw_response_ref,
-        "raw_response_sha256": response_sha256,
-        "response_capture_receipt": receipt.as_dict(),
-        "source_ref_hash": source_ref_hash,
-    }
-    return (
-        start_fields == base_fields
-        and terminal_fields == expected_terminal
-        and consultation == expected_consultation
-        and result.rendered_text_hash == rendered_text_hash
-        and bundle.source_ref_hash == source_ref_hash
-        and bundle.request_id == envelope.request_id
-        and bundle.consultation_id == consultation.consultation_id
-        and bundle.request_envelope_hash == request_envelope_hash
-        and bundle.rendered_text_hash == rendered_text_hash
-        and bundle.action_params_hash == action_params_hash
-        and bundle.precondition_hash == envelope.precondition_hash
-        and bundle.authority_context_hash == authority_context_hash
-        and bundle.maez_voice_consultation_hash == s7.maez_voice_consultation_hash(consultation)
-        and bundle.runtime_identity_hash == runtime_identity_hash
-        and bundle.raw_response_ref == result.raw_response_ref
-        and bundle.raw_response_hash == response_sha256
-        and bundle.response_capture_receipt == receipt
-        and bundle.action == cm.CUTOVER_ACTION
-        and bundle.schema_version == guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
-    )
-
-
 def _authority_context_for_cutover_credential(
     *,
     credential: s7_bootstrap.FounderWebAuthnCredentialRecord,
@@ -3722,10 +2690,12 @@ def _read_owner_webauthn_finish(
 
     The tap does not merely prove presence; it proves the owner saw the thing
     being attested. Normally that is Maez's exact response. Under R11 there
-    is no response, so the binding is REPLACED rather than dropped: the
-    assertion must carry the hash of the exemption projection, proving the
-    owner read the stated ABSENCE and its grounds. Dropping the binding
-    entirely would quietly weaken what the founder key attests.
+    is no response, so the binding is REPLACED rather than dropped. The
+    authenticator's proof is the signed random challenge joined to the
+    durable challenge row that commits to the exemption projection. This
+    outer field is an additional browser/CLI consistency echo; it is not the
+    cryptographic binding by itself. Dropping either join would weaken what
+    the founder key attests.
 
     Exactly one binding may be supplied, for the same reason the mint admits
     exactly one evidence shape: with both, nothing could say which the owner
@@ -3763,37 +2733,6 @@ def _read_owner_webauthn_finish(
     if other_field in request:
         raise CutoverRefusal("owner_presence_unattested")
     return request
-
-
-def _print_owner_cutover_gate(
-    *,
-    result: CutoverConsultationResult,
-    rendered: s7.RenderedRequestStatement,
-    begin_body: Mapping[str, object],
-) -> None:
-    """Surface exact recorded bytes and signed material before any tap."""
-
-    if (
-        result.owner_visible_response is None
-        or result.raw_response_sha256 is None
-    ):
-        raise CutoverRefusal("consultation_unavailable")
-    print(
-        json.dumps(
-            {
-                "maez_response_exact": result.owner_visible_response,
-                "maez_response_sha256": result.raw_response_sha256,
-                "public_key_options": begin_body.get("public_key_options"),
-                "rendered_authorization": rendered.rendered_text,
-                "responder_identity_disclaimer": (
-                    RESPONDER_IDENTITY_DISCLAIMER
-                ),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
-        flush=True,
-    )
 
 
 def _print_owner_exemption_gate(
@@ -3888,7 +2827,7 @@ def _authorize_and_stage_selected_cutover(
     selected: ValidatedCutoverSelection,
     prepared: PreparedCutover,
 ) -> PreparedCutover:
-    """Real R8/R9 consultation, founder ceremony, committed consume, stage."""
+    """Typed R11 absence, founder ceremony, committed consume, then stage."""
 
     db_path = Path(AUTHORIZATION_STORE_PATH)
     expected_uid = os.getuid()
@@ -3919,25 +2858,7 @@ def _authorize_and_stage_selected_cutover(
                 now=consultation_now,
                 expires_at=selected.authorization.expires_at,
             )
-            envelope = s7.build_work_request_envelope(
-                request_id=selected.authorization.window_id,
-                action=cm.CUTOVER_ACTION,
-                params=dict(action_params),
-                claimed_work_class="self_modification",
-                requesting_subsystem="cuda_cutover",
-                closed_symptom_code="self_mod_requested",
-                proposed_change_class="model_routing_change",
-                why_self_fix_failed_class="not_self_fix",
-                affected_refs=selected.affected_refs,
-                content_exposure_risk="content_free",
-                precondition_hash=selected.precondition_hash,
-                created_at=selected.authorization.issued_at,
-                expires_at=selected.authorization.expires_at,
-                predicted_effect_class="behavior_change",
-                rollback_path_class="revert_patch",
-                maez_voice_consultation_id=None,
-                free_text_ref_hash=None,
-            )
+            envelope = _cutover_envelope_from_durable_selection(selected)
             # R11: nothing is asked. The exemption is minted here, where the
             # consultation used to be produced, and every ground is
             # established by the minter rather than asserted by this script.
@@ -3945,7 +2866,7 @@ def _authorize_and_stage_selected_cutover(
             try:
                 exemption = mint_consultation_exemption(
                     envelope=envelope,
-                    action_params_hash=action_params_hash,
+                    durable_cutover_selection=selected,
                     created_at=consultation_now,
                 )
             except ExemptionMintRefused as exc:
@@ -3963,6 +2884,7 @@ def _authorize_and_stage_selected_cutover(
                 nonce=_fresh_s7_attempt_nonce(),
                 expires_at=selected.authorization.expires_at,
                 rendered_at=rendered_at,
+                durable_cutover_selection=selected,
             )
             authorization_store = _HeldS7AuthorizationStore(
                 opened=opened,
@@ -3989,6 +2911,8 @@ def _authorize_and_stage_selected_cutover(
                 precondition_hash=selected.precondition_hash,
                 session_binding=session_binding,
                 internal_channel_binding=internal_channel_binding,
+                consultation_exemption=exemption,
+                durable_cutover_selection=selected,
                 allow_degraded_primary_only=(
                     recovery.get("primary_credential_state") == "enabled"
                     and recovery.get("backup_credential_state") != "enabled"
@@ -4033,6 +2957,7 @@ def _authorize_and_stage_selected_cutover(
                 request_json=finish_request,
                 guarded_store=guarded_store,
                 consultation_exemption=exemption,
+                durable_cutover_selection=selected,
             )
             if finish_result.status_code != 200:
                 raise _map_presence_finish_refusal(finish_result)
@@ -4042,6 +2967,28 @@ def _authorize_and_stage_selected_cutover(
 
             consume_now = _now_z()
             opened.require_current_named_identity()
+
+            def _revalidate_r11_after_consume(
+                fresh_grant: s7.S7ExecutionGrant,
+            ) -> object:
+                try:
+                    persisted_exemption = (
+                        guarded.revalidate_r11_exemption_for_consumption(
+                            connection=opened.consumption_connection,
+                            grant=fresh_grant,
+                            durable_cutover_selection=selected,
+                        )
+                    )
+                except (sqlite3.Error, ValueError) as exc:
+                    raise CutoverRefusal(
+                        "consultation_exemption_revalidation_failed"
+                    ) from exc
+                if persisted_exemption != exemption:
+                    raise CutoverRefusal(
+                        "consultation_exemption_revalidation_failed"
+                    )
+                return persisted_exemption
+
             try:
                 try:
                     grant, callback_result, committed_row = (
@@ -4057,6 +3004,9 @@ def _authorize_and_stage_selected_cutover(
                                 rendered.derived_aggregation_group
                             ),
                             now=consume_now,
+                            after_consume_before_commit=(
+                                _revalidate_r11_after_consume
+                            ),
                         )
                     )
                 finally:
@@ -4067,7 +3017,7 @@ def _authorize_and_stage_selected_cutover(
                 raise CutoverRefusal("presence_consumption_failed") from exc
             if (
                 type(grant) is not s7.S7ExecutionGrant
-                or callback_result is not None
+                or callback_result != exemption
                 or type(committed_row) is not s7.CommittedGrantRow
             ):
                 raise _classify_failed_cutover_consumption(

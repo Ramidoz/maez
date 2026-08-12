@@ -122,7 +122,8 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     authority_context_hash TEXT NOT NULL DEFAULT '',
     maez_voice_consultation_hash TEXT,
     derived_aggregation_group TEXT NOT NULL DEFAULT '',
-    nonce TEXT NOT NULL DEFAULT ''
+    nonce TEXT NOT NULL DEFAULT '',
+    consultation_exemption_projection_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS s7_refusal_history (
@@ -997,10 +998,23 @@ class S7WebAuthnBootstrapStore:
         now: str,
         expires_at: str,
         uv_required: bool,
+        consultation_exemption_projection_hash: str | None = None,
     ) -> dict[str, Any]:
         _parse_time(now)
         _parse_time(expires_at)
         _validate_hash64_text(precondition_hash, field="precondition_hash")
+        if consultation_exemption_projection_hash is not None:
+            _validate_hash64_text(
+                consultation_exemption_projection_hash,
+                field="consultation_exemption_projection_hash",
+            )
+        if (
+            rendered_statement.maez_voice_consultation_hash is not None
+            and consultation_exemption_projection_hash is not None
+        ):
+            raise ValueError(
+                "authorization challenge carries both voice and R11 evidence"
+            )
         challenge_id = f"s7auth_{uuid.uuid4().hex}"
         challenge_b64 = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
         session_binding_hash = _fingerprint(session_binding)
@@ -1013,6 +1027,7 @@ class S7WebAuthnBootstrapStore:
             precondition_hash,
             str(rendered_statement.authority_context_hash),
             str(rendered_statement.maez_voice_consultation_hash or ""),
+            str(consultation_exemption_projection_hash or ""),
             str(rendered_statement.derived_aggregation_group),
             str(rendered_statement.nonce),
         )
@@ -1042,10 +1057,11 @@ class S7WebAuthnBootstrapStore:
                     internal_channel_binding_hash, request_id, uv_required, created_at,
                     request_envelope_hash, rendered_text_hash, action_params_hash,
                     precondition_hash, authority_context_hash, maez_voice_consultation_hash,
+                    consultation_exemption_projection_hash,
                     derived_aggregation_group, nonce
                 ) VALUES (?, 'authorize_guarded_request', ?, NULL, NULL, ?, ?,
                           'localhost', 'http://localhost:11437', 'localhost:11437',
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     challenge_id,
@@ -1063,6 +1079,7 @@ class S7WebAuthnBootstrapStore:
                     precondition_hash,
                     rendered_statement.authority_context_hash,
                     rendered_statement.maez_voice_consultation_hash,
+                    consultation_exemption_projection_hash,
                     rendered_statement.derived_aggregation_group,
                     rendered_statement.nonce,
                 ),
@@ -1082,6 +1099,9 @@ class S7WebAuthnBootstrapStore:
             "precondition_hash": precondition_hash,
             "authority_context_hash": rendered_statement.authority_context_hash,
             "maez_voice_consultation_hash": rendered_statement.maez_voice_consultation_hash,
+            "consultation_exemption_projection_hash": (
+                consultation_exemption_projection_hash
+            ),
             "derived_aggregation_group": rendered_statement.derived_aggregation_group,
             "nonce": rendered_statement.nonce,
             "session_binding_hash": session_binding_hash,
@@ -1109,7 +1129,9 @@ class S7WebAuthnBootstrapStore:
                        expires_at, consumed_at, invalidated_at, request_id,
                        request_envelope_hash, rendered_text_hash, action_params_hash,
                        precondition_hash, authority_context_hash,
-                       maez_voice_consultation_hash, derived_aggregation_group,
+                       maez_voice_consultation_hash,
+                       consultation_exemption_projection_hash,
+                       derived_aggregation_group,
                        nonce, uv_required
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
@@ -1143,7 +1165,9 @@ class S7WebAuthnBootstrapStore:
                        expires_at, consumed_at, invalidated_at, request_id,
                        request_envelope_hash, rendered_text_hash, action_params_hash,
                        precondition_hash, authority_context_hash,
-                       maez_voice_consultation_hash, derived_aggregation_group,
+                       maez_voice_consultation_hash,
+                       consultation_exemption_projection_hash,
+                       derived_aggregation_group,
                        nonce, uv_required
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?

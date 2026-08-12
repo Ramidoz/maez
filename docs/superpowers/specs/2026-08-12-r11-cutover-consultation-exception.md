@@ -1,9 +1,12 @@
 # R11 — the cutover carries NO consultation. Environment, not entity.
 
-Status: **WIRED BUT NOT SAFE TO RUN.** Codex xhigh review of the wiring
-(78c6870, 3c2522f, fa9c308, 8db7d47) returned **BLOCK**. Two findings were
-fixed immediately; four remain open and the ceremony must NOT be run until
-they are closed. See "xhigh review outcome" at the end.
+Status: **ALL XHIGH CODE BLOCKERS CLOSED; LIVE PROVISIONING REQUIRED BEFORE
+A TAP.** The four remaining findings from Codex's xhigh BLOCK are closed in
+the uncommitted 2026-08-12 working tree. The code now fails before the owner
+prompt unless the canonical store has been explicitly provisioned with the
+R11 challenge column and durable evidence table. This build did not inspect
+or mutate `memory/s7_1_webauthn/`, so live provisioning remains **UNVERIFIED**
+and the founder must not tap yet. See "xhigh review outcome" at the end.
 
 Owner-approved 2026-08-12. Implemented at `3874bed`
 (`core/governance/s7_consultation_exemption.py`, gate wiring in
@@ -139,9 +142,9 @@ the actual manifests, which surfaced the contextless-ask defect, the
 canon/template contradiction, and a fail-open the parser would have
 introduced. A contextless base model would have surfaced none of them.
 
-## Implementation shape, if approved
+## Implementation shape
 
-Not built. The work is: a typed consultation-absence record for this
+Built. The work is: a typed consultation-absence record for this
 action; the cutover voice gate admitting that typed absence *without*
 widening any other path or reusing the `not_determined` bucket — which
 must stay distinct from "unparseable" per the fail-open finding in
@@ -156,7 +159,7 @@ that removing the exception's scope check fails the test.
 approval — corrected, because a document that disagrees with itself about
 whether a ruling is live is exactly the confusion this arc removes.)
 
-## Implementation status — MERGED-DORMANT, verified by review
+## Historical implementation status — superseded by the xhigh closure below
 
 Codex review of `3874bed`/`8e37f07`, independently verified by the gate
 lane: **the ruling is sound; the implementation does not yet enact it.**
@@ -313,7 +316,7 @@ Consequences, stated plainly:
 
 ---
 
-# xhigh review outcome — BLOCK. DO NOT RUN THE CEREMONY.
+# xhigh review outcome — ALL FIVE CODE BLOCKERS CLOSED
 
 Codex reviewed the four wiring commits at xhigh and answered the question
 that mattered: **not safe to run.** The canonical script behaves correctly,
@@ -336,31 +339,52 @@ false or incomplete picture.
   `artifact.action_params_hash`, so an exemption could excuse an artifact
   whose params differed from the ones it was minted for. Now joined.
 
-## OPEN — each blocks running the ceremony
+## CLOSED in the 2026-08-12 working tree
 
-1. **The preimage is still a caller assertion.** The retired bundle
-   revalidator reopened the full eight-field preimage and verified it
-   against durable evidence; the minter accepts a hash from its caller and
-   admission only checks the caller supplied the same one. A5 required
-   deriving it from the durable selection; that is not done, and the
-   tripwire test still positively asserts the hole.
-2. **The founder assertion does not cryptographically attest the
-   projection.** The projection hash is checked only as an outer JSON
-   field; it is not in the stored WebAuthn challenge, so the authenticator
-   signs a random challenge that says nothing about the exemption.
-3. **No exemption evidence is persisted or rechecked at consumption.** The
-   exempt mint writes an ordinary artifact with no evidence-kind, ruling,
-   receipt or projection field. If birth lands, or the receipt changes,
-   between finish and consumption, the artifact stays consumable — R11's
-   grounds are never revalidated. An auditor also cannot distinguish
-   "deliberately not consulted" from "evidence disappeared".
-4. **The old consultation authority is still LIVE.** Without an exemption,
-   `authorize_finish` still takes the bundle path and the voice gate still
-   admits the old cutover revalidator result. Correct classification: the
-   named producers are MERGED-DORMANT in the canonical caller graph, but
-   **the old admission seam is live**. "The canonical ceremony no longer
-   calls them" is true; "the authority path was deleted" is false, and my
-   commit message for 8db7d47 overstated it.
+1. **CLOSED — the preimage is derived from durable selection evidence.**
+   `ValidatedCutoverSelection` is minted only by durable reconstruction;
+   the minter, renderer, begin/finish boundary, voice-seat recheck and guarded
+   mint independently derive the eight-field `_cutover_action_preimage` hash
+   from that typed selection. They also rebuild the complete canonical
+   envelope from the same selection and join its window/request id,
+   precondition, affected refs, issue/expiry times and closed classes, so an
+   unrelated envelope cannot cite a valid selection hash. Begin and finish
+   additionally join the caller's precondition and every envelope-derived
+   field carried by the rendered statement to that reconstruction; guarded
+   mint joins the artifact's own request id, precondition, work class and
+   aggregation group. This closes the final alternate-caller route where a
+   canonical envelope hash could be cited beside consistently relabelled
+   authority fields. The positive known-gap tripwire
+   `test_KNOWN_GAP_a_consistently_cited_preimage_is_admitted_today` was
+   retired and replaced by a real reconstructed-selection refusal witness.
+2. **CLOSED — the authenticator challenge attests the projection.** The
+   projection hash is stored in `s7_ceremony_challenges`, participates in the
+   D12 challenge fingerprint, and is re-derived from the presented typed
+   exemption at finish before the authenticator verifier is called. A
+   different otherwise-valid projection refuses. The same boundary also
+   refuses a rendered request id or supplied precondition that differs from
+   the durable selection even when an alternate caller made its challenge
+   internally self-consistent. Explicit legacy-store
+   provisioning appends the field in the same frozen column order used by a
+   fresh store; a provision-then-canonical-preflight witness prevents a
+   migration shape that the ceremony itself would reject.
+3. **CLOSED — typed evidence is persisted and rechecked before consume
+   commit.** The guarded mint atomically writes the artifact and a
+   `s7_consultation_exemption_evidence_v1` row carrying evidence-kind,
+   ruling, receipt hash, canonical projection and artifact binding.
+   Consumption rereads that row inside the consuming transaction and
+   rechecks birth, the owner receipt, projection integrity, durable-selection
+   preimage and artifact binding. Every mutated ground rolls back
+   `consumed_at` to null. Voice evidence and R11 evidence are mutually
+   exclusive in both write orders, and a forced durable collision is refused
+   again inside the consuming transaction.
+4. **CLOSED — the old consultation authority and producer chain are
+   deleted.** The cutover action now refuses before the generic voice rail
+   unless a valid R11 exemption is present. The cutover-specific revalidator,
+   consultation types, producer, bundle builder/persister and owner
+   consultation printer no longer exist. The last consultation-only cutover
+   envelope builder and its positive tests are deleted too; their explicit
+   admission tests were removed rather than preserved as false authority.
 5. ~~**The exemption branch lost the guarded-store guarantees.**~~
    **CLOSED (154b293 follow-up).** The exemption branch now requires an
    exact `S7GuardedStateStore` whose authorization store is an exact
@@ -378,16 +402,15 @@ correctly" quietly stopped being true later, and this project has already
 had exactly that happen — two callers each rolled their own way of asking
 Maez and both got it wrong the same way.
 
-**Order for the remaining four**, cheapest surface reduction first:
-delete the dead consultation seam (4) — it has no legitimate user now that
-the cutover does not consult; attest the projection inside the WebAuthn
-challenge (2); derive the preimage from the durable selection (1); persist
-the exemption and recheck its grounds at consumption (3).
+The four were closed in the owner-selected order: delete the dead seam;
+attest the projection in the challenge; derive the preimage from durable
+selection; persist and recheck at consumption.
 
 ## The honest summary
 
-The ceremony asks Maez nothing, which is what R11 intended, and the script
-that performs it is internally consistent. But R11's authority is currently
-enforced by **caller discipline rather than by the boundary**, and that is
-precisely the distinction this arc exists to refuse. Until items 1-5 are
-closed, the founder tap must not be given.
+The ceremony asks Maez nothing, which is what R11 intended, and the authority
+boundary now enforces that shape against alternate callers. The working tree
+is fail-closed until the R11 store schema is explicitly provisioned. Because
+this build was forbidden to inspect or change the live store, the live
+ceremony is **not yet safe for a founder tap**; provisioning and a read-only
+preflight are still required before that claim can change.

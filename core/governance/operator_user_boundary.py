@@ -3746,47 +3746,6 @@ def build_brain_swap_work_request_envelope(
     )
 
 
-def build_cutover_work_request_envelope(
-    *,
-    request_id: str,
-    action: str,
-    params: dict[str, Any],
-    affected_refs: tuple[str, ...],
-    precondition_hash: str,
-    created_at: str,
-    expires_at: str,
-    maez_voice_consultation_id: str,
-) -> WorkRequestEnvelope:
-    """Build the CUDA cutover envelope from supplied per-attempt fields."""
-    expected_action = "model_routing.cutover_cuda"
-    if action != expected_action:
-        raise ValueError("S7 cutover request must target model_routing.cutover_cuda")
-    params_snapshot = dict(params or {})
-    if params_snapshot != {"cutover_action": expected_action}:
-        raise ValueError("S7 cutover request params do not match the frozen action")
-    if type(maez_voice_consultation_id) is not str or not maez_voice_consultation_id:
-        raise ValueError("S7 cutover request requires a Maez consultation id")
-    return build_work_request_envelope(
-        request_id=request_id,
-        action=expected_action,
-        params=params_snapshot,
-        claimed_work_class="self_modification",
-        requesting_subsystem="cuda_cutover",
-        closed_symptom_code="self_mod_requested",
-        proposed_change_class="model_routing_change",
-        why_self_fix_failed_class="not_self_fix",
-        affected_refs=tuple(affected_refs),
-        content_exposure_risk="content_free",
-        precondition_hash=precondition_hash,
-        created_at=created_at,
-        expires_at=expires_at,
-        predicted_effect_class="behavior_change",
-        rollback_path_class="revert_patch",
-        maez_voice_consultation_id=maez_voice_consultation_id,
-        free_text_ref_hash=None,
-    )
-
-
 def brain_swap_execution_authorized(
     *,
     envelope: WorkRequestEnvelope,
@@ -4922,6 +4881,7 @@ def render_request_statement(
     rendered_at: str,
     renderer_version: str = RENDERER_VERSION,
     consultation_exemption: Any | None = None,
+    durable_cutover_selection: Any | None = None,
 ) -> RenderedRequestStatement:
     _validate_hash64(action_params_hash, field="action_params_hash")
     if not nonce:
@@ -4935,6 +4895,13 @@ def render_request_statement(
     objection = "not applicable"
     objection_state = "none"
     unavailable = "no"
+    if (
+        consultation_exemption is not None
+        and maez_voice_consultation is not None
+    ):
+        raise ValueError(
+            "S7 request carries both consultation exemption and voice evidence"
+        )
     if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES and (
         consultation_exemption is not None
     ):
@@ -4950,8 +4917,10 @@ def render_request_statement(
         if not consultation_exemption_admits(
             envelope=envelope,
             exemption=consultation_exemption,
-            action_params_hash=action_params_hash,
+            durable_cutover_selection=durable_cutover_selection,
             ledger_writes_enabled=False,
+        ) or action_params_hash != getattr(
+            consultation_exemption, "action_params_hash", None
         ):
             raise ValueError("consultation exemption does not admit this request")
         consulted = MAEZ_CONSULTED_NOT_PERFORMED_R11
