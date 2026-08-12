@@ -361,10 +361,28 @@ false or incomplete picture.
    **the old admission seam is live**. "The canonical ceremony no longer
    calls them" is true; "the authority path was deleted" is false, and my
    commit message for 8db7d47 overstated it.
-5. **The exemption branch lost the guarded-store guarantees.** The bundle
-   branch requires an exact `S7GuardedStateStore` bound to the ceremony
-   database; the exemption branch checks neither, so a fake or
-   different-database store could satisfy finish.
+5. ~~**The exemption branch lost the guarded-store guarantees.**~~
+   **CLOSED (154b293 follow-up).** The exemption branch now requires an
+   exact `S7GuardedStateStore` whose authorization store is an exact
+   `S7AuthorizationStore` bound to THIS ceremony's database, refusing with
+   `s7_guarded_state_store_required` otherwise. A fake store, or one
+   writing to a different database than the challenge and credential were
+   consumed from, no longer satisfies finish.
+
+**Owner decision 2026-08-12: close all five before the tap.** The
+alternative — fix only what affects the honest path, record the
+alternate-caller risk as accepted, and tap sooner — was put to the owner
+with its cost stated and declined. Reason it was declined matters and is
+kept: every hard rule in this codebase exists because "it works when used
+correctly" quietly stopped being true later, and this project has already
+had exactly that happen — two callers each rolled their own way of asking
+Maez and both got it wrong the same way.
+
+**Order for the remaining four**, cheapest surface reduction first:
+delete the dead consultation seam (4) — it has no legitimate user now that
+the cutover does not consult; attest the projection inside the WebAuthn
+challenge (2); derive the preimage from the durable selection (1); persist
+the exemption and recheck its grounds at consumption (3).
 
 ## The honest summary
 

@@ -601,7 +601,24 @@ class S7LocalWebAuthnCeremonyService:
                     body={"ok": False, "error": "s7_consultation_exemption_invalid"},
                     status_code=409,
                 )
-            authorization_store = s7.S7AuthorizationStore(store.db_path)
+            # The bundle branch requires an EXACT guarded store bound to this
+            # ceremony's database. The exemption branch checked neither, so a
+            # fake or different-database store could satisfy finish: the
+            # challenge and credential consumed in one database while the
+            # artifact was written to another, or to nothing at all.
+            from core.governance import s7_guarded_execution as guarded
+
+            exempt_store = getattr(guarded_store, "authorization_store", None)
+            if (
+                type(guarded_store) is not guarded.S7GuardedStateStore
+                or type(exempt_store) is not s7.S7AuthorizationStore
+                or exempt_store.db_path != store.db_path
+            ):
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_guarded_state_store_required"},
+                    status_code=409,
+                )
+            authorization_store = exempt_store
         elif voice_seat_work:
             from core.governance import s7_guarded_execution as guarded
 
