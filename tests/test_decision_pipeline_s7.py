@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import sqlite3
@@ -16,7 +17,7 @@ from core.action_classifier import ClassificationResult, IntentCategory
 from core import decision_pipeline as _dp
 from core.decision_pipeline import DecisionPipeline
 from core.decision.pending_cards import CardStatus, CardStoreError, PendingCardStore
-from tests.s7_store_fixture import fresh_store_at
+from tests.s7_store_fixture import fresh_v2_store_at
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -391,10 +392,13 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             S7VoiceConsultationBundle,
             S7VoiceConsultationBundleStore,
             S7VoiceSourceBundleHashBinding,
-            validate_s7_voice_source_bundle,
+            put_voice_source_bundle_v2,
+            read_voice_source_bundle,
+            s7_voice_consultation_bundle_hash,
+            validate_voice_source_bundle,
         )
 
-        auth_store = fresh_store_at(bootstrap_store.db_path)
+        auth_store = fresh_v2_store_at(bootstrap_store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(bootstrap_store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(bootstrap_store.db_path)
@@ -433,32 +437,46 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             f"rendered-prompt-{card.request_id}",
             rendered_prompt_text,
         )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                source_ref_hash=consultation.source_ref_hash,
-                request_id=env.request_id,
-                consultation_id=consultation.consultation_id,
-                request_envelope_hash=binding.request_envelope_hash,
-                rendered_text_hash=binding.rendered_text_hash,
-                action_params_hash=binding.action_params_hash,
-                precondition_hash=binding.precondition_hash,
-                authority_context_hash=binding.authority_context_hash,
-                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-                rendered_prompt_ref=f"rendered-prompt-{card.request_id}",
-                rendered_prompt_hash=binding.rendered_prompt_hash,
-                mutation_preview_hash=binding.mutation_preview_hash,
-                rollback_plan_ref=binding.rollback_plan_ref,
-                context_manifest_ref=manifest.manifest_id,
-                context_manifest_hash=binding.context_manifest_hash,
-                runtime_identity_hash=binding.runtime_identity_hash,
-                model_routing_identity_hash=binding.model_routing_identity_hash,
-                model_config_hash=binding.model_config_hash,
-                raw_response_ref=f"raw-response-{card.request_id}",
-                raw_response_hash=s7.canonical_hash(raw_text),
-                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
-                expires_at="2026-05-18T11:05:00+00:00",
-            )
+        bundle = S7VoiceConsultationBundle(
+            source_ref_hash=consultation.source_ref_hash,
+            request_id=env.request_id,
+            consultation_id=consultation.consultation_id,
+            request_envelope_hash=binding.request_envelope_hash,
+            rendered_text_hash=binding.rendered_text_hash,
+            action_params_hash=binding.action_params_hash,
+            precondition_hash=binding.precondition_hash,
+            authority_context_hash=binding.authority_context_hash,
+            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+            rendered_prompt_ref=f"rendered-prompt-{card.request_id}",
+            rendered_prompt_hash=binding.rendered_prompt_hash,
+            mutation_preview_hash=binding.mutation_preview_hash,
+            rollback_plan_ref=binding.rollback_plan_ref,
+            context_manifest_ref=manifest.manifest_id,
+            context_manifest_hash=binding.context_manifest_hash,
+            runtime_identity_hash=binding.runtime_identity_hash,
+            model_routing_identity_hash=binding.model_routing_identity_hash,
+            model_config_hash=binding.model_config_hash,
+            raw_response_ref=f"raw-response-{card.request_id}",
+            raw_response_hash=s7.canonical_hash(raw_text),
+            semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            expires_at="2026-05-18T11:05:00+00:00",
+            action=rendered.action,
         )
+        bundle = replace(
+            bundle,
+            source_bundle_hash=s7_voice_consultation_bundle_hash(bundle),
+        )
+        with auth_store.anchored_transaction() as conn:
+            put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+            persisted_bundle, version = read_voice_source_bundle(
+                source_ref_hash=consultation.source_ref_hash,
+                conn=conn,
+            )
+            validation = validate_voice_source_bundle(
+                bundle=persisted_bundle,
+                version=version,
+                purpose="execution",
+            )
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=env.request_id,
@@ -470,14 +488,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         guarded_store = S7GuardedStateStore(
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
-        )
-        validation = validate_s7_voice_source_bundle(
-            consultation=consultation,
-            bundle_store=bundle_store,
-            bundle_use_store=bundle_use_store,
-            semantic_reader_attempt_store=attempt_store,
-            expected_binding=binding,
-            now=NOW,
         )
         begin = service.authorize_begin(
             now=NOW,
@@ -802,7 +812,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 1)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertEqual(consumed_at, s7._timestamp_text(NOW, field="now"))
@@ -840,7 +850,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -930,7 +940,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNotNone(consumed_at)
@@ -1002,7 +1012,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1108,7 +1118,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization_a.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization_a.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1143,7 +1153,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1183,7 +1193,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1358,6 +1368,7 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                 verifier=_S7RouteVerifier(),
                 store_factory=lambda: bootstrap_store,
             )
+            store = fresh_v2_store_at(bootstrap_store.db_path)
             begin = service.authorize_begin(
                 now=NOW,
                 rendered_statement=rendered,
@@ -1379,7 +1390,6 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                     "authentication_response": {"clientDataJSON": "valid-auth"},
                 },
             )
-            store = fresh_store_at(bootstrap_store.db_path)
             grant, _ = store.consume_for_execution(
                 finish.body["artifact_id"],
                 rendered=rendered,

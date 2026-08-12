@@ -1614,6 +1614,7 @@ class TestCutoverVoiceGateAdmission:
         tmp_path: Path,
         column: str,
         replacement: str,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         envelope, result, guarded_store = _cutover_voice_gate_fixture(
             tmp_path,
@@ -1640,6 +1641,18 @@ class TestCutoverVoiceGateAdmission:
         assert control.status_code == 200
         assert refused.status_code == 409
         assert refused.body["error"] == "s7_voice_seat_unresolved"
+
+        def broken_read(**_kwargs):
+            raise ValueError("cutover durable-row read seam broke")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(guarded, "read_voice_source_bundle", broken_read)
+            with pytest.raises(ValueError, match="durable-row read seam broke"):
+                _call_cutover_voice_gate(
+                    envelope=envelope,
+                    result=result,
+                    guarded_store=guarded_store,
+                )
 
     def test_generic_not_determined_does_not_import_the_cutover_stack(
         self,

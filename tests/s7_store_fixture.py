@@ -13,6 +13,7 @@ is the failure mode the prerequisite exists to remove.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -95,8 +96,28 @@ def fresh_store_at(path: Path):
     return s7.S7AuthorizationStore(path)
 
 
+def fresh_v2_store_at(path: Path):
+    """Initialise and privately activate the executable v2 planes for a test."""
+
+    path = Path(path)
+    fresh_store_at(path)
+    from core.governance import s7_v2_migration
+
+    dir_fd = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        s7_v2_migration._migrate_authorization_store_to_v2_at(
+            store_dir_fd=dir_fd,
+        )
+    finally:
+        os.close(dir_fd)
+    return s7.S7AuthorizationStore(path)
+
+
 def bootstrap_with_authorization(root: Path):
-    """A bootstrap store whose authorization table has been initialised.
+    """A bootstrap store whose executable authorization plane is activated.
 
     TEST SETUP ONLY. The daemon and S7WebAuthnBootstrapStore are
     deliberately NOT taught to initialise: that would put creation
@@ -107,5 +128,5 @@ def bootstrap_with_authorization(root: Path):
     from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
     store = S7WebAuthnBootstrapStore(root)
-    s7.initialise_authorization_store(store.db_path)
+    fresh_v2_store_at(store.db_path)
     return store

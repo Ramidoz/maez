@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import tempfile
 import unittest
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from tests.s7_store_fixture import fresh_store_at
+from tests.s7_store_fixture import fresh_v2_store_at
 
 NOW = "2026-05-18T12:00:00+00:00"
 FUTURE = "2026-05-18T12:05:00+00:00"
@@ -187,10 +188,13 @@ class S71DreamExecutionTests(unittest.TestCase):
             S7VoiceConsultationBundle,
             S7VoiceConsultationBundleStore,
             S7VoiceSourceBundleHashBinding,
-            validate_s7_voice_source_bundle,
+            put_voice_source_bundle_v2,
+            read_voice_source_bundle,
+            s7_voice_consultation_bundle_hash,
+            validate_voice_source_bundle,
         )
 
-        auth_store = fresh_store_at(store.db_path)
+        auth_store = fresh_v2_store_at(store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(store.db_path)
@@ -230,32 +234,46 @@ class S71DreamExecutionTests(unittest.TestCase):
             f"rendered-prompt-{rendered.request_id}",
             rendered_prompt_text,
         )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                source_ref_hash=consultation.source_ref_hash,
-                request_id=envelope.request_id,
-                consultation_id=consultation.consultation_id,
-                request_envelope_hash=binding.request_envelope_hash,
-                rendered_text_hash=binding.rendered_text_hash,
-                action_params_hash=binding.action_params_hash,
-                precondition_hash=binding.precondition_hash,
-                authority_context_hash=binding.authority_context_hash,
-                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-                rendered_prompt_ref=f"rendered-prompt-{rendered.request_id}",
-                rendered_prompt_hash=binding.rendered_prompt_hash,
-                mutation_preview_hash=binding.mutation_preview_hash,
-                rollback_plan_ref=binding.rollback_plan_ref,
-                context_manifest_ref=manifest.manifest_id,
-                context_manifest_hash=binding.context_manifest_hash,
-                runtime_identity_hash=binding.runtime_identity_hash,
-                model_routing_identity_hash=binding.model_routing_identity_hash,
-                model_config_hash=binding.model_config_hash,
-                raw_response_ref=f"raw-response-{rendered.request_id}",
-                raw_response_hash=s7.canonical_hash(raw_text),
-                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
-                expires_at=FUTURE,
-            )
+        bundle = S7VoiceConsultationBundle(
+            source_ref_hash=consultation.source_ref_hash,
+            request_id=envelope.request_id,
+            consultation_id=consultation.consultation_id,
+            request_envelope_hash=binding.request_envelope_hash,
+            rendered_text_hash=binding.rendered_text_hash,
+            action_params_hash=binding.action_params_hash,
+            precondition_hash=binding.precondition_hash,
+            authority_context_hash=binding.authority_context_hash,
+            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+            rendered_prompt_ref=f"rendered-prompt-{rendered.request_id}",
+            rendered_prompt_hash=binding.rendered_prompt_hash,
+            mutation_preview_hash=binding.mutation_preview_hash,
+            rollback_plan_ref=binding.rollback_plan_ref,
+            context_manifest_ref=manifest.manifest_id,
+            context_manifest_hash=binding.context_manifest_hash,
+            runtime_identity_hash=binding.runtime_identity_hash,
+            model_routing_identity_hash=binding.model_routing_identity_hash,
+            model_config_hash=binding.model_config_hash,
+            raw_response_ref=f"raw-response-{rendered.request_id}",
+            raw_response_hash=s7.canonical_hash(raw_text),
+            semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            expires_at=FUTURE,
+            action=rendered.action,
         )
+        bundle = replace(
+            bundle,
+            source_bundle_hash=s7_voice_consultation_bundle_hash(bundle),
+        )
+        with auth_store.anchored_transaction() as conn:
+            put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+            persisted_bundle, version = read_voice_source_bundle(
+                source_ref_hash=consultation.source_ref_hash,
+                conn=conn,
+            )
+            validation = validate_voice_source_bundle(
+                bundle=persisted_bundle,
+                version=version,
+                purpose="execution",
+            )
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=envelope.request_id,
@@ -267,14 +285,6 @@ class S71DreamExecutionTests(unittest.TestCase):
         guarded_store = S7GuardedStateStore(
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
-        )
-        validation = validate_s7_voice_source_bundle(
-            consultation=consultation,
-            bundle_store=bundle_store,
-            bundle_use_store=bundle_use_store,
-            semantic_reader_attempt_store=attempt_store,
-            expected_binding=binding,
-            now=NOW,
         )
         begin = service.authorize_begin(
             now=NOW,
@@ -386,7 +396,7 @@ class S71DreamExecutionTests(unittest.TestCase):
             prop = dream.get_proposal(prop_id)
             with sqlite3.connect(authorization.store.db_path) as conn:
                 consumed_at = conn.execute(
-                    "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                    "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                     (authorization.artifact_id,),
                 ).fetchone()[0]
 
@@ -546,7 +556,7 @@ class S71DreamExecutionTests(unittest.TestCase):
             prop = dream.get_proposal(prop_id)
             with sqlite3.connect(authorization.store.db_path) as conn:
                 consumed_at = conn.execute(
-                    "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                    "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                     (authorization.artifact_id,),
                 ).fetchone()[0]
 

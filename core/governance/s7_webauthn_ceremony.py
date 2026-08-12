@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import sqlite3
 from typing import Any, Callable
 import uuid
 
@@ -541,16 +540,22 @@ class S7LocalWebAuthnCeremonyService:
             return _d12_binding_mismatch()
         from core.governance import operator_user_boundary as s7
 
-        if (
-            getattr(envelope, "derived_work_class", None) in s7.VOICE_SEAT_WORK_CLASSES
-            and guarded_store is not None
-        ):
-            from core.governance.s7_guarded_execution import (
-                S7VoiceSourceBundleValidationResult,
-            )
+        voice_seat_work = (
+            getattr(envelope, "derived_work_class", None)
+            in s7.VOICE_SEAT_WORK_CLASSES
+        )
+        fresh_source_bundle_validation = None
+        if voice_seat_work:
+            from core.governance import s7_guarded_execution as guarded
 
             source_bundle_ok = (
-                isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult)
+                type(guarded_store) is guarded.S7GuardedStateStore
+                and type(source_bundle_validation)
+                is guarded.S7VoiceSourceBundleValidationResultV2
+                and getattr(source_bundle_validation, "_token_verified", False) is True
+                and source_bundle_validation.schema_version
+                == guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+                and source_bundle_validation.action == rendered_statement.action
                 and (
                     (
                         source_bundle_validation.status == "valid_absent"
@@ -563,11 +568,30 @@ class S7LocalWebAuthnCeremonyService:
                         source_bundle_validation.status == "blocking_present"
                         and source_bundle_validation.source_bundle_valid is True
                         and source_bundle_validation.mint_eligible is False
-                        and source_bundle_validation.authority_projection == "grounded_refusal"
+                        and source_bundle_validation.authority_projection
+                        == "grounded_refusal"
                         and source_bundle_validation.failure_reason_code is None
                     )
                 )
             )
+            if source_bundle_ok is True:
+                fresh_source_bundle_validation = (
+                    _revalidate_finish_voice_source_bundle(
+                        envelope=envelope,
+                        consultation=maez_voice_consultation,
+                        guarded_store=guarded_store,
+                        source_bundle_binding=source_bundle_binding,
+                        source_ref_hash=source_ref_hash,
+                        source_bundle_validation=source_bundle_validation,
+                        cutover_consultation_result=cutover_consultation_result,
+                        now=now,
+                    )
+                )
+                source_bundle_ok = (
+                    type(fresh_source_bundle_validation)
+                    is guarded.S7VoiceSourceBundleValidationResultV2
+                    and fresh_source_bundle_validation == source_bundle_validation
+                )
             if source_bundle_ok is not True:
                 return S7CeremonyServiceResult(
                     body={
@@ -577,6 +601,20 @@ class S7LocalWebAuthnCeremonyService:
                     },
                     status_code=409,
                 )
+            authorization_store = guarded_store.authorization_store
+            if (
+                type(authorization_store) is not s7.S7AuthorizationStore
+                or authorization_store.db_path != store.db_path
+            ):
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_guarded_state_store_required",
+                    },
+                    status_code=409,
+                )
+        else:
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
         voice = authorization_voice_seat_recheck(
             envelope=envelope,
             maez_voice_consultation=maez_voice_consultation,
@@ -587,6 +625,7 @@ class S7LocalWebAuthnCeremonyService:
             guarded_store=guarded_store,
             source_bundle_binding=source_bundle_binding,
             source_ref_hash=source_ref_hash,
+            source_bundle_validation=source_bundle_validation,
             cutover_consultation_result=cutover_consultation_result,
         )
         if voice.status_code != 200:
@@ -689,9 +728,9 @@ class S7LocalWebAuthnCeremonyService:
         try:
             mint_authorization_artifact(
                 artifact=artifact,
-                authorization_store=s7.S7AuthorizationStore(store.db_path),
+                authorization_store=authorization_store,
                 guarded_store=guarded_store,
-                source_bundle_validation=source_bundle_validation,
+                source_bundle_validation=fresh_source_bundle_validation,
                 source_ref_hash=source_ref_hash,
                 reservation_token=reservation_token,
                 now=now,
@@ -787,6 +826,7 @@ def authorization_voice_seat_recheck(
     guarded_store: Any | None = None,
     source_bundle_binding: Any | None = None,
     source_ref_hash: str | None = None,
+    source_bundle_validation: Any | None = None,
     cutover_consultation_result: Any | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
@@ -862,14 +902,15 @@ def authorization_voice_seat_recheck(
             requester_ref=requester_ref,
             now=now,
         )
-    if not _generic_voice_evidence_revalidated_at_gate(
+    if _generic_voice_evidence_revalidated_at_gate(
         envelope=envelope,
         consultation=maez_voice_consultation,
         guarded_store=guarded_store,
         source_bundle_binding=source_bundle_binding,
         source_ref_hash=source_ref_hash,
+        source_bundle_validation=source_bundle_validation,
         now=now,
-    ):
+    ) is None:
         return _voice_seat_block(
             "absent",
             reason="missing_or_invalid_voice_evidence",
@@ -896,8 +937,9 @@ def _generic_voice_evidence_revalidated_at_gate(
     guarded_store: Any | None,
     source_bundle_binding: Any | None,
     source_ref_hash: str | None,
+    source_bundle_validation: Any | None,
     now: str | None,
-) -> bool:
+) -> Any | None:
     """Reopen generic response/reader evidence before accepting `absent`."""
 
     from core.governance import operator_user_boundary as s7
@@ -918,35 +960,127 @@ def _generic_voice_evidence_revalidated_at_gate(
         or source_bundle_binding.maez_voice_consultation_hash
         != s7.maez_voice_consultation_hash(consultation)
     ):
-        return False
-    try:
-        db_path = guarded_store.authorization_store.db_path
-        validation = guarded.validate_s7_voice_source_bundle(
-            consultation=consultation,
-            bundle_store=guarded.S7VoiceConsultationBundleStore(db_path),
-            bundle_use_store=guarded.S7VoiceBundleUseStore(db_path),
-            semantic_reader_attempt_store=guarded.S7SemanticReaderAttemptStore(db_path),
+        return None
+    db_path = guarded_store.authorization_store.db_path
+    bundle_store = guarded.S7VoiceConsultationBundleStore(db_path)
+    bundle_use_store = guarded.S7VoiceBundleUseStore(db_path)
+    attempt_store = guarded.S7SemanticReaderAttemptStore(db_path)
+    with guarded_store.authorization_store.anchored_transaction() as conn:
+        try:
+            bundle, version = guarded.read_voice_source_bundle(
+                source_ref_hash=source_ref_hash,
+                conn=conn,
+            )
+        except guarded.S7VoiceSourceBundleEvidenceInvalid:
+            return None
+        validation = guarded.validate_voice_source_bundle(
+            bundle=bundle,
+            version=version,
+            purpose="execution",
             expected_binding=source_bundle_binding,
-            now=now,
         )
-        return (
-            type(validation) is guarded.S7VoiceSourceBundleValidationResult
-            and getattr(validation, "_validator_produced", False) is True
-            and validation.status == "valid_absent"
+        validation_complete = (
+            validation.status == "valid_absent"
             and validation.source_bundle_valid is True
             and validation.mint_eligible is True
             and validation.authority_projection == "valid_absent"
             and validation.failure_reason_code is None
+        ) or (
+            validation.status == "blocking_present"
+            and validation.source_bundle_valid is True
+            and validation.mint_eligible is False
+            and validation.authority_projection == "grounded_refusal"
+            and validation.failure_reason_code is None
         )
-    except (
-        AttributeError,
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-        sqlite3.DatabaseError,
-    ):
-        return False
+        if (
+            version != guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+            or bundle.action != envelope.action
+            or not validation_complete
+            or validation.action != envelope.action
+            or (
+                source_bundle_validation is not None
+                and validation != source_bundle_validation
+            )
+            or not guarded._bundle_fresh(bundle, now=now)
+            or not guarded._consultation_bundle_cross_fields_valid(
+                consultation=consultation,
+                bundle=bundle,
+            )
+            or not guarded._context_manifest_policy_valid(
+                bundle=bundle,
+                bundle_store=bundle_store,
+                expected_binding=source_bundle_binding,
+                connection=conn,
+            )
+        ):
+            return None
+        bundle_use = bundle_use_store.get_for_source_ref(
+            source_ref_hash,
+            connection=conn,
+        )
+        if (
+            bundle_use is None
+            or bundle_use.reservation_state != "unreserved"
+            or bundle_use.artifact_id is not None
+            or bundle_use.reservation_token_hash is not None
+            or bundle_use.reserved_at is not None
+            or bundle_use.consumed_at is not None
+        ):
+            return None
+        if bundle.rendered_prompt_ref is None or bundle.rendered_prompt_hash is None:
+            return None
+        rendered_prompt = bundle_store.read_rendered_prompt(
+            bundle.rendered_prompt_ref,
+            connection=conn,
+        )
+        if (
+            rendered_prompt is None
+            or s7.canonical_hash(rendered_prompt) != bundle.rendered_prompt_hash
+        ):
+            return None
+        if bundle.raw_response_ref is None or bundle.raw_response_hash is None:
+            return None
+        raw_response = bundle_store.read_raw_response(
+            bundle.raw_response_ref,
+            connection=conn,
+        )
+        if (
+            raw_response is None
+            or s7.canonical_hash(raw_response) != bundle.raw_response_hash
+        ):
+            return None
+        if bundle.semantic_reader_attempt_hash is None:
+            return None
+        attempt = attempt_store.get(
+            bundle.semantic_reader_attempt_hash,
+            connection=conn,
+        )
+        if (
+            attempt is None
+            or attempt.semantic_reader_route_identity_hash
+            not in guarded.REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES
+        ):
+            return None
+        effective_reader_outcome = guarded._effective_reader_outcome_replays(
+            raw_response=raw_response,
+            attempt=attempt,
+        )
+        if (
+            not guarded._replayed_reducer_fields_match(
+                consultation=consultation,
+                effective_reader_outcome=effective_reader_outcome,
+            )
+            or not guarded._replayed_authority_fields_match(
+                bundle=bundle,
+                effective_reader_outcome=effective_reader_outcome,
+            )
+            or not guarded._authority_predicate_valid(
+                consultation=consultation,
+                bundle=bundle,
+            )
+        ):
+            return None
+        return validation
 
 
 def _cutover_voice_evidence_revalidated_at_gate(
@@ -956,8 +1090,8 @@ def _cutover_voice_evidence_revalidated_at_gate(
     guarded_store: Any | None,
     source_ref_hash: str | None,
     cutover_consultation_result: Any | None,
-) -> bool:
-    """Reopen cutover evidence here; a caller's label or verdict is not evidence."""
+) -> Any | None:
+    """Return only the fresh v2 result joined to the durable R8/R9 evidence."""
 
     from core.governance import operator_user_boundary as s7
     from core.governance import s7_guarded_execution as guarded
@@ -973,39 +1107,82 @@ def _cutover_voice_evidence_revalidated_at_gate(
         or source_ref_hash != consultation.source_ref_hash
         or type(cutover_consultation_result) is not cuda_cutover.CutoverConsultationResult
     ):
-        return False
-    try:
-        with guarded_store.authorization_store.anchored_transaction() as conn:
+        return None
+    with guarded_store.authorization_store.anchored_transaction() as conn:
+        try:
             bundle, version = guarded.read_voice_source_bundle(
                 source_ref_hash=source_ref_hash,
                 conn=conn,
             )
-            validation = guarded.validate_voice_source_bundle(
+        except guarded.S7VoiceSourceBundleEvidenceInvalid:
+            return None
+        validation = guarded.validate_voice_source_bundle(
+            bundle=bundle,
+            version=version,
+            purpose="execution",
+        )
+        mint_eligible = (
+            type(validation) is guarded.S7VoiceSourceBundleValidationResultV2
+            and getattr(validation, "_token_verified", False) is True
+            and validation.status == "valid_absent"
+            and validation.source_bundle_valid is True
+            and validation.mint_eligible is True
+            and validation.authority_projection == "valid_absent"
+            and validation.failure_reason_code is None
+            and validation.schema_version
+            == guarded.S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+            and validation.action is not None
+        )
+        if mint_eligible is not True:
+            return None
+        guarded.require_source_bundle_validation_for_mint(validation)
+        if (
+            validation.action != cuda_migration.CUTOVER_ACTION
+            or validation.source_bundle_hash != bundle.source_bundle_hash
+            or validation.binding_hash
+            != guarded._voice_source_bundle_binding_hash(bundle)
+            or not cuda_cutover.revalidate_cutover_consultation_result(
+                envelope=envelope,
+                consultation=consultation,
+                result=cutover_consultation_result,
                 bundle=bundle,
-                version=version,
-                purpose="execution",
             )
-            guarded.require_source_bundle_validation_for_mint(validation)
-            return (
-                validation.action == cuda_migration.CUTOVER_ACTION
-                and validation.source_bundle_hash == bundle.source_bundle_hash
-                and validation.binding_hash == guarded._voice_source_bundle_binding_hash(bundle)
-                and cuda_cutover.revalidate_cutover_consultation_result(
-                    envelope=envelope,
-                    consultation=consultation,
-                    result=cutover_consultation_result,
-                    bundle=bundle,
-                )
-            )
-    except (
-        AttributeError,
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-        sqlite3.DatabaseError,
-    ):
-        return False
+        ):
+            return None
+        return validation
+
+
+def _revalidate_finish_voice_source_bundle(
+    *,
+    envelope: Any,
+    consultation: Any,
+    guarded_store: Any,
+    source_bundle_binding: Any | None,
+    source_ref_hash: str | None,
+    source_bundle_validation: Any,
+    cutover_consultation_result: Any | None,
+    now: str,
+) -> Any | None:
+    """Reopen the authoritative v2 row before any authenticator side effect."""
+
+    if getattr(envelope, "action", None) == "model_routing.cutover_cuda":
+        validation = _cutover_voice_evidence_revalidated_at_gate(
+            envelope=envelope,
+            consultation=consultation,
+            guarded_store=guarded_store,
+            source_ref_hash=source_ref_hash,
+            cutover_consultation_result=cutover_consultation_result,
+        )
+        return validation if validation == source_bundle_validation else None
+    return _generic_voice_evidence_revalidated_at_gate(
+        envelope=envelope,
+        consultation=consultation,
+        guarded_store=guarded_store,
+        source_bundle_binding=source_bundle_binding,
+        source_ref_hash=source_ref_hash,
+        source_bundle_validation=source_bundle_validation,
+        now=now,
+    )
 
 
 def authorization_aggregation_recheck(

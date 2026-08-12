@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 from daemon import maez_daemon as D
 from daemon.maez_daemon import MaezDaemon
-from tests.s7_store_fixture import fresh_store_at
 from tests.s7_store_fixture import bootstrap_with_authorization
 
 NOW = "2026-05-18T11:00:00+00:00"
@@ -673,6 +672,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             S7VoiceConsultationBundleStore,
             derive_s7_voice_source_bundle_hash_binding,
             expected_s7_voice_rendered_prompt_text,
+            put_voice_source_bundle_v2,
             s7_voice_consultation_bundle_hash,
         )
 
@@ -756,15 +756,17 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             expires_at="2026-05-18T11:05:00+00:00",
             authority_class=authority_class,
             has_grounded_semantic_blocking_signal=has_grounded_semantic_blocking_signal,
+            action=rendered.action,
         )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                **{
-                    **bundle.__dict__,
-                    "source_bundle_hash": s7_voice_consultation_bundle_hash(bundle),
-                }
-            )
+        bundle = S7VoiceConsultationBundle(
+            **{
+                **bundle.__dict__,
+                "source_bundle_hash": s7_voice_consultation_bundle_hash(bundle),
+            }
         )
+        authorization_store = s7.S7AuthorizationStore(db_path)
+        with authorization_store.anchored_transaction() as conn:
+            put_voice_source_bundle_v2(bundle=bundle, conn=conn)
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=rendered.request_id,
@@ -977,10 +979,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 raise AssertionError("voice-seat finish must validate source bundle before service")
 
         with tempfile.TemporaryDirectory() as tmp:
+            store_root = f"{tmp}/memory/s7_1_webauthn"
+            bootstrap_with_authorization(store_root)
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
                 "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
-                "S7_WEBAUTHN_STORE_ROOT": f"{tmp}/memory/s7_1_webauthn",
+                "S7_WEBAUTHN_STORE_ROOT": store_root,
             }
             with patch.dict(os.environ, env, clear=False):
                 with patch("daemon.maez_daemon.datetime", _FixedDateTime):
@@ -1160,8 +1164,9 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
     def test_daemon_voice_seat_finish_rejects_resealed_bundle_copied_binding(self):
         from dataclasses import replace
 
+        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
-            S7VoiceConsultationBundleStore,
+            read_voice_source_bundle,
             s7_voice_consultation_bundle_hash,
         )
         from daemon import maez_daemon
@@ -1191,8 +1196,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             )
             self.assertTrue(material.ok)
             binding = self._seed_valid_voice_bundle_for_material(store.db_path, material)
-            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
-            bundle = bundle_store.get_for_source_ref(binding.source_ref_hash)
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
+            with authorization_store.anchored_transaction() as conn:
+                bundle, _version = read_voice_source_bundle(
+                    source_ref_hash=binding.source_ref_hash,
+                    conn=conn,
+                )
             self.assertIsNotNone(bundle)
             assert bundle is not None
             resealed = replace(
@@ -1207,7 +1216,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             with sqlite3.connect(store.db_path) as conn:
                 conn.execute(
                     """
-                    UPDATE s7_voice_consultation_bundles
+                    UPDATE s7_voice_source_bundles_v2
                     SET action_params_hash = ?, source_bundle_hash = ?
                     WHERE source_ref_hash = ?
                     """,
@@ -1297,7 +1306,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 artifact_row = conn.execute(
                     """
                     SELECT consumed_at, consumed_by_request_id
-                    FROM s7_authorization_artifacts
+                    FROM s7_authorization_artifacts_v2
                     WHERE artifact_id = ?
                     """,
                     (finish.get_json()["artifact_id"],),
@@ -1397,9 +1406,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_row[1], 0)
 
     def test_daemon_voice_seat_finish_live_producer_persists_bundle_without_test_seed(self):
+        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
             S7VoiceBundleUseStore,
-            S7VoiceConsultationBundleStore,
+            read_voice_source_bundle,
         )
 
         request_id = "req-s7-live-producer"
@@ -1448,7 +1458,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
-            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
             bundle_use_store = S7VoiceBundleUseStore(store.db_path)
             bundle_uses = []
             with sqlite3.connect(store.db_path) as conn:
@@ -1465,7 +1474,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 "Maez says there is no objection.",
             )
             self.assertEqual(len(bundle_uses), 1)
-            bundle = bundle_store.get_for_source_ref(bundle_uses[0][0])
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
+            with authorization_store.anchored_transaction() as conn:
+                bundle, _version = read_voice_source_bundle(
+                    source_ref_hash=bundle_uses[0][0],
+                    conn=conn,
+                )
             self.assertIsNotNone(bundle)
             assert bundle is not None
             self.assertEqual(
@@ -1568,7 +1582,8 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(finish.get_json()["detail"], "invalid_hash_binding")
 
     def test_daemon_voice_seat_begin_persists_d12_bundle_before_finish(self):
-        from core.governance.s7_guarded_execution import S7VoiceConsultationBundleStore
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import read_voice_source_bundle
 
         request_id = "req-s7-begin-persists-d12-bundle"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1603,9 +1618,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                     )
                     self.assertEqual(begin.status_code, 200)
                     begin_body = begin.get_json()
-                    bundle = S7VoiceConsultationBundleStore(store.db_path).get_for_source_ref(
-                        begin_body["maez_voice_source_ref_hash"]
-                    )
+                    authorization_store = s7.S7AuthorizationStore(store.db_path)
+                    with authorization_store.anchored_transaction() as conn:
+                        bundle, _version = read_voice_source_bundle(
+                            source_ref_hash=begin_body["maez_voice_source_ref_hash"],
+                            conn=conn,
+                        )
                     self.assertIsNotNone(bundle)
                     assert bundle is not None
                     self.assertEqual(bundle.rendered_text_hash, begin_body["rendered_text_hash"])
@@ -1938,18 +1956,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
             with sqlite3.connect(store.db_path) as conn:
-                artifact_table = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 's7_authorization_artifacts'"
-                ).fetchone()
-                artifact_count = (
-                    0
-                    if artifact_table is None
-                    else conn.execute(
-                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
-                        (request_id,),
-                    ).fetchone()[0]
-                )
+                artifact_count = conn.execute(
+                    "SELECT COUNT(*) FROM s7_authorization_artifacts_v2 "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
 
         self.assertEqual(finish.status_code, 409)
         self.assertEqual(finish.get_json()["error"], "s7_voice_seat_unresolved")
@@ -2013,18 +2024,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
             with sqlite3.connect(store.db_path) as conn:
-                artifact_table = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 's7_authorization_artifacts'"
-                ).fetchone()
-                artifact_count = (
-                    0
-                    if artifact_table is None
-                    else conn.execute(
-                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
-                        (request_id,),
-                    ).fetchone()[0]
-                )
+                artifact_count = conn.execute(
+                    "SELECT COUNT(*) FROM s7_authorization_artifacts_v2 "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
 
         self.assertEqual(finish.status_code, 409)
         self.assertEqual(finish.get_json()["error"], "s7_guarded_source_bundle_required")
@@ -2450,12 +2454,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                         },
                         headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                     )
-            fresh_store_at(store.db_path)
             with sqlite3.connect(store.db_path) as conn:
                 artifact_row = conn.execute(
                     """
                     SELECT request_id, grant_source, user_verification
-                    FROM s7_authorization_artifacts
+                    FROM s7_authorization_artifacts_v2
                     WHERE artifact_id = ?
                     """,
                     (finish.get_json()["artifact_id"],),
