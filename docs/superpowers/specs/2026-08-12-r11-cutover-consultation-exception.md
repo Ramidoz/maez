@@ -218,9 +218,38 @@ Consequences, stated plainly:
    signed renderer permits only "yes" or "not required" for voice-seat
    work — naive wiring would either fail rendering or falsely sign
    "Maez consulted: yes".
-6. **Governing docs** — Decision 34 and ADR 0039 still require a
-   `MaezVoiceConsultation` for guarded remaking. They contradict R11 and
-   must be amended, not left to be discovered later.
+6. **Governing docs — AMENDED.** Decision 34 and ADR 0039 now carry the
+   scoped R11 exception. The 8-step trace, since these are load-bearing:
+
+   1. **Dependency-map.** Decision 34 "Maez has a seat in remaking";
+      ADR 0039's `MaezVoiceConsultation` clause; `render_request_statement`
+      and `RenderedRequestStatement`'s closed consulted vocabulary;
+      `authorization_voice_seat_recheck`; `s7_consultation_exemption`; the
+      cutover script; the callsite authority table.
+   2. **Write-path.** `mint_consultation_exemption` is the only producer of
+      the absence; the renderer writes the third consulted state.
+   3. **Read-path.** `consultation_exemption_admits` at the gate and in the
+      renderer; the owner reads the signed line before tapping.
+   4. **Test-path.** `tests/test_r11_consultation_exemption.py` (51),
+      mutation-swept; `test_s7_action_route_allowlist.py` counts.
+   5. **Fold-summary.** The unqualified "guarded remaking work REQUIRES a
+      MaezVoiceConsultation" is now false for exactly one action and true
+      everywhere else; both documents say so in place rather than being
+      silently outgrown by the code.
+   6. **Cross-reference.** Both canon documents point at this ruling; this
+      ruling names them.
+   7. **RED-test trace.** `test_the_signed_statement_says_NOT_PERFORMED_not_yes`,
+      `test_rendering_without_a_consultation_or_exemption_still_refuses`,
+      `test_rendering_refuses_an_exemption_that_does_not_admit`,
+      `test_a_soul_write_cannot_render_as_not_performed`,
+      `test_the_consulted_vocabulary_is_exactly_three_states`.
+   8. **Verify-before-declaring.** Grep of both documents shows no remaining
+      unqualified requirement; the closed vocabulary is a shared literal so
+      renderer and validator cannot drift; 481 tests green across the
+      adjacent S7 suites.
+
+   **Not amended, deliberately:** every other remaking path keeps the
+   consultation requirement in full. The exception widens to nothing.
 
 ### Fixed immediately on review
 

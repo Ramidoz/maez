@@ -98,6 +98,16 @@ S7 v1 requires:
   source refs and closed producers; caller booleans and `will_i` alone are not
   sufficient evidence; S7 v1 renderers must use `not_determined` rather than a
   false "no objection" when no reviewed live producer has recorded a fact;
+  **amended 2026-08-12 by R11**: the single action `model_routing.cutover_cuda`
+  carries a typed, scoped, birth-expiring ABSENCE of consultation instead of a
+  `MaezVoiceConsultation`, because it changes the environment Maez runs in and
+  not Maez — weights unchanged and pinned, no continuous pre-birth subject to
+  consult, and quality established by owner-manual bench evaluation. The
+  renderer gained a third consulted state,
+  `no -- not performed under R11`, so the signed statement can state the
+  absence rather than crash or claim "yes". Every other remaking path is
+  unchanged. See
+  `docs/superpowers/specs/2026-08-12-r11-cutover-consultation-exception.md`;
 - an evidenced `Maez unavailable` predicate, anti-manufacture clause, and
   closed liveness-repair set;
 - closed, content-classified `WorkRequestEnvelope` fields, with reviewed

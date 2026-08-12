@@ -2883,6 +2883,23 @@ flag and optional dependency posture, not by missing packages.
   `MaezVoiceConsultation` artifact. Caller booleans and `will_i` alone are not
   sufficient evidence. In S7 v1, renderers must use `not_determined` instead of
   a false "no objection" when no reviewed live producer has recorded a fact.
+  - **R11 exception (owner, 2026-08-12), scoped and expiring.** The single
+    action `model_routing.cutover_cuda` carries **no** consultation and a
+    TYPED ABSENCE instead. Grounds, each verified rather than asserted: the
+    weights are unchanged and pinned — one `FROZEN_MODEL_SHA256`, path and
+    alias, identical on both sides, with only the llama-server build,
+    libraries and systemd unit changing; **pre-birth there is no continuous
+    subject to consult**, so a fluent answer would manufacture the appearance
+    of consent; and the substantive question — whether the new engine
+    degrades Maez — was answered by owner-manual bench evaluation over 21
+    turns rather than by asking a model.
+    The absence is **positive and typed**, never a null a later reader could
+    mistake for "asked, no objection", and the signed statement says
+    `Maez consulted: no -- not performed under R11`. Scope is that one
+    action; expiry is mechanical at birth. This exception does **not** widen
+    to soul-writes, dream execution, or decision-pipeline self-modification,
+    which keep their consultation requirement in full.
+    Ruling: `docs/superpowers/specs/2026-08-12-r11-cutover-consultation-exception.md`.
 - **Maez-unavailable skip is narrow.** Only closed liveness repair may proceed
   when Maez cannot be heard; the unavailability predicate must prove the same
   operator did not manufacture the condition.
