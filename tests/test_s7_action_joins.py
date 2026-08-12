@@ -424,7 +424,7 @@ class TestLinkRowToGrant:
         )
 
         consume_tree = ast.parse(
-            textwrap.dedent(inspect.getsource(s7.S7AuthorizationStore.consume_for_execution))
+            textwrap.dedent(inspect.getsource(s7.consume_for_execution_on_connection))
         )
         mint_calls = [
             node
@@ -459,7 +459,7 @@ class TestLinkRowToGrant:
             isinstance(execute_call, ast.Call)
             and isinstance(execute_call.func, ast.Attribute)
             and isinstance(execute_call.func.value, ast.Name)
-            and execute_call.func.value.id == "conn"
+            and execute_call.func.value.id == "connection"
             and execute_call.func.attr == "execute"
         )
         sql_literals = [
@@ -1686,7 +1686,7 @@ class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
         "core/governance/operator_user_boundary.py::"
         "S7AuthorizationStore.anchored_transaction",
         "core/governance/operator_user_boundary.py::"
-        "S7AuthorizationStore.consume_for_execution",
+        "consume_for_execution_on_connection",
     ]
 
     def _callsites(self) -> list[str]:

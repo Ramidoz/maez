@@ -2423,6 +2423,108 @@ class S7ExecutionGrant:
         _timestamp_text(self.consumed_at, field="consumed_at")
 
 
+@dataclass(frozen=True)
+class CommittedGrantRow:
+    """Typed post-commit view of the durable authorization row."""
+
+    artifact_id: str
+    request_id: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    action: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    nonce: str
+    credential_ref: str
+    auth_method: str
+    grant_source: str
+    consumed_at: str
+    ceremony_kind: str
+    schema_version: str
+    user_presence: int
+    user_verification: int
+    created_at: str
+    expires_at: str
+    consumed_by_request_id: str
+
+
+_COMMITTED_ROW_GRANT_FIELDS = (
+    "artifact_id",
+    "request_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "action",
+    "derived_work_class",
+    "derived_aggregation_group",
+    "nonce",
+    "credential_ref",
+    "auth_method",
+    "grant_source",
+    "consumed_at",
+    "ceremony_kind",
+)
+
+
+def _parse_exact_canonical_row_timestamp(value: object) -> datetime | None:
+    if type(value) is not str:
+        return None
+    try:
+        canonical = _timestamp_text(value, field="committed row timestamp")
+    except ValueError:
+        return None
+    if value != canonical:
+        return None
+    return _canonical_timestamp(value)
+
+
+def committed_grant_row_proves_founder_self_modification(
+    row: CommittedGrantRow,
+    grant: S7ExecutionGrant,
+) -> bool:
+    """Validate the frozen post-commit row-to-grant cutover predicates."""
+    if not isinstance(row, CommittedGrantRow) or not isinstance(
+        grant, S7ExecutionGrant
+    ):
+        return False
+    for field in _COMMITTED_ROW_GRANT_FIELDS:
+        row_value = getattr(row, field)
+        grant_value = getattr(grant, field)
+        if type(row_value) is not type(grant_value) or row_value != grant_value:
+            return False
+    if (
+        type(grant.schema_version) is not str
+        or grant.schema_version != "s7.execution_grant.v2"
+        or type(row.schema_version) is not str
+        or row.schema_version != S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA
+        or type(row.user_presence) is not int
+        or row.user_presence != 1
+        or type(row.user_verification) is not int
+        or row.user_verification != 1
+        or type(row.consumed_by_request_id) is not str
+        or row.consumed_by_request_id != row.request_id
+        or row.derived_work_class != "self_modification"
+        or row.ceremony_kind != "founder_local_webauthn"
+        or row.auth_method != "founder_webauthn"
+        or row.grant_source != "founder_webauthn"
+    ):
+        return False
+    created_at = _parse_exact_canonical_row_timestamp(row.created_at)
+    consumed_at = _parse_exact_canonical_row_timestamp(row.consumed_at)
+    expires_at = _parse_exact_canonical_row_timestamp(row.expires_at)
+    return (
+        created_at is not None
+        and consumed_at is not None
+        and expires_at is not None
+        and created_at <= consumed_at < expires_at
+    )
+
+
 def _mint_s7_execution_grant(
     *,
     artifact_id: str,
@@ -2494,6 +2596,82 @@ class _S7HeldConnection(sqlite3.Connection):
     """Connection opened from the descriptor-held S7 store."""
 
 
+_HELD_CONNECTION_BIND_TOKEN = object()
+
+
+class _S7HeldConnectionBinding:
+    """Descriptor identity inseparably attached when the connection opens."""
+
+    __slots__ = (
+        "dir_fd",
+        "dir_identity",
+        "store_fd",
+        "store_identity",
+    )
+
+    def __init__(
+        self,
+        *,
+        dir_fd: int,
+        store_fd: int,
+        _token: object,
+    ) -> None:
+        if _token is not _HELD_CONNECTION_BIND_TOKEN:
+            raise ValueError("S7 held connection binding is core-owned")
+        dir_stat = os.fstat(dir_fd)
+        store_stat = os.fstat(store_fd)
+        self.dir_fd = dir_fd
+        self.store_fd = store_fd
+        self.dir_identity = (dir_stat.st_dev, dir_stat.st_ino)
+        self.store_identity = (store_stat.st_dev, store_stat.st_ino)
+
+
+def _open_s7_connection_from_held_store(
+    *,
+    dir_fd: int,
+    store_fd: int,
+) -> _S7HeldConnection:
+    """Open and bind one RW connection to the caller's already-held store."""
+    connection = sqlite3.connect(
+        f"file:/proc/self/fd/{store_fd}?mode=rw",
+        uri=True,
+        factory=_S7HeldConnection,
+    )
+    try:
+        connection._s7_held_binding = _S7HeldConnectionBinding(
+            dir_fd=dir_fd,
+            store_fd=store_fd,
+            _token=_HELD_CONNECTION_BIND_TOKEN,
+        )
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _require_verified_held_connection(
+    connection: sqlite3.Connection,
+) -> _S7HeldConnectionBinding:
+    binding = getattr(connection, "_s7_held_binding", None)
+    if not isinstance(connection, _S7HeldConnection) or not isinstance(
+        binding, _S7HeldConnectionBinding
+    ):
+        raise ValueError("S7 consumption requires a verified held connection")
+    try:
+        dir_stat = os.fstat(binding.dir_fd)
+        store_stat = os.fstat(binding.store_fd)
+    except OSError as exc:
+        raise ValueError(
+            "S7 consumption requires a live verified held connection"
+        ) from exc
+    if (
+        (dir_stat.st_dev, dir_stat.st_ino) != binding.dir_identity
+        or (store_stat.st_dev, store_stat.st_ino) != binding.store_identity
+    ):
+        raise ValueError("S7 held connection descriptors changed identity")
+    return binding
+
+
 class _S7VendedAnchoredConnectionToken:
     """Per-transaction capability retired when its anchored scope exits."""
 
@@ -2546,10 +2724,9 @@ def _held_store(db_path):
             Path(db_path).name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=dir_fd
         )
         try:
-            conn = sqlite3.connect(
-                f"file:/proc/self/fd/{store_fd}?mode=rw",
-                uri=True,
-                factory=_S7HeldConnection,
+            conn = _open_s7_connection_from_held_store(
+                dir_fd=dir_fd,
+                store_fd=store_fd,
             )
             try:
                 yield dir_fd, store_fd, conn
@@ -2711,6 +2888,254 @@ def initialise_authorization_store(db_path: str | Path) -> Path:
         conn.commit()
     os.chmod(path, 0o600)
     return path
+
+
+_POST_COMMIT_READ_TOKEN = object()
+
+
+class _CommittedConsumptionConnection:
+    """Capability minted only after a consuming RW transaction commits."""
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: sqlite3.Connection, *, _token: object) -> None:
+        if _token is not _POST_COMMIT_READ_TOKEN:
+            raise ValueError(
+                "committed-row reads require the consuming RW connection"
+            )
+        self.connection = connection
+
+
+def _read_committed_grant_row_after_commit(
+    committed_connection: _CommittedConsumptionConnection,
+    artifact_id: str,
+) -> CommittedGrantRow | None:
+    """Read only through the capability minted after the consuming commit."""
+    if not isinstance(committed_connection, _CommittedConsumptionConnection):
+        raise ValueError(
+            "committed-row reads require the consuming RW connection"
+        )
+    connection = committed_connection.connection
+    if connection.in_transaction:
+        raise ValueError("committed grant row cannot be read before commit")
+    rows = connection.execute(
+        f"""
+        SELECT artifact_id,
+               request_id,
+               request_envelope_hash,
+               rendered_text_hash,
+               action_params_hash,
+               precondition_hash,
+               authority_context_hash,
+               action,
+               derived_work_class,
+               derived_aggregation_group,
+               nonce,
+               credential_ref,
+               auth_method,
+               grant_source,
+               consumed_at,
+               ceremony_kind,
+               schema_version,
+               user_presence,
+               user_verification,
+               created_at,
+               expires_at,
+               consumed_by_request_id
+        FROM {_V2_AUTH_TABLE}
+        WHERE artifact_id = ?
+        """,
+        (artifact_id,),
+    ).fetchall()
+    if len(rows) != 1:
+        return None
+    return CommittedGrantRow(*rows[0])
+
+
+def consume_for_execution_on_connection(
+    connection: sqlite3.Connection,
+    artifact_id: str,
+    *,
+    rendered: RenderedRequestStatement,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    precondition_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    now: str,
+    superseded_request_ids: set[str] | None = None,
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+    after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
+) -> tuple[S7ExecutionGrant | None, object | None]:
+    """Consume and commit through a caller-held, descriptor-verified RW connection."""
+    binding = _require_verified_held_connection(connection)
+    if connection.in_transaction:
+        raise ValueError("S7 consumption requires an idle held RW connection")
+    if not isinstance(rendered, RenderedRequestStatement):
+        return None, None
+    if superseded_request_ids and rendered.request_id in superseded_request_ids:
+        return None, None
+    _validate_hash64(action_params_hash, field="action_params_hash")
+    _validate_hash64(precondition_hash, field="precondition_hash")
+    validate_work_class(derived_work_class)
+    if not derived_aggregation_group:
+        return None, None
+    if not _authority_context_active_for_artifact(authority_context, now=now):
+        return None, None
+    if not _authority_context_roles_allow_work(authority_context, derived_work_class):
+        return None, None
+    if not _authority_context_trust_source_allows_artifact(
+        authority_context, derived_work_class
+    ):
+        return None, None
+    if not covenant_ceremony_satisfies_request(
+        rendered=rendered,
+        derived_work_class=derived_work_class,
+        evidence=covenant_ceremony_evidence,
+        now=now,
+    ):
+        return None, None
+    auth_hash = authority_context_hash(authority_context)
+    if rendered.authority_context_hash != auth_hash:
+        return None, None
+    if rendered.action_params_hash != action_params_hash:
+        return None, None
+    if rendered.derived_work_class != derived_work_class:
+        return None, None
+    if rendered.derived_aggregation_group != derived_aggregation_group:
+        return None, None
+    now_text = _timestamp_text(now, field="now")
+    if not _table_present(connection, _V2_AUTH_TABLE):
+        raise S7GuardedExecutionUnavailable(
+            "S7 v2 authorization plane is absent; guarded execution "
+            "refuses rather than falling back to v1"
+        )
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_held_store_activation(
+            binding.dir_fd, binding.store_fd, connection
+        )
+        cur = connection.execute(
+            f"""
+            UPDATE {_V2_AUTH_TABLE}
+            SET consumed_at = ?,
+                consumed_by_request_id = ?
+            WHERE artifact_id = ?
+              AND request_id = ?
+              AND request_envelope_hash = ?
+              AND rendered_text_hash = ?
+              AND action = ?
+              AND action_params_hash = ?
+              AND precondition_hash = ?
+              AND authority_context_hash = ?
+              AND derived_work_class = ?
+              AND derived_aggregation_group = ?
+              AND nonce = ?
+              AND credential_ref = ?
+              AND auth_method = ?
+              AND grant_source = ?
+              AND ceremony_kind = 'founder_local_webauthn'
+              AND user_presence = 1
+              AND user_verification IN (0, 1)
+              AND (? = 0 OR user_verification = 1)
+              AND consumed_at IS NULL
+              AND expires_at > ?
+            RETURNING action
+            """,
+            (
+                now_text,
+                rendered.request_id,
+                artifact_id,
+                rendered.request_id,
+                rendered.request_envelope_hash,
+                rendered.rendered_text_hash,
+                rendered.action,
+                action_params_hash,
+                precondition_hash,
+                auth_hash,
+                derived_work_class,
+                derived_aggregation_group,
+                rendered.nonce,
+                authority_context.credential_ref,
+                authority_context.auth_method,
+                authority_context.grant_source,
+                1 if _webauthn_requires_user_verification(derived_work_class) else 0,
+                now_text,
+            ),
+        )
+        matched_row = cur.fetchone()
+        if matched_row is None or cur.rowcount != 1:
+            connection.rollback()
+            return None, None
+        grant = _mint_s7_execution_grant(
+            artifact_id=artifact_id,
+            rendered=rendered,
+            stored_action=matched_row[0],
+            action_params_hash=action_params_hash,
+            precondition_hash=precondition_hash,
+            authority_context_hash=auth_hash,
+            derived_work_class=derived_work_class,
+            derived_aggregation_group=derived_aggregation_group,
+            credential_ref=authority_context.credential_ref or "",
+            auth_method=authority_context.auth_method,
+            grant_source=authority_context.grant_source,
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=now_text,
+        )
+        callback_result = (
+            after_consume_before_commit(grant)
+            if after_consume_before_commit is not None
+            else None
+        )
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+    return grant, callback_result
+
+
+def consume_for_execution_with_committed_row(
+    connection: sqlite3.Connection,
+    artifact_id: str,
+    *,
+    rendered: RenderedRequestStatement,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    precondition_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    now: str,
+    superseded_request_ids: set[str] | None = None,
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+    after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
+) -> tuple[S7ExecutionGrant | None, object | None, CommittedGrantRow | None]:
+    """Consume on the held RW connection, then reread its committed row."""
+    grant, callback_result = consume_for_execution_on_connection(
+        connection,
+        artifact_id,
+        rendered=rendered,
+        action_params_hash=action_params_hash,
+        authority_context=authority_context,
+        precondition_hash=precondition_hash,
+        derived_work_class=derived_work_class,
+        derived_aggregation_group=derived_aggregation_group,
+        now=now,
+        superseded_request_ids=superseded_request_ids,
+        covenant_ceremony_evidence=covenant_ceremony_evidence,
+        after_consume_before_commit=after_consume_before_commit,
+    )
+    if grant is None:
+        return None, None, None
+    committed_connection = _CommittedConsumptionConnection(
+        connection, _token=_POST_COMMIT_READ_TOKEN
+    )
+    committed_row = _read_committed_grant_row_after_commit(
+        committed_connection, artifact_id
+    )
+    return grant, callback_result, committed_row
 
 
 class S7AuthorizationStore:
@@ -2988,133 +3413,21 @@ class S7AuthorizationStore:
         covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
         after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
     ) -> tuple[S7ExecutionGrant | None, object | None]:
-        if not isinstance(rendered, RenderedRequestStatement):
-            return None, None
-        if superseded_request_ids and rendered.request_id in superseded_request_ids:
-            return None, None
-        _validate_hash64(action_params_hash, field="action_params_hash")
-        _validate_hash64(precondition_hash, field="precondition_hash")
-        validate_work_class(derived_work_class)
-        if not derived_aggregation_group:
-            return None, None
-        if not _authority_context_active_for_artifact(authority_context, now=now):
-            return None, None
-        if not _authority_context_roles_allow_work(authority_context, derived_work_class):
-            return None, None
-        if not _authority_context_trust_source_allows_artifact(authority_context, derived_work_class):
-            return None, None
-        if not covenant_ceremony_satisfies_request(
-            rendered=rendered,
-            derived_work_class=derived_work_class,
-            evidence=covenant_ceremony_evidence,
-            now=now,
-        ):
-            return None, None
-        auth_hash = authority_context_hash(authority_context)
-        if rendered.authority_context_hash != auth_hash:
-            return None, None
-        if rendered.action_params_hash != action_params_hash:
-            return None, None
-        if rendered.derived_work_class != derived_work_class:
-            return None, None
-        if rendered.derived_aggregation_group != derived_aggregation_group:
-            return None, None
-        now_text = _timestamp_text(now, field="now")
-        # ABSENT IS NOT PERMISSION -- checked OUTSIDE the try below.
-        #
-        # Falling back to v1 when v2 is missing would let guarded execution
-        # proceed on a store that was never migrated. It has to sit outside
-        # the swallow: that `except Exception: return None, None` would
-        # convert this deliberate refusal into an ordinary denial, which is
-        # exactly the "a broken seam looks like a No" defect already
-        # queued for repair.
-        with closing(sqlite3.connect(self.db_path)) as probe:
-            if not _table_present(probe, _V2_AUTH_TABLE):
-                raise S7GuardedExecutionUnavailable(
-                    "S7 v2 authorization plane is absent; guarded execution "
-                    "refuses rather than falling back to v1"
-                )
-
-        with _held_store(self.db_path) as (_dir_fd, _store_fd, conn):
-            # Validation and mutation share ONE held descriptor and ONE
-            # transaction. Validating a disposable probe and then
-            # opening a second connection let a swap between the two
-            # steps consume a receipt-less store.
-            conn.execute("BEGIN IMMEDIATE")
-            _verify_held_store_activation(_dir_fd, _store_fd, conn)
-            table = _V2_AUTH_TABLE
-            cur = conn.execute(
-                f"""
-                UPDATE {table}
-                SET consumed_at = ?,
-                    consumed_by_request_id = ?
-                WHERE artifact_id = ?
-                  AND request_id = ?
-                  AND request_envelope_hash = ?
-                  AND rendered_text_hash = ?
-                  AND action = ?
-                  AND action_params_hash = ?
-                  AND precondition_hash = ?
-                  AND authority_context_hash = ?
-                  AND derived_work_class = ?
-                  AND derived_aggregation_group = ?
-                  AND nonce = ?
-                  AND credential_ref = ?
-                  AND auth_method = ?
-                  AND grant_source = ?
-                  AND ceremony_kind = 'founder_local_webauthn'
-                  AND user_presence = 1
-                  AND user_verification IN (0, 1)
-                  AND (? = 0 OR user_verification = 1)
-                  AND consumed_at IS NULL
-                  AND expires_at > ?
-                RETURNING action
-                """,
-                (
-                    now_text,
-                    rendered.request_id,
-                    artifact_id,
-                    rendered.request_id,
-                    rendered.request_envelope_hash,
-                    rendered.rendered_text_hash,
-                    rendered.action,
-                    action_params_hash,
-                    precondition_hash,
-                    auth_hash,
-                    derived_work_class,
-                    derived_aggregation_group,
-                    rendered.nonce,
-                    authority_context.credential_ref,
-                    authority_context.auth_method,
-                    authority_context.grant_source,
-                    1 if _webauthn_requires_user_verification(derived_work_class) else 0,
-                    now_text,
-                ),
-            )
-            matched_row = cur.fetchone()
-            if matched_row is None or cur.rowcount != 1:
-                return None, None
-            grant = _mint_s7_execution_grant(
-                artifact_id=artifact_id,
+        with _held_store(self.db_path) as (dir_fd, store_fd, connection):
+            grant, callback_result = consume_for_execution_on_connection(
+                connection,
+                artifact_id,
                 rendered=rendered,
-                stored_action=matched_row[0],
                 action_params_hash=action_params_hash,
+                authority_context=authority_context,
                 precondition_hash=precondition_hash,
-                authority_context_hash=auth_hash,
                 derived_work_class=derived_work_class,
                 derived_aggregation_group=derived_aggregation_group,
-                credential_ref=authority_context.credential_ref or "",
-                auth_method=authority_context.auth_method,
-                grant_source=authority_context.grant_source,
-                ceremony_kind="founder_local_webauthn",
-                consumed_at=now_text,
+                now=now,
+                superseded_request_ids=superseded_request_ids,
+                covenant_ceremony_evidence=covenant_ceremony_evidence,
+                after_consume_before_commit=after_consume_before_commit,
             )
-            callback_result = (
-                after_consume_before_commit(grant)
-                if after_consume_before_commit is not None
-                else None
-            )
-            conn.commit()
             return grant, callback_result
 
 

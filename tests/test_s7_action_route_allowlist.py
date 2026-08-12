@@ -190,8 +190,8 @@ def scanned(table):
 class TestTheTableIsInternallyConsistent:
     """One table, one count."""
 
-    def test_the_row_count_is_seventy_eight(self, table) -> None:
-        assert len(table) == 78
+    def test_the_row_count_is_ninety_two(self, table) -> None:
+        assert len(table) == 92
 
     def test_the_prose_counts_agree_with_the_table(self, table) -> None:
         """v4's headings totalled 30 while its rows totalled something else.
@@ -212,7 +212,7 @@ class TestTheTableIsInternallyConsistent:
         assert len(all_counts) > 1, "expected a superseded counts line to exist"
         assert any(i < anchor for i in all_counts), "no pre-anchor line to confuse"
         _per_role, total = _prose_counts()
-        assert total == 78
+        assert total == 92
 
     def test_the_role_counts_sum_to_the_row_count(self, table) -> None:
         from_table = collections.Counter(row[2] for row in table)
@@ -225,6 +225,81 @@ class TestTheTableIsInternallyConsistent:
     def test_the_syntactic_roles_are_a_closed_vocabulary(self, table) -> None:
         kinds = {row[3].split(":", 1)[0] for row in table}
         assert kinds == {"call", "definition"}
+
+    def test_prerequisite_slice_a_authorities_are_explicit(self, table) -> None:
+        routes = {(row[1], row[2], row[3]) for row in table}
+        assert {
+            (
+                "_held_store",
+                "constructor",
+                "call:_open_s7_connection_from_held_store",
+            ),
+            (
+                "_open_s7_connection_from_held_store",
+                "constructor",
+                "call:_S7HeldConnectionBinding",
+            ),
+            (
+                "_open_s7_connection_from_held_store",
+                "constructor",
+                "definition",
+            ),
+            (
+                "_read_committed_grant_row_after_commit",
+                "source_bundle",
+                "call:CommittedGrantRow",
+            ),
+            (
+                "_read_committed_grant_row_after_commit",
+                "source_bundle",
+                "definition",
+            ),
+            (
+                "_require_verified_held_connection",
+                "validator",
+                "definition",
+            ),
+            (
+                "committed_grant_row_proves_founder_self_modification",
+                "validator",
+                "definition",
+            ),
+            (
+                "consume_for_execution",
+                "durable_writer",
+                "call:consume_for_execution_on_connection",
+            ),
+            (
+                "consume_for_execution_on_connection",
+                "durable_writer",
+                "definition",
+            ),
+            (
+                "consume_for_execution_on_connection",
+                "validator",
+                "call:_require_verified_held_connection",
+            ),
+            (
+                "consume_for_execution_with_committed_row",
+                "durable_writer",
+                "call:consume_for_execution_on_connection",
+            ),
+            (
+                "consume_for_execution_with_committed_row",
+                "durable_writer",
+                "definition",
+            ),
+            (
+                "consume_for_execution_with_committed_row",
+                "source_bundle",
+                "call:_CommittedConsumptionConnection",
+            ),
+            (
+                "consume_for_execution_with_committed_row",
+                "source_bundle",
+                "call:_read_committed_grant_row_after_commit",
+            ),
+        } <= routes
 
 
 class TestTheAllowlistMatchesTheCode:
@@ -241,7 +316,7 @@ class TestTheAllowlistMatchesTheCode:
         assert not extra, f"unpinned sites present in the code: {sorted(extra)}"
 
     def test_the_totals_match_exactly(self, table, scanned) -> None:
-        assert sum(scanned.values()) == len(table) == 78
+        assert sum(scanned.values()) == len(table) == 92
 
     def test_multiplicity_is_carried_not_collapsed(self, table, scanned) -> None:
         """A second call to the same target in the same function must be
@@ -455,7 +530,7 @@ class TestRepoWideDiscoveryGuard:
         # The sweep looks for CALL targets only; definitions are not call
         # sites. So the floor is the table's call-row count, not its total.
         call_rows = sum(1 for r in table if r[3].startswith("call:"))
-        assert call_rows == 60
+        assert call_rows == 68
         assert len(sites) >= call_rows, (len(sites), call_rows)
 
     def test_no_tracked_call_lives_outside_the_allowlisted_files(
