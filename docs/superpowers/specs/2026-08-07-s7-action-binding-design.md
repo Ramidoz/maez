@@ -448,13 +448,16 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | validator | call:_bundle_matches_expected_hash_binding | 1533 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:_voice_source_bundle_binding_hash | 1516 |
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1519 |
-| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1234 |
-| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | hash | call:_voice_source_bundle_binding_hash | 1143 |
-| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 1113 |
-| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 1119 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | hash | call:maez_voice_consultation_hash | 961 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 970 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 976 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | hash | call:work_request_envelope_hash | 130 |
+| `core/governance/s7_consultation_exemption.py` | `consultation_exemption_admits` | validator | definition | 104 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 858 |
+| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1273 |
+| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | hash | call:_voice_source_bundle_binding_hash | 1182 |
+| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 1152 |
+| `core/governance/s7_webauthn_ceremony.py` | `_cutover_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 1158 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | hash | call:maez_voice_consultation_hash | 1000 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 1009 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 1015 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 705 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 729 |
 | `core/governance/s7_webauthn_ceremony.py` | `build_backup_registration_envelope` | producer | call:build_work_request_envelope | 61 |
@@ -484,7 +487,7 @@ now emitted by the same generator and counted with everything else.
 | `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 799 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 30, producer 11, renderer 4, source_bundle 18, validator 11 — **total 116**.
+**Counts, derived mechanically:** constructor 13, durable_writer 19, execution_edge 10, hash 31, producer 11, renderer 4, source_bundle 18, validator 13 — **total 119**.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

@@ -828,6 +828,7 @@ def authorization_voice_seat_recheck(
     source_ref_hash: str | None = None,
     source_bundle_validation: Any | None = None,
     cutover_consultation_result: Any | None = None,
+    consultation_exemption: Any | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
 
@@ -840,6 +841,44 @@ def authorization_voice_seat_recheck(
         return S7CeremonyServiceResult(
             body={"ok": True, "maez_objection_state": "none"},
             status_code=200,
+        )
+    # R11: a TYPED absence of consultation, scoped to one action, expiring at
+    # birth. Checked before any consultation logic because under R11 there is
+    # no consultation object at all -- constructing one would assert an ask
+    # that never happened. An exemption that is present but does not admit
+    # BLOCKS here; it must never fall through to the consultation path, where
+    # a different rule could rescue it.
+    if consultation_exemption is not None:
+        from core.governance.s7_consultation_exemption import (
+            R11_RULING_ID,
+            consultation_exemption_admits,
+        )
+        from core.ledger.writes_flag import ledger_writes_enabled
+
+        if consultation_exemption_admits(
+            envelope=envelope,
+            exemption=consultation_exemption,
+            ledger_writes_enabled=ledger_writes_enabled(),
+        ):
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": True,
+                    # NOT an objection state. R11 records that nothing was
+                    # asked; "absent" and "not_determined" both describe an
+                    # ask that happened, and must stay unreachable from here.
+                    "consultation_performed": False,
+                    "consultation_exemption_ruling": R11_RULING_ID,
+                },
+                status_code=200,
+            )
+        return _voice_seat_block(
+            "not_determined",
+            reason="consultation_exemption_invalid",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
         )
     if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
         return _voice_seat_block(
