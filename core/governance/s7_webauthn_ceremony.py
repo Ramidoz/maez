@@ -829,6 +829,7 @@ def authorization_voice_seat_recheck(
     source_bundle_validation: Any | None = None,
     cutover_consultation_result: Any | None = None,
     consultation_exemption: Any | None = None,
+    action_params_hash: str | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
 
@@ -858,6 +859,7 @@ def authorization_voice_seat_recheck(
         if consultation_exemption_admits(
             envelope=envelope,
             exemption=consultation_exemption,
+            action_params_hash=action_params_hash,
             ledger_writes_enabled=born_by_any_signal(),
         ):
             return S7CeremonyServiceResult(

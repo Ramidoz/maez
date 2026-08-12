@@ -55,7 +55,8 @@ def _exemption(envelope, **overrides) -> S7ConsultationExemption:
         "request_envelope_hash": s7.work_request_envelope_hash(envelope),
         "reason_code": R11_REASON_CODE,
         "model_sha256_unchanged": exemption_mod.R11_EXPECTED_MODEL_SHA256,
-        "quality_evidence_sha256": "b" * 64,
+        "quality_evidence_sha256": exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+        "action_params_hash": exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         "created_at": "2026-08-12T12:00:00Z",
     }
     fields.update(overrides)
@@ -72,6 +73,7 @@ def test_a_valid_cutover_exemption_admits_pre_birth() -> None:
     assert consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -98,6 +100,7 @@ def test_no_other_action_can_use_the_exemption(action: str) -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=exemption,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -110,6 +113,7 @@ def test_cutover_exemption_cannot_cover_a_different_envelopes_action() -> None:
     assert not consultation_exemption_admits(
         envelope=soul_envelope,
         exemption=smuggled,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -127,12 +131,14 @@ def test_an_exemption_claiming_cutover_but_BOUND_to_a_soul_write_refuses() -> No
         request_envelope_hash=s7.work_request_envelope_hash(soul_envelope),
         reason_code=R11_REASON_CODE,
         model_sha256_unchanged=exemption_mod.R11_EXPECTED_MODEL_SHA256,
-        quality_evidence_sha256="b" * 64,
+        quality_evidence_sha256=exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         created_at="2026-08-12T12:00:00Z",
     )
     assert not consultation_exemption_admits(
         envelope=soul_envelope,
         exemption=forged,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -148,6 +154,7 @@ def test_envelope_hash_must_match_the_actual_envelope() -> None:
     assert not consultation_exemption_admits(
         envelope=other,
         exemption=_exemption(envelope),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -164,6 +171,7 @@ def test_a_changed_model_sha_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope, model_sha256_unchanged="c" * 64),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -188,6 +196,7 @@ def test_a_reason_code_mutated_after_construction_still_refuses() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=mutated,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -241,6 +250,7 @@ def test_the_exemption_refuses_once_the_ledger_is_writing() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=_exemption(envelope),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=True,
     )
 
@@ -255,7 +265,8 @@ def test_a_lookalike_object_is_refused_by_exact_typing() -> None:
         action = cm.CUTOVER_ACTION
         reason_code = R11_REASON_CODE
         model_sha256_unchanged = exemption_mod.R11_EXPECTED_MODEL_SHA256
-        quality_evidence_sha256 = "b" * 64
+        quality_evidence_sha256 = exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256
+        action_params_hash = exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH
         created_at = "2026-08-12T12:00:00Z"
 
         def __init__(self, envelope_hash: str) -> None:
@@ -265,6 +276,7 @@ def test_a_lookalike_object_is_refused_by_exact_typing() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=LooksLikeAnExemption(s7.work_request_envelope_hash(envelope)),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -274,6 +286,7 @@ def test_none_is_not_an_exemption() -> None:
     assert not consultation_exemption_admits(
         envelope=envelope,
         exemption=None,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         ledger_writes_enabled=False,
     )
 
@@ -297,6 +310,149 @@ def test_the_exemption_carries_no_objection_state_field() -> None:
 
 
 # --------------------------------------------------------------------- #
+#  A1: the bench receipt is the whole justification, so BIND it.          #
+# --------------------------------------------------------------------- #
+
+
+def test_the_expected_receipt_hash_is_the_real_receipt_on_this_machine() -> None:
+    """The literal must track the owner's actual bench receipt.
+
+    The receipt is gitignored and owner-local, so this cannot run where it
+    is absent -- skipping is honest; asserting a pass would not be.
+    """
+    import hashlib
+
+    path = exemption_mod.R11_QUALITY_EVIDENCE_PATH
+    if not path.exists():
+        pytest.skip("owner-local bench receipt absent on this machine")
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert actual == exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256
+
+
+def test_an_invented_quality_hash_refuses() -> None:
+    """THE EIGHTH GUARD. Before this, the positive fixture passed with
+    'b' * 64 -- R11's entire justification was unbound to any evidence."""
+    envelope = _envelope()
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope, quality_evidence_sha256="b" * 64),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_a_missing_receipt_file_refuses(monkeypatch, tmp_path) -> None:
+    """No receipt, no exemption. The ruling rests on evidence that must
+    still be there at admit time, not merely on a matching constant."""
+    envelope = _envelope()
+    monkeypatch.setattr(
+        exemption_mod, "R11_QUALITY_EVIDENCE_PATH", tmp_path / "absent.json"
+    )
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_a_tampered_receipt_file_refuses(monkeypatch, tmp_path) -> None:
+    """The receipt is re-read and byte-compared, so altering it after the
+    fact cannot leave a matching constant standing in for real evidence."""
+    envelope = _envelope()
+    tampered = tmp_path / "quality-evidence.json"
+    tampered.write_text('{"fields": {"quality_failure_count": 99}}')
+    monkeypatch.setattr(exemption_mod, "R11_QUALITY_EVIDENCE_PATH", tampered)
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
+        ledger_writes_enabled=False,
+    )
+
+
+# --------------------------------------------------------------------- #
+#  A1: the envelope does not retain params, so bind the preimage too.    #
+# --------------------------------------------------------------------- #
+
+
+def test_the_expected_action_params_hash_is_the_frozen_preimage() -> None:
+    assert exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH == s7.canonical_hash(
+        dict(cm.CUTOVER_ACTION_PARAMS)
+    )
+
+
+def test_changed_action_params_refuse_even_with_a_matching_envelope() -> None:
+    """Codex finding: WorkRequestEnvelope discards params after derivation,
+    so a changed preimage can yield the same envelope hash. The exemption
+    must bind the preimage independently of the envelope."""
+    envelope = _envelope()
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        action_params_hash="e" * 64,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_an_exemption_citing_the_wrong_preimage_refuses() -> None:
+    envelope = _envelope()
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope, action_params_hash="f" * 64),
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_a_changed_preimage_cited_CONSISTENTLY_still_refuses() -> None:
+    """Found by mutation: the join alone did not bite here.
+
+    The dangerous case is not a mismatch -- it is a CHANGED cutover whose
+    exemption honestly cites the changed preimage. Both agree, so only the
+    frozen-preimage check stops it. Without that, R11 would cover an
+    operation the owner never benched.
+    """
+    envelope = _envelope()
+    changed = "e" * 64
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope, action_params_hash=changed),
+        action_params_hash=changed,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_a_str_subclass_preimage_is_refused_by_exact_typing() -> None:
+    """Found by mutation: equality alone accepted a lookalike type, the same
+    defect exact typing already refuses for the exemption object itself."""
+    envelope = _envelope()
+
+    class _EqualButWrongType(str):
+        pass
+
+    sneaky = _EqualButWrongType(exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH)
+    assert sneaky == exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        action_params_hash=sneaky,
+        ledger_writes_enabled=False,
+    )
+
+
+def test_a_missing_operation_preimage_refuses() -> None:
+    """Absent is not permission: no preimage supplied means no admission."""
+    envelope = _envelope()
+    assert not consultation_exemption_admits(
+        envelope=envelope,
+        exemption=_exemption(envelope),
+        action_params_hash=None,
+        ledger_writes_enabled=False,
+    )
+
+
+# --------------------------------------------------------------------- #
 #  The live gate. The predicate above is not the authority surface.       #
 # --------------------------------------------------------------------- #
 
@@ -312,6 +468,7 @@ def _gate(envelope, exemption, **overrides):
         "requester_ref": "founder-local-browser",
         "now": "2026-08-12T12:00:00Z",
         "consultation_exemption": exemption,
+        "action_params_hash": exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
     }
     kwargs.update(overrides)
     return ceremony.authorization_voice_seat_recheck(**kwargs)
@@ -358,7 +515,8 @@ def test_a_soul_write_cannot_be_exempted_at_the_gate() -> None:
         request_envelope_hash=s7.work_request_envelope_hash(soul_envelope),
         reason_code=R11_REASON_CODE,
         model_sha256_unchanged=exemption_mod.R11_EXPECTED_MODEL_SHA256,
-        quality_evidence_sha256="b" * 64,
+        quality_evidence_sha256=exemption_mod.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+        action_params_hash=exemption_mod.R11_EXPECTED_ACTION_PARAMS_HASH,
         created_at="2026-08-12T12:00:00Z",
     )
     result = _gate(soul_envelope, forged)

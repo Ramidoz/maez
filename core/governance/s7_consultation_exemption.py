@@ -24,6 +24,7 @@ ledger is writing -- the birth signal -- the exemption stops admitting.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from core.governance import operator_user_boundary as s7
@@ -47,6 +48,30 @@ R11_EXPECTED_MODEL_SHA256 = (
     "4085665ee36d82a672a238a43f0e5643f2f0e39f2d7bd5d373f0ef10ecf53095"
 )
 
+#: R11's justification is the owner's bench evaluation, so the exemption must
+#: BIND that evidence rather than merely cite a well-formed hash. Before this
+#: the field was validated as 64 hex characters and never read, and the
+#: passing fixture used an invented value -- the ruling rested on nothing.
+#: The receipt is owner-local and gitignored, so it is re-read at admit time
+#: and its absence REFUSES: no receipt, no exemption.
+R11_QUALITY_EVIDENCE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "local"
+    / "cuda_migration_bench"
+    / "receipts"
+    / "quality-evidence.json"
+)
+R11_EXPECTED_QUALITY_EVIDENCE_SHA256 = (
+    "dba239959389b199632726715b0b81cca11b39a6cf0006e7fc8ffd27e135f327"
+)
+
+#: `WorkRequestEnvelope` derives from params and then DISCARDS them, so a
+#: changed preimage can yield the same envelope hash. The exemption binds the
+#: preimage independently, and the gate joins it to the operation's own.
+R11_EXPECTED_ACTION_PARAMS_HASH = (
+    "378e391cf73648e3da262b24ab9bb4b72ab048db80e5a9ce11665e7359f84536"
+)
+
 _R11_STATEMENT = (
     "No consultation was performed. Pre-birth, no continuous subject exists "
     "to consult. This operation changes the execution environment -- the "
@@ -65,6 +90,7 @@ class S7ConsultationExemption:
     reason_code: str
     model_sha256_unchanged: str
     quality_evidence_sha256: str
+    action_params_hash: str
     created_at: str
 
     def __post_init__(self) -> None:
@@ -82,6 +108,7 @@ class S7ConsultationExemption:
         s7._validate_hash64(
             self.quality_evidence_sha256, field="quality_evidence_sha256"
         )
+        s7._validate_hash64(self.action_params_hash, field="action_params_hash")
         if type(self.created_at) is not str or not self.created_at:
             raise ValueError("consultation exemption requires created_at")
 
@@ -96,6 +123,7 @@ class S7ConsultationExemption:
             "reason_code": self.reason_code,
             "model_sha256_unchanged": self.model_sha256_unchanged,
             "quality_evidence_sha256": self.quality_evidence_sha256,
+            "action_params_hash": self.action_params_hash,
             "created_at": self.created_at,
             "statement": _R11_STATEMENT,
         }
@@ -146,10 +174,31 @@ def born_by_any_signal() -> bool:
     return False
 
 
+def _quality_receipt_still_matches() -> bool:
+    """Re-read the owner's bench receipt and byte-compare it at admit time.
+
+    A constant alone would only stop an exemption citing a DIFFERENT bench
+    run; re-reading also proves the evidence still exists and is unaltered.
+    Absent or unreadable REFUSES -- R11 rests on this receipt, so its absence
+    is not permission.
+    """
+    import hashlib
+
+    try:
+        path = R11_QUALITY_EVIDENCE_PATH
+        if not path.exists():
+            return False
+        payload = path.read_bytes()
+    except OSError:
+        return False
+    return hashlib.sha256(payload).hexdigest() == R11_EXPECTED_QUALITY_EVIDENCE_SHA256
+
+
 def consultation_exemption_admits(
     *,
     envelope: Any,
     exemption: Any,
+    action_params_hash: str | None,
     ledger_writes_enabled: bool,
 ) -> bool:
     """True only for a valid R11 exemption on the one action, pre-birth.
@@ -170,6 +219,19 @@ def consultation_exemption_admits(
     if exemption.reason_code not in _R11_REASON_CODES:
         return False
     if exemption.model_sha256_unchanged != R11_EXPECTED_MODEL_SHA256:
+        return False
+    # The bench receipt is the justification, joined three ways: the exemption
+    # must cite the frozen receipt, the operation's own preimage must be the
+    # frozen cutover preimage, and the exemption must cite that same preimage.
+    if exemption.quality_evidence_sha256 != R11_EXPECTED_QUALITY_EVIDENCE_SHA256:
+        return False
+    if type(action_params_hash) is not str:
+        return False
+    if action_params_hash != R11_EXPECTED_ACTION_PARAMS_HASH:
+        return False
+    if exemption.action_params_hash != action_params_hash:
+        return False
+    if not _quality_receipt_still_matches():
         return False
     try:
         expected_envelope_hash = s7.work_request_envelope_hash(envelope)
