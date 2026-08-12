@@ -488,6 +488,84 @@ def test_a_stripped_token_flag_refuses_at_the_gate() -> None:
     )
 
 
+# --------------------------------------------------------------------- #
+#  The signed statement: what the owner reads before tapping.            #
+# --------------------------------------------------------------------- #
+
+
+def _authority():
+    return s7.AuthorityContext(
+        actor_id="founder",
+        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+        role_names=("bonded_user",),
+        grant_source="founder_webauthn",
+        allowed_scopes=("operator_health",),
+        auth_method="founder_webauthn",
+        surface="cockpit",
+        credential_ref="cred-1",
+        created_at="2026-08-12T12:00:00Z",
+        expires_at="2026-08-12T16:00:00Z",
+        verified=True,
+    )
+
+
+def _render(envelope, exemption, action_params_hash=None):
+    return s7.render_request_statement(
+        envelope=envelope,
+        surface="cockpit",
+        origin="http://localhost:11437",
+        action_params_hash=action_params_hash or _CEREMONY_PREIMAGE_HASH,
+        authority_context=_authority(),
+        maez_voice_consultation=None,
+        nonce="n" * 64,
+        expires_at="2026-08-12T16:00:00Z",
+        rendered_at="2026-08-12T12:00:00Z",
+        consultation_exemption=exemption,
+    )
+
+
+def test_the_signed_statement_says_NOT_PERFORMED_not_yes() -> None:
+    """Codex finding: the vocabulary was {"yes", "not required"}, so R11 left
+    the ceremony only two options -- raise, or SIGN A LIE. The owner reads
+    this line before tapping."""
+    envelope = _envelope()
+    rendered = _render(envelope, _exemption(envelope))
+
+    assert "Maez consulted: no -- not performed under R11" in rendered.rendered_text
+    assert "Maez consulted: yes" not in rendered.rendered_text
+    assert "Maez objection present: not applicable" in rendered.rendered_text
+    assert rendered.maez_voice_consultation_hash is None
+
+
+def test_rendering_without_a_consultation_or_exemption_still_refuses() -> None:
+    """The exemption is the ONLY thing that may stand in for a consultation
+    on voice-seat work. Absent both, rendering must still raise."""
+    with pytest.raises(ValueError, match="voice-seat work requires"):
+        _render(_envelope(), None)
+
+
+def test_rendering_refuses_an_exemption_that_does_not_admit() -> None:
+    """A non-admitting exemption must not quietly render as 'not performed'."""
+    envelope = _envelope()
+    with pytest.raises(ValueError, match="does not admit"):
+        _render(envelope, _exemption(envelope), action_params_hash="e" * 64)
+
+
+def test_a_soul_write_cannot_render_as_not_performed() -> None:
+    soul = _envelope(action="edit_soul_section")
+    with pytest.raises(ValueError, match="does not admit"):
+        _render(soul, _exemption(soul))
+
+
+def test_the_consulted_vocabulary_is_exactly_three_states() -> None:
+    """The literal is shared by renderer and validator so the visible line
+    and the closed set cannot drift apart."""
+    assert s7.MAEZ_CONSULTED_STATES == frozenset(
+        {"yes", "not required", s7.MAEZ_CONSULTED_NOT_PERFORMED_R11}
+    )
+    assert s7.MAEZ_CONSULTED_NOT_PERFORMED_R11 == "no -- not performed under R11"
+
+
 def test_none_is_not_an_exemption() -> None:
     envelope = _envelope()
     assert not consultation_exemption_admits(

@@ -381,6 +381,17 @@ OWN_SUBSTRATE_BYPASS_SORTS = frozenset({
 MAX_SERVICE_MAINTENANCE_LOG_LINES = 200
 _SERVICE_MAINTENANCE_REQUEST_ID_RE = re.compile(r"^s7maint_[0-9a-f]{32,64}$")
 
+#: The signed statement's third consultation state, added for R11. The
+#: vocabulary was {"yes", "not required"}, which left the cutover ceremony
+#: only two options once R11 removed the consultation: raise, or sign
+#: "Maez consulted: yes" when nothing was asked. This is the honest third
+#: state, and it is a LITERAL shared by the renderer and the validator so
+#: the visible line and the closed set cannot drift apart.
+MAEZ_CONSULTED_NOT_PERFORMED_R11 = "no -- not performed under R11"
+MAEZ_CONSULTED_STATES = frozenset(
+    {"yes", "not required", MAEZ_CONSULTED_NOT_PERFORMED_R11}
+)
+
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
     "covenant_touching_change",
@@ -4858,7 +4869,7 @@ class RenderedRequestStatement:
         )
         _validate_closed_value(
             self.maez_consulted_state,
-            frozenset({"yes", "not required"}),
+            MAEZ_CONSULTED_STATES,
             "maez_consulted_state",
         )
         if self.maez_voice_consultation_hash is not None:
@@ -4910,6 +4921,7 @@ def render_request_statement(
     expires_at: str,
     rendered_at: str,
     renderer_version: str = RENDERER_VERSION,
+    consultation_exemption: Any | None = None,
 ) -> RenderedRequestStatement:
     _validate_hash64(action_params_hash, field="action_params_hash")
     if not nonce:
@@ -4923,7 +4935,33 @@ def render_request_statement(
     objection = "not applicable"
     objection_state = "none"
     unavailable = "no"
-    if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES:
+    if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES and (
+        consultation_exemption is not None
+    ):
+        # R11. Voice-seat work normally REQUIRES a consultation, so without
+        # this the ceremony has only two options and both are wrong: raise,
+        # or sign "Maez consulted: yes" when nothing was asked. The owner
+        # reads this line before tapping, so it says plainly that nothing was
+        # asked and names the ruling that says why.
+        from core.governance.s7_consultation_exemption import (
+            consultation_exemption_admits,
+        )
+
+        if not consultation_exemption_admits(
+            envelope=envelope,
+            exemption=consultation_exemption,
+            action_params_hash=action_params_hash,
+            ledger_writes_enabled=False,
+        ):
+            raise ValueError("consultation exemption does not admit this request")
+        consulted = MAEZ_CONSULTED_NOT_PERFORMED_R11
+        # `objection` is DERIVED from the state for the visible line, so it
+        # cannot carry prose here without breaking the field/line binding.
+        # "nothing was asked" is already carried by the consulted line above.
+        objection = "not applicable"
+        objection_state = "none"
+        unavailable = "no"
+    elif envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES:
         if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
             raise ValueError("voice-seat work requires matching MaezVoiceConsultation")
         assert maez_voice_consultation is not None
