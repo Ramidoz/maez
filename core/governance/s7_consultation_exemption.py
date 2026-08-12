@@ -64,13 +64,30 @@ R11_QUALITY_EVIDENCE_PATH = (
 R11_EXPECTED_QUALITY_EVIDENCE_SHA256 = (
     "dba239959389b199632726715b0b81cca11b39a6cf0006e7fc8ffd27e135f327"
 )
+#: The receipt is a small JSON document; anything larger is not it.
+_R11_RECEIPT_MAX_BYTES = 64 * 1024
 
 #: `WorkRequestEnvelope` derives from params and then DISCARDS them, so a
 #: changed preimage can yield the same envelope hash. The exemption binds the
 #: preimage independently, and the gate joins it to the operation's own.
-R11_EXPECTED_ACTION_PARAMS_HASH = (
-    "378e391cf73648e3da262b24ab9bb4b72ab048db80e5a9ce11665e7359f84536"
-)
+#:
+#: A1 FIRST BOUND THIS TO A FROZEN LITERAL, AND THAT WAS WRONG. The real
+#: cutover preimage (`_cutover_action_preimage`) has EIGHT fields and is
+#: PER-CEREMONY: it binds the authorization document's binding hash, its
+#: window id, the stage-2 receipt hashes and the target runtime identity.
+#: A constant cannot equal it, so the frozen check would either refuse every
+#: honest operation or -- worse -- admit while a different preimage was
+#: rendered and executed. That is a field named for a binding that binds
+#: nothing, the exact defect this arc exists to close, committed by the lane
+#: closing it. The constant is deleted rather than corrected.
+#:
+#: What remains here is the JOIN only: the exemption must carry the same
+#: preimage hash the ceremony derived from its durable selection. The gate
+#: cannot yet derive that hash itself, so this one value is a caller
+#: assertion, and closing it belongs with the production wiring, where the
+#: gate will hold the selection. Until then R11 is dormant and no live path
+#: relies on it.
+R11_ACTION_PREIMAGE_IS_PER_CEREMONY = True
 
 _R11_STATEMENT = (
     "No consultation was performed. Pre-birth, no continuous subject exists "
@@ -167,11 +184,35 @@ def born_by_any_signal() -> bool:
         return True
     import sqlite3
 
+    # `is_born` collapses "no meta table" (an ordinary gestation shape) and
+    # "the query failed" (which could hide a real anchor) into the same False.
+    # Re-run the query here so the two can be told apart: a readable ledger
+    # whose meta table is simply absent stays unborn, while any other failure
+    # counts as born.
     try:
-        sqlite3.connect(f"file:{path}?mode=ro", uri=True).close()
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     except Exception:
         return True
-    return False
+    try:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "meta" not in names:
+            return False
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'birth_event_turn_id'"
+        ).fetchone()
+    except Exception:
+        return True
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return bool(row and str(row[0] or "").strip())
 
 
 def _quality_receipt_still_matches() -> bool:
@@ -183,14 +224,40 @@ def _quality_receipt_still_matches() -> bool:
     is not permission.
     """
     import hashlib
+    import os
+    import stat as stat_module
 
+    fd = -1
     try:
-        path = R11_QUALITY_EVIDENCE_PATH
-        if not path.exists():
+        # O_NOFOLLOW: a symlink to byte-identical content elsewhere must not
+        # stand in for the receipt. O_NONBLOCK: a FIFO/FUSE target must not
+        # block authorization indefinitely. Size-bounded: an unbounded target
+        # must not raise MemoryError out of a predicate.
+        fd = os.open(
+            R11_QUALITY_EVIDENCE_PATH,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        )
+        info = os.fstat(fd)
+        # Defence in depth, redundant BY MEASUREMENT rather than by argument:
+        # mutation shows removing this still refuses, because a FIFO opened
+        # non-blocking yields empty bytes that fail the digest and a directory
+        # raises on read. Kept because it refuses for the right reason and at
+        # the right layer, but it is not what carries the protection.
+        if not stat_module.S_ISREG(info.st_mode):
             return False
-        payload = path.read_bytes()
-    except OSError:
+        if info.st_size > _R11_RECEIPT_MAX_BYTES:
+            return False
+        payload = os.read(fd, _R11_RECEIPT_MAX_BYTES)
+        if len(payload) != info.st_size:
+            return False
+    except (OSError, ValueError):
         return False
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return hashlib.sha256(payload).hexdigest() == R11_EXPECTED_QUALITY_EVIDENCE_SHA256
 
 
@@ -207,6 +274,12 @@ def consultation_exemption_admits(
     the caller. A caller-shaped lookalike is refused by exact typing.
     """
     if type(exemption) is not S7ConsultationExemption:
+        return False
+    # The TWELFTH guard. `work_request_envelope_hash` type-checks nothing, so
+    # a distinct dataclass carrying identical fields hashes identically and
+    # was admitted. Exact typing was promised for the exemption and not given
+    # to the envelope it is joined against.
+    if type(envelope) is not s7.WorkRequestEnvelope:
         return False
     if ledger_writes_enabled is not False:
         # Expiry is mechanical: the durable per-turn ledger writing is the
@@ -227,7 +300,9 @@ def consultation_exemption_admits(
         return False
     if type(action_params_hash) is not str:
         return False
-    if action_params_hash != R11_EXPECTED_ACTION_PARAMS_HASH:
+    try:
+        s7._validate_hash64(action_params_hash, field="action_params_hash")
+    except ValueError:
         return False
     if exemption.action_params_hash != action_params_hash:
         return False
