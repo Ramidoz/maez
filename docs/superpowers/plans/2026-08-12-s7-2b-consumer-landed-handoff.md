@@ -45,8 +45,15 @@ forward. You have full authority").
    `affected_refs` with `host:local`, import-time drift guards;
    `anchored_io` hardened (component walk, O_CLOEXEC, post-read
    named-identity + length verification).
-4. *(in flight at handoff time)* — the `_on_approve` re-swallow slice;
-   see "In flight" below.
+4. **`2d55afa` — the `_on_approve` seam**: a broken approval seam is
+   loud, never a quiet denial. Typed `S7CardTransitionRefused` keeps
+   honest refusals blocking exactly as before; unexpected exceptions
+   become `PipelineStatus.ERROR` with
+   `s7_approval_seam_broken:<ExceptionType>`, a FAILED card via the
+   distinct `mark_s7_seam_failed` transition, and a structured HTTP 500
+   with the daemon alive. The deep blanket swallow in
+   `approve_and_mark_running` is removed. Witnesses in both directions,
+   measured per-test. Thirteen-suite total: **724**.
 
 Suites at commit 3 (LOCAL, NON-CERTIFYING): step 2B **113**; the other
 eleven suites **606**; ruff clean.
@@ -89,10 +96,9 @@ eleven suites **606**; ruff clean.
 
 ## In flight at handoff
 
-`task-msptmdvr-9njim5`: the `_on_approve` re-swallow
-(`core/decision/decision_pipeline.py` ~1862 and ~1883) — a broken seam
-must not be recorded as a denial. Dispatched with both-directions
-witnesses required; gate before commit.
+Nothing. All owed engineering slices from the resume plan are landed
+(items 1, 3, 4 built and gated; item 2's witnesses stay absent by
+design). The build queue is empty.
 
 ## Owner-only, unchanged
 
