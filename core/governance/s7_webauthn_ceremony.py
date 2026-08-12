@@ -506,6 +506,7 @@ class S7LocalWebAuthnCeremonyService:
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
         cutover_consultation_result: Any | None = None,
+        consultation_exemption: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -545,7 +546,44 @@ class S7LocalWebAuthnCeremonyService:
             in s7.VOICE_SEAT_WORK_CLASSES
         )
         fresh_source_bundle_validation = None
-        if voice_seat_work:
+        if voice_seat_work and consultation_exemption is not None:
+            # R11: the exemption is the OTHER lawful evidence shape. It never
+            # relaxes the bundle requirement -- it replaces it, and the two
+            # are mutually exclusive so nothing can say "both".
+            from core.governance.s7_consultation_exemption import (
+                born_by_any_signal,
+                consultation_exemption_admits,
+            )
+
+            if (
+                source_bundle_validation is not None
+                or source_bundle_binding is not None
+                or source_ref_hash is not None
+                or reservation_token is not None
+                or cutover_consultation_result is not None
+                or maez_voice_consultation is not None
+            ):
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_exemption_and_consultation_both_present",
+                    },
+                    status_code=409,
+                )
+            if not consultation_exemption_admits(
+                envelope=envelope,
+                exemption=consultation_exemption,
+                action_params_hash=getattr(
+                    rendered_statement, "action_params_hash", None
+                ),
+                ledger_writes_enabled=born_by_any_signal(),
+            ):
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_consultation_exemption_invalid"},
+                    status_code=409,
+                )
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
+        elif voice_seat_work:
             from core.governance import s7_guarded_execution as guarded
 
             source_bundle_ok = (
@@ -627,6 +665,8 @@ class S7LocalWebAuthnCeremonyService:
             source_ref_hash=source_ref_hash,
             source_bundle_validation=source_bundle_validation,
             cutover_consultation_result=cutover_consultation_result,
+            consultation_exemption=consultation_exemption,
+            action_params_hash=getattr(rendered_statement, "action_params_hash", None),
         )
         if voice.status_code != 200:
             return voice
@@ -734,6 +774,7 @@ class S7LocalWebAuthnCeremonyService:
                 source_ref_hash=source_ref_hash,
                 reservation_token=reservation_token,
                 now=now,
+                consultation_exemption=consultation_exemption,
             )
         except ValueError as exc:
             if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
