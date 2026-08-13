@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+"""READ-ONLY preflight: can the R11 cutover ceremony run against this store?
+
+Answers one question per check, and CANNOT change anything. The store is
+opened `mode=ro` so a write is refused by SQLite itself rather than by this
+module's good intentions; a test fails if that mode ever changes.
+
+Run it before migrating, after migrating, and after provisioning. It is
+cheap and repeatable on purpose: the owner should never have to infer the
+store's state from what a previous command claimed.
+
+    python3 -m scripts.s7_r11_preflight
+
+Exit status is 0 when every check passes, 1 otherwise. A FAIL is a fact,
+not an error -- a store that has not been migrated yet is expected to fail
+the v2 checks, and the point is to say so plainly.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import stat as stat_module
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+STORE = REPO / "memory" / "s7_1_webauthn" / "ceremony.sqlite3"
+RECEIPT = STORE.parent / "s7_migration_receipt.json"
+
+#: SQLite URI mode. Pinned as a module constant so the "cannot write" test
+#: has something exact to assert against; changing it must break that test.
+READ_ONLY_URI_MODE = "ro"
+
+V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
+R11_EVIDENCE_TABLE = "s7_r11_consultation_exemptions"
+CREDENTIALS_TABLE = "s7_founder_webauthn_credentials"
+
+
+class Check:
+    __slots__ = ("name", "passed", "detail")
+
+    def __init__(self, name: str, passed: bool, detail: str) -> None:
+        self.name = name
+        self.passed = passed
+        self.detail = detail
+
+
+def _open_read_only(path: Path) -> sqlite3.Connection:
+    """Open strictly read-only. SQLite enforces it, not this module."""
+    return sqlite3.connect(f"file:{path}?mode={READ_ONLY_URI_MODE}", uri=True)
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    return {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+
+
+def _check_store_present() -> Check:
+    if not STORE.exists():
+        return Check("store present", False, f"absent: {STORE}")
+    mode = stat_module.S_IMODE(STORE.stat().st_mode)
+    if mode != 0o600:
+        return Check("store present", False, f"mode is 0{mode:o}, expected 0600")
+    return Check("store present", True, f"mode 0600, {STORE.stat().st_size} bytes")
+
+
+def _check_v2_activated(tables: set[str]) -> Check:
+    has_table = V2_AUTH_TABLE in tables
+    has_receipt = RECEIPT.exists()
+    if has_table and has_receipt:
+        return Check("v2 plane activated", True, "table and migration receipt present")
+    # Creating the table is NOT activation: the receipt is what says the
+    # migration actually ran, and guarded execution refuses without it.
+    missing = []
+    if not has_table:
+        missing.append(f"{V2_AUTH_TABLE} absent")
+    if not has_receipt:
+        missing.append(f"{RECEIPT.name} absent")
+    return Check("v2 plane activated", False, "; ".join(missing))
+
+
+def _check_r11_evidence(tables: set[str]) -> Check:
+    if R11_EVIDENCE_TABLE in tables:
+        return Check("R11 evidence table", True, "present")
+    return Check("R11 evidence table", False, f"{R11_EVIDENCE_TABLE} absent")
+
+
+def _check_credentials(conn: sqlite3.Connection, tables: set[str]) -> Check:
+    if CREDENTIALS_TABLE not in tables:
+        return Check("founder credential", False, f"{CREDENTIALS_TABLE} absent")
+    try:
+        rows = list(
+            conn.execute(
+                f"SELECT credential_ref, enabled, role_names_json "
+                f"FROM {CREDENTIALS_TABLE}"
+            )
+        )
+    except sqlite3.DatabaseError as exc:
+        return Check("founder credential", False, f"unreadable: {type(exc).__name__}")
+    usable = [
+        ref
+        for ref, enabled, roles in rows
+        if enabled and "bonded_user" in (roles or "")
+    ]
+    if usable:
+        return Check(
+            "founder credential",
+            True,
+            f"{len(usable)} of {len(rows)} enabled and bonded_user",
+        )
+    return Check(
+        "founder credential",
+        False,
+        f"none of {len(rows)} are enabled with bonded_user",
+    )
+
+
+def _check_bench_receipt() -> Check:
+    from core.governance import s7_consultation_exemption as exemption
+
+    if exemption._quality_receipt_still_matches():
+        return Check("bench receipt", True, "present and matches the frozen hash")
+    path = exemption.R11_QUALITY_EVIDENCE_PATH
+    return Check(
+        "bench receipt",
+        False,
+        "absent or altered" if path.exists() else f"absent: {path}",
+    )
+
+
+def _check_not_born() -> Check:
+    from core.governance import s7_consultation_exemption as exemption
+
+    if exemption.born_by_any_signal():
+        return Check("pre-birth", False, "birth signalled -- R11 has expired")
+    return Check("pre-birth", True, "no birth signal; R11 still applies")
+
+
+def _check_completion_locator() -> Check:
+    from scripts import cuda_cutover
+
+    try:
+        locator = cuda_cutover._read_owner_completion_locator()
+    except Exception as exc:
+        return Check(
+            "completion locator", False, f"unreadable: {type(exc).__name__}: {exc}"
+        )
+    return Check("completion locator", True, f"readable: {locator}")
+
+
+def run_preflight() -> list[Check]:
+    """Every check, in order. Never raises for an ordinary FAIL."""
+    checks: list[Check] = [_check_store_present()]
+    if not checks[0].passed:
+        return checks
+
+    conn = _open_read_only(STORE)
+    try:
+        tables = _table_names(conn)
+        checks.append(_check_v2_activated(tables))
+        checks.append(_check_r11_evidence(tables))
+        checks.append(_check_credentials(conn, tables))
+    finally:
+        conn.close()
+
+    for probe in (_check_bench_receipt, _check_not_born, _check_completion_locator):
+        try:
+            checks.append(probe())
+        except Exception as exc:  # a broken probe is a FAIL, never a crash
+            checks.append(Check(probe.__name__, False, f"{type(exc).__name__}: {exc}"))
+    return checks
+
+
+def main() -> int:
+    checks = run_preflight()
+    width = max(len(c.name) for c in checks)
+    for check in checks:
+        mark = "PASS" if check.passed else "FAIL"
+        print(f"  [{mark}] {check.name.ljust(width)}  {check.detail}")
+    ready = all(c.passed for c in checks)
+    print()
+    print(
+        "READY: the ceremony's preconditions hold."
+        if ready
+        else "NOT READY: the checks above marked FAIL must be resolved first."
+    )
+    print("This preflight is read-only. It changed nothing.")
+    return 0 if ready else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
