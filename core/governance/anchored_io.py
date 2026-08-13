@@ -44,6 +44,13 @@ __all__ = [
 # A receipt is a small content-light document. The cap bounds the read so a
 # hostile file cannot exhaust memory before any validation runs.
 MAX_PRIVATE_FILE_BYTES = 8192
+#: A ceiling on the ceiling. A caller may raise its own read bound above the
+#: default, but never without limit -- an unbounded read is the thing the cap
+#: exists to prevent, and "the caller asked for it" is not a reason to allow
+#: one. Sized for the largest legitimate anchored artifact (bench completion
+#: packets run ~16KB) with room, and nothing near a file that could exhaust
+#: memory.
+MAX_ANCHORED_READ_BYTES = 256 * 1024
 
 STORE_NAME = "ceremony.sqlite3"
 RECEIPT_NAME = "s7_migration_receipt.json"
@@ -78,7 +85,13 @@ def _open_directory(path: str | os.PathLike[str]):
         os.close(fd)
 
 
-def _verify_and_read(fd: int, before, relative: str, expected_uid: int) -> bytes:
+def _verify_and_read(
+    fd: int,
+    before,
+    relative: str,
+    expected_uid: int,
+    max_bytes: int | None = None,
+) -> bytes:
     """Verify an already-open descriptor and read it.
 
     Takes the descriptor AND its first stat, rather than opening and
@@ -101,11 +114,17 @@ def _verify_and_read(fd: int, before, relative: str, expected_uid: int) -> bytes
         # A second name is a second way to replace the bytes after they
         # have been checked.
         raise OSError(f"{relative} has {before.st_nlink} links, expected 1")
-    if before.st_size > MAX_PRIVATE_FILE_BYTES:
-        raise ValueError(
-            f"{relative} is {before.st_size} bytes, over the "
-            f"{MAX_PRIVATE_FILE_BYTES} cap"
-        )
+    # The cap stays TIGHT by default: these are small control files, and a
+    # bounded read is what stops a substituted or corrupted file exhausting
+    # memory before any check can fire. A caller may raise it only by naming
+    # a larger bound explicitly, so widening is a visible decision at the
+    # call site rather than a global loosening -- the completion packet is
+    # legitimately ~16KB and must not drag every receipt's cap up with it.
+    cap = MAX_PRIVATE_FILE_BYTES if max_bytes is None else max_bytes
+    if type(cap) is not int or cap <= 0 or cap > MAX_ANCHORED_READ_BYTES:
+        raise ValueError(f"{relative} was given an invalid read cap")
+    if before.st_size > cap:
+        raise ValueError(f"{relative} is {before.st_size} bytes, over the {cap} cap")
 
     chunks: list[bytes] = []
     remaining = before.st_size

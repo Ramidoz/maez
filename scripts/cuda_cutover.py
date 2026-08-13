@@ -45,6 +45,13 @@ AUTHORIZATION_NAME = "receipts/cutover-authorization.json"
 MARKER_DIR = "markers"
 COMPLETION_SELECTION_NAME = "cutover-completion-selection.json"
 COMPLETION_SELECTION_SCHEMA = "cuda_cutover.completion_selection.v1"
+#: The completion packet carries a whole run's phase data, not a control
+#: file. Measured on the real bench artifact: 16609 bytes. Bounded well
+#: above that so a legitimate packet is never refused for growing a little,
+#: and far below anything that could exhaust memory -- the read stays
+#: bounded, it is simply bounded at the right size for THIS object.
+COMPLETION_PACKET_MAX_BYTES = 64 * 1024
+
 AUTHORIZATION_STORE_PATH = Path(
     "/home/rohit/maez/memory/s7_1_webauthn/ceremony.sqlite3"
 )
@@ -344,6 +351,7 @@ def _read_selected_private_file(
     relative: str,
     refusal: str,
     predicate_refusal: str | None = None,
+    max_bytes: int | None = None,
 ) -> bytes:
     root_fd = -1
     parent_fd = -1
@@ -370,9 +378,22 @@ def _read_selected_private_file(
             before,
             relative,
             expected_uid,
+            max_bytes=max_bytes,
         )
         after = os.fstat(leaf_fd)
-        named = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        try:
+            named = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            # A name that vanished BETWEEN the read and this stat is a
+            # PREDICATE failure -- the held bytes are no longer reachable by
+            # the name that authorized them -- not an ordinary "absent file".
+            # Without this it lands in the FileNotFoundError clause below and
+            # reports the generic refusal. The distinction was invisible
+            # while the frozen graph had no builtins: the lookup raised
+            # TypeError, which fell into the predicate clause by accident,
+            # so the test asserting predicate refusal passed for the wrong
+            # reason.
+            raise OSError("selected file name no longer identifies held bytes") from exc
         if (
             len(payload) != before.st_size
             or not _same_file_identity(after, named)
@@ -458,6 +479,12 @@ def _reconstruct_selected_cutover_at(
         expected_uid=expected_uid,
         relative=completion_locator,
         refusal="command_completion_invalid",
+        # A bench completion packet is a different KIND of object from the
+        # small control files the 8KB default guards: it carries the phase
+        # data for a whole run and measures ~16KB in practice. Widened HERE,
+        # explicitly, rather than by raising the global default and
+        # loosening every receipt and selection read along with it.
+        max_bytes=COMPLETION_PACKET_MAX_BYTES,
     )
     try:
         completion_doc = cm._canonical_persisted_role(

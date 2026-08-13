@@ -42,12 +42,16 @@ def _candidates() -> list[dict[str, str]]:
             continue
         if fields.get("status") != "completed":
             continue
-        ref = fields.get("artifact_ref")
-        if not isinstance(ref, str) or not ref:
+        # The ceremony parses THIS document as a CommandCompletionDoc and
+        # requires command == "assemble-stage2". Offering anything else --
+        # or offering the artifact_ref INSIDE it, which is a phase packet,
+        # a different kind of object entirely -- lets the owner select
+        # something the ceremony will refuse. Both mistakes were made.
+        if fields.get("command") != "assemble-stage2":
             continue
         found.append(
             {
-                "artifact_ref": ref,
+                "artifact_ref": path.name,
                 "command": str(fields.get("command", "?")),
                 "window_id": str(fields.get("window_id", "?")),
                 "timestamp": str(fields.get("timestamp", "?")),
@@ -105,7 +109,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     if "--select" not in argv:
-        print(f"Completed bench runs under {BENCH_ROOT.name}:\n")
+        print(f"Completed assemble-stage2 runs under {BENCH_ROOT.name}:\n")
         for index, cand in enumerate(candidates, start=1):
             print(f"  [{index}] {cand['command']}  window {cand['window_id']}")
             print(f"      at   {cand['timestamp']}")
