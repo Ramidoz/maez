@@ -164,3 +164,63 @@ Live store migrated, provisioned, backed up (two timestamped backups).
 Authorization `cutover-20260813-1553` valid until 19:53:30Z; re-mint after
 that. Selection written. Preflight 8/8 PASS. Nothing has been burned: no
 marker published today, systemd untouched, llama-server still on Vulkan.
+
+---
+
+# RESUMED — 2026-08-13 (later session). The blocker is closed. The tap decision is live.
+
+## The envelope mismatch: root cause was MODULE IDENTITY, not created_at
+
+The leading hypothesis was wrong, and diffing fields would have found
+nothing: both producers call the SAME pure builder and the ceremony's
+envelope IS built from `authorization.issued_at`. The real cause:
+`python3 -m scripts.cuda_cutover` runs the file as `__main__` and leaves
+`scripts.cuda_cutover` unimported, so the exemption boundary's
+`from scripts import cuda_cutover` loaded a SECOND copy of the module.
+The rebuild's exact-type check rejected the running ceremony's own
+selection (different `ValidatedCutoverSelection` class), the refusal was
+swallowed to `None`, and equality-with-None surfaced as an envelope
+mismatch. Invisible to every test, because tests import the dotted name.
+
+Fixed at the root (35ba6a6): the module registers itself under its dotted
+name at import; a pre-existing FOREIGN copy refuses loudly. The
+derive-not-accept equality check is untouched. Witnessed by -m emulation
+in a clean subprocess, an end-to-end mint of the ceremony's own selection
+shape, and mutation checks on both guards.
+
+## Also closed this session
+
+* The KNOWN RED (`test_selected_file_replacement_after_open_refuses_predicate`)
+  was a stale fixture signature -- the monkeypatched reader predated
+  `max_bytes`, so phase 1 "passed" via TypeError without ever performing
+  the renames. No production defect. Fixed, plus the missing witness for
+  the vanished-name predicate mapping (0695dfd).
+* The preflight now checks the full pinned-source surface -- every file
+  and directory the burn pins, against the ceremony's OWN predicates
+  (shared functions, not re-encoded). Findings 4 and 5 now surface
+  pre-ceremony. 10/10 PASS on this machine (a8b8281).
+* Two authority pins had been failing UNRECORDED since d2f4f29/2e6d406:
+  the migration helper's single-callsite pin (rehearsal allowlisted as the
+  documented private-copy use; `phase_migrate` rewired through the public
+  anchored edge) and the 2A reference multiset (missing entry for 2B's
+  typed bundle field). With these, the cutover test surface is fully
+  green: 594 passed (97bded9).
+
+## State
+
+Live store byte-identical all session (sha256 c936ff9d…cfc1a, same inode).
+Preflight 10/10 PASS. Authorization `cutover-20260813-1553` still the live
+window -- re-mint after 19:53:30Z. Nothing burned; llama-server on Vulkan.
+
+**The ceremony is the owner's act:** `python3 -m scripts.cuda_cutover`
+to the founder tap. Every known pre-burn refusal now surfaces in the
+preflight first.
+
+## Still owed, unchanged
+
+* Slice-B fixture regression (floor: 3 pre-existing + 1 slice-B in
+  `tests/test_s7_3_guarded_execution.py`).
+* The bonded consultation organ for soul-write / dream / decision-pipeline
+  (designs blocked at `e556fd7`, `cb025ff`; canon D10 ruled authoritative,
+  template not yet rewritten).
+* RULINGS 1 and 2, owner-only.
