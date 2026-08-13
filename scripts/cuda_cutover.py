@@ -175,6 +175,7 @@ CUTOVER_REFUSALS = frozenset(
         "edge_state_unreadable",
         "executor_contract",
         "executor_failed",
+        "executor_pin_lost",
         "join_mismatch",
         "legacy_cutover_consumer_retired",
         "marker_dir_absent",
@@ -2024,20 +2025,90 @@ class PreparedCutover:
         environment = dict(self._environment)
         try:
             for operation in self.operations:
+                # Live scar (2026-08-13): the burn's first install exited 1
+                # with a bare ENOENT and the executor discarded which
+                # command, which fd, and whose message it was -- one founder
+                # tap spent to learn nothing. Before each operation, every
+                # held descriptor must still be the object pinned at
+                # prepare; a lost or recycled number refuses BY NAME here
+                # instead of surfacing as a child's unexplained failure.
+                for pinned in (
+                    *self.recovery_artifacts,
+                    *self.installation_artifacts,
+                    *self.executables,
+                ):
+                    try:
+                        held_pin = os.fstat(pinned.fd)
+                    except OSError:
+                        held_pin = None
+                    if held_pin is None or _file_identity(held_pin) != pinned.identity:
+                        print(
+                            "executor: pinned source lost before spawn: "
+                            f"{pinned.label}",
+                            flush=True,
+                        )
+                        raise CutoverRefusal("executor_pin_lost")
+                for held_dir in self.directories:
+                    try:
+                        held_stat = os.fstat(held_dir.fd)
+                    except OSError:
+                        held_stat = None
+                    if (
+                        held_stat is None
+                        or _directory_identity(held_stat) != held_dir.identity
+                    ):
+                        print(
+                            "executor: pinned directory lost before spawn: "
+                            f"{held_dir.label}",
+                            flush=True,
+                        )
+                        raise CutoverRefusal("executor_pin_lost")
                 for command in operation.commands:
-                    file_actions = tuple(
-                        (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
-                        for source_fd, child_fd in command.child_fd_map
+                    stderr_read = stderr_write = -1
+                    try:
+                        stderr_read, stderr_write = os.pipe()
+                        file_actions = tuple(
+                            (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
+                            for source_fd, child_fd in command.child_fd_map
+                        ) + ((os.POSIX_SPAWN_DUP2, stderr_write, 2),)
+                        pid = self._posix_spawn(
+                            f"/proc/self/fd/{command.executable_fd}",
+                            command.argv,
+                            environment,
+                            file_actions=file_actions,
+                        )
+                        os.close(stderr_write)
+                        stderr_write = -1
+                        _pid, status = self._waitpid(pid, 0)
+                        # Read after wait: these commands emit at most a few
+                        # hundred bytes, far under the pipe buffer, so the
+                        # child cannot block on a full pipe before exiting.
+                        captured = bytearray()
+                        while len(captured) < 8192:
+                            chunk = os.read(stderr_read, 1024)
+                            if not chunk:
+                                break
+                            captured.extend(chunk)
+                    finally:
+                        if stderr_write >= 0:
+                            os.close(stderr_write)
+                        if stderr_read >= 0:
+                            os.close(stderr_read)
+                    child_stderr = (
+                        bytes(captured).decode("utf-8", "replace").strip()
                     )
-                    pid = self._posix_spawn(
-                        f"/proc/self/fd/{command.executable_fd}",
-                        command.argv,
-                        environment,
-                        file_actions=file_actions,
-                    )
-                    _pid, status = self._waitpid(pid, 0)
-                    if os.waitstatus_to_exitcode(status) != 0:
+                    exit_code = os.waitstatus_to_exitcode(status)
+                    if exit_code != 0:
+                        print(
+                            f"executor: {' '.join(command.argv)} "
+                            f"exited {exit_code}: {child_stderr}",
+                            flush=True,
+                        )
                         raise CutoverRefusal("executor_failed")
+                    if child_stderr:
+                        # A succeeding command's stderr still reaches the
+                        # owner, as it did when fd 2 was inherited.
+                        print(child_stderr, flush=True)
                 completed.append(operation.name)
             result = self._execution_result_type(
                 outcome="cutover_commands_completed",

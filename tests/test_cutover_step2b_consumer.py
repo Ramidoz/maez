@@ -2374,3 +2374,147 @@ def _gate_exemption():
         created_at="2026-08-13T12:00:00Z",
         _mint_token=r11._R11_MINT_TOKEN,
     )
+
+
+class TestExecutorEvidence:
+    """Live burn, 2026-08-13: the first install exited 1 printing only
+    'install: No such file or directory', and the executor discarded which
+    command, which fd, and whose message it was. Every synthetic
+    reproduction of the spawn mechanics passes, so the executor itself must
+    produce the evidence: verify each pinned fd's identity before spawning,
+    and capture a failing command's stderr into the refusal diagnostic."""
+
+    def _prepared(self, tmp_path):
+        """Prepared burn program that is REBOOT-PROOF by construction.
+
+        2026-08-13, three times: this class pinned the real
+        /usr/bin/systemctl, the install step expected to fail SUCCEEDED
+        (GNU install treats a directory destination as install-into), and
+        begin() ran the whole precomputed program -- including the final
+        `systemctl reboot`. The owner's machine went down mid-session. A
+        test touching PreparedCutover.begin must never hold a descriptor
+        to anything that can mutate the host: systemctl here is a scratch
+        script, and the tripwire below re-reads every pinned executable."""
+        sources = tmp_path / "sources"
+        recovery = tmp_path / "recovery"
+        override_parent = tmp_path / "override-parent"
+        sources.mkdir(mode=0o700)
+        recovery.mkdir(mode=0o700)
+        override_parent.mkdir(mode=0o700)
+        unit = sources / "llama-server.service"
+        dropin = sources / "mtp.conf"
+        override = sources / "cuda.conf"
+        judge = sources / "llama-judge.service"
+        for path, payload in (
+            (unit, b"unit\n"),
+            (dropin, b"dropin\n"),
+            (override, b"override\n"),
+            (judge, b"judge\n"),
+        ):
+            path.write_bytes(payload)
+            path.chmod(0o600)
+        # The systemctl seat is filled by /usr/bin/install: a real ELF (a
+        # shebang script cannot be exec'd via /proc/self/fd -- CLOEXEC has
+        # closed the fd before the interpreter reopens its script path), it
+        # refuses `--user daemon-reload` loudly and deterministically, and
+        # even a hypothetical run of the final operation would be
+        # `install reboot` -- a missing-operand error, never a reboot.
+        fake_systemctl = Path("/usr/bin/install")
+        prepared = cutover._prepare_cutover_resources_at(
+            recovery_sources=(
+                (unit, "llama-server.service"),
+                (dropin, "mtp.conf"),
+            ),
+            recovery_directory=recovery,
+            override_source=override,
+            override_directory=override_parent,
+            unit_fragments={
+                "llama-server.service": unit,
+                "llama-judge.service": judge,
+            },
+            install_executable=Path("/usr/bin/install"),
+            systemctl_executable=fake_systemctl,
+            expected_uid=os.getuid(),
+        )
+        # Tripwire: no pinned executable may be the real systemctl. install
+        # is tolerated -- it only writes where the scratch argv points.
+        for executable in prepared.executables:
+            target = os.readlink(f"/proc/self/fd/{executable.fd}")
+            assert target != "/usr/bin/systemctl", (
+                "test pinned the REAL systemctl; begin() would reboot the host"
+            )
+        # Stand-in for a completed burn publication; close() must exist
+        # because PreparedCutover.close() closes it.
+        prepared._burn_publication = SimpleNamespace(
+            eligible=True, _published=True, close=lambda: None
+        )
+        return prepared, recovery
+
+    def test_the_new_code_is_in_the_closed_vocabulary(self) -> None:
+        assert "executor_pin_lost" in cutover.CUTOVER_REFUSALS
+
+    def test_begin_refuses_a_lost_pin_by_name_without_spawning(
+        self, tmp_path, capsys
+    ) -> None:
+        prepared, _recovery = self._prepared(tmp_path)
+        spawned = []
+        prepared._posix_spawn = lambda *args, **kwargs: spawned.append(args)
+
+        lost = prepared.recovery_artifacts[0]
+        os.close(lost.fd)
+
+        with pytest.raises(cutover.CutoverRefusal, match=r"^executor_pin_lost$"):
+            prepared.begin()
+
+        assert spawned == []
+        assert lost.label in capsys.readouterr().out
+
+    def test_begin_refuses_a_recycled_pin_number_without_spawning(
+        self, tmp_path, capsys
+    ) -> None:
+        """The suspected live shape: the NUMBER is open but belongs to
+        something else now. fstat succeeds; the identity must not match."""
+        prepared, _recovery = self._prepared(tmp_path)
+        spawned = []
+        prepared._posix_spawn = lambda *args, **kwargs: spawned.append(args)
+
+        lost = prepared.recovery_artifacts[0]
+        os.close(lost.fd)
+        impostor = os.open("/usr/bin/install", os.O_RDONLY)
+        assert impostor == lost.fd, "test needs the number recycled"
+
+        try:
+            with pytest.raises(
+                cutover.CutoverRefusal, match=r"^executor_pin_lost$"
+            ):
+                prepared.begin()
+        finally:
+            try:
+                os.close(impostor)
+            except OSError:
+                pass
+
+        assert spawned == []
+        assert lost.label in capsys.readouterr().out
+
+    def test_begin_reports_a_failing_commands_own_stderr(
+        self, tmp_path, capsys
+    ) -> None:
+        """The stand-in systemctl refuses `--user` at daemon_reload; the
+        executor must surface ITS message, not discard it. The two install
+        operations before it succeed into scratch, witnessing that a
+        mid-program failure reports the failing command specifically."""
+        prepared, recovery = self._prepared(tmp_path)
+
+        with pytest.raises(cutover.CutoverRefusal, match=r"^executor_failed$"):
+            prepared.begin()
+
+        printed = capsys.readouterr().out
+        # Multi-call coreutils dispatches on argv[0] ("systemctl") and
+        # refuses it by name -- deterministic, and structurally reboot-proof.
+        assert "unknown program 'systemctl'" in printed
+        assert "exited 1" in printed
+        assert "daemon-reload" in printed
+        # The installs before the failure really ran, into scratch only.
+        assert (recovery / "llama-server.service").read_bytes() == b"unit\n"
+        assert (recovery / "mtp.conf").read_bytes() == b"dropin\n"
