@@ -218,6 +218,106 @@ def _check_completion_locator() -> Check:
     return Check("completion locator", True, f"readable: {locator}")
 
 
+def _check_pinned_sources() -> Check:
+    """Every file the burn would pin, against the ceremony's OWN predicate.
+
+    Added after the live run: the CUDA override and both llama unit files
+    were group-writable, and the ceremony was the first thing to look. The
+    predicate is imported from the ceremony, never re-encoded here, so a
+    report of PASS and a mid-ceremony refusal cannot disagree. Read-only:
+    each candidate is opened O_RDONLY and only fstat'd, exactly as the pin
+    does, without reading a byte.
+    """
+    import os
+    from scripts import cuda_cutover
+
+    candidates: list[tuple[Path, str, int | None, bool]] = [
+        (path, f"recovery-source:{leaf}", os.getuid(), False)
+        for path, leaf in cuda_cutover.CUTOVER_RECOVERY_SOURCES
+    ]
+    candidates.append(
+        (cuda_cutover.CUTOVER_OVERRIDE_SOURCE, "cuda-override-source", os.getuid(), False)
+    )
+    try:
+        fragments = cuda_cutover._resolve_user_unit_fragments(
+            cuda_cutover.CUTOVER_UNIT_NAMES
+        )
+    except Exception as exc:
+        return Check(
+            "pinned sources",
+            False,
+            f"unit fragments unresolvable: {type(exc).__name__}: {exc}",
+        )
+    candidates.extend(
+        (path, f"unit-fragment:{unit_name}", os.getuid(), False)
+        for unit_name, path in fragments.items()
+    )
+    candidates.extend(
+        (path, label, None, True)
+        for path, label in (
+            (cuda_cutover.CUTOVER_INSTALL_EXECUTABLE, "install-executable"),
+            (cuda_cutover.CUTOVER_SYSTEMCTL_EXECUTABLE, "systemctl-executable"),
+        )
+    )
+
+    failures: list[str] = []
+    for path, label, expected_uid, executable in candidates:
+        fd = -1
+        try:
+            selected = path.resolve(strict=True) if executable else path
+            fd = os.open(selected, os.O_RDONLY | os.O_NOFOLLOW)
+            violation = cuda_cutover._pinned_file_mode_violation(
+                os.fstat(fd), expected_uid=expected_uid, executable=executable
+            )
+        except OSError as exc:
+            violation = f"unopenable: {type(exc).__name__}"
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        if violation:
+            failures.append(f"{label}: {violation}")
+    if failures:
+        return Check("pinned sources", False, "; ".join(failures))
+    return Check(
+        "pinned sources", True, f"{len(candidates)} files pass the pin predicate"
+    )
+
+
+def _check_pinned_directories() -> Check:
+    """Both directories the burn would pin; the 775 finding, pre-ceremony.
+
+    Same discipline as `_check_pinned_sources`: the ceremony's predicate,
+    imported, applied to the ceremony's constants, fstat only.
+    """
+    import os
+    from scripts import cuda_cutover
+
+    targets = (
+        (Path(cuda_cutover.BENCH_ROOT) / "recovery", "cutover-recovery-directory"),
+        (cuda_cutover.CUTOVER_OVERRIDE_DIRECTORY, "systemd-user-override-directory"),
+    )
+    failures: list[str] = []
+    for path, label in targets:
+        fd = -1
+        try:
+            fd = cuda_cutover.s7._open_directory_by_components(path)
+            violation = cuda_cutover._pinned_directory_mode_violation(
+                os.fstat(fd), expected_uid=os.getuid()
+            )
+        except OSError as exc:
+            violation = f"unopenable: {type(exc).__name__}"
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        if violation:
+            failures.append(f"{label}: {violation}")
+    if failures:
+        return Check("pinned directories", False, "; ".join(failures))
+    return Check(
+        "pinned directories", True, f"{len(targets)} directories pass the pin predicate"
+    )
+
+
 def run_preflight() -> list[Check]:
     """Every check, in order. Never raises for an ordinary FAIL."""
     checks: list[Check] = [_check_store_present()]
@@ -238,6 +338,8 @@ def run_preflight() -> list[Check]:
         _check_not_born,
         _check_completion_locator,
         _check_cutover_authorization,
+        _check_pinned_sources,
+        _check_pinned_directories,
     ):
         try:
             checks.append(probe())

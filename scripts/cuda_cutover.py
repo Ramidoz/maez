@@ -78,6 +78,39 @@ BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
 RECEIPT_NAME = "command-assemble-stage1-attempt-026-terminal.json"
 AUTHORIZATION_NAME = "receipts/cutover-authorization.json"
 MARKER_DIR = "markers"
+
+#: The complete pinned-source surface of the burn, as module constants so the
+#: read-only preflight can check the SAME paths against the SAME predicates
+#: the ceremony pins. Two of the live run's five refusals -- a group-writable
+#: pinned source and a 775 unit directory -- surfaced only mid-ceremony
+#: because the preflight had no view of this set.
+CUTOVER_RECOVERY_SOURCES: tuple[tuple[Path, str], ...] = (
+    (
+        Path("/home/rohit/.config/systemd/user/llama-server.service"),
+        "llama-server.service",
+    ),
+    (
+        Path(
+            "/home/rohit/.config/systemd/user/"
+            "llama-server.service.d/mtp.conf"
+        ),
+        "mtp.conf",
+    ),
+)
+CUTOVER_OVERRIDE_SOURCE = Path(
+    "/home/rohit/maez/config/systemd/"
+    "llama-server-b9596-cuda.override.conf"
+)
+CUTOVER_OVERRIDE_DIRECTORY = Path(
+    "/home/rohit/.config/systemd/user/llama-server.service.d"
+)
+CUTOVER_INSTALL_EXECUTABLE = Path("/usr/bin/install")
+CUTOVER_SYSTEMCTL_EXECUTABLE = Path("/usr/bin/systemctl")
+CUTOVER_UNIT_NAMES: tuple[str, ...] = (
+    "llama-server.service",
+    "llama-judge.service",
+)
+
 COMPLETION_SELECTION_NAME = "cutover-completion-selection.json"
 COMPLETION_SELECTION_SCHEMA = "cuda_cutover.completion_selection.v1"
 #: The completion packet carries a whole run's phase data, not a control
@@ -2086,12 +2119,8 @@ def _pin_regular_file(
     try:
         fd = os.open(selected_path, os.O_RDONLY | os.O_NOFOLLOW)
         held = os.fstat(fd)
-        if (
-            not stat_module.S_ISREG(held.st_mode)
-            or held.st_nlink < 1
-            or (expected_uid is not None and held.st_uid != expected_uid)
-            or (held.st_mode & 0o022) != 0
-            or (executable and (held.st_mode & 0o111) == 0)
+        if _pinned_file_mode_violation(
+            held, expected_uid=expected_uid, executable=executable
         ):
             raise PermissionError(f"{label} is not a pinned private file")
         digest = hashlib.sha256()
@@ -2133,6 +2162,46 @@ def _pin_regular_file(
             os.close(fd)
 
 
+def _pinned_file_mode_violation(
+    held: os.stat_result,
+    *,
+    expected_uid: int | None,
+    executable: bool = False,
+) -> str | None:
+    """The ONE statement of what a pinnable source file must look like.
+
+    Shared verbatim with the read-only preflight, so what the preflight
+    reports and what the ceremony refuses cannot drift apart. Returns a
+    human-readable violation, or None when the predicate holds.
+    """
+
+    if not stat_module.S_ISREG(held.st_mode):
+        return "not a regular file"
+    if held.st_nlink < 1:
+        return "zero link count"
+    if expected_uid is not None and held.st_uid != expected_uid:
+        return f"owned by uid {held.st_uid}, expected {expected_uid}"
+    if (held.st_mode & 0o022) != 0:
+        return f"group/other-writable: mode 0{stat_module.S_IMODE(held.st_mode):o}"
+    if executable and (held.st_mode & 0o111) == 0:
+        return "not executable"
+    return None
+
+
+def _pinned_directory_mode_violation(
+    held: os.stat_result, *, expected_uid: int
+) -> str | None:
+    """Directory counterpart of `_pinned_file_mode_violation`; same sharing."""
+
+    if not stat_module.S_ISDIR(held.st_mode):
+        return "not a directory"
+    if held.st_uid != expected_uid:
+        return f"owned by uid {held.st_uid}, expected {expected_uid}"
+    if (held.st_mode & 0o022) != 0:
+        return f"group/other-writable: mode 0{stat_module.S_IMODE(held.st_mode):o}"
+    return None
+
+
 def _pin_directory(
     path: Path, *, label: str, expected_uid: int
 ) -> PinnedDirectory:
@@ -2140,11 +2209,7 @@ def _pin_directory(
     try:
         fd = s7._open_directory_by_components(path)
         held = os.fstat(fd)
-        if (
-            not stat_module.S_ISDIR(held.st_mode)
-            or held.st_uid != expected_uid
-            or (held.st_mode & 0o022) != 0
-        ):
+        if _pinned_directory_mode_violation(held, expected_uid=expected_uid):
             raise PermissionError(f"{label} is not an owner-private directory")
         os.set_inheritable(fd, False)
         pinned = PinnedDirectory(
@@ -2467,30 +2532,13 @@ def _bind_selected_cutover_preparer(
     fixed_root = Path(BENCH_ROOT)
     fixed_expected_uid = os.getuid()
     boot_id_path = Path("/proc/sys/kernel/random/boot_id")
-    recovery_sources = (
-        (
-            Path("/home/rohit/.config/systemd/user/llama-server.service"),
-            "llama-server.service",
-        ),
-        (
-            Path(
-                "/home/rohit/.config/systemd/user/"
-                "llama-server.service.d/mtp.conf"
-            ),
-            "mtp.conf",
-        ),
-    )
+    recovery_sources = CUTOVER_RECOVERY_SOURCES
     recovery_directory = fixed_root / "recovery"
-    override_source = Path(
-        "/home/rohit/maez/config/systemd/"
-        "llama-server-b9596-cuda.override.conf"
-    )
-    override_directory = Path(
-        "/home/rohit/.config/systemd/user/llama-server.service.d"
-    )
-    install_executable = Path("/usr/bin/install")
-    systemctl_executable = Path("/usr/bin/systemctl")
-    unit_names = ("llama-server.service", "llama-judge.service")
+    override_source = CUTOVER_OVERRIDE_SOURCE
+    override_directory = CUTOVER_OVERRIDE_DIRECTORY
+    install_executable = CUTOVER_INSTALL_EXECUTABLE
+    systemctl_executable = CUTOVER_SYSTEMCTL_EXECUTABLE
+    unit_names = CUTOVER_UNIT_NAMES
     frozen_unit_hash = cm.FROZEN_VULKAN_UNIT_SHA256
     frozen_dropin_hash = cm.FROZEN_VULKAN_DROPIN_SHA256
 

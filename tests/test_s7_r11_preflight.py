@@ -238,3 +238,141 @@ def test_a_broken_probe_becomes_a_FAIL_not_a_crash(tmp_path, monkeypatch) -> Non
     assert any(c.passed is False and "probe exploded" in c.detail for c in checks)
     # every later probe still ran
     assert any(c.name == "completion locator" for c in checks)
+
+
+class TestPinnedModeChecks:
+    """The two live-run findings the preflight could not see: a group-writable
+    pinned source and a 775 unit directory. Fixtures monkeypatch the
+    ceremony's OWN path constants -- the predicate itself is imported from the
+    ceremony, so these tests also witness that the two cannot drift."""
+
+    @pytest.fixture()
+    def _pinned_fixture(self, tmp_path, monkeypatch):
+        from scripts import cuda_cutover
+
+        unit_dir = tmp_path / "systemd-user"
+        unit_dir.mkdir(mode=0o700)
+        dropin_dir = tmp_path / "systemd-user" / "llama-server.service.d"
+        dropin_dir.mkdir(mode=0o700)
+        recovery_dir = tmp_path / "bench" / "recovery"
+        recovery_dir.mkdir(mode=0o700, parents=True)
+
+        unit = unit_dir / "llama-server.service"
+        dropin = dropin_dir / "mtp.conf"
+        override = tmp_path / "override.conf"
+        for path in (unit, dropin, override):
+            path.write_bytes(b"fixture")
+            path.chmod(0o600)
+
+        monkeypatch.setattr(
+            cuda_cutover,
+            "CUTOVER_RECOVERY_SOURCES",
+            ((unit, "llama-server.service"), (dropin, "mtp.conf")),
+        )
+        monkeypatch.setattr(cuda_cutover, "CUTOVER_OVERRIDE_SOURCE", override)
+        monkeypatch.setattr(cuda_cutover, "CUTOVER_OVERRIDE_DIRECTORY", dropin_dir)
+        monkeypatch.setattr(cuda_cutover, "BENCH_ROOT", tmp_path / "bench")
+        # Unit-fragment resolution shells out to systemctl; the fixture
+        # resolves to the same files the pin would receive.
+        monkeypatch.setattr(
+            cuda_cutover,
+            "_resolve_user_unit_fragments",
+            lambda names: {"llama-server.service": unit},
+        )
+        return {
+            "unit": unit,
+            "dropin": dropin,
+            "override": override,
+            "dropin_dir": dropin_dir,
+            "recovery_dir": recovery_dir,
+        }
+
+    def test_clean_fixtures_pass_both_checks(self, _pinned_fixture) -> None:
+        assert preflight._check_pinned_sources().passed is True
+        assert preflight._check_pinned_directories().passed is True
+
+    def test_a_group_writable_pinned_source_FAILS_by_name(
+        self, _pinned_fixture
+    ) -> None:
+        """Live finding 4: the CUDA override was group-writable and only the
+        ceremony noticed. The preflight must now name the file and the mode."""
+        _pinned_fixture["override"].chmod(0o660)
+
+        check = preflight._check_pinned_sources()
+
+        assert check.passed is False
+        assert "cuda-override-source" in check.detail
+        assert "0660" in check.detail
+
+    def test_a_group_writable_unit_fragment_FAILS(self, _pinned_fixture) -> None:
+        _pinned_fixture["unit"].chmod(0o664)
+
+        check = preflight._check_pinned_sources()
+
+        assert check.passed is False
+        assert "unit-fragment:llama-server.service" in check.detail
+
+    def test_a_775_unit_directory_FAILS_by_name(self, _pinned_fixture) -> None:
+        """Live finding 5: every systemd unit directory was 775."""
+        _pinned_fixture["dropin_dir"].chmod(0o775)
+
+        check = preflight._check_pinned_directories()
+
+        assert check.passed is False
+        assert "systemd-user-override-directory" in check.detail
+        assert "0775" in check.detail
+
+    def test_an_absent_pinned_source_FAILS_rather_than_raising(
+        self, _pinned_fixture
+    ) -> None:
+        _pinned_fixture["dropin"].unlink()
+
+        check = preflight._check_pinned_sources()
+
+        assert check.passed is False
+        assert "mtp.conf" in check.detail
+
+    def test_unresolvable_unit_fragments_FAIL_rather_than_raising(
+        self, _pinned_fixture, monkeypatch
+    ) -> None:
+        from scripts import cuda_cutover
+
+        def _boom(names):
+            raise cuda_cutover.CutoverRefusal("consumer_internal_pre")
+
+        monkeypatch.setattr(cuda_cutover, "_resolve_user_unit_fragments", _boom)
+
+        check = preflight._check_pinned_sources()
+
+        assert check.passed is False
+        assert "unit fragments unresolvable" in check.detail
+
+    def test_the_predicate_is_the_ceremonys_not_a_copy(self) -> None:
+        """The preflight must report through the SAME callable the pin
+        refuses through; a re-encoded predicate could drift silently."""
+        import inspect
+
+        from scripts import cuda_cutover
+
+        source = inspect.getsource(preflight._check_pinned_sources)
+        assert "cuda_cutover._pinned_file_mode_violation" in source
+        assert "& 0o022" not in source
+        dir_source = inspect.getsource(preflight._check_pinned_directories)
+        assert "cuda_cutover._pinned_directory_mode_violation" in dir_source
+        assert "& 0o022" not in dir_source
+
+    def test_both_checks_are_wired_into_run_preflight(
+        self, _pinned_fixture, tmp_path, monkeypatch
+    ) -> None:
+        """Direct-call tests above cannot notice the probe being dropped
+        from the roster; the owner only ever sees run_preflight's output."""
+        store = _fixture_store(tmp_path)
+        monkeypatch.setattr(preflight, "STORE", store)
+        monkeypatch.setattr(
+            preflight, "RECEIPT", tmp_path / "s7_migration_receipt.json"
+        )
+
+        names = {check.name for check in preflight.run_preflight()}
+
+        assert "pinned sources" in names
+        assert "pinned directories" in names
