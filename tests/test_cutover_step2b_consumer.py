@@ -920,8 +920,15 @@ class TestSelectedStage2Reconstruction:
         detached = root / "selected-detached.json"
         verify_and_read = cutover.s7_io._verify_and_read
 
-        def read_then_replace(fd, before, relative, expected_uid):
-            payload = verify_and_read(fd, before, relative, expected_uid)
+        def read_then_replace(fd, before, relative, expected_uid, *, max_bytes=None):
+            # Signature mirrors production's call including max_bytes (the
+            # per-read bound, 8a8e0d9). With the stale four-arg signature the
+            # production call raised TypeError BEFORE the renames ran: phase 1
+            # then "passed" through the generic-exception clause for the wrong
+            # reason, and phase 2 failed on the never-created detached file.
+            payload = verify_and_read(
+                fd, before, relative, expected_uid, max_bytes=max_bytes
+            )
             selected.rename(detached)
             replacement.rename(selected)
             return payload
@@ -951,6 +958,49 @@ class TestSelectedStage2Reconstruction:
             refusal="command_completion_invalid",
             predicate_refusal="command_completion_predicate",
         ) == b"selected-original"
+
+    def test_selected_file_vanishing_after_open_refuses_predicate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A name that VANISHES between read and named-stat is a predicate
+        failure -- the held bytes are no longer reachable by the name that
+        authorized them -- never the generic "absent file" refusal. This is
+        the FileNotFoundError-to-predicate mapping added at 8a8e0d9, which
+        had no witness: the replacement test above exercises only the
+        identity-mismatch arm, where the named stat still succeeds."""
+        root = tmp_path / "root"
+        root.mkdir(mode=0o700)
+        selected = root / "selected.json"
+        selected.write_bytes(b"selected-original")
+        selected.chmod(0o600)
+        verify_and_read = cutover.s7_io._verify_and_read
+
+        def read_then_vanish(fd, before, relative, expected_uid, *, max_bytes=None):
+            payload = verify_and_read(
+                fd, before, relative, expected_uid, max_bytes=max_bytes
+            )
+            selected.unlink()
+            return payload
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                cutover.s7_io,
+                "_verify_and_read",
+                read_then_vanish,
+            )
+            with pytest.raises(
+                cutover.CutoverRefusal,
+                match=r"^command_completion_predicate$",
+            ):
+                cutover._read_selected_private_file(
+                    root=root,
+                    expected_uid=os.getuid(),
+                    relative="selected.json",
+                    refusal="command_completion_invalid",
+                    predicate_refusal="command_completion_predicate",
+                )
 
 
 class TestPreparedCutoverResources:
