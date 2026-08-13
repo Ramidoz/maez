@@ -39,6 +39,41 @@ from scripts import cuda_bench_assemble as assemble
 from scripts import cuda_migration as cm
 from scripts import cuda_bench_driver as driver
 
+
+def _register_single_module_copy() -> None:
+    """Guarantee ONE copy of this module per process, under `-m` as well.
+
+    `python3 -m scripts.cuda_cutover` executes this file as `__main__` and
+    leaves `scripts.cuda_cutover` unimported. A later `from scripts import
+    cuda_cutover` -- which is exactly what the R11 exemption boundary does to
+    REBUILD the request envelope from durable evidence rather than accept the
+    caller's -- would then import a SECOND copy, with its own
+    `ValidatedCutoverSelection` class. The rebuild would reject the running
+    ceremony's own selection on type identity, return no envelope at all, and
+    the mint would refuse as "exemption envelope does not match the durable
+    selection" -- naming a field disagreement that never existed. Every test
+    imports the dotted name, so one copy exists there and no unit test could
+    see it. Registering the running module under its dotted name closes the
+    divergence at the source; the equality check downstream is untouched.
+
+    A copy already registered by someone else is an ambiguous process, not a
+    condition to paper over: refuse rather than diverge silently.
+    """
+
+    import sys
+
+    running = sys.modules[__name__]
+    resolved = sys.modules.setdefault("scripts.cuda_cutover", running)
+    if resolved is not running:
+        raise ImportError(
+            "two copies of scripts.cuda_cutover in one process -- the R11 "
+            "rebuild cannot recognise the running ceremony's own selection"
+        )
+
+
+_register_single_module_copy()
+del _register_single_module_copy
+
 BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
 RECEIPT_NAME = "command-assemble-stage1-attempt-026-terminal.json"
 AUTHORIZATION_NAME = "receipts/cutover-authorization.json"
