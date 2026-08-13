@@ -2515,6 +2515,11 @@ class TestExecutorEvidence:
         assert "unknown program 'systemctl'" in printed
         assert "exited 1" in printed
         assert "daemon-reload" in printed
+        # The postmortem captures both views of the failed command's fds:
+        # parent-side readlinks and the child's own /proc/self/fd listing
+        # under the same dup2 actions.
+        assert "postmortem: executable_fd=" in printed
+        assert "child /proc/self/fd under the same dup2 actions" in printed
         # The installs before the failure really ran, into scratch only.
         assert (recovery / "llama-server.service").read_bytes() == b"unit\n"
         assert (recovery / "mtp.conf").read_bytes() == b"dropin\n"

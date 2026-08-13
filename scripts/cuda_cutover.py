@@ -2104,6 +2104,12 @@ class PreparedCutover:
                             f"exited {exit_code}: {child_stderr}",
                             flush=True,
                         )
+                        _spawn_failure_postmortem(
+                            command=command,
+                            environment=environment,
+                            posix_spawn=self._posix_spawn,
+                            waitpid=self._waitpid,
+                        )
                         raise CutoverRefusal("executor_failed")
                     if child_stderr:
                         # A succeeding command's stderr still reaches the
@@ -2123,6 +2129,76 @@ class PreparedCutover:
         finally:
             self.close()
         return result
+
+
+def _spawn_failure_postmortem(
+    *,
+    command: "PreparedCommand",
+    environment: dict[str, str],
+    posix_spawn: Callable[..., int],
+    waitpid: Callable[[int, int], tuple[int, int]],
+) -> None:
+    """Print what the parent and the CHILD each see of a failed command's fds.
+
+    2026-08-13, twice: the burn's first install exited 1 with a bare ENOENT
+    on its /proc/self/fd source while every parent-side pin verified
+    healthy microseconds earlier, and every synthetic reproduction of the
+    same spawn shape succeeds. The two views must be captured at the
+    moment of failure. Parent side: readlink of every mapped source fd.
+    Child side: `ls -l /proc/self/fd` spawned with the SAME dup2 actions,
+    so it inherits exactly what the failed command inherited. Diagnostic
+    only -- exceptions are swallowed so a broken postmortem can never mask
+    the executor refusal it accompanies.
+    """
+
+    try:
+        print(f"postmortem: executable_fd={command.executable_fd} -> "
+              + os.readlink(f"/proc/self/fd/{command.executable_fd}"),
+              flush=True)
+        for source_fd, child_fd in command.child_fd_map:
+            print(
+                f"postmortem: parent fd {source_fd} (child {child_fd}) -> "
+                + os.readlink(f"/proc/self/fd/{source_fd}"),
+                flush=True,
+            )
+        ls_fd = -1
+        stdout_read = stdout_write = -1
+        try:
+            ls_fd = os.open("/usr/bin/ls", os.O_RDONLY | os.O_CLOEXEC)
+            stdout_read, stdout_write = os.pipe()
+            file_actions = tuple(
+                (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
+                for source_fd, child_fd in command.child_fd_map
+            ) + ((os.POSIX_SPAWN_DUP2, stdout_write, 1),)
+            pid = posix_spawn(
+                f"/proc/self/fd/{ls_fd}",
+                ("ls", "-l", "/proc/self/fd"),
+                environment,
+                file_actions=file_actions,
+            )
+            os.close(stdout_write)
+            stdout_write = -1
+            waitpid(pid, 0)
+            listing = bytearray()
+            while len(listing) < 16384:
+                chunk = os.read(stdout_read, 4096)
+                if not chunk:
+                    break
+                listing.extend(chunk)
+            print(
+                "postmortem: child /proc/self/fd under the same dup2 actions:\n"
+                + bytes(listing).decode("utf-8", "replace").rstrip(),
+                flush=True,
+            )
+        finally:
+            if stdout_write >= 0:
+                os.close(stdout_write)
+            if stdout_read >= 0:
+                os.close(stdout_read)
+            if ls_fd >= 0:
+                os.close(ls_fd)
+    except BaseException as exc:  # noqa: BLE001 -- diagnostic must not mask
+        print(f"postmortem: unavailable: {exc!r}", flush=True)
 
 
 def _file_identity(stat: os.stat_result) -> tuple[int, int, int, int, int]:
