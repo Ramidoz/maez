@@ -2284,3 +2284,93 @@ class TestPresenceRefusalNamesTheRealCause:
         refusal = cutover._map_presence_finish_refusal(result)
 
         assert str(refusal) == "presence_assertion_invalid"
+
+
+class TestOwnerGatePrintsTheFinishContract:
+    """Live, 2026-08-13: the first run to reach the tap prompt could not
+    succeed -- _read_owner_webauthn_finish refuses a paste without the exact
+    challenge_id, and the gate never printed it. Everything the reader
+    demands must appear in the gate output, as a template with one hole."""
+
+    def test_the_gate_prints_every_field_the_finish_reader_requires(
+        self, capsys
+    ) -> None:
+        exemption = _gate_exemption()
+        projection_sha256 = s7.canonical_hash(exemption.projection())
+        rendered = SimpleNamespace(rendered_text="S7 work-on-Maez authorization")
+
+        cutover._print_owner_exemption_gate(
+            exemption=exemption,
+            projection_sha256=projection_sha256,
+            rendered=rendered,
+            begin_body={
+                "challenge_id": "s7auth_gate-contract",
+                "public_key_options": {"rpId": "localhost"},
+            },
+            credential_ref="cred-gate-contract",
+        )
+
+        printed = json.loads(capsys.readouterr().out)
+        template = printed["webauthn_finish_template"]
+        # The reader's exact equality checks (_read_owner_webauthn_finish):
+        assert template["challenge_id"] == "s7auth_gate-contract"
+        assert template["credential_ref"] == "cred-gate-contract"
+        assert (
+            template["consultation_exemption_projection_hash"]
+            == projection_sha256
+        )
+        # The one hole the owner fills; the OTHER evidence binding must not
+        # be suggested, mirroring the reader's mutual-exclusion refusal.
+        assert "authentication_response" in template
+        assert "maez_voice_raw_response_hash" not in template
+
+    def test_a_template_paste_with_a_real_assertion_passes_the_reader(
+        self, monkeypatch, capsys
+    ) -> None:
+        """The printed template, filled, is EXACTLY what the reader admits."""
+        exemption = _gate_exemption()
+        projection_sha256 = s7.canonical_hash(exemption.projection())
+        rendered = SimpleNamespace(rendered_text="S7 work-on-Maez authorization")
+        cutover._print_owner_exemption_gate(
+            exemption=exemption,
+            projection_sha256=projection_sha256,
+            rendered=rendered,
+            begin_body={
+                "challenge_id": "s7auth_gate-roundtrip",
+                "public_key_options": {"rpId": "localhost"},
+            },
+            credential_ref="cred-gate-roundtrip",
+        )
+        template = json.loads(capsys.readouterr().out)[
+            "webauthn_finish_template"
+        ]
+        template["authentication_response"] = {"id": "assertion-fixture"}
+
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": json.dumps(template)
+        )
+
+        accepted = cutover._read_owner_webauthn_finish(
+            selected_credential_ref="cred-gate-roundtrip",
+            challenge_id="s7auth_gate-roundtrip",
+            exemption_projection_sha256=projection_sha256,
+        )
+
+        assert accepted["challenge_id"] == "s7auth_gate-roundtrip"
+        assert accepted["authentication_response"] == {"id": "assertion-fixture"}
+
+
+def _gate_exemption():
+    """A structurally real exemption; the gate only projects it."""
+    from core.governance import s7_consultation_exemption as r11
+
+    return r11.S7ConsultationExemption(
+        action=r11.R11_EXEMPT_ACTION,
+        request_envelope_hash="a" * 64,
+        reason_code=r11.R11_REASON_CODE,
+        model_sha256_unchanged=r11.R11_EXPECTED_MODEL_SHA256,
+        quality_evidence_sha256=r11.R11_EXPECTED_QUALITY_EVIDENCE_SHA256,
+        action_params_hash="b" * 64,
+        created_at="2026-08-13T12:00:00Z",
+        _mint_token=r11._R11_MINT_TOKEN,
+    )

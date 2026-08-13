@@ -2852,6 +2852,7 @@ def _print_owner_exemption_gate(
     projection_sha256: str,
     rendered: s7.RenderedRequestStatement,
     begin_body: Mapping[str, object],
+    credential_ref: str,
 ) -> None:
     """Surface the ABSENCE and its grounds before any tap.
 
@@ -2861,6 +2862,12 @@ def _print_owner_exemption_gate(
     what was seen.
     """
     projection = exemption.projection()
+    # The finish reader REFUSES a paste that lacks the exact challenge_id --
+    # correct, it joins the assertion to the durable challenge row -- but the
+    # first live run reached this prompt with no way to know that id, because
+    # this gate never printed it. Everything the owner's paste must echo is
+    # therefore printed HERE, as a template with one hole (the browser
+    # assertion), so the contract is visible instead of archaeological.
     print(
         json.dumps(
             {
@@ -2870,6 +2877,15 @@ def _print_owner_exemption_gate(
                 "public_key_options": begin_body.get("public_key_options"),
                 "rendered_authorization": rendered.rendered_text,
                 "responder_identity_disclaimer": RESPONDER_IDENTITY_DISCLAIMER,
+                "webauthn_finish_template": {
+                    "challenge_id": begin_body.get("challenge_id"),
+                    "credential_ref": credential_ref,
+                    "consultation_exemption_projection_hash": projection_sha256,
+                    "authentication_response": (
+                        "<the assertion from navigator.credentials.get at"
+                        " http://localhost:11437, base64url-encoded fields>"
+                    ),
+                },
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -3058,6 +3074,7 @@ def _authorize_and_stage_selected_cutover(
                 projection_sha256=exemption_projection_sha256,
                 rendered=rendered,
                 begin_body=begin_result.body,
+                credential_ref=credential.credential_ref,
             )
             finish_request = _read_owner_webauthn_finish(
                 selected_credential_ref=credential.credential_ref,
