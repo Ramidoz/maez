@@ -119,6 +119,108 @@ def test_a_world_readable_store_FAILS(tmp_path, monkeypatch) -> None:
     assert "0644" in checks[0].detail
 
 
+def _authorization_doc(**overrides):
+    from scripts import cuda_migration as cm
+
+    fields = {
+        "window_id": "cutover-20260813-1500",
+        "actions": cm.CUTOVER_ACTION_SET,
+        "boot_id": "boot-fixture",
+        "nonce": "ab12" * 16,
+        "issued_at": "2026-08-13T15:00:00Z",
+        "expires_at": "2026-08-13T19:00:00Z",
+        "owner": "rohit",
+        "parent_bench_evidence_sha256": "a" * 64,
+        "rollback_manifest_sha256": cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
+    }
+    fields.update(overrides)
+    return cm.CutoverAuthorizationDoc(**fields)
+
+
+def _install_authorization(tmp_path, monkeypatch, doc) -> None:
+    """Place a real, canonically-encoded authorization where the check looks."""
+    from scripts import cuda_cutover
+    from scripts import cuda_migration as cm
+
+    root = tmp_path / "bench"
+    (root / "receipts").mkdir(parents=True)
+    wrapper = {
+        "schema": cm.CUTOVER_AUTHORIZATION_SCHEMA,
+        "binding_sha256": doc.binding_sha256,
+        "fields": {
+            "window_id": doc.window_id,
+            "actions": list(doc.actions),
+            "boot_id": doc.boot_id,
+            "nonce": doc.nonce,
+            "issued_at": doc.issued_at,
+            "expires_at": doc.expires_at,
+            "owner": doc.owner,
+            "parent_bench_evidence_sha256": doc.parent_bench_evidence_sha256,
+            "rollback_manifest_sha256": doc.rollback_manifest_sha256,
+        },
+    }
+    (root / cuda_cutover.AUTHORIZATION_NAME).write_bytes(
+        cm._canonical_wrapper_bytes(wrapper)
+    )
+    monkeypatch.setattr(cuda_cutover, "BENCH_ROOT", root)
+
+
+def test_a_missing_authorization_FAILS_rather_than_reading_READY(monkeypatch, tmp_path) -> None:
+    """The gap that let the preflight report READY while the ceremony would
+    have refused: it checked the store and the locator but never the
+    authority the ceremony actually consumes."""
+    from scripts import cuda_cutover
+
+    monkeypatch.setattr(cuda_cutover, "BENCH_ROOT", tmp_path / "empty")
+
+    check = preflight._check_cutover_authorization()
+
+    assert check.passed is False
+    assert "absent" in check.detail
+
+
+def test_an_EXPIRED_authorization_fails_here_not_at_the_execution_edge(
+    monkeypatch, tmp_path
+) -> None:
+    _install_authorization(
+        tmp_path,
+        monkeypatch,
+        _authorization_doc(
+            issued_at="2026-01-01T00:00:00Z", expires_at="2026-01-01T04:00:00Z"
+        ),
+    )
+
+    check = preflight._check_cutover_authorization()
+
+    assert check.passed is False
+    assert "EXPIRED" in check.detail
+
+
+def test_a_STALE_BOOT_authorization_fails(monkeypatch, tmp_path) -> None:
+    """Boot binding exists so an authorization cannot survive a restart. If
+    the host rebooted since minting, that must be visible before the tap."""
+    import datetime
+
+    # TTL is exact: issued + 4h, or the document itself refuses.
+    issued = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    now = issued.strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (issued + datetime.timedelta(seconds=14_400)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    _install_authorization(
+        tmp_path,
+        monkeypatch,
+        _authorization_doc(
+            boot_id="a-boot-that-is-not-this-one", issued_at=now, expires_at=future
+        ),
+    )
+
+    check = preflight._check_cutover_authorization()
+
+    assert check.passed is False
+    assert "boot id" in check.detail
+
+
 def test_a_broken_probe_becomes_a_FAIL_not_a_crash(tmp_path, monkeypatch) -> None:
     """The owner runs this to learn the truth; it must never die halfway
     and leave them guessing which checks never ran."""

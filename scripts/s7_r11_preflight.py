@@ -145,6 +145,67 @@ def _check_not_born() -> Check:
     return Check("pre-birth", True, "no birth signal; R11 still applies")
 
 
+def _check_cutover_authorization() -> Check:
+    """The document the ceremony actually consumes.
+
+    Added after the preflight reported READY while this was absent: it
+    checked the database and the locator but never the authority itself, so
+    the owner would have discovered it by running the ceremony. It is
+    time-boxed (4h) and boot-bound on purpose, so it is minted shortly
+    before the ceremony -- an expired or stale-boot one must FAIL here
+    rather than at the execution edge.
+    """
+    from scripts import cuda_cutover
+    from scripts import cuda_migration as cm
+
+    path = cuda_cutover.BENCH_ROOT / cuda_cutover.AUTHORIZATION_NAME
+    if not path.exists():
+        return Check(
+            "cutover authorization",
+            False,
+            f"absent: {cuda_cutover.AUTHORIZATION_NAME} -- mint it before the ceremony",
+        )
+    try:
+        doc = cm.PersistedDoc(path.read_bytes()).obj
+    except Exception as exc:
+        return Check(
+            "cutover authorization", False, f"unreadable: {type(exc).__name__}: {exc}"
+        )
+    if type(doc) is not cm.CutoverAuthorizationDoc:
+        return Check("cutover authorization", False, "not a cutover authorization")
+
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        expires = datetime.datetime.strptime(
+            doc.expires_at, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return Check("cutover authorization", False, "expiry is not canonical")
+    if expires <= now:
+        return Check(
+            "cutover authorization", False, f"EXPIRED at {doc.expires_at} -- re-mint"
+        )
+
+    try:
+        boot_now = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        boot_now = ""
+    if boot_now and doc.boot_id != boot_now:
+        return Check(
+            "cutover authorization",
+            False,
+            "boot id differs from this boot -- the host restarted since minting",
+        )
+    remaining = int((expires - now).total_seconds() // 60)
+    return Check(
+        "cutover authorization",
+        True,
+        f"window {doc.window_id}, {remaining} min remaining, boot matches",
+    )
+
+
 def _check_completion_locator() -> Check:
     from scripts import cuda_cutover
 
@@ -172,7 +233,12 @@ def run_preflight() -> list[Check]:
     finally:
         conn.close()
 
-    for probe in (_check_bench_receipt, _check_not_born, _check_completion_locator):
+    for probe in (
+        _check_bench_receipt,
+        _check_not_born,
+        _check_completion_locator,
+        _check_cutover_authorization,
+    ):
         try:
             checks.append(probe())
         except Exception as exc:  # a broken probe is a FAIL, never a crash
