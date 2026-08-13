@@ -9,6 +9,7 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
 from tests.s7_store_fixture import fresh_store_at
 
@@ -2297,6 +2298,115 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(
             result.body["error"],
             "s7_signed_statement_contradicts_exemption",
+        )
+
+    def _r11_finish_with_store(self, tmp, exempt_store_for):
+        """Run begin+finish on the exemption branch with a caller-built
+        authorization store; returns the finish result. The verifier is
+        VALID, so any refusal is a gate before or after the store check."""
+        from core.governance import s7_guarded_execution as guarded
+        from core.governance.s7_webauthn_ceremony import (
+            S7LocalWebAuthnCeremonyService,
+        )
+
+        store, _intent = self._store_with_bootstrap(tmp)
+        store.store_credential(
+            self._credential_record("cred-primary", kind="primary")
+        )
+        store.store_credential(
+            self._credential_record("cred-backup", kind="backup")
+        )
+        fresh_store_at(store.db_path)  # initialise the v1 plane pre-migration
+        self._migrate_private_store(store.db_path)
+        guarded_store = guarded.S7GuardedStateStore(
+            authorization_store=exempt_store_for(store.db_path),
+        )
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_ValidRegistrationVerifier(),
+            store_factory=lambda: store,
+        )
+        envelope = self._r11_envelope()
+        exemption = self._r11_exemption(envelope)
+        rendered = self._r11_rendered_statement(envelope, exemption)
+        begin = service.authorize_begin(
+            now=NOW,
+            rendered_statement=rendered,
+            precondition_hash=envelope.precondition_hash,
+            session_binding="session-r11",
+            internal_channel_binding="daemon-channel",
+            consultation_exemption=exemption,
+            durable_cutover_selection=self._r11_selection(),
+        )
+        return service.authorize_finish(
+            now=NOW,
+            envelope=envelope,
+            rendered_statement=rendered,
+            precondition_hash=envelope.precondition_hash,
+            maez_voice_consultation=None,
+            session_binding="session-r11",
+            internal_channel_binding="daemon-channel",
+            request_json={
+                "challenge_id": begin.body["challenge_id"],
+                "credential_ref": "cred-primary",
+                "authentication_response": {"clientDataJSON": "assertion"},
+            },
+            guarded_store=guarded_store,
+            consultation_exemption=exemption,
+            durable_cutover_selection=self._r11_selection(),
+        )
+
+    def test_authorize_finish_admits_the_held_store_subclass(self):
+        """Live tap, 2026-08-13: the cutover's _HeldS7AuthorizationStore --
+        a SUBCLASS whose every transaction stays on the held inode, strictly
+        stricter than the plain store -- was refused by blocker 5's exact-type
+        check as if it were a fake. The owner's real assertion died at
+        presence_mint_failed. Blocker 5 landed with no test naming its error,
+        so the collision between the two hardening passes was first observed
+        mid-ceremony. The gate's job is 'no fake store, no other database';
+        a genuine subclass on the SAME database is neither."""
+        from core.governance import operator_user_boundary as s7
+
+        class _HeldLike(s7.S7AuthorizationStore):
+            def __init__(self, db_path):
+                # Mirrors the facade: binds path facts, skips super().__init__.
+                self.db_path = Path(db_path)
+                self._vended = set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            finish = self._r11_finish_with_store(tmp, _HeldLike)
+
+        self.assertNotEqual(
+            finish.body.get("error"), "s7_guarded_state_store_required"
+        )
+
+    def test_authorize_finish_still_refuses_a_lookalike_store(self):
+        """Blocker 5's actual guarantee, kept: a structural fake that merely
+        carries a db_path attribute is not an authorization store."""
+        with tempfile.TemporaryDirectory() as tmp:
+            finish = self._r11_finish_with_store(
+                tmp, lambda db_path: SimpleNamespace(db_path=Path(db_path))
+            )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"], "s7_guarded_state_store_required"
+        )
+
+    def test_authorize_finish_still_refuses_a_different_database_store(self):
+        """The other half of blocker 5: a REAL store addressing a different
+        database than the challenge and credential were consumed from."""
+        with tempfile.TemporaryDirectory() as tmp:
+            other = Path(tmp) / "other-store"
+            other.mkdir()
+
+            def _elsewhere(db_path):
+                return fresh_store_at(other / "ceremony.sqlite3")
+
+            finish = self._r11_finish_with_store(tmp, _elsewhere)
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"], "s7_guarded_state_store_required"
         )
 
     def test_authorize_finish_refuses_exemption_and_voice_evidence_together(self):

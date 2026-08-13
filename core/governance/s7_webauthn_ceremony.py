@@ -652,12 +652,24 @@ class S7LocalWebAuthnCeremonyService:
             # fake or different-database store could satisfy finish: the
             # challenge and credential consumed in one database while the
             # artifact was written to another, or to nothing at all.
+            #
+            # The inner store is isinstance, not exact type. Exact typing here
+            # refused the cutover's _HeldS7AuthorizationStore -- a subclass
+            # whose every transaction stays on the ceremony's HELD inode,
+            # strictly stricter than the plain store -- and the owner's first
+            # real assertion died at presence_mint_failed (2026-08-13; the two
+            # hardening passes had never run together, and this gate landed
+            # with no test naming its error). The guarantee is unchanged:
+            # structural fakes are not instances, and a store addressing any
+            # other database still refuses on db_path below. A subclass can
+            # only come from code already holding the real class, which is the
+            # same in-process authority that could construct the exact type.
             from core.governance import s7_guarded_execution as guarded
 
             exempt_store = getattr(guarded_store, "authorization_store", None)
             if (
                 type(guarded_store) is not guarded.S7GuardedStateStore
-                or type(exempt_store) is not s7.S7AuthorizationStore
+                or not isinstance(exempt_store, s7.S7AuthorizationStore)
                 or exempt_store.db_path != store.db_path
             ):
                 return S7CeremonyServiceResult(
