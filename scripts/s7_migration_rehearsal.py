@@ -146,6 +146,39 @@ def rehearse(scratch: Path) -> list[tuple[str, bool, str]]:
         )
     )
 
+    # Phase 2, on the SAME rehearsed copy: the owner runs these back to back,
+    # so rehearsing them apart would leave the join between them unobserved.
+    from core.governance import s7_guarded_execution as guarded
+
+    dir_fd = os.open(scratch, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+        results.append(("R11 provisioning ran", True, "no exception"))
+        # Idempotence is a property the owner may depend on after an
+        # interrupted run, so it is exercised rather than assumed.
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+        results.append(("R11 provisioning is idempotent", True, "second run clean"))
+    except Exception as exc:
+        results.append(("R11 provisioning ran", False, f"{type(exc).__name__}: {exc}"))
+    finally:
+        os.close(dir_fd)
+
+    final = _snapshot(copy_path)
+    results.append(
+        (
+            "R11 evidence table present",
+            guarded.R11_EXEMPTION_EVIDENCE_TABLE in final["tables"],
+            guarded.R11_EXEMPTION_EVIDENCE_TABLE,
+        )
+    )
+    results.append(
+        (
+            "credentials still exact after provisioning",
+            final["credentials"] == before["credentials"],
+            f"{len(final['credentials'])} credentials, unchanged",
+        )
+    )
+
     results.append(
         (
             "LIVE STORE UNTOUCHED",

@@ -34,7 +34,12 @@ RECEIPT = STORE.parent / "s7_migration_receipt.json"
 READ_ONLY_URI_MODE = "ro"
 
 V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
-R11_EVIDENCE_TABLE = "s7_r11_consultation_exemptions"
+#: The real table, read from the module that owns it rather than
+#: retyped here -- I first invented a name and the preflight cheerfully
+#: reported a table that would never exist.
+from core.governance.s7_guarded_execution import (  # noqa: E402
+    R11_EXEMPTION_EVIDENCE_TABLE as R11_EVIDENCE_TABLE,
+)
 CREDENTIALS_TABLE = "s7_founder_webauthn_credentials"
 
 
