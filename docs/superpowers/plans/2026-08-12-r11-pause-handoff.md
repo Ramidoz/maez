@@ -102,3 +102,65 @@ minutes; medium reviews ran 8-15.
 * **Two tables in one doc.** The callsite design contains a superseded
   table; rows landed in the wrong one once. Regenerate only after the
   active-table anchor.
+
+---
+
+# RESUME POINT — 2026-08-13. The ceremony reaches the credential prompt.
+
+The store is prepared and the ceremony now runs to the founder-credential
+selection. It refuses immediately after, and that refusal is the ONE thing
+blocking the tap.
+
+## Where it stops
+
+    ExemptionMintRefused: exemption envelope does not match the durable selection
+    -> CutoverRefusal: consultation_exemption_unavailable
+
+`mint_consultation_exemption` rebuilds the expected envelope from the
+durable selection (`_cutover_envelope_from_durable_selection`) and compares
+it for **equality** with the envelope the ceremony built. They differ.
+
+**Leading hypothesis, NOT VERIFIED — verify before acting:** the two
+constructions disagree on `created_at`. The rebuild uses
+`authorization.issued_at`; the ceremony's own construction appears to use a
+fresh `_now_z()`. Two envelopes built at different moments cannot be equal.
+Diff them field by field first — do not assume this is the only difference.
+
+This is code from the blocker-3 work (e05b020, "derive the preimage from
+the durable selection"). The check itself is right: the boundary must
+derive rather than accept. The two producers simply do not agree yet.
+
+## Everything the ceremony proved on the way here
+
+Five refusals, every one pre-burn, every one pointing at something real:
+
+1. 16KB completion packet vs an 8KB read cap -> per-read bound (8a8e0d9).
+2. Wrong locator KIND -- artifact_ref (a phase packet) instead of the
+   assemble-stage2 completion document. My helper was wrong twice.
+3. `assemble-stage2` HAD NEVER BEEN RUN. All 23 inputs were present; it
+   needed the CUTOVER window, not the bench A/B window. Now attempt-028.
+4. Every pinned source was group-writable -- the CUDA override, both
+   llama units, and 17 user unit fragments. Fixed by the owner to 0600.
+5. Every systemd unit DIRECTORY was 775. Fixed to 750.
+
+Items 4 and 5 are findings about the machine, not the code: the entire
+systemd surface Maez runs on was group-writable. Nothing else would have
+looked.
+
+## Also still red / owed
+
+* `test_selected_file_replacement_after_open_refuses_predicate` -- was
+  passing because of the builtins bug fixed at de28ab8; now exposes a real
+  refusal-code ordering question in a second code path (cause documented
+  in 8a8e0d9).
+* The preflight should check pinned-source and directory modes, so items
+  4 and 5 surface before the ceremony rather than during it.
+* Slice-B fixture regression; the consultation organ for soul-write /
+  dream / decision-pipeline, which still ask a contextless model.
+
+## State
+
+Live store migrated, provisioned, backed up (two timestamped backups).
+Authorization `cutover-20260813-1553` valid until 19:53:30Z; re-mint after
+that. Selection written. Preflight 8/8 PASS. Nothing has been burned: no
+marker published today, systemd untouched, llama-server still on Vulkan.
