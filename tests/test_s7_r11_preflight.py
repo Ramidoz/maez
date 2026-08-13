@@ -376,3 +376,50 @@ class TestPinnedModeChecks:
 
         assert "pinned sources" in names
         assert "pinned directories" in names
+
+
+class TestWebAuthnDependencyCheck:
+    """The wrong-interpreter class (live, 2026-08-13): py_webauthn is lazy,
+    so a bare python3 passed every other check and first failed mid-ceremony
+    under a misleading name. This check runs the verifier's own probe."""
+
+    def test_a_present_dependency_passes_and_names_the_interpreter(self) -> None:
+        import sys
+
+        check = preflight._check_webauthn_dependency()
+
+        assert check.passed is True
+        assert sys.executable in check.detail
+
+    def test_a_missing_dependency_FAILS_and_names_the_interpreter(
+        self, monkeypatch
+    ) -> None:
+        import sys
+
+        from core.governance import s7_webauthn_verifier as verifier_mod
+
+        def _absent(self):
+            return None
+
+        monkeypatch.setattr(
+            verifier_mod.S7ProductionWebAuthnVerifier, "_load", _absent
+        )
+
+        check = preflight._check_webauthn_dependency()
+
+        assert check.passed is False
+        assert "MISSING" in check.detail
+        assert sys.executable in check.detail
+
+    def test_the_check_is_wired_into_run_preflight(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        store = _fixture_store(tmp_path)
+        monkeypatch.setattr(preflight, "STORE", store)
+        monkeypatch.setattr(
+            preflight, "RECEIPT", tmp_path / "s7_migration_receipt.json"
+        )
+
+        names = {check.name for check in preflight.run_preflight()}
+
+        assert "webauthn dependency" in names

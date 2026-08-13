@@ -36,6 +36,7 @@ import pytest
 from core.governance import operator_user_boundary as s7
 from core.governance import s7_guarded_execution as guarded
 from core.governance import s7_v2_migration
+from core.governance import s7_webauthn_ceremony as s7_ceremony
 from scripts import cuda_cutover as cutover
 from scripts import cuda_bench_assemble as assemble
 from scripts import cuda_bench_driver as driver
@@ -2246,3 +2247,40 @@ class TestFrozenGraphKeepsBuiltins:
 
         frozen = self._frozen_globals()
         assert not isinstance(frozen["os"], ModuleType)
+
+
+class TestPresenceRefusalNamesTheRealCause:
+    """2026-08-13, live: /usr/bin/python3 has no py_webauthn, so authorize_begin
+    failed CLOSED at its dependency gate -- correct -- but the mapper's default
+    branch renamed the typed 503 to presence_assertion_invalid, pointing the
+    owner at an assertion that never existed. A refusal that misnames its
+    cause sends the investigation to the wrong layer; it cost a founder-key
+    session to find that the interpreter, not the ceremony, was wrong."""
+
+    def test_a_missing_webauthn_dependency_is_named_as_such(self) -> None:
+        result = s7_ceremony.S7CeremonyServiceResult(
+            body={
+                "ok": False,
+                "error": "s7_webauthn_dependency_missing",
+                "library_name": "webauthn",
+                "library_version": None,
+            },
+            status_code=503,
+        )
+
+        refusal = cutover._map_presence_finish_refusal(result)
+
+        assert str(refusal) == "presence_dependency_missing"
+
+    def test_the_new_code_is_in_the_closed_vocabulary(self) -> None:
+        assert "presence_dependency_missing" in cutover.CUTOVER_REFUSALS
+
+    def test_an_unknown_error_still_defaults_to_assertion_invalid(self) -> None:
+        result = s7_ceremony.S7CeremonyServiceResult(
+            body={"ok": False, "error": "s7_authentication_invalid"},
+            status_code=409,
+        )
+
+        refusal = cutover._map_presence_finish_refusal(result)
+
+        assert str(refusal) == "presence_assertion_invalid"

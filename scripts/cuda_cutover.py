@@ -194,6 +194,7 @@ CUTOVER_REFUSALS = frozenset(
         "presence_binding_mismatch",
         "presence_consumption_failed",
         "presence_credential_unscoped",
+        "presence_dependency_missing",
         "presence_grant_unprojectable",
         "presence_mint_failed",
         "presence_no_usable_credential",
@@ -2881,6 +2882,15 @@ def _map_presence_finish_refusal(
     result: s7_ceremony.S7CeremonyServiceResult,
 ) -> CutoverRefusal:
     error = str(result.body.get("error") or "")
+    if error == "s7_webauthn_dependency_missing":
+        # The verifier loads py_webauthn LAZILY so a bare install fails
+        # closed instead of arming -- correct -- but this default-mapped to
+        # presence_assertion_invalid, naming an assertion that never
+        # existed. Live scar (2026-08-13): the owner ran the ceremony under
+        # /usr/bin/python3, which has no webauthn; everything before the
+        # dependency gate needs none, so the first symptom was a refusal
+        # pointing at the wrong layer entirely.
+        return CutoverRefusal("presence_dependency_missing")
     if error in {"s7_credential_disabled", "s7_credential_setup_incomplete"}:
         return CutoverRefusal("presence_credential_unscoped")
     if error in {

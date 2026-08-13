@@ -218,6 +218,38 @@ def _check_completion_locator() -> Check:
     return Check("completion locator", True, f"readable: {locator}")
 
 
+def _check_webauthn_dependency() -> Check:
+    """Can THIS interpreter verify a founder assertion at all?
+
+    py_webauthn is loaded lazily by design, so nothing before the ceremony's
+    begin gate needs it -- which meant a wrong interpreter (the owner's bare
+    `python3` instead of the venv) sailed through everything, including this
+    preflight, and first surfaced as a mid-ceremony refusal misnamed
+    presence_assertion_invalid (2026-08-13). The check runs the verifier's
+    own dependency probe under the SAME interpreter that would run the
+    ceremony, and names that interpreter either way, so a PASS here and a
+    ceremony run under a different python are visibly different facts.
+    """
+    import sys
+
+    from core.governance.s7_webauthn_ceremony import S7ProductionWebAuthnVerifier
+
+    state = S7ProductionWebAuthnVerifier().dependency_state()
+    if state.get("ok") is True:
+        return Check(
+            "webauthn dependency",
+            True,
+            f"{state.get('library_name')} {state.get('library_version')}"
+            f" under {sys.executable}",
+        )
+    return Check(
+        "webauthn dependency",
+        False,
+        f"{state.get('library_name')} MISSING under {sys.executable}"
+        " -- run the ceremony with the venv interpreter",
+    )
+
+
 def _check_pinned_sources() -> Check:
     """Every file the burn would pin, against the ceremony's OWN predicate.
 
@@ -340,6 +372,7 @@ def run_preflight() -> list[Check]:
         _check_cutover_authorization,
         _check_pinned_sources,
         _check_pinned_directories,
+        _check_webauthn_dependency,
     ):
         try:
             checks.append(probe())
