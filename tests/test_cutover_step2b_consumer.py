@@ -2148,3 +2148,51 @@ class TestRuledConsumerIngress:
         assert "selected" in inspect.signature(
             _closed_production_authorizer()
         ).parameters
+
+
+class TestFrozenGraphKeepsBuiltins:
+    """Found by RUNNING the ceremony, not by a test.
+
+    The freezer replaces module-valued globals with immutable facades so a
+    reassigned module attribute cannot redirect a production edge. It also
+    replaced `__builtins__`, which CPython resolves by SUBSCRIPTING -- so
+    every frozen function silently lost every builtin name. The live
+    symptom was a clean size-cap refusal arriving as
+    "TypeError: 'types.SimpleNamespace' object is not subscriptable" raised
+    from an `except FileNotFoundError` line.
+    """
+
+    def _frozen_globals(self):
+        import scripts.cuda_cutover as module
+
+        for cell in cutover.execute_cutover.__closure__ or ():
+            value = cell.cell_contents
+            globals_ = getattr(value, "__globals__", None)
+            if callable(value) and globals_ is not None and globals_ is not module.__dict__:
+                return globals_
+        raise AssertionError("no frozen function found in the entrypoint closure")
+
+    def test_builtins_survive_the_freeze_as_a_real_mapping(self) -> None:
+        frozen = self._frozen_globals()
+        assert isinstance(frozen["__builtins__"], dict)
+
+    def test_a_frozen_function_can_still_name_a_builtin_exception(self) -> None:
+        from types import FunctionType
+
+        def probe():
+            try:
+                raise ValueError("x")
+            except FileNotFoundError:
+                return "wrong handler"
+            except ValueError:
+                return "ok"
+
+        clone = FunctionType(probe.__code__, self._frozen_globals(), "probe")
+        assert clone() == "ok"
+
+    def test_module_facades_are_still_frozen(self) -> None:
+        """The hardening this freezer exists for must survive the fix."""
+        from types import ModuleType
+
+        frozen = self._frozen_globals()
+        assert not isinstance(frozen["os"], ModuleType)

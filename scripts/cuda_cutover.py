@@ -3246,7 +3246,20 @@ def _freeze_cutover_function_graph(
 
     frozen_globals: dict[str, object] = {}
     for name, value in module_globals.items():
-        if isinstance(value, ModuleType):
+        # `__builtins__` MUST survive as the interpreter left it. CPython
+        # resolves a name that is neither local nor global by SUBSCRIPTING
+        # this entry, so replacing the module with a facade removes every
+        # builtin from the frozen functions -- `FileNotFoundError`, `OSError`,
+        # `len`, `type`, all of them -- and the failure surfaces only when a
+        # builtin name is actually looked up. Live symptom: a clean
+        # size-cap refusal arrived as
+        # "TypeError: 'types.SimpleNamespace' object is not subscriptable"
+        # raised from an `except FileNotFoundError` line, which is not a
+        # place an error can come from. Found by RUNNING the ceremony; no
+        # test exercised the frozen path's exception handling.
+        if name == "__builtins__":
+            frozen_globals[name] = value
+        elif isinstance(value, ModuleType):
             frozen_globals[name] = SimpleNamespace(**vars(value))
         else:
             frozen_globals[name] = value
