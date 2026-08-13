@@ -83,9 +83,16 @@ def _run_phase(label: str, work) -> int:
 
 
 def phase_migrate(dir_fd: int) -> None:
+    # Through the PUBLIC anchored entrypoint: this phase targets exactly the
+    # canonical store, and the public edge walks the frozen path itself --
+    # calling the descriptor-injection helper here was a second production
+    # callsite of a private surface whose allowlist has exactly one. The
+    # injected dir_fd (which _run_phase opens for the backup) is deliberately
+    # unused; only provisioning, which has no anchored public edge, takes it.
+    del dir_fd
     from core.governance import s7_v2_migration as migration
 
-    migration._migrate_authorization_store_to_v2_at(store_dir_fd=dir_fd)
+    migration.migrate_authorization_store_to_v2()
 
 
 def phase_provision(dir_fd: int) -> None:

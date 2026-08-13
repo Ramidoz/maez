@@ -646,8 +646,22 @@ class TestPrivateHelperHasExactlyOneProductionCallsite:
     # throughout. Re-pinned to where they now live -- NOT relaxed: the
     # assertion is still exact equality against a single allowed pair, so a
     # genuine second caller (or a move to any other file) still fails.
-    ALLOWED = ("core/governance/s7_v2_migration.py",
-               "migrate_authorization_store_to_v2")
+    #
+    # One addition since (d2f4f29): the owner-run REHEARSAL, which migrates a
+    # byte-identical scratch COPY of the live store and so cannot use the
+    # public edge -- that edge walks the frozen canonical path by design.
+    # This is the descriptor-injection use the helper's own docstring names.
+    # d2f4f29 also made `s7_prepare_store.phase_migrate` a THIRD caller
+    # against the live store itself; that one had no such excuse -- it
+    # targets exactly the canonical store -- and was rewired to the public
+    # entrypoint rather than allowlisted here. Both changes landed without
+    # this pin being updated, so the failure sat unrecorded; the pin stays
+    # exact equality so the next addition fails loudly again.
+    ALLOWED = [
+        ("core/governance/s7_v2_migration.py",
+         "migrate_authorization_store_to_v2"),
+        ("scripts/s7_migration_rehearsal.py", "rehearse"),
+    ]
 
     @classmethod
     def _references(cls):
@@ -695,7 +709,7 @@ class TestPrivateHelperHasExactlyOneProductionCallsite:
 
     def test_exactly_one_production_callsite(self) -> None:
         calls, _ = self._references()
-        assert calls == [self.ALLOWED], calls
+        assert sorted(calls) == sorted(self.ALLOWED), calls
 
     def test_no_alias_or_indirect_reference_exists(self) -> None:
         _, other = self._references()
