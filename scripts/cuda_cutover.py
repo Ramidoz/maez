@@ -2161,42 +2161,102 @@ def _spawn_failure_postmortem(
                 + os.readlink(f"/proc/self/fd/{source_fd}"),
                 flush=True,
             )
-        ls_fd = -1
-        stdout_read = stdout_write = -1
+        def _capture_spawn(executable, argv, *, output_fd):
+            """Spawn with the SAME dup2 actions; return (exit, captured)."""
+            probe_fd = -1
+            pipe_read = pipe_write = -1
+            try:
+                probe_fd = os.open(executable, os.O_RDONLY | os.O_CLOEXEC)
+                pipe_read, pipe_write = os.pipe()
+                file_actions = tuple(
+                    (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
+                    for source_fd, child_fd in command.child_fd_map
+                ) + ((os.POSIX_SPAWN_DUP2, pipe_write, output_fd),)
+                pid = posix_spawn(
+                    f"/proc/self/fd/{probe_fd}",
+                    argv,
+                    environment,
+                    file_actions=file_actions,
+                )
+                os.close(pipe_write)
+                pipe_write = -1
+                _pid, probe_status = waitpid(pid, 0)
+                captured = bytearray()
+                while len(captured) < 16384:
+                    chunk = os.read(pipe_read, 4096)
+                    if not chunk:
+                        break
+                    captured.extend(chunk)
+                return (
+                    os.waitstatus_to_exitcode(probe_status),
+                    bytes(captured).decode("utf-8", "replace").rstrip(),
+                )
+            finally:
+                if pipe_write >= 0:
+                    os.close(pipe_write)
+                if pipe_read >= 0:
+                    os.close(pipe_read)
+                if probe_fd >= 0:
+                    os.close(probe_fd)
+
+        listing_exit, listing = _capture_spawn(
+            "/usr/bin/ls", ("ls", "-l", "/proc/self/fd"), output_fd=1
+        )
+        print(
+            "postmortem: child /proc/self/fd under the same dup2 actions "
+            f"(ls exit {listing_exit}):\n{listing}",
+            flush=True,
+        )
+        # Determinism: the SAME failed command, re-spawned identically.
+        retry_read = retry_write = -1
         try:
-            ls_fd = os.open("/usr/bin/ls", os.O_RDONLY | os.O_CLOEXEC)
-            stdout_read, stdout_write = os.pipe()
-            file_actions = tuple(
+            retry_read, retry_write = os.pipe()
+            retry_actions = tuple(
                 (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
                 for source_fd, child_fd in command.child_fd_map
-            ) + ((os.POSIX_SPAWN_DUP2, stdout_write, 1),)
+            ) + ((os.POSIX_SPAWN_DUP2, retry_write, 2),)
             pid = posix_spawn(
-                f"/proc/self/fd/{ls_fd}",
-                ("ls", "-l", "/proc/self/fd"),
+                f"/proc/self/fd/{command.executable_fd}",
+                command.argv,
                 environment,
-                file_actions=file_actions,
+                file_actions=retry_actions,
             )
-            os.close(stdout_write)
-            stdout_write = -1
-            waitpid(pid, 0)
-            listing = bytearray()
-            while len(listing) < 16384:
-                chunk = os.read(stdout_read, 4096)
+            os.close(retry_write)
+            retry_write = -1
+            _pid, retry_status = waitpid(pid, 0)
+            retry_err = bytearray()
+            while len(retry_err) < 8192:
+                chunk = os.read(retry_read, 1024)
                 if not chunk:
                     break
-                listing.extend(chunk)
+                retry_err.extend(chunk)
             print(
-                "postmortem: child /proc/self/fd under the same dup2 actions:\n"
-                + bytes(listing).decode("utf-8", "replace").rstrip(),
+                "postmortem: identical re-spawn exited "
+                f"{os.waitstatus_to_exitcode(retry_status)}: "
+                + bytes(retry_err).decode("utf-8", "replace").strip(),
                 flush=True,
             )
         finally:
-            if stdout_write >= 0:
-                os.close(stdout_write)
-            if stdout_read >= 0:
-                os.close(stdout_read)
-            if ls_fd >= 0:
-                os.close(ls_fd)
+            if retry_write >= 0:
+                os.close(retry_write)
+            if retry_read >= 0:
+                os.close(retry_read)
+        # Can the child actually OPEN and read the mapped fds? readlink
+        # (ls above) proves presence; cat proves the reopen that install
+        # needs. Directories exit non-zero by nature; sources must read.
+        for _source_fd, child_fd in command.child_fd_map:
+            cat_exit, cat_out = _capture_spawn(
+                "/usr/bin/cat",
+                ("cat", f"/proc/self/fd/{child_fd}"),
+                output_fd=1,
+            )
+            # Captured stdout stays unprinted -- only its size matters;
+            # cat's own errors go to inherited stderr, visible directly.
+            print(
+                f"postmortem: cat /proc/self/fd/{child_fd} exited "
+                f"{cat_exit}, read {len(cat_out)} bytes",
+                flush=True,
+            )
     except BaseException as exc:  # noqa: BLE001 -- diagnostic must not mask
         print(f"postmortem: unavailable: {exc!r}", flush=True)
 
