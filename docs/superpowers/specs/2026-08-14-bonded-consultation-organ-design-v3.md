@@ -30,8 +30,11 @@ Two round-four refutations already fixed below: the template line now
 carries RULING O's full two-class scope; the INSERT-only/CAS
 contradiction is now RESOLVED IN TEXT (§3 mutability law: attempt rows
 are the one mutable-state table with an immutable sealed column set;
-all other staging INSERT-only). Cluster 1 (attempt schema + D15
-reconciliation) is WRITTEN as of this revision and awaits its gate.
+all other staging INSERT-only). **Cluster 1 (attempt schema + D15
+reconciliation) is FROZEN — gate PASSED at facbaee after five rounds
+(15→9→3→2→1→0 findings), with live SQLite witnesses on both lanes for
+the retry ceiling, the timestamp checks, and the not_asked exclusion.
+Next session: cluster 2 (the two gates + exact joins + D16/D21 text).**
 
 ---
 
