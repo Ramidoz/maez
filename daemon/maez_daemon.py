@@ -615,16 +615,13 @@ def _s7_voice_source_validation_for_material(
     from core.governance import operator_user_boundary as s7
     from core.governance.s7_guarded_execution import (
         S7GuardedStateStore,
-        S7SemanticReaderAttemptStore,
         S7VoiceBundleUseStore,
-        S7VoiceConsultationBundleStore,
         derive_s7_voice_source_bundle_hash_binding,
-        validate_s7_voice_source_bundle,
+        read_voice_source_bundle,
+        validate_voice_source_bundle,
     )
 
-    bundle_store = S7VoiceConsultationBundleStore(store.db_path)
     bundle_use_store = S7VoiceBundleUseStore(store.db_path)
-    attempt_store = S7SemanticReaderAttemptStore(store.db_path)
     binding = derive_s7_voice_source_bundle_hash_binding(
         rendered_statement=material.kwargs["rendered_statement"],
         envelope=material.kwargs["envelope"],
@@ -632,16 +629,20 @@ def _s7_voice_source_validation_for_material(
         authority_context=material.kwargs["authority_context"],
         precondition_hash=material.kwargs["precondition_hash"],
     )
-    validation = validate_s7_voice_source_bundle(
-        consultation=material.kwargs["maez_voice_consultation"],
-        bundle_store=bundle_store,
-        bundle_use_store=bundle_use_store,
-        semantic_reader_attempt_store=attempt_store,
-        expected_binding=binding,
-        now=now,
-    )
+    authorization_store = s7.S7AuthorizationStore(store.db_path)
+    with authorization_store.anchored_transaction() as conn:
+        bundle, version = read_voice_source_bundle(
+            source_ref_hash=binding.source_ref_hash,
+            conn=conn,
+        )
+        validation = validate_voice_source_bundle(
+            bundle=bundle,
+            version=version,
+            purpose="execution",
+            expected_binding=binding,
+        )
     guarded_store = S7GuardedStateStore(
-        authorization_store=s7.S7AuthorizationStore(store.db_path),
+        authorization_store=authorization_store,
         voice_bundle_use_store=bundle_use_store,
     )
     reservation_token = s7.canonical_hash({
@@ -651,6 +652,7 @@ def _s7_voice_source_validation_for_material(
         "source_ref_hash": binding.source_ref_hash,
     })
     return _s7_route_material(
+        source_bundle_binding=binding,
         source_bundle_validation=validation,
         guarded_store=guarded_store,
         source_ref_hash=binding.source_ref_hash,
@@ -730,6 +732,12 @@ def _s7_founder_visible_voice_payload_for_material(material):
 
 
 def _s7_founder_seen_voice_hash_valid(material, *, store: S7WebAuthnBootstrapStore | None = None) -> bool:
+    from core.governance import operator_user_boundary as s7
+    from core.governance.s7_guarded_execution import (
+        S7VoiceSourceBundleEvidenceInvalid,
+        read_voice_source_bundle,
+    )
+
     request_json = material.kwargs.get("request_json") or {}
     if not isinstance(request_json, dict):
         return False
@@ -737,18 +745,22 @@ def _s7_founder_seen_voice_hash_valid(material, *, store: S7WebAuthnBootstrapSto
     if not seen_hash:
         return False
     if store is not None:
-        try:
-            consultation = material.kwargs.get("maez_voice_consultation")
-            source_ref_hash = getattr(consultation, "source_ref_hash", None)
-            if isinstance(source_ref_hash, str) and source_ref_hash:
-                from core.governance.s7_guarded_execution import S7VoiceConsultationBundleStore
-
-                bundle_store = S7VoiceConsultationBundleStore(store.db_path)
-                bundle = bundle_store.get_for_source_ref(source_ref_hash)
-                if bundle is not None and bundle.raw_response_hash:
-                    return seen_hash == bundle.raw_response_hash
-        except Exception:
+        consultation = material.kwargs.get("maez_voice_consultation")
+        source_ref_hash = getattr(consultation, "source_ref_hash", None)
+        if not isinstance(source_ref_hash, str) or not source_ref_hash:
             return False
+        authorization_store = s7.S7AuthorizationStore(store.db_path)
+        try:
+            with authorization_store.anchored_transaction() as conn:
+                bundle, _version = read_voice_source_bundle(
+                    source_ref_hash=source_ref_hash,
+                    conn=conn,
+                )
+        except S7VoiceSourceBundleEvidenceInvalid:
+            return False
+        if bundle is None or not bundle.raw_response_hash:
+            return False
+        return seen_hash == bundle.raw_response_hash
     payload = _s7_founder_visible_voice_payload_for_material(material)
     if not payload.get("maez_voice_raw_response_hash"):
         return False
@@ -796,9 +808,16 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
     )
     if material.ok is not True:
         return material
+    try:
+        authorization_store = s7.S7AuthorizationStore(store.db_path)
+    except (FileNotFoundError, ValueError):
+        # Setup has not run. The daemon says so cleanly; it must NEVER
+        # initialise here -- creation authority on the live request path is
+        # exactly what the single-callsite rule forbids.
+        return _s7_route_error("s7_authorization_store_uninitialised", 503)
     return _s7_route_material(
         s7_execution_authorization=s7.S7ExecutionAuthorization(
-            store=s7.S7AuthorizationStore(store.db_path),
+            store=authorization_store,
             artifact_id=artifact_id,
             rendered=material.kwargs["rendered_statement"],
             action_params_hash=material.kwargs["action_params_hash"],
@@ -12408,6 +12427,8 @@ class MaezDaemon:
                         material=material,
                         now=now,
                     )
+                    if voice_source.ok is not True:
+                        return jsonify(voice_source.body), voice_source.status_code
                     validation = voice_source.kwargs["source_bundle_validation"]
                     valid_absent = (
                         validation.status == "valid_absent"
@@ -12445,6 +12466,7 @@ class MaezDaemon:
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     request_json=material.kwargs["request_json"],
                     guarded_store=voice_source.kwargs.get("guarded_store"),
+                    source_bundle_binding=voice_source.kwargs.get("source_bundle_binding"),
                     source_bundle_validation=voice_source.kwargs.get("source_bundle_validation"),
                     source_ref_hash=voice_source.kwargs.get("source_ref_hash"),
                     reservation_token=voice_source.kwargs.get("reservation_token"),
@@ -12502,6 +12524,17 @@ class MaezDaemon:
                     return jsonify({"ok": False, "error": "s7_execution_unrelated"}), 409
                 status = getattr(getattr(result, "status", None), "value", str(getattr(result, "status", "")))
                 ok = status == "executed" and bool(getattr(result, "execution_success", False))
+                if status == "error":
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "status": status,
+                            "message": getattr(result, "message", ""),
+                            "output": (getattr(result, "execution_output", "") or "")[:2000],
+                            "error": getattr(result, "message", "") or "s7_execution_edge_broken",
+                            "detail": getattr(result, "execution_error", None),
+                        }
+                    ), 500
                 status_code = 200 if ok else 409
                 return jsonify(
                     {

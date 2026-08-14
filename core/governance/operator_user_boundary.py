@@ -12,7 +12,7 @@ mint WebAuthn assertions, or grant authority from legacy owner labels.
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -27,6 +27,10 @@ from core.governance import successor_governance as s6
 
 
 SCHEMA_VERSION = "s7.v1"
+# The ENVELOPE's own identity. Changing the shared SCHEMA_VERSION
+# relabelled 21 unrelated S7 record types -- operator health, aggregation,
+# maintenance, brain-swap, recovery -- because they share this constant.
+WORK_REQUEST_ENVELOPE_SCHEMA = "s7.work_request_envelope.v2"
 S7_LIVE_WEBAUTHN_CEREMONY_ENV = "S7_LIVE_WEBAUTHN_CEREMONY"
 S7_CEREMONY_DEFERRED_REASON = "s7_ceremony_deferred"
 GUARDED_SELF_MODIFICATION_PAUSED_MODE = "guarded_self_modification_paused_pending_s7.1"
@@ -377,6 +381,17 @@ OWN_SUBSTRATE_BYPASS_SORTS = frozenset({
 MAX_SERVICE_MAINTENANCE_LOG_LINES = 200
 _SERVICE_MAINTENANCE_REQUEST_ID_RE = re.compile(r"^s7maint_[0-9a-f]{32,64}$")
 
+#: The signed statement's third consultation state, added for R11. The
+#: vocabulary was {"yes", "not required"}, which left the cutover ceremony
+#: only two options once R11 removed the consultation: raise, or sign
+#: "Maez consulted: yes" when nothing was asked. This is the honest third
+#: state, and it is a LITERAL shared by the renderer and the validator so
+#: the visible line and the closed set cannot drift apart.
+MAEZ_CONSULTED_NOT_PERFORMED_R11 = "no -- not performed under R11"
+MAEZ_CONSULTED_STATES = frozenset(
+    {"yes", "not required", MAEZ_CONSULTED_NOT_PERFORMED_R11}
+)
+
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
     "covenant_touching_change",
@@ -402,7 +417,7 @@ MAEZ_UNAVAILABLE_REASON_CODES = frozenset({
     "none",
 })
 
-RENDERER_VERSION = "s7.rendered_request.v1"
+RENDERER_VERSION = "s7.rendered_request.v2"
 FOUNDER_WEBAUTHN_RP_ID = "localhost"
 FOUNDER_WEBAUTHN_ORIGIN = "http://localhost:11437"
 FOUNDER_WEBAUTHN_HOST = "localhost:11437"
@@ -811,7 +826,9 @@ def _canonical_affected_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
         text = str(ref or "").strip()
         if not text:
             continue
-        if text.startswith("service:"):
+        if text in {"host:local", "systemd_manager:user"}:
+            canonical.append(text)
+        elif text.startswith("service:"):
             service_name = text.removeprefix("service:").strip()
             if service_name and not service_name.endswith(".service"):
                 service_name += ".service"
@@ -854,6 +871,30 @@ def _touches_covenant_substrate(material: str) -> bool:
 
 def _touches_self_mod_substrate(material: str) -> bool:
     return any(marker in material for marker in _SELF_MOD_PATH_MARKERS)
+
+
+_ACTION_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
+_ACTION_MAX_BYTES = 128
+
+
+def validate_action_literal(action: object) -> str:
+    """The action is an IDENTIFIER, bounded and renderable.
+
+    Dotted segments are OPTIONAL: an earlier draft required them and would
+    have refused write_soul_note, edit_soul_section, run_shell,
+    backup_status and both credential actions -- six literals already in
+    use. Malformed values REFUSE rather than being escaped: an escaped
+    action is still one the human must decode, and "what you see is what
+    you sign" requires that they not have to.
+    """
+
+    if type(action) is not str or not action:
+        raise ValueError("s7_action_invalid")
+    if len(action.encode("utf-8")) > _ACTION_MAX_BYTES:
+        raise ValueError("s7_action_invalid")
+    if _ACTION_RE.fullmatch(action) is None:
+        raise ValueError("s7_action_invalid")
+    return action
 
 
 def derive_work_class(
@@ -1079,6 +1120,7 @@ class WorkRequestEnvelope:
     request_id: str
     schema_version: str
     claimed_work_class: str
+    action: str
     derived_work_class: str
     requesting_subsystem: str
     closed_symptom_code: str
@@ -1098,7 +1140,7 @@ class WorkRequestEnvelope:
     def __post_init__(self) -> None:
         if not self.request_id:
             raise ValueError("S7 request_id is required")
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version != WORK_REQUEST_ENVELOPE_SCHEMA:
             raise ValueError("invalid S7 schema_version")
         validate_work_class(self.claimed_work_class)
         validate_work_class(self.derived_work_class)
@@ -1397,7 +1439,8 @@ def build_work_request_envelope(
     )
     return WorkRequestEnvelope(
         request_id=request_id,
-        schema_version=SCHEMA_VERSION,
+        schema_version=WORK_REQUEST_ENVELOPE_SCHEMA,
+        action=validate_action_literal(action),
         claimed_work_class=claimed_work_class,
         derived_work_class=resolved,
         requesting_subsystem=requesting_subsystem,
@@ -2125,6 +2168,7 @@ class S7AuthorizationArtifact:
     action_params_hash: str
     precondition_hash: str
     authority_context_hash: str
+    action: str
     derived_work_class: str
     derived_aggregation_group: str
     nonce: str
@@ -2136,9 +2180,15 @@ class S7AuthorizationArtifact:
     created_at: str
     expires_at: str
     consumed_at: str | None
+    schema_version: str = "s7.authorization_artifact.v2"
     ceremony_kind: str = "founder_local_webauthn"
 
     def __post_init__(self) -> None:
+        if self.schema_version != S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA:
+            raise ValueError(
+                "S7AuthorizationArtifact schema_version must be "
+                f"{S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA}"
+            )
         if not self.artifact_id:
             raise ValueError("S7 artifact_id is required")
         if not self.request_id:
@@ -2148,6 +2198,7 @@ class S7AuthorizationArtifact:
         _validate_hash64(self.action_params_hash, field="action_params_hash")
         _validate_hash64(self.precondition_hash, field="precondition_hash")
         _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_action_literal(self.action)
         validate_work_class(self.derived_work_class)
         if not self.derived_aggregation_group:
             raise ValueError("S7 artifact derived_aggregation_group is required")
@@ -2277,6 +2328,7 @@ def authorization_artifact_matches(
         "request_id": rendered.request_id,
         "request_envelope_hash": rendered.request_envelope_hash,
         "rendered_text_hash": rendered.rendered_text_hash,
+        "action": rendered.action,
         "action_params_hash": action_params_hash,
         "precondition_hash": precondition_hash,
         "authority_context_hash": authority_context_hash,
@@ -2339,6 +2391,7 @@ class S7ExecutionGrant:
     action_params_hash: str
     precondition_hash: str
     authority_context_hash: str
+    action: str
     derived_work_class: str
     derived_aggregation_group: str
     nonce: str
@@ -2348,10 +2401,15 @@ class S7ExecutionGrant:
     consumed_at: str
     ceremony_kind: str
     _mint_token: InitVar[object]
+    schema_version: str = "s7.execution_grant.v2"
 
     def __post_init__(self, _mint_token: object) -> None:
         if _mint_token is not _EXECUTION_GRANT_TOKEN:
             raise ValueError("S7ExecutionGrant can only be minted by S7AuthorizationStore")
+        # A default is not a check: a token-valid grant could otherwise
+        # carry schema_version="garbage".
+        if self.schema_version != "s7.execution_grant.v2":
+            raise ValueError("S7ExecutionGrant schema_version must be v2")
         if not self.artifact_id:
             raise ValueError("S7 execution grant requires artifact_id")
         if not self.request_id:
@@ -2361,6 +2419,7 @@ class S7ExecutionGrant:
         _validate_hash64(self.action_params_hash, field="action_params_hash")
         _validate_hash64(self.precondition_hash, field="precondition_hash")
         _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_action_literal(self.action)
         validate_work_class(self.derived_work_class)
         if not self.derived_aggregation_group:
             raise ValueError("S7 execution grant requires derived_aggregation_group")
@@ -2375,10 +2434,113 @@ class S7ExecutionGrant:
         _timestamp_text(self.consumed_at, field="consumed_at")
 
 
+@dataclass(frozen=True)
+class CommittedGrantRow:
+    """Typed post-commit view of the durable authorization row."""
+
+    artifact_id: str
+    request_id: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    action: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    nonce: str
+    credential_ref: str
+    auth_method: str
+    grant_source: str
+    consumed_at: str
+    ceremony_kind: str
+    schema_version: str
+    user_presence: int
+    user_verification: int
+    created_at: str
+    expires_at: str
+    consumed_by_request_id: str
+
+
+_COMMITTED_ROW_GRANT_FIELDS = (
+    "artifact_id",
+    "request_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "action",
+    "derived_work_class",
+    "derived_aggregation_group",
+    "nonce",
+    "credential_ref",
+    "auth_method",
+    "grant_source",
+    "consumed_at",
+    "ceremony_kind",
+)
+
+
+def _parse_exact_canonical_row_timestamp(value: object) -> datetime | None:
+    if type(value) is not str:
+        return None
+    try:
+        canonical = _timestamp_text(value, field="committed row timestamp")
+    except ValueError:
+        return None
+    if value != canonical:
+        return None
+    return _canonical_timestamp(value)
+
+
+def committed_grant_row_proves_founder_self_modification(
+    row: CommittedGrantRow,
+    grant: S7ExecutionGrant,
+) -> bool:
+    """Validate the frozen post-commit row-to-grant cutover predicates."""
+    if not isinstance(row, CommittedGrantRow) or not isinstance(
+        grant, S7ExecutionGrant
+    ):
+        return False
+    for field in _COMMITTED_ROW_GRANT_FIELDS:
+        row_value = getattr(row, field)
+        grant_value = getattr(grant, field)
+        if type(row_value) is not type(grant_value) or row_value != grant_value:
+            return False
+    if (
+        type(grant.schema_version) is not str
+        or grant.schema_version != "s7.execution_grant.v2"
+        or type(row.schema_version) is not str
+        or row.schema_version != S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA
+        or type(row.user_presence) is not int
+        or row.user_presence != 1
+        or type(row.user_verification) is not int
+        or row.user_verification != 1
+        or type(row.consumed_by_request_id) is not str
+        or row.consumed_by_request_id != row.request_id
+        or row.derived_work_class != "self_modification"
+        or row.ceremony_kind != "founder_local_webauthn"
+        or row.auth_method != "founder_webauthn"
+        or row.grant_source != "founder_webauthn"
+    ):
+        return False
+    created_at = _parse_exact_canonical_row_timestamp(row.created_at)
+    consumed_at = _parse_exact_canonical_row_timestamp(row.consumed_at)
+    expires_at = _parse_exact_canonical_row_timestamp(row.expires_at)
+    return (
+        created_at is not None
+        and consumed_at is not None
+        and expires_at is not None
+        and created_at <= consumed_at < expires_at
+    )
+
+
 def _mint_s7_execution_grant(
     *,
     artifact_id: str,
     rendered: "RenderedRequestStatement",
+    stored_action: str,
     action_params_hash: str,
     precondition_hash: str,
     authority_context_hash: str,
@@ -2392,6 +2554,7 @@ def _mint_s7_execution_grant(
 ) -> S7ExecutionGrant:
     return S7ExecutionGrant(
         artifact_id=artifact_id,
+        action=stored_action,
         request_id=rendered.request_id,
         request_envelope_hash=rendered.request_envelope_hash,
         rendered_text_hash=rendered.rendered_text_hash,
@@ -2410,22 +2573,693 @@ def _mint_s7_execution_grant(
     )
 
 
+_AUTH_TABLE = "s7_authorization_artifacts"
+_V2_AUTH_TABLE = "s7_authorization_artifacts_v2"
+S7_AUTHORIZATION_ARTIFACT_V2_SCHEMA = "s7.authorization_artifact.v2"
+
+
+class S7GuardedExecutionUnavailable(RuntimeError):
+    """v2 is absent or inert. Absent is not permission."""
+
+
+def _open_directory_by_components(directory: Path) -> int:
+    """Walk to `directory` one component at a time, each with O_NOFOLLOW."""
+    resolved = Path(directory)
+    if not resolved.is_absolute():
+        resolved = Path(os.getcwd()) / resolved
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in resolved.parts[1:]:
+            nxt = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = nxt
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+class _S7HeldConnection(sqlite3.Connection):
+    """Connection opened from the descriptor-held S7 store."""
+
+
+_HELD_CONNECTION_BIND_TOKEN = object()
+
+
+class _S7HeldConnectionBinding:
+    """Descriptor identity inseparably attached when the connection opens."""
+
+    __slots__ = (
+        "dir_fd",
+        "dir_identity",
+        "store_fd",
+        "store_identity",
+    )
+
+    def __init__(
+        self,
+        *,
+        dir_fd: int,
+        store_fd: int,
+        _token: object,
+    ) -> None:
+        if _token is not _HELD_CONNECTION_BIND_TOKEN:
+            raise ValueError("S7 held connection binding is core-owned")
+        dir_stat = os.fstat(dir_fd)
+        store_stat = os.fstat(store_fd)
+        self.dir_fd = dir_fd
+        self.store_fd = store_fd
+        self.dir_identity = (dir_stat.st_dev, dir_stat.st_ino)
+        self.store_identity = (store_stat.st_dev, store_stat.st_ino)
+
+
+def _open_s7_connection_from_held_store(
+    *,
+    dir_fd: int,
+    store_fd: int,
+) -> _S7HeldConnection:
+    """Open and bind one RW connection to the caller's already-held store."""
+    connection = sqlite3.connect(
+        f"file:/proc/self/fd/{store_fd}?mode=rw",
+        uri=True,
+        factory=_S7HeldConnection,
+    )
+    try:
+        connection._s7_held_binding = _S7HeldConnectionBinding(
+            dir_fd=dir_fd,
+            store_fd=store_fd,
+            _token=_HELD_CONNECTION_BIND_TOKEN,
+        )
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _require_verified_held_connection(
+    connection: sqlite3.Connection,
+) -> _S7HeldConnectionBinding:
+    binding = getattr(connection, "_s7_held_binding", None)
+    if not isinstance(connection, _S7HeldConnection) or not isinstance(
+        binding, _S7HeldConnectionBinding
+    ):
+        raise ValueError("S7 consumption requires a verified held connection")
+    try:
+        dir_stat = os.fstat(binding.dir_fd)
+        store_stat = os.fstat(binding.store_fd)
+    except OSError as exc:
+        raise ValueError(
+            "S7 consumption requires a live verified held connection"
+        ) from exc
+    if (
+        (dir_stat.st_dev, dir_stat.st_ino) != binding.dir_identity
+        or (store_stat.st_dev, store_stat.st_ino) != binding.store_identity
+    ):
+        raise ValueError("S7 held connection descriptors changed identity")
+    return binding
+
+
+class _S7VendedAnchoredConnectionToken:
+    """Per-transaction capability retired when its anchored scope exits."""
+
+    __slots__ = ("active",)
+
+    def __init__(self) -> None:
+        self.active = True
+
+
+def _vended_anchored_connection_token_is_active(token: object) -> bool:
+    return (
+        isinstance(token, _S7VendedAnchoredConnectionToken)
+        and token.active is True
+    )
+
+
+def _require_vended_anchored_connection(
+    conn: sqlite3.Connection,
+) -> _S7VendedAnchoredConnectionToken:
+    """Refuse connections not yielded by an active anchored transaction."""
+    token = getattr(conn, "_s7_vended_token", None)
+    if not isinstance(conn, _S7HeldConnection) or not (
+        _vended_anchored_connection_token_is_active(token)
+    ):
+        raise ValueError(
+            "S7 v2 voice operations require a store-vended connection; "
+            "a caller-supplied connection cannot be identified"
+        )
+    return token
+
+
+@contextmanager
+def _held_store(db_path):
+    """Hold the parent directory AND the database beneath it.
+
+    Both descriptors are retained for the whole operation. The previous
+    shape read `readlink("/proc/self/fd/N")` and REOPENED the directory by
+    name -- pathname re-resolution, which canon already identified as the
+    race to avoid. The directory fd from the original walk is kept instead,
+    and the sibling receipt is read through that same fd.
+    """
+    # COMPONENT-BY-COMPONENT. Opening the whole parent path once with
+    # O_NOFOLLOW protects only the FINAL component -- reproduced: an
+    # intermediate symlink was followed and a v2 row landed in the real
+    # target store. Every component is walked with O_NOFOLLOW so no link
+    # anywhere in the path can choose the directory.
+    dir_fd = _open_directory_by_components(Path(db_path).parent)
+    try:
+        store_fd = os.open(
+            Path(db_path).name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=dir_fd
+        )
+        try:
+            conn = _open_s7_connection_from_held_store(
+                dir_fd=dir_fd,
+                store_fd=store_fd,
+            )
+            try:
+                yield dir_fd, store_fd, conn
+            finally:
+                conn.close()
+        finally:
+            os.close(store_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _verify_held_store_activation(
+    dir_fd: int, store_fd: int, conn: sqlite3.Connection
+) -> bool:
+    """HELD-STORE ACTIVATION VERIFICATION -- distinct from canonical
+    activation DISCOVERY.
+
+    Canon conflated two questions. `read_migration_receipt()` answers
+    "which store is live?" and rightly takes no arguments. This answers
+    "does the store I am ALREADY HOLDING carry a valid activation
+    receipt?", which private copies and configured roots also need.
+
+    It accepts no pathname and no independently supplied root: the
+    directory fd and the database fd are both already held, the sibling
+    receipt is read through that same directory fd, identity is checked
+    against the held database fd, and the schema is checked on the very
+    transaction that will do the writing.
+    """
+    from core.governance import s7_v2_migration as _migration
+
+    receipt = _migration._read_receipt(dir_fd)
+    if receipt is None:
+        raise ValueError(
+            "S7 v2 table exists but no migration receipt activates it; "
+            "creating the table is not permission to write to it"
+        )
+    stat = os.fstat(store_fd)
+    if (
+        receipt.get("store_dev") != stat.st_dev
+        or receipt.get("store_ino") != stat.st_ino
+    ):
+        raise ValueError(
+            "the migration receipt does not describe the database this "
+            "connection holds"
+        )
+    _migration._validate_receipt(receipt, conn)
+    return True
+
+
+def _table_present(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
+def _auth_table_present(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (_AUTH_TABLE,),
+    ).fetchone()
+    return row is not None
+
+
+def _auth_schema_fingerprint(conn: sqlite3.Connection) -> str:
+    """Normalized sqlite_master.sql for the auth table, hashed.
+
+    Covers the table, its indexes AND its triggers, because it hashes the
+    SQL text rather than enumerating PRAGMA fields.
+    """
+    import hashlib
+    import re
+
+    rows = []
+    for kind, name, tbl, sql in conn.execute(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE tbl_name=? ORDER BY type,name",
+        (_AUTH_TABLE,),
+    ):
+        canonical = None if sql is None else re.sub(r"\s+", " ", sql).strip().rstrip(";")
+        rows.append([kind, name, tbl, canonical])
+    payload = json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _reference_auth_fingerprint() -> str:
+    """The fingerprint the canonical schema produces, built in memory."""
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.executescript(_AUTH_SCHEMA)
+        return _auth_schema_fingerprint(conn)
+
+
+def initialise_authorization_store(db_path: str | Path) -> Path:
+    """Create the S7 authorization store. Bootstrap/setup only.
+
+    The single creation authority, deliberately separate from opening.
+
+    IDEMPOTENT-VERIFY:
+      absent           -> create
+      present, correct -> verify, change nothing
+      present, damaged -> REFUSE, never repair
+
+    A dropped table is NOT damage: it leaves exactly the state a
+    never-initialised store is in, so refusing it would make first
+    initialisation impossible. Damage is a schema that EXISTS and does not
+    match -- an added column, a stray index, an altered trigger. Repairing
+    such a store would rebuild, unfrozen, a table the migration froze.
+    """
+    import stat as _stat
+
+    path = Path(db_path)
+    reference = _reference_auth_fingerprint()
+
+    # EXISTING store: verify, never repair.
+    #
+    # An earlier version chmod'd the parent to 0700 BEFORE classifying,
+    # which silently repaired directory metadata while leaving an insecure
+    # 0644 database untouched -- half the posture fixed, the dangerous half
+    # left open, and a caller told everything was fine. Modes are part of
+    # what "correct" means, so a wrong mode refuses exactly like a wrong
+    # schema.
+    if path.exists():
+        parent_mode = _stat.S_IMODE(os.stat(path.parent).st_mode)
+        db_mode = _stat.S_IMODE(os.stat(path).st_mode)
+        if parent_mode != 0o700 or db_mode != 0o600:
+            raise ValueError(
+                "S7 authorization store has insecure permissions "
+                f"(directory {oct(parent_mode)}, database {oct(db_mode)}); "
+                "refusing to repair it"
+            )
+        with closing(sqlite3.connect(path)) as conn:
+            if _auth_table_present(conn):
+                if _auth_schema_fingerprint(conn) != reference:
+                    raise ValueError(
+                        "S7 authorization schema does not match the expected "
+                        "definition; refusing to repair it"
+                    )
+                return path
+
+    # FRESH creation: build it private from the start.
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(_AUTH_SCHEMA)
+        cols = {
+            str(row[1]) for row in conn.execute(f"PRAGMA table_info({_AUTH_TABLE})")
+        }
+        if "ceremony_kind" not in cols:
+            conn.execute(
+                f"ALTER TABLE {_AUTH_TABLE} "
+                "ADD COLUMN ceremony_kind TEXT NOT NULL "
+                "DEFAULT 'founder_local_webauthn'"
+            )
+        conn.commit()
+    os.chmod(path, 0o600)
+    return path
+
+
+_POST_COMMIT_READ_TOKEN = object()
+
+
+class _CommittedConsumptionConnection:
+    """Capability minted only after a consuming RW transaction commits."""
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: sqlite3.Connection, *, _token: object) -> None:
+        if _token is not _POST_COMMIT_READ_TOKEN:
+            raise ValueError(
+                "committed-row reads require the consuming RW connection"
+            )
+        self.connection = connection
+
+
+def _read_committed_grant_row_after_commit(
+    committed_connection: _CommittedConsumptionConnection,
+    artifact_id: str,
+) -> CommittedGrantRow | None:
+    """Read only through the capability minted after the consuming commit."""
+    if not isinstance(committed_connection, _CommittedConsumptionConnection):
+        raise ValueError(
+            "committed-row reads require the consuming RW connection"
+        )
+    connection = committed_connection.connection
+    if connection.in_transaction:
+        raise ValueError("committed grant row cannot be read before commit")
+    rows = connection.execute(
+        f"""
+        SELECT artifact_id,
+               request_id,
+               request_envelope_hash,
+               rendered_text_hash,
+               action_params_hash,
+               precondition_hash,
+               authority_context_hash,
+               action,
+               derived_work_class,
+               derived_aggregation_group,
+               nonce,
+               credential_ref,
+               auth_method,
+               grant_source,
+               consumed_at,
+               ceremony_kind,
+               schema_version,
+               user_presence,
+               user_verification,
+               created_at,
+               expires_at,
+               consumed_by_request_id
+        FROM {_V2_AUTH_TABLE}
+        WHERE artifact_id = ?
+        """,
+        (artifact_id,),
+    ).fetchall()
+    if len(rows) != 1:
+        return None
+    return CommittedGrantRow(*rows[0])
+
+
+def consume_for_execution_on_connection(
+    connection: sqlite3.Connection,
+    artifact_id: str,
+    *,
+    rendered: RenderedRequestStatement,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    precondition_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    now: str,
+    superseded_request_ids: set[str] | None = None,
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+    after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
+) -> tuple[S7ExecutionGrant | None, object | None]:
+    """Consume and commit through a caller-held, descriptor-verified RW connection."""
+    binding = _require_verified_held_connection(connection)
+    if connection.in_transaction:
+        raise ValueError("S7 consumption requires an idle held RW connection")
+    if not isinstance(rendered, RenderedRequestStatement):
+        return None, None
+    if superseded_request_ids and rendered.request_id in superseded_request_ids:
+        return None, None
+    _validate_hash64(action_params_hash, field="action_params_hash")
+    _validate_hash64(precondition_hash, field="precondition_hash")
+    validate_work_class(derived_work_class)
+    if not derived_aggregation_group:
+        return None, None
+    if not _authority_context_active_for_artifact(authority_context, now=now):
+        return None, None
+    if not _authority_context_roles_allow_work(authority_context, derived_work_class):
+        return None, None
+    if not _authority_context_trust_source_allows_artifact(
+        authority_context, derived_work_class
+    ):
+        return None, None
+    if not covenant_ceremony_satisfies_request(
+        rendered=rendered,
+        derived_work_class=derived_work_class,
+        evidence=covenant_ceremony_evidence,
+        now=now,
+    ):
+        return None, None
+    auth_hash = authority_context_hash(authority_context)
+    if rendered.authority_context_hash != auth_hash:
+        return None, None
+    if rendered.action_params_hash != action_params_hash:
+        return None, None
+    if rendered.derived_work_class != derived_work_class:
+        return None, None
+    if rendered.derived_aggregation_group != derived_aggregation_group:
+        return None, None
+    now_text = _timestamp_text(now, field="now")
+    if not _table_present(connection, _V2_AUTH_TABLE):
+        raise S7GuardedExecutionUnavailable(
+            "S7 v2 authorization plane is absent; guarded execution "
+            "refuses rather than falling back to v1"
+        )
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_held_store_activation(
+            binding.dir_fd, binding.store_fd, connection
+        )
+        cur = connection.execute(
+            f"""
+            UPDATE {_V2_AUTH_TABLE}
+            SET consumed_at = ?,
+                consumed_by_request_id = ?
+            WHERE artifact_id = ?
+              AND request_id = ?
+              AND request_envelope_hash = ?
+              AND rendered_text_hash = ?
+              AND action = ?
+              AND action_params_hash = ?
+              AND precondition_hash = ?
+              AND authority_context_hash = ?
+              AND derived_work_class = ?
+              AND derived_aggregation_group = ?
+              AND nonce = ?
+              AND credential_ref = ?
+              AND auth_method = ?
+              AND grant_source = ?
+              AND ceremony_kind = 'founder_local_webauthn'
+              AND user_presence = 1
+              AND user_verification IN (0, 1)
+              AND (? = 0 OR user_verification = 1)
+              AND consumed_at IS NULL
+              AND expires_at > ?
+            RETURNING action
+            """,
+            (
+                now_text,
+                rendered.request_id,
+                artifact_id,
+                rendered.request_id,
+                rendered.request_envelope_hash,
+                rendered.rendered_text_hash,
+                rendered.action,
+                action_params_hash,
+                precondition_hash,
+                auth_hash,
+                derived_work_class,
+                derived_aggregation_group,
+                rendered.nonce,
+                authority_context.credential_ref,
+                authority_context.auth_method,
+                authority_context.grant_source,
+                1 if _webauthn_requires_user_verification(derived_work_class) else 0,
+                now_text,
+            ),
+        )
+        matched_row = cur.fetchone()
+        if matched_row is None or cur.rowcount != 1:
+            connection.rollback()
+            return None, None
+        grant = _mint_s7_execution_grant(
+            artifact_id=artifact_id,
+            rendered=rendered,
+            stored_action=matched_row[0],
+            action_params_hash=action_params_hash,
+            precondition_hash=precondition_hash,
+            authority_context_hash=auth_hash,
+            derived_work_class=derived_work_class,
+            derived_aggregation_group=derived_aggregation_group,
+            credential_ref=authority_context.credential_ref or "",
+            auth_method=authority_context.auth_method,
+            grant_source=authority_context.grant_source,
+            ceremony_kind="founder_local_webauthn",
+            consumed_at=now_text,
+        )
+        callback_result = (
+            after_consume_before_commit(grant)
+            if after_consume_before_commit is not None
+            else None
+        )
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+    return grant, callback_result
+
+
+def consume_for_execution_with_committed_row(
+    connection: sqlite3.Connection,
+    artifact_id: str,
+    *,
+    rendered: RenderedRequestStatement,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    precondition_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    now: str,
+    superseded_request_ids: set[str] | None = None,
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+    after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
+) -> tuple[S7ExecutionGrant | None, object | None, CommittedGrantRow | None]:
+    """Consume on the held RW connection, then reread its committed row."""
+    grant, callback_result = consume_for_execution_on_connection(
+        connection,
+        artifact_id,
+        rendered=rendered,
+        action_params_hash=action_params_hash,
+        authority_context=authority_context,
+        precondition_hash=precondition_hash,
+        derived_work_class=derived_work_class,
+        derived_aggregation_group=derived_aggregation_group,
+        now=now,
+        superseded_request_ids=superseded_request_ids,
+        covenant_ceremony_evidence=covenant_ceremony_evidence,
+        after_consume_before_commit=after_consume_before_commit,
+    )
+    if grant is None:
+        return None, None, None
+    committed_connection = _CommittedConsumptionConnection(
+        connection, _token=_POST_COMMIT_READ_TOKEN
+    )
+    committed_row = _read_committed_grant_row_after_commit(
+        committed_connection, artifact_id
+    )
+    return grant, callback_result, committed_row
+
+
 class S7AuthorizationStore:
     def __init__(self, db_path: str | Path):
+        """Open an EXISTING store. Verification only -- never creation.
+
+        This constructor used to mkdir, executescript, ALTER and commit on
+        every open, and `daemon/maez_daemon.py` builds it on the live
+        request path. That made "the schema I verified" and "the schema I
+        created" the same act, and it could resurrect -- unfrozen -- a
+        table the v2 migration had deliberately frozen.
+
+        Creation now lives in `initialise_authorization_store`, owned by
+        bootstrap/setup.
+        """
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.executescript(_AUTH_SCHEMA)
-            cols = {
-                str(row[1])
-                for row in conn.execute("PRAGMA table_info(s7_authorization_artifacts)")
-            }
-            if "ceremony_kind" not in cols:
-                conn.execute(
-                    "ALTER TABLE s7_authorization_artifacts "
-                    "ADD COLUMN ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn'"
+        # Connections THIS store vended. Per-instance on purpose: a
+        # process-global set proves only that some store vended it.
+        self._vended: set[int] = set()
+        # mode=rw NEVER creates. A plain sqlite3.connect() after an
+        # is_file() check is a TOCTOU: if the file disappears in the window
+        # between them, connect() silently recreates an EMPTY database and
+        # the caller believes it opened the real store.
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)
+        except sqlite3.OperationalError as exc:
+            raise FileNotFoundError(
+                f"S7 authorization store is not initialised: {self.db_path.name}"
+            ) from exc
+        with closing(conn):
+            if not _auth_table_present(conn):
+                raise ValueError(
+                    "S7 authorization store is missing its artifact table; "
+                    "opening does not create one"
                 )
-            conn.commit()
+
+    @contextmanager
+    def anchored_transaction(self):
+        """An anchored, activated, single transaction the caller composes
+        into.
+
+        The guarded voice-seat writer reserves a voice bundle and inserts
+        the artifact atomically. Refusing its connection secured storage by
+        killing the only route real minting uses, so the store OWNS the
+        transaction instead: identity is bound to a descriptor WE hold, and
+        the caller writes inside it.
+
+        Commits on clean exit, rolls back on any exception -- a reservation
+        must not survive an artifact insert that failed.
+        """
+        with _held_store(self.db_path) as (dir_fd, store_fd, conn):
+            conn.execute("BEGIN IMMEDIATE")
+            _verify_held_store_activation(dir_fd, store_fd, conn)
+            vended_token = _S7VendedAnchoredConnectionToken()
+            conn._s7_vended_token = vended_token
+            # PER-STORE, not process-global: a global set proves only that
+            # SOME store vended this connection. Reproduced -- A vended one
+            # and B.put(connection=connA) succeeded, writing A.
+            self._vended.add(id(conn))
+            try:
+                yield conn
+            except BaseException:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
+            finally:
+                self._vended.discard(id(conn))
+                vended_token.active = False
+                conn._s7_vended_token = None
+
+    def _insert_v2(self, conn, artifact, created_at, expires_at, consumed_at):
+        """The v2 row. The action and the schema label both come from the
+        ARTIFACT; the writer asserts neither."""
+        conn.execute(
+            f"""
+            INSERT INTO {_V2_AUTH_TABLE} (
+                artifact_id, request_id, request_envelope_hash,
+                rendered_text_hash, action_params_hash, precondition_hash,
+                authority_context_hash, derived_work_class,
+                derived_aggregation_group, nonce, credential_ref,
+                auth_method, grant_source, user_presence,
+                user_verification, created_at, expires_at, consumed_at,
+                consumed_by_request_id, ceremony_kind, action, schema_version
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                NULL, ?, ?, ?
+            )
+            """,
+            (
+                artifact.artifact_id,
+                artifact.request_id,
+                artifact.request_envelope_hash,
+                artifact.rendered_text_hash,
+                artifact.action_params_hash,
+                artifact.precondition_hash,
+                artifact.authority_context_hash,
+                artifact.derived_work_class,
+                artifact.derived_aggregation_group,
+                artifact.nonce,
+                artifact.credential_ref,
+                artifact.auth_method,
+                artifact.grant_source,
+                1 if artifact.user_presence else 0,
+                1 if artifact.user_verification else 0,
+                created_at,
+                expires_at,
+                consumed_at,
+                artifact.ceremony_kind,
+                artifact.action,
+                artifact.schema_version,
+            ),
+        )
 
     def put(
         self,
@@ -2440,6 +3274,41 @@ class S7AuthorizationStore:
             if artifact.consumed_at is not None
             else None
         )
+        if connection is not None:
+            # A vended anchored connection is the store identity. Reopening
+            # ``self.db_path`` here can cross to a replacement inode during a
+            # human wait and makes the later write answer a different store.
+            v2_present = _table_present(connection, _V2_AUTH_TABLE)
+        else:
+            with closing(sqlite3.connect(self.db_path)) as probe:
+                v2_present = _table_present(probe, _V2_AUTH_TABLE)
+
+        if v2_present:
+            # A caller-supplied connection cannot be identity-bound: its
+            # held inode is not observable from Python, and PRAGMA reports
+            # only a NAME -- repoint that name and another store's receipt
+            # authorizes this write. Rather than validate what cannot be
+            # pinned, the v2 write runs on OUR anchored connection, with
+            # validation and mutation in ONE transaction on it.
+            if connection is not None:
+                # Only a connection THIS store vended is identity-bound. A
+                # foreign one reports a pathname and nothing more.
+                if id(connection) not in self._vended:
+                    raise ValueError(
+                        "v2 authorization writes may not use a "
+                        "caller-supplied connection; the database it holds "
+                        "cannot be identified"
+                    )
+                self._insert_v2(
+                    connection, artifact, created_at, expires_at, consumed_at
+                )
+                return
+            with self.anchored_transaction() as anchored:
+                self._insert_v2(
+                    anchored, artifact, created_at, expires_at, consumed_at
+                )
+            return
+
         if connection is not None:
             self._put_with_connection(
                 connection,
@@ -2468,6 +3337,14 @@ class S7AuthorizationStore:
         expires_at: str,
         consumed_at: str | None,
     ) -> None:
+        # After migration v1 is FROZEN, so a v1 insert aborts with
+        # s7_v1_frozen and the artifact has nowhere to go. Storage follows
+        # the migrated plane: v2 when it exists, v1 otherwise. The v2 row
+        # carries the ACTION, which is the whole reason the plane exists.
+        #
+        # Scope: this routes STORAGE only. Receipt-gated activation of
+        # guarded EXECUTION -- "absent is not permission" -- belongs to the
+        # mint and consume seams.
         conn.execute(
             """
             INSERT INTO s7_authorization_artifacts (
@@ -2553,110 +3430,75 @@ class S7AuthorizationStore:
         covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
         after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
     ) -> tuple[S7ExecutionGrant | None, object | None]:
-        if not isinstance(rendered, RenderedRequestStatement):
-            return None, None
-        if superseded_request_ids and rendered.request_id in superseded_request_ids:
-            return None, None
-        _validate_hash64(action_params_hash, field="action_params_hash")
-        _validate_hash64(precondition_hash, field="precondition_hash")
-        validate_work_class(derived_work_class)
-        if not derived_aggregation_group:
-            return None, None
-        if not _authority_context_active_for_artifact(authority_context, now=now):
-            return None, None
-        if not _authority_context_roles_allow_work(authority_context, derived_work_class):
-            return None, None
-        if not _authority_context_trust_source_allows_artifact(authority_context, derived_work_class):
-            return None, None
-        if not covenant_ceremony_satisfies_request(
-            rendered=rendered,
-            derived_work_class=derived_work_class,
-            evidence=covenant_ceremony_evidence,
-            now=now,
-        ):
-            return None, None
-        auth_hash = authority_context_hash(authority_context)
-        if rendered.authority_context_hash != auth_hash:
-            return None, None
-        if rendered.action_params_hash != action_params_hash:
-            return None, None
-        if rendered.derived_work_class != derived_work_class:
-            return None, None
-        if rendered.derived_aggregation_group != derived_aggregation_group:
-            return None, None
-        now_text = _timestamp_text(now, field="now")
+        with _held_store(self.db_path) as (dir_fd, store_fd, connection):
+            grant, callback_result = consume_for_execution_on_connection(
+                connection,
+                artifact_id,
+                rendered=rendered,
+                action_params_hash=action_params_hash,
+                authority_context=authority_context,
+                precondition_hash=precondition_hash,
+                derived_work_class=derived_work_class,
+                derived_aggregation_group=derived_aggregation_group,
+                now=now,
+                superseded_request_ids=superseded_request_ids,
+                covenant_ceremony_evidence=covenant_ceremony_evidence,
+                after_consume_before_commit=after_consume_before_commit,
+            )
+            return grant, callback_result
+
+
+class S7HeldAuthorizationStore(S7AuthorizationStore):
+    """S7 mutating facade whose every transaction stays on one held inode.
+
+    Moved here from the cutover script (2026-08-14) so the ceremony's
+    exemption-branch store gate can be exact-type against a CLOSED
+    two-member set -- {S7AuthorizationStore, S7HeldAuthorizationStore} --
+    instead of isinstance, which Codex's cross-lane review showed admits
+    arbitrary subclasses that skip the real constructor and override
+    write behavior. `opened` is duck-typed on purpose: it must provide
+    `require_current_named_identity()`, `_parent_fd` and `_db_fd`, and is
+    consulted only at write time, so construction alone touches nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        opened: Any,
+        db_path: Path,
+    ) -> None:
+        self.db_path = Path(db_path)
+        self._vended: set[int] = set()
+        self._opened = opened
+
+    @contextmanager
+    def anchored_transaction(self):
+        self._opened.require_current_named_identity()
+        connection = _open_s7_connection_from_held_store(
+            dir_fd=self._opened._parent_fd,
+            store_fd=self._opened._db_fd,
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_held_store_activation(
+            self._opened._parent_fd,
+            self._opened._db_fd,
+            connection,
+        )
+        vended_token = _S7VendedAnchoredConnectionToken()
+        connection._s7_vended_token = vended_token
+        self._vended.add(id(connection))
         try:
-            with closing(sqlite3.connect(self.db_path)) as conn:
-                cur = conn.execute(
-                    """
-                    UPDATE s7_authorization_artifacts
-                    SET consumed_at = ?,
-                        consumed_by_request_id = ?
-                    WHERE artifact_id = ?
-                      AND request_id = ?
-                      AND request_envelope_hash = ?
-                      AND rendered_text_hash = ?
-                      AND action_params_hash = ?
-                      AND precondition_hash = ?
-                      AND authority_context_hash = ?
-                      AND derived_work_class = ?
-                      AND derived_aggregation_group = ?
-                      AND nonce = ?
-                      AND credential_ref = ?
-                      AND auth_method = ?
-                      AND grant_source = ?
-                      AND ceremony_kind = 'founder_local_webauthn'
-                      AND user_presence = 1
-                      AND user_verification IN (0, 1)
-                      AND (? = 0 OR user_verification = 1)
-                      AND consumed_at IS NULL
-                      AND expires_at > ?
-                    """,
-                    (
-                        now_text,
-                        rendered.request_id,
-                        artifact_id,
-                        rendered.request_id,
-                        rendered.request_envelope_hash,
-                        rendered.rendered_text_hash,
-                        action_params_hash,
-                        precondition_hash,
-                        auth_hash,
-                        derived_work_class,
-                        derived_aggregation_group,
-                        rendered.nonce,
-                        authority_context.credential_ref,
-                        authority_context.auth_method,
-                        authority_context.grant_source,
-                        1 if _webauthn_requires_user_verification(derived_work_class) else 0,
-                        now_text,
-                    ),
-                )
-                if cur.rowcount != 1:
-                    return None, None
-                grant = _mint_s7_execution_grant(
-                    artifact_id=artifact_id,
-                    rendered=rendered,
-                    action_params_hash=action_params_hash,
-                    precondition_hash=precondition_hash,
-                    authority_context_hash=auth_hash,
-                    derived_work_class=derived_work_class,
-                    derived_aggregation_group=derived_aggregation_group,
-                    credential_ref=authority_context.credential_ref or "",
-                    auth_method=authority_context.auth_method,
-                    grant_source=authority_context.grant_source,
-                    ceremony_kind="founder_local_webauthn",
-                    consumed_at=now_text,
-                )
-                callback_result = (
-                    after_consume_before_commit(grant)
-                    if after_consume_before_commit is not None
-                    else None
-                )
-                conn.commit()
-                return grant, callback_result
-        except Exception:
-            return None, None
+            yield connection
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+        finally:
+            self._vended.discard(id(connection))
+            vended_token.active = False
+            connection._s7_vended_token = None
+            connection.close()
 
 
 @dataclass(frozen=True)
@@ -2701,14 +3543,20 @@ def execution_grant_authorizes_action(
     """Return True only when a consumed S7 grant matches this execution."""
     if not isinstance(grant, S7ExecutionGrant):
         return False
+    if type(action) is not str:
+        return False
     try:
         derived = derive_work_class(action=action, params=params or {})
     except Exception:
         derived = "undeterminable_work_class"
     if derived not in GUARDED_WORK_CLASSES:
         return False
+    # EXACT action equality, added to -- never replacing -- the two
+    # existing checks. Without it one grant authorized every sibling
+    # operation of the same class with identical params.
     return (
-        grant.derived_work_class == derived
+        grant.action == action
+        and grant.derived_work_class == derived
         and grant.action_params_hash == canonical_hash(params or {})
     )
 
@@ -3945,6 +4793,7 @@ class RenderedRequestStatement:
     renderer_version: str
     surface: str
     origin: str
+    action: str
     rendered_text: str
     rendered_text_hash: str
     request_envelope_hash: str
@@ -3972,6 +4821,7 @@ class RenderedRequestStatement:
             raise ValueError("S7 rendered surface is required")
         if not self.origin:
             raise ValueError("S7 rendered origin is required")
+        validate_action_literal(self.action)
         if not self.rendered_text:
             raise ValueError("S7 rendered_text is required")
         lines = self.rendered_text.splitlines()
@@ -3980,6 +4830,9 @@ class RenderedRequestStatement:
             ("Surface: ", f"Surface: {self.surface}"),
             ("Origin: ", f"Origin: {self.origin}"),
             ("Request id: ", f"Request id: {self.request_id}"),
+            # The visible line MUST equal the field. Without this the
+            # record could be relabelled after the owner read it.
+            ("Action: ", f"Action: {self.action}"),
             ("Work class: ", f"Work class: {self.derived_work_class}"),
             ("Change class: ", f"Change class: {self.proposed_change_class}"),
             ("Predicted effect class: ", f"Predicted effect class: {self.predicted_effect_class}"),
@@ -4028,7 +4881,7 @@ class RenderedRequestStatement:
         )
         _validate_closed_value(
             self.maez_consulted_state,
-            frozenset({"yes", "not required"}),
+            MAEZ_CONSULTED_STATES,
             "maez_consulted_state",
         )
         if self.maez_voice_consultation_hash is not None:
@@ -4080,6 +4933,8 @@ def render_request_statement(
     expires_at: str,
     rendered_at: str,
     renderer_version: str = RENDERER_VERSION,
+    consultation_exemption: Any | None = None,
+    durable_cutover_selection: Any | None = None,
 ) -> RenderedRequestStatement:
     _validate_hash64(action_params_hash, field="action_params_hash")
     if not nonce:
@@ -4093,7 +4948,42 @@ def render_request_statement(
     objection = "not applicable"
     objection_state = "none"
     unavailable = "no"
-    if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES:
+    if (
+        consultation_exemption is not None
+        and maez_voice_consultation is not None
+    ):
+        raise ValueError(
+            "S7 request carries both consultation exemption and voice evidence"
+        )
+    if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES and (
+        consultation_exemption is not None
+    ):
+        # R11. Voice-seat work normally REQUIRES a consultation, so without
+        # this the ceremony has only two options and both are wrong: raise,
+        # or sign "Maez consulted: yes" when nothing was asked. The owner
+        # reads this line before tapping, so it says plainly that nothing was
+        # asked and names the ruling that says why.
+        from core.governance.s7_consultation_exemption import (
+            consultation_exemption_admits,
+        )
+
+        if not consultation_exemption_admits(
+            envelope=envelope,
+            exemption=consultation_exemption,
+            durable_cutover_selection=durable_cutover_selection,
+            ledger_writes_enabled=False,
+        ) or action_params_hash != getattr(
+            consultation_exemption, "action_params_hash", None
+        ):
+            raise ValueError("consultation exemption does not admit this request")
+        consulted = MAEZ_CONSULTED_NOT_PERFORMED_R11
+        # `objection` is DERIVED from the state for the visible line, so it
+        # cannot carry prose here without breaking the field/line binding.
+        # "nothing was asked" is already carried by the consulted line above.
+        objection = "not applicable"
+        objection_state = "none"
+        unavailable = "no"
+    elif envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES:
         if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
             raise ValueError("voice-seat work requires matching MaezVoiceConsultation")
         assert maez_voice_consultation is not None
@@ -4115,6 +5005,9 @@ def render_request_statement(
         f"Surface: {surface}",
         f"Origin: {origin}",
         f"Request id: {envelope.request_id}",
+        # VISIBLE, between Request id and Work class. "What you see is
+        # what you sign" cannot be met by a hash the human never reads.
+        f"Action: {envelope.action}",
         f"Work class: {envelope.derived_work_class}",
         f"Change class: {envelope.proposed_change_class}",
         f"Predicted effect class: {envelope.predicted_effect_class}",
@@ -4135,6 +5028,7 @@ def render_request_statement(
     ]
     rendered_text = "\n".join(lines)
     return RenderedRequestStatement(
+        action=envelope.action,
         request_id=envelope.request_id,
         renderer_version=renderer_version,
         surface=surface,
@@ -4211,3 +5105,22 @@ def authorizes_work(
     # Guarded work requires the later exact-request authorization artifact
     # path. A role-bearing context alone must not become the ceremony.
     return False
+
+
+# --- v2 migration, re-exported ------------------------------------------
+#
+# The procedure lives in core/governance/s7_v2_migration.py. It is exposed
+# here because this module is the S7 façade every caller already imports;
+# the implementation stays separate so migration cannot quietly acquire
+# the store's other authorities.
+from core.governance.s7_v2_migration import (  # noqa: E402,F401
+    S7MigrationRefused,
+    _utc_now,
+    migrate_authorization_store_to_v2,
+)
+
+__all__ = [
+    *globals().get("__all__", []),
+    "S7MigrationRefused",
+    "migrate_authorization_store_to_v2",
+]

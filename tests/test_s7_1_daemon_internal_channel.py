@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from daemon import maez_daemon as D
 from daemon.maez_daemon import MaezDaemon
+from tests.s7_store_fixture import bootstrap_with_authorization
 
 NOW = "2026-05-18T11:00:00+00:00"
 
@@ -671,6 +672,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             S7VoiceConsultationBundleStore,
             derive_s7_voice_source_bundle_hash_binding,
             expected_s7_voice_rendered_prompt_text,
+            put_voice_source_bundle_v2,
             s7_voice_consultation_bundle_hash,
         )
 
@@ -754,15 +756,17 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             expires_at="2026-05-18T11:05:00+00:00",
             authority_class=authority_class,
             has_grounded_semantic_blocking_signal=has_grounded_semantic_blocking_signal,
+            action=rendered.action,
         )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                **{
-                    **bundle.__dict__,
-                    "source_bundle_hash": s7_voice_consultation_bundle_hash(bundle),
-                }
-            )
+        bundle = S7VoiceConsultationBundle(
+            **{
+                **bundle.__dict__,
+                "source_bundle_hash": s7_voice_consultation_bundle_hash(bundle),
+            }
         )
+        authorization_store = s7.S7AuthorizationStore(db_path)
+        with authorization_store.anchored_transaction() as conn:
+            put_voice_source_bundle_v2(bundle=bundle, conn=conn)
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=rendered.request_id,
@@ -975,10 +979,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 raise AssertionError("voice-seat finish must validate source bundle before service")
 
         with tempfile.TemporaryDirectory() as tmp:
+            store_root = f"{tmp}/memory/s7_1_webauthn"
+            bootstrap_with_authorization(store_root)
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
                 "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
-                "S7_WEBAUTHN_STORE_ROOT": f"{tmp}/memory/s7_1_webauthn",
+                "S7_WEBAUTHN_STORE_ROOT": store_root,
             }
             with patch.dict(os.environ, env, clear=False):
                 with patch("daemon.maez_daemon.datetime", _FixedDateTime):
@@ -1009,7 +1015,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertFalse(called["service"])
 
     def test_daemon_voice_seat_finish_supplies_validator_result_from_derived_binding(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         seen = {}
@@ -1030,7 +1035,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(request_id)(daemon)
             material = maez_daemon._s7_authorization_route_material(
@@ -1069,12 +1074,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(response.status_code, 209)
         self.assertEqual(seen["source_bundle_validation"].status, "valid_absent")
         self.assertTrue(seen["source_bundle_validation"].source_bundle_valid)
+        self.assertEqual(seen.get("source_bundle_binding"), binding)
         self.assertEqual(seen["source_ref_hash"], binding.source_ref_hash)
         self.assertIsNotNone(seen["guarded_store"])
         self.assertTrue(seen["reservation_token"])
 
     def test_daemon_voice_seat_finish_passes_grounded_objection_to_service(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         seen = {}
@@ -1099,7 +1104,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(
                 request_id,
@@ -1159,11 +1164,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
     def test_daemon_voice_seat_finish_rejects_resealed_bundle_copied_binding(self):
         from dataclasses import replace
 
+        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
-            S7VoiceConsultationBundleStore,
+            read_voice_source_bundle,
             s7_voice_consultation_bundle_hash,
         )
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
         from daemon import maez_daemon
 
         called = {"service": False}
@@ -1179,7 +1184,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store_root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(store_root)
+            store = bootstrap_with_authorization(store_root)
             daemon = MaezDaemon.__new__(MaezDaemon)
             self._daemon_with_self_mod_pipeline(request_id)(daemon)
             material = maez_daemon._s7_authorization_route_material(
@@ -1191,8 +1196,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             )
             self.assertTrue(material.ok)
             binding = self._seed_valid_voice_bundle_for_material(store.db_path, material)
-            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
-            bundle = bundle_store.get_for_source_ref(binding.source_ref_hash)
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
+            with authorization_store.anchored_transaction() as conn:
+                bundle, _version = read_voice_source_bundle(
+                    source_ref_hash=binding.source_ref_hash,
+                    conn=conn,
+                )
             self.assertIsNotNone(bundle)
             assert bundle is not None
             resealed = replace(
@@ -1207,7 +1216,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
             with sqlite3.connect(store.db_path) as conn:
                 conn.execute(
                     """
-                    UPDATE s7_voice_consultation_bundles
+                    UPDATE s7_voice_source_bundles_v2
                     SET action_params_hash = ?, source_bundle_hash = ?
                     WHERE source_ref_hash = ?
                     """,
@@ -1247,12 +1256,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertFalse(called["service"])
 
     def test_daemon_s7_execute_consumes_fresh_artifact_and_records_trace(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-live"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -1298,7 +1306,7 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 artifact_row = conn.execute(
                     """
                     SELECT consumed_at, consumed_by_request_id
-                    FROM s7_authorization_artifacts
+                    FROM s7_authorization_artifacts_v2
                     WHERE artifact_id = ?
                     """,
                     (finish.get_json()["artifact_id"],),
@@ -1329,13 +1337,129 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_row[3], "revert_patch")
         self.assertEqual(target_text, "# after")
 
+    def test_daemon_s7_execute_surfaces_broken_seam_as_structured_500_not_refusal(self):
+        from core.governance import operator_user_boundary as s7
+
+        request_id = "req-s7-execute-broken-seam"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = bootstrap_with_authorization(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, pipeline, engine, card, target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        with patch.object(
+                            pipeline,
+                            "_consume_s7_execution_authorization",
+                            side_effect=s7.S7GuardedExecutionUnavailable(
+                                "injected daemon consume seam break"
+                            ),
+                        ):
+                            with self.assertLogs(
+                                "core.decision.decision_pipeline",
+                                level="ERROR",
+                            ) as logs:
+                                execute = client.post(
+                                    f"/internal/s7/cards/{request_id}/execute",
+                                    json={
+                                        "session_binding": "session-auth",
+                                        "authorization_challenge_id": begin.get_json()[
+                                            "challenge_id"
+                                        ],
+                                        "authorization_credential_ref": "cred-primary",
+                                        "s7_authorization_artifact_id": finish.get_json()[
+                                            "artifact_id"
+                                        ],
+                                        "text": "yes",
+                                    },
+                                    headers={
+                                        "X-Maez-S7-Internal-Channel": "test-channel-secret"
+                                    },
+                                )
+                                after_failure = client.get("/")
+            with sqlite3.connect(store.db_path) as conn:
+                consumed_at = conn.execute(
+                    "SELECT consumed_at FROM s7_authorization_artifacts_v2 "
+                    "WHERE artifact_id = ?",
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()[0]
+                trace_row = conn.execute(
+                    "SELECT execution_status, execution_success, error_hash "
+                    "FROM s7_guarded_execution_traces WHERE artifact_id = ?",
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()
+            fresh = pipeline.card_store.get(request_id)
+            dialog = pipeline._dialog_store.get_for_card(request_id)
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(execute.status_code, 500, execute.get_data(as_text=True))
+        self.assertEqual(
+            execute.get_json(),
+            {
+                "ok": False,
+                "status": "error",
+                "message": "s7_approval_seam_broken",
+                "output": "",
+                "error": "s7_approval_seam_broken",
+                "detail": "s7_approval_seam_broken:S7GuardedExecutionUnavailable",
+            },
+        )
+        self.assertEqual(after_failure.status_code, 200)
+        self.assertEqual(after_failure.get_json()["status"], "running")
+        self.assertIn("S7GuardedExecutionUnavailable", "\n".join(logs.output))
+        self.assertEqual(len(engine.calls), 0)
+        self.assertIsNone(consumed_at)
+        self.assertEqual(
+            trace_row,
+            (
+                "error",
+                0,
+                s7.canonical_hash(
+                    "s7_approval_seam_broken:S7GuardedExecutionUnavailable"
+                ),
+            ),
+        )
+        self.assertEqual(target_text, "# before")
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, "failed")
+        self.assertEqual(
+            fresh.execution_error,
+            "s7_approval_seam_broken:S7GuardedExecutionUnavailable",
+        )
+        self.assertIsNotNone(dialog)
+        assert dialog is not None
+        self.assertEqual(dialog.stage, "failed")
+        self.assertIsNone(dialog.s7_block_reason)
+
     def test_daemon_s7_execute_blocks_wrong_expected_post_hash_before_mutation(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-post-hash-mismatch"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, target = self._live_self_mod_daemon(
@@ -1399,16 +1523,16 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_row[1], 0)
 
     def test_daemon_voice_seat_finish_live_producer_persists_bundle_without_test_seed(self):
+        from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
             S7VoiceBundleUseStore,
-            S7VoiceConsultationBundleStore,
+            read_voice_source_bundle,
         )
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1451,7 +1575,6 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
-            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
             bundle_use_store = S7VoiceBundleUseStore(store.db_path)
             bundle_uses = []
             with sqlite3.connect(store.db_path) as conn:
@@ -1468,7 +1591,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 "Maez says there is no objection.",
             )
             self.assertEqual(len(bundle_uses), 1)
-            bundle = bundle_store.get_for_source_ref(bundle_uses[0][0])
+            authorization_store = s7.S7AuthorizationStore(store.db_path)
+            with authorization_store.anchored_transaction() as conn:
+                bundle, _version = read_voice_source_bundle(
+                    source_ref_hash=bundle_uses[0][0],
+                    conn=conn,
+                )
             self.assertIsNotNone(bundle)
             assert bundle is not None
             self.assertEqual(
@@ -1482,12 +1610,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_rejects_stale_unreserved_retry_bundle(self):
         from daemon import maez_daemon
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-retry"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1572,13 +1699,13 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(finish.get_json()["detail"], "invalid_hash_binding")
 
     def test_daemon_voice_seat_begin_persists_d12_bundle_before_finish(self):
-        from core.governance.s7_guarded_execution import S7VoiceConsultationBundleStore
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import read_voice_source_bundle
 
         request_id = "req-s7-begin-persists-d12-bundle"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1608,9 +1735,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                     )
                     self.assertEqual(begin.status_code, 200)
                     begin_body = begin.get_json()
-                    bundle = S7VoiceConsultationBundleStore(store.db_path).get_for_source_ref(
-                        begin_body["maez_voice_source_ref_hash"]
-                    )
+                    authorization_store = s7.S7AuthorizationStore(store.db_path)
+                    with authorization_store.anchored_transaction() as conn:
+                        bundle, _version = read_voice_source_bundle(
+                            source_ref_hash=begin_body["maez_voice_source_ref_hash"],
+                            conn=conn,
+                        )
                     self.assertIsNotNone(bundle)
                     assert bundle is not None
                     self.assertEqual(bundle.rendered_text_hash, begin_body["rendered_text_hash"])
@@ -1641,12 +1771,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertTrue(finish.get_json()["ok"])
 
     def test_daemon_authorize_finish_replays_begin_rendered_timestamp_for_d12(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-finish-replays-begin-rendered-at"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1713,12 +1842,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertTrue(finish.get_json()["ok"])
 
     def test_daemon_authorize_begin_binds_default_credential_when_ui_leaves_blank(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-begin-default-credential"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             primary = self._credential_record("cred-primary", kind="primary")
             store.store_credential(primary)
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
@@ -1786,13 +1914,12 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_begin_shows_reader_false_negative_to_founder(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         raw_response = "I object, but the fixture reader misses it."
         request_id = "req-s7-live-producer-reader-false-negative-visible"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
@@ -1834,12 +1961,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertIn("I object", body["maez_voice_raw_response"])
 
     def test_daemon_voice_seat_finish_rejects_missing_founder_seen_raw_hash(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-missing-founder-seen-hash"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
@@ -1887,14 +2013,13 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_live_producer_grounded_objection_blocks_mint(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         raw_response = "I object because this changes what I am."
         quote = "this changes what I am"
         request_id = "req-s7-live-producer-refusal"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence(
@@ -1948,18 +2073,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
             with sqlite3.connect(store.db_path) as conn:
-                artifact_table = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 's7_authorization_artifacts'"
-                ).fetchone()
-                artifact_count = (
-                    0
-                    if artifact_table is None
-                    else conn.execute(
-                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
-                        (request_id,),
-                    ).fetchone()[0]
-                )
+                artifact_count = conn.execute(
+                    "SELECT COUNT(*) FROM s7_authorization_artifacts_v2 "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
 
         self.assertEqual(finish.status_code, 409)
         self.assertEqual(finish.get_json()["error"], "s7_voice_seat_unresolved")
@@ -1967,12 +2085,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
     def test_daemon_voice_seat_finish_live_producer_unreadable_reader_fails_closed(self):
         from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-live-producer-unreadable"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             attempt = S7SemanticReaderAttemptEvidence(
@@ -2024,30 +2141,22 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
             with sqlite3.connect(store.db_path) as conn:
-                artifact_table = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 's7_authorization_artifacts'"
-                ).fetchone()
-                artifact_count = (
-                    0
-                    if artifact_table is None
-                    else conn.execute(
-                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
-                        (request_id,),
-                    ).fetchone()[0]
-                )
+                artifact_count = conn.execute(
+                    "SELECT COUNT(*) FROM s7_authorization_artifacts_v2 "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
 
         self.assertEqual(finish.status_code, 409)
         self.assertEqual(finish.get_json()["error"], "s7_guarded_source_bundle_required")
         self.assertEqual(artifact_count, 0)
 
     def test_daemon_s7_execute_replays_consumed_artifact_without_second_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-replay"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2103,12 +2212,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(trace_count, 1)
 
     def test_daemon_s7_execute_rejects_missing_or_wrong_artifact_before_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-wrong-artifact"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2167,12 +2275,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(len(engine.calls), 0)
 
     def test_daemon_s7_execute_requires_rollback_plan_before_execution(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         request_id = "req-s7-execute-missing-rollback"
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
@@ -2260,6 +2367,9 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                 return Result()
 
         with tempfile.TemporaryDirectory() as tmp:
+            # The daemon builds its own bootstrap store at this root and
+            # must NOT be taught to initialise. Setup runs here instead.
+            bootstrap_with_authorization(f"{tmp}/memory/s7_1_webauthn")
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
                 "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
@@ -2426,12 +2536,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(finish_response.get_json()["error"], "s7_proof_route_disabled")
 
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
-        from core.governance import operator_user_boundary as s7
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             env = {
@@ -2463,12 +2571,11 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
                         },
                         headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                     )
-            s7.S7AuthorizationStore(store.db_path)
             with sqlite3.connect(store.db_path) as conn:
                 artifact_row = conn.execute(
                     """
                     SELECT request_id, grant_source, user_verification
-                    FROM s7_authorization_artifacts
+                    FROM s7_authorization_artifacts_v2
                     WHERE artifact_id = ?
                     """,
                     (finish.get_json()["artifact_id"],),
@@ -2485,11 +2592,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(artifact_row[2], 1)
 
     def test_daemon_backup_register_begin_consumes_primary_authorization_artifact(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
@@ -2546,11 +2652,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(register_begin.get_json()["registration_class"], "backup")
 
     def test_daemon_backup_authorization_infers_single_primary_when_credential_ref_omitted(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
@@ -2585,11 +2690,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(authorize_finish.get_json()["request_id"], "req-backup-infer-primary")
 
     def test_daemon_proof_disable_credential_consumes_matching_s7_artifact(self):
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(self._credential_record("cred-primary", kind="primary"))
             store.store_credential(self._credential_record("cred-backup", kind="backup"))
             env = {
@@ -2659,11 +2763,10 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
     def test_daemon_proof_disable_backup_can_authorize_after_primary_disabled(self):
         from dataclasses import replace
 
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
         with tempfile.TemporaryDirectory() as tmp:
             root = f"{tmp}/memory/s7_1_webauthn"
-            store = S7WebAuthnBootstrapStore(root)
+            store = bootstrap_with_authorization(root)
             store.store_credential(
                 replace(self._credential_record("cred-primary", kind="primary"), enabled=False)
             )
@@ -2710,6 +2813,116 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
+
+    # ---- ROUTE-LEVEL refusal, through Flask -------------------------
+    #
+    # These live in THIS class, not a sibling one: the backup
+    # register/begin route needs _daemon_with_card_pipeline and the
+    # helpers it chains into, none of which are on the mixin.
+
+    def _bootstrap_only(self, tmp):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        root = f"{tmp}/memory/s7_1_webauthn"
+        # Bootstrap ONLY -- deliberately NOT bootstrap_with_authorization.
+        return S7WebAuthnBootstrapStore(root), root
+
+    def _post_register_begin(self, root):
+        """The BACKUP register/begin request, exactly as the sibling test
+        makes it.
+
+        Two things kept this refused at 403 before it ever reached the
+        store: the header is X-Maez-S7-Internal-Channel (not
+        X-S7-Internal-Token), and the route needs the card pipeline plus a
+        real backup-registration payload rather than {}.
+        """
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+            "S7_WEBAUTHN_STORE_ROOT": root,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            return self._client(
+                configure_daemon=self._daemon_with_card_pipeline(
+                    "req-backup-register"
+                )
+            ).post(
+                "/internal/s7/webauthn/register/begin",
+                json={
+                    "registration_class": "backup",
+                    "session_binding": "session-backup",
+                    "backup_authorization_request_id": "req-backup-register",
+                    "s7_authorization_artifact_id": "artifact-backup-register",
+                },
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+    def test_the_request_actually_reaches_the_store_open(self):
+        """CONTROL, and currently RED at 403.
+
+        The request is being refused before it reaches the authorization
+        store at all, which means every assertion below it -- no
+        initializer, no table, no byte change -- is passing VACUOUSLY: a
+        403 never touches the store. Until this reaches the seam, this
+        class proves nothing about the refusal path.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertNotEqual(
+                response.status_code, 403, "refused before reaching the store"
+            )
+
+    def test_uninitialised_store_returns_structured_503(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                response.get_json(),
+                {"ok": False, "error": "s7_authorization_store_uninitialised"},
+            )
+
+    def test_the_refusal_leaks_no_path(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            response = self._post_register_begin(root)
+            self.assertNotIn(root, json.dumps(response.get_json()))
+
+    def test_the_route_invokes_no_initializer(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _store, root = self._bootstrap_only(tmp)
+            calls = []
+            with patch.object(
+                s7,
+                "initialise_authorization_store",
+                side_effect=lambda *a, **k: calls.append((a, k)),
+            ):
+                self._post_register_begin(root)
+            self.assertEqual(calls, [])
+
+    def test_the_route_creates_no_authorization_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, root = self._bootstrap_only(tmp)
+            self._post_register_begin(root)
+            with sqlite3.connect(store.db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            self.assertNotIn("s7_authorization_artifacts", names)
+
+    def test_the_route_changes_no_byte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, root = self._bootstrap_only(tmp)
+            before = Path(store.db_path).read_bytes()
+            self._post_register_begin(root)
+            self.assertEqual(Path(store.db_path).read_bytes(), before)
 
 
 class CockpitStateS7Gate(_DaemonAppClientMixin, unittest.TestCase):

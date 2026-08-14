@@ -11,6 +11,7 @@ from core.audit import AuditVerdict, Decision
 from core.audit_log import AuditLog
 from core.decision.decision_pipeline import DecisionPipeline
 from core.decision.pending_cards import PendingCardStore
+from tests.s7_store_fixture import fresh_store_at
 
 
 NOW = "2026-06-12T17:00:00+00:00"
@@ -267,7 +268,7 @@ class DialogSoulWriteLiveProof(unittest.TestCase):
             validate_s7_voice_source_bundle,
         )
 
-        auth_store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+        auth_store = fresh_store_at(bootstrap_store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(bootstrap_store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(bootstrap_store.db_path)
@@ -369,6 +370,7 @@ class DialogSoulWriteLiveProof(unittest.TestCase):
                 authorization_store=auth_store,
                 voice_bundle_use_store=bundle_use_store,
             ),
+            source_bundle_binding=binding,
             source_bundle_validation=validation,
             source_ref_hash=consultation.source_ref_hash,
             reservation_token=f"reservation-token-{card.request_id}",

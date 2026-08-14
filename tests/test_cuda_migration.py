@@ -12,6 +12,7 @@ import unittest
 from dataclasses import FrozenInstanceError, fields as dataclass_fields, replace
 from pathlib import Path
 
+from core.governance import operator_user_boundary as s7
 from scripts import cuda_bench_driver as _driver
 from scripts import cuda_migration as cm
 
@@ -4641,6 +4642,25 @@ def _cutover_consumption_doc(
 ) -> cm.PersistedDoc:
     auth = auth_doc.obj
     receipt = receipt_doc.obj
+    grant = s7.S7ExecutionGrant(
+        artifact_id="fixture-cutover-artifact",
+        request_id="fixture-cutover-request",
+        request_envelope_hash=auth_doc.file_sha256,
+        rendered_text_hash=receipt_doc.file_sha256,
+        action_params_hash=s7.canonical_hash(cm.CUTOVER_ACTION_PARAMS),
+        precondition_hash=receipt.binding_sha256,
+        authority_context_hash=auth.binding_sha256,
+        action=cm.CUTOVER_ACTION,
+        derived_work_class="self_modification",
+        derived_aggregation_group="s7agg_cutover_fixture",
+        nonce=auth.nonce,
+        credential_ref="fixture-founder-credential",
+        auth_method="founder_webauthn",
+        grant_source="founder_webauthn",
+        consumed_at=CUTOVER_CONSUMED_AT,
+        ceremony_kind="founder_local_webauthn",
+        _mint_token=s7._EXECUTION_GRANT_TOKEN,
+    )
     burn = cm.CutoverConsumptionReceipt(
         authorization_file_sha256=auth_doc.file_sha256,
         authorization_binding_sha256=auth.binding_sha256,
@@ -4649,6 +4669,10 @@ def _cutover_consumption_doc(
         boot_id=auth.boot_id,
         stage_two_receipt_file_sha256=receipt_doc.file_sha256,
         stage_two_receipt_binding_sha256=receipt.binding_sha256,
+        presence_mode=cm.CUTOVER_PRESENCE_MODE,
+        presence_evidence_sha256=hashlib.sha256(
+            cm.s7_execution_grant_projection_bytes(grant)
+        ).hexdigest(),
         consumed_at=CUTOVER_CONSUMED_AT,
     )
     return _persisted_doc(

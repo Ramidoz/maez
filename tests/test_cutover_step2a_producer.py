@@ -858,6 +858,11 @@ class TestOneBuilderTopology:
         # fields(cm.BenchEvidenceBundle) -- reading the field list to carry
         # stage-1 values forward, NOT constructing and NOT aliasing.
         ("scripts/cuda_bench_assemble.py", "build_stage2_bundle", "Call.args"): 1,
+        # 2B (2e6d406): ValidatedCutoverSelection carries the reconstructed
+        # bundle, typed. A field annotation -- the exact class this pin's
+        # history says must stay allowlisted -- landed without its entry, so
+        # the failure sat unrecorded until 2026-08-13.
+        ("scripts/cuda_cutover.py", "ValidatedCutoverSelection", "AnnAssign.annotation"): 1,
     }
     # Any role NOT in the pinned multiset is an alias or an evasion.
     BINDING_ROLES = frozenset(

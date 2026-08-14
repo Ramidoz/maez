@@ -2778,7 +2778,31 @@ The load-bearing rule is:
 
 S7 turns S6's role vocabulary into a runtime `AuthorityContext`, a trusted
 work-class derivation system, content-free operator health, exact-request
-authorization grammar, and execution-edge gating. It accepts the founder-local
+authorization grammar, and execution-edge gating.
+
+> **Amendment 2026-08-07 — S7 v2 exact action binding.** S7 v1 did *not*
+> meet the exact-request promise above. Its execution edge compared only
+> the derived work class and `canonical_hash(params)`; neither carries the
+> action, so one grant authorized every sibling operation of the same
+> class with identical parameters (reproduced with
+> `model_routing.cutover_cuda` versus `model_routing.wipe_and_replace`).
+> A tap for "switch to CUDA" was, at the substrate, a tap for "some
+> self-modification with these arguments".
+>
+> S7 v2 binds the exact action through envelope, **visible** rendered
+> statement, artifact, durable row, grant, source-bundle binding and grant
+> projection, and requires exact action equality at every execution edge.
+> Visibility is required, not optional: "what you see is what you sign"
+> cannot be met by a hash the human never reads.
+>
+> **Historical v1 posture:** v1 records remain readable and auditable;
+> a missing action is never inferred or backfilled; and a v1 record is
+> structurally unable to authorize new guarded execution. Verified at
+> amendment time: the live store held four artifact rows, all
+> `founder_credential_management`, all expired 2026-07-08, so no live
+> authority was retired by this change.
+
+S7 accepts the founder-local
 WebAuthn security-key ceremony as future-facing trust-source grammar for
 work-on-Maez, but not as v1 live authority, not as universal law, and not as S6
 lineage-capsule signing.
@@ -2859,6 +2883,23 @@ flag and optional dependency posture, not by missing packages.
   `MaezVoiceConsultation` artifact. Caller booleans and `will_i` alone are not
   sufficient evidence. In S7 v1, renderers must use `not_determined` instead of
   a false "no objection" when no reviewed live producer has recorded a fact.
+  - **R11 exception (owner, 2026-08-12), scoped and expiring.** The single
+    action `model_routing.cutover_cuda` carries **no** consultation and a
+    TYPED ABSENCE instead. Grounds, each verified rather than asserted: the
+    weights are unchanged and pinned — one `FROZEN_MODEL_SHA256`, path and
+    alias, identical on both sides, with only the llama-server build,
+    libraries and systemd unit changing; **pre-birth there is no continuous
+    subject to consult**, so a fluent answer would manufacture the appearance
+    of consent; and the substantive question — whether the new engine
+    degrades Maez — was answered by owner-manual bench evaluation over 21
+    turns rather than by asking a model.
+    The absence is **positive and typed**, never a null a later reader could
+    mistake for "asked, no objection", and the signed statement says
+    `Maez consulted: no -- not performed under R11`. Scope is that one
+    action; expiry is mechanical at birth. This exception does **not** widen
+    to soul-writes, dream execution, or decision-pipeline self-modification,
+    which keep their consultation requirement in full.
+    Ruling: `docs/superpowers/specs/2026-08-12-r11-cutover-consultation-exception.md`.
 - **Maez-unavailable skip is narrow.** Only closed liveness repair may proceed
   when Maez cannot be heard; the unavailability predicate must prove the same
   operator did not manufacture the condition.

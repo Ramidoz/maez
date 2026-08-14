@@ -540,11 +540,40 @@ COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
 PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v2"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 CUTOVER_AUTHORIZATION_SCHEMA = "cuda_migration.cutover_authorization.v1"
-CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v1"
+CUTOVER_CONSUMPTION_SCHEMA = "cuda_migration.cutover_consumption.v2"
+PRESENCE_MODES = ("founder_webauthn", "procedural")
+CUTOVER_PRESENCE_MODE = "founder_webauthn"
+S7_GRANT_PROJECTION_SCHEMA = "cuda_migration.s7_execution_grant_projection.v2"
+S7_GRANT_PROJECTION_FIELDS = (
+    "artifact_id",
+    "request_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "action",
+    "derived_work_class",
+    "derived_aggregation_group",
+    "nonce",
+    "credential_ref",
+    "auth_method",
+    "grant_source",
+    "consumed_at",
+    "ceremony_kind",
+    "schema_version",
+)
 ASSEMBLE_RECEIPT_SCHEMA = "cuda_bench_assemble.receipt.v1"
 CUTOVER_TTL_S = 14_400
-# The one closed action set a cutover authorization can permit.  The
-# ceremony may not improvise actions the owner did not sign.
+# The singular S7 authority/action-edge identifier for the aggregate model
+# routing operation.  Per-attempt facts belong to the request envelope, not
+# this stable action-params hash domain.
+CUTOVER_ACTION = "model_routing.cutover_cuda"
+CUTOVER_ACTION_PARAMS = {"cutover_action": CUTOVER_ACTION}
+# The older cutover authorization's ordered six-step executor manifest.  It is
+# intentionally distinct from CUTOVER_ACTION: this tuple limits the concrete
+# operations the authorization permits; CUTOVER_ACTION names their aggregate
+# S7 self-modification contract.
 CUTOVER_ACTION_SET = (
     "stage_recovery_copies",
     "install_cuda_override",
@@ -552,6 +581,34 @@ CUTOVER_ACTION_SET = (
     "restart_llama_server",
     "restart_llama_judge",
     "host_reboot",
+)
+# Each executor operation names the state it can mutate. Recovery staging is a
+# logical ref because preparation chooses its private destination at runtime;
+# the other refs denote the exact owner-user manager, services, and host boot
+# domain changed by their respective operations.
+CUTOVER_OPERATION_AFFECTED_REFS = MappingProxyType(
+    {
+        "stage_recovery_copies": ("backup:cuda_cutover_recovery",),
+        "install_cuda_override": (
+            "file:/home/rohit/.config/systemd/user/"
+            "llama-server.service.d/zz-b9596-cuda.conf",
+        ),
+        "daemon_reload": ("systemd_manager:user",),
+        "restart_llama_server": ("service:llama-server.service",),
+        "restart_llama_judge": ("service:llama-judge.service",),
+        "host_reboot": ("host:local",),
+    }
+)
+if tuple(CUTOVER_OPERATION_AFFECTED_REFS) != CUTOVER_ACTION_SET:
+    raise RuntimeError("cutover affected-ref manifest does not match action set")
+CUTOVER_AFFECTED_REFS = tuple(
+    sorted(
+        {
+            ref
+            for refs in CUTOVER_OPERATION_AFFECTED_REFS.values()
+            for ref in refs
+        }
+    )
 )
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
@@ -1129,6 +1186,8 @@ class CutoverConsumptionReceipt:
     boot_id: str
     stage_two_receipt_file_sha256: str
     stage_two_receipt_binding_sha256: str
+    presence_mode: str
+    presence_evidence_sha256: str
     consumed_at: str
     schema_version: str = field(default=CUTOVER_CONSUMPTION_SCHEMA, init=False)
 
@@ -1143,8 +1202,14 @@ class CutoverConsumptionReceipt:
             self.authorization_binding_sha256,
             self.stage_two_receipt_file_sha256,
             self.stage_two_receipt_binding_sha256,
+            self.presence_evidence_sha256,
         ):
             _validate_sha256(digest)
+        if (
+            type(self.presence_mode) is not str
+            or self.presence_mode not in PRESENCE_MODES
+        ):
+            raise ValueError("cutover_consumption_presence_mode")
         if type(self.nonce) is not str or _NONCE_RE.fullmatch(self.nonce) is None:
             raise ValueError("authorization_nonce")
         if (
@@ -1168,6 +1233,8 @@ class CutoverConsumptionReceipt:
                 "boot_id": self.boot_id,
                 "stage_two_receipt_file_sha256": self.stage_two_receipt_file_sha256,
                 "stage_two_receipt_binding_sha256": self.stage_two_receipt_binding_sha256,
+                "presence_mode": self.presence_mode,
+                "presence_evidence_sha256": self.presence_evidence_sha256,
                 "consumed_at": self.consumed_at,
             }
         )
@@ -3202,6 +3269,20 @@ def _canonical_wrapper_bytes(wrapper: Mapping[str, object]) -> bytes:
     )
 
 
+def s7_execution_grant_projection_bytes(grant: object) -> bytes:
+    """Encode the complete v2 S7 execution-grant projection."""
+    from core.governance.operator_user_boundary import S7ExecutionGrant
+
+    if not isinstance(grant, S7ExecutionGrant):
+        raise ValueError("s7_grant_projection")
+    projected_fields = {
+        name: getattr(grant, name) for name in S7_GRANT_PROJECTION_FIELDS
+    }
+    return _canonical_wrapper_bytes(
+        {"schema": S7_GRANT_PROJECTION_SCHEMA, "fields": projected_fields}
+    )
+
+
 def _persisted_fields(fields: object, expected: tuple[str, ...]) -> dict[str, object]:
     if not isinstance(fields, Mapping) or set(fields) != set(expected):
         raise ValueError("persisted_roundtrip")
@@ -3448,6 +3529,8 @@ def _decode_cutover_consumption(fields: object) -> CutoverConsumptionReceipt:
             "boot_id",
             "stage_two_receipt_file_sha256",
             "stage_two_receipt_binding_sha256",
+            "presence_mode",
+            "presence_evidence_sha256",
             "consumed_at",
         ),
     )

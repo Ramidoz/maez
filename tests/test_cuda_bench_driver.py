@@ -7263,7 +7263,7 @@ class TestTask3CommandAdmissionCanon:
             "cuda_migration.authorization_witness.v1",
             "cuda_migration.backend_map_witness.v1",
             "cuda_migration.cutover_authorization.v1",
-            "cuda_migration.cutover_consumption.v1",
+            "cuda_migration.cutover_consumption.v2",
         )
         assert actual == expected
         assert len(actual) == len(set(actual)) == 25

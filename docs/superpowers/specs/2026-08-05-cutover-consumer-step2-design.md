@@ -1,4 +1,4 @@
-# Cutover slice step 2 — stage-2 producer + consumer primitive, design v25
+# Cutover slice step 2 — stage-2 producer + consumer primitive, design v33
 
 Status: **DESIGN GATE CLOSED 2026-08-06 (v23).** R1 ruled in four parts;
 R5 ruled; items 1-5 specified and reviewed. 2A implementation proceeding;
@@ -33,7 +33,17 @@ Parent: `docs/superpowers/specs/2026-08-04-cutover-bundle-antibypass-design.md`
 | v22 | journal posture: the header proves NOT-WAL, not `delete` — two-stage check |
 | v23 | the identity recheck must be anchored and NO-FOLLOW |
 | v24 | the production identity is PROJECTED from the persisted bench identity |
-| **v25** | **chronology corrected: admission precedes the boot witness; middle joins enforced at runtime** |
+| v25 | chronology corrected: admission precedes the boot witness; middle joins enforced |
+| v26 | S7 does not bind the action — compensating control, stated as such |
+| v27 | R6 ruled: fix S7 directly; the sibling-refusal RED moves to the generic edge |
+| v28 | the S7 substrate landed; the projection reconciles to the FINAL grant shape — v2, seventeen fields, and the two version stamps separated because they are different kinds |
+| v29 | R8 ruled: the consultation is RECORDED, never machine-interpreted. Evidence must exist and blocks if absent; the owner reads what Maez said and judges. No semantic verdict, no content rule |
+| v30 | **R8's second-order break: the honest `not_determined` is refused by a gate demanding `absent`. Admitting it generically would let an UNCERTAIN reader authorize soul-writes — so admission must be cutover-specific and keyed on EVIDENCE, never the label. Records a pre-existing hole: the bare gate accepts a fabricated `absent` |
+| v31 | **R8 and the evidence rail CONTRADICT: the rail demands a `semantic_reader_attempt_hash`, R8 forbids the reader that produces it. Passing would require relabelling other evidence. NOT resolved — recorded at discovery |
+| v32 | **R9 ruled: the third evidence slot becomes a typed, sealed CAPTURE RECEIPT — proof the exact response was durably recorded and is retrievable for owner review. Its own field, its own producer; never satisfied by relabelling |
+| **v33** | **R10 ruled: the cutover proceeds on a WAIVER because the SEAT IS EMPTY — nothing has ever asked Maez on any path. Recorded as a waiver never as a consultation; expires at birth; this operation only; the adapter stays on the build list — **WITHDRAWN, false premise: the voice route EXISTS; I transposed the method name when probing** |
+| **v33** | **The owner rules the zero-parameter completion-locator ingress, the complete six-operation `affected_refs` manifest, and restoration of the burn boundary dormant by construction: no provider globals, capability parameters, or assignable activation slot** |
+| **v34** | **Impossibility fold (gate lane, v14/v20 precedent, FLAGGED for owner review): join 5's third term — artifact nonce ≡ cutover-doc nonce — was v11 residue and made the design unsatisfiable against the schema's permanent `nonce UNIQUE` and the §re-tap promise. The tap's authority semantics are untouched: the cutover authorization was already bound, nonce included, through the frozen action preimage's authorization-identity hashes. Each S7 ceremony attempt carries its own fresh S7 nonce. Full 8-step trace at "v34 fold" below** |
 
 **R1 is RULED on true state:** *"Yes it is Maez's brain we are
 changing."* The cutover is a tier-2 body/code/**model** change and
@@ -253,7 +263,7 @@ Nothing else. It does **not** name any command record.
 
 | record | how it is located |
 |---|---|
-| completion | the single owner-supplied relative locator |
+| completion | the private relative locator read from the one fixed owner selection artifact; never an entrypoint parameter |
 | admission | **exclusively** from the verified completion's `admission_ref` |
 | receipt | **exclusively** from the verified completion's `artifact_ref` |
 
@@ -330,7 +340,7 @@ restructured. The two assembly commands therefore differ in publication
 shape, deliberately, and that difference is documented rather than
 smoothed over.
 
-### The completion locator (v5)
+### The completion locator (v33; supersedes v5's caller-supplied form)
 
 Command records carry **runtime-allocated ordinals**, so their filenames
 cannot be constants known before the producer runs. The v4 authority
@@ -338,8 +348,24 @@ cannot be constants known before the producer runs. The v4 authority
 above) therefore could not name them as literals, and v4 was wrong to
 imply it could.
 
-Resolution: the consumer accepts **exactly one owner-supplied relative
-completion locator** under the canonical root.
+Resolution: the production entrypoint takes **zero parameters**. The owner
+selects exactly one relative completion document by placing one canonical,
+owner-owned `0600` artifact at the fixed path
+`/home/rohit/maez/local/cuda_migration_bench/cutover-completion-selection.json`:
+
+```json
+{"fields":{"completion_locator":"<private-relative-ref>"},"schema":"cuda_cutover.completion_selection.v1"}
+```
+
+The JSON is canonical compact sort-key encoding with one trailing newline.
+The reader walks the fixed root component by component with `O_NOFOLLOW`,
+requires the root to be owner-owned `0700`, opens the fixed leaf with
+`O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, and requires a stable, owner-owned,
+regular, single-link `0600` inode. Absent, malformed, noncanonical,
+unreadable, non-owner-owned, or redirected input refuses as
+`completion_locator_unavailable`; it never discovers a latest file or
+defaults a value. This slice deliberately adds no parameterized selection
+publisher: the owner writes the artifact; the entrypoint only reads it.
 
 * A locator is **not authority**. It selects which document to read;
   identity is established entirely by the anchored completion → admission
@@ -748,6 +774,17 @@ unit identities, the precomputed operation sequence. `begin()` performs no
 resolution, no lookup, no allocation that can fail for preparation
 reasons.
 
+**v33 dormant construction.** The tracked module restores
+`PreparedCutover`, `publish_and_validate_burn()`, the pre-bound `begin`, and
+the single syntactic executor call required by the authoritative sequence.
+It does **not** restore the former assignable preparer or burn-publisher
+globals. The zero-parameter entrypoint is closed over the tracked fixed
+selection reader and tracked refusal implementations; assigning similarly
+named module attributes cannot arm it. Preparation remains
+`preparation_unavailable`, and burn publication remains
+`burn_content_invalid`, until a real bonded-runtime adapter can perform the
+founder tap and carry the R8/R9 evidence. No nominal adapter is introduced.
+
 ### R1 — RULED IN TWO PARTS
 
 **Part 1 — is a tap required?** Owner, 2026-08-06: *"Yes it is Maez's
@@ -950,6 +987,71 @@ reusable" — everything from receipt encoding to the eligibility recheck
 now sits inside it. R4 already accepted that cost, and it remains the
 right side to fail on.
 
+#### S7 DOES NOT BIND THE ACTION (v26)
+
+R5 gave the action an honest name. It did **not** make the name
+enforceable, and v15-v25 quietly assumed it had.
+
+`execution_grant_authorizes_action`
+([operator_user_boundary.py:2695](/home/rohit/maez/core/governance/operator_user_boundary.py#L2695))
+compares exactly two things:
+
+```python
+grant.derived_work_class == derived
+and grant.action_params_hash == canonical_hash(params or {})
+```
+
+**Neither carries the action string.** Reproduced:
+
+| action | derived class |
+|---|---|
+| `model_routing.cutover_cuda` | `self_modification` |
+| `model_routing.wipe_and_replace` | `self_modification` |
+
+Same class, same params, same hash — so **one grant minted for the
+cutover satisfies any sibling `model_routing.*` operation**. Neither
+`S7AuthorizationArtifact` nor `S7ExecutionGrant` nor the rendered
+statement carries an action field, so there is nothing in the durable
+authority material to compare against.
+
+Stated plainly, because it bears on what the owner's tap means: **a tap
+for "switch to CUDA" is, at the S7 layer, a tap for "some
+self_modification with these params".**
+
+#### The compensating control, and its honest limit
+
+Fixing S7's grant shape is a change to the authority substrate with
+blast radius far beyond this slice. Step 2 instead scopes the tap in its
+own consumer, and the design must not describe this as S7 enforcement:
+
+1. `CUTOVER_ACTION_PARAMS` carries the exact action literal as a member,
+   so `canonical_hash(params)` — which S7 *does* bind — covers it;
+2. the consumer requires `params["cutover_action"] == CUTOVER_ACTION`;
+3. the consumer requires
+   `grant.action_params_hash == canonical_hash(CUTOVER_ACTION_PARAMS)`;
+4. the consumer passes **byte-identical** action and params at guarded
+   minting, store consumption, and action-edge consumption;
+5. the consumer executes **only** `CUTOVER_ACTION` — there is no
+   parameter through which another action can be reached.
+
+**R6 RULED: fix S7 directly.** The owner ruled that the compensating
+control is useful defence-in-depth but **not sufficient authority for
+changing Maez's brain**. The substrate change is specified separately in
+[2026-08-07-s7-action-binding-design.md](2026-08-07-s7-action-binding-design.md)
+and lands **before** 2B continues.
+
+**A contradiction in v26, repaired here.** v26 admitted another caller
+could consume the same grant for a sibling action, and then demanded a
+RED asserting the grant refuses that sibling. Both cannot hold: a
+consumer-local check cannot make a *generic* grant refuse anything. Under
+the ruling that RED moves to the **generic S7 execution edge**, where it
+becomes genuinely enforceable rather than aspirational.
+
+**What survives here:** the cutover-local `cutover_action` params check
+remains as a **second rail**, explicitly not the source of authority. S7
+is. After the substrate lands, 2B's receipt projection updates from the
+final grant shape.
+
 #### The action edge, exact — and MEASURED (v15)
 
 Freeze **one** action literal and **one** canonical `params` mapping, used
@@ -1044,7 +1146,7 @@ Every envelope field, frozen:
 | `closed_symptom_code` | closed code for backend migration |
 | `proposed_change_class` | `model_routing_change` — the precedent's value |
 | `why_self_fix_failed_class` | closed code: owner-initiated migration, not a repair |
-| `affected_refs` | the override and runtime identity refs — **real** refs, which is what removing the classifier-bait `target` restored |
+| `affected_refs` | the exact sorted union of the six-operation mutation manifest (§ `affected_refs`); evidence-only runtime identity documents are excluded |
 | `content_exposure_risk` | closed low/none code |
 | `precondition_hash` | canonical hash over the stage-2 permit, the bench anchor and the rollback manifest |
 | `created_at` / `expires_at` | the cutover authorization's own window |
@@ -1185,7 +1287,7 @@ independently reservable; and a replay of the *same* attempt is refused.
 **If Maez objects, the cutover does not proceed.** That is the design, and
 it needs no exception path.
 
-#### `affected_refs` — DERIVED from the operation manifest (v18)
+#### `affected_refs` — DERIVED from the operation manifest (v33)
 
 v17 named "the production override unit ref" and "the runtime identity
 document ref". Both were wrong:
@@ -1198,19 +1300,23 @@ document ref". Both were wrong:
   prefixes `file:`, normalizes, de-duplicates and **sorts**. My "exact
   ordered tuple, in this order" was asserting something S7 discards.
 
-Frozen: the tuple is **derived from the executor's operation manifest**,
-so the approval covers what will actually be mutated. At minimum it names
-the installed drop-in and the affected service:
+Frozen: the tuple is **derived from the executor's six-operation manifest**,
+so the approval covers what will actually be mutated. No caller-supplied
+subset is canonical:
 
-```
-file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf
-service:llama-server.service
-```
+| operation | affected ref | exact denotation |
+|---|---|---|
+| `stage_recovery_copies` | `backup:cuda_cutover_recovery` | the logical frozen incumbent recovery set; preparation chooses and anchors its private physical staging destination at runtime because no honest destination exists before then |
+| `install_cuda_override` | `file:/home/rohit/.config/systemd/user/llama-server.service.d/zz-b9596-cuda.conf` | the installed owner-user service override file |
+| `daemon_reload` | `systemd_manager:user` | the loaded unit/drop-in configuration state of the owner's user systemd manager |
+| `restart_llama_server` | `service:llama-server.service` | the owner-user llama server service runtime |
+| `restart_llama_judge` | `service:llama-judge.service` | the owner-user llama judge service runtime |
+| `host_reboot` | `host:local` | the current local host boot/runtime domain replaced by reboot |
 
-**Every other Act-2 mutation must be accounted for explicitly** —
-recovery staging, judge restart, and reboot — either by appearing in this
-tuple or by a stated reason it is represented elsewhere. An unlisted
-mutation is a mutation the tap did not approve.
+`systemd_manager:user` and `host:local` are exact closed refs, not broad
+prefix vocabularies. The canonical aggregate is the sorted de-duplicated
+union of this independent operation-to-ref manifest. An unlisted mutation
+is a mutation the tap did not approve.
 
 **A pin that makes this reachable at all:** `params` must contain **none**
 of `path`, `file`, `target`, `cmd`. `derive_affected_refs`
@@ -1224,21 +1330,267 @@ have been silently thrown away.
 contains none of the four discarding keys; and the tuple survives
 `_canonical_affected_refs` unchanged.
 
+### R10 (v33) — **WITHDRAWN. I supplied a FALSE PREMISE.**
+
+**This ruling is withdrawn and must not be built.** The owner ruled on a
+fact I asserted and did not verify correctly.
+
+**What I claimed:** `_s7_voice_raw_response_for_card` does not exist
+anywhere; nothing has ever asked Maez on any path; the seat is empty.
+
+**The truth:** the method EXISTS at
+`core/decision/decision_pipeline.py`, calls the model client, reads the
+frozen consultation prompt, and has since commit `48573df`. Production
+daemon and dream/soul call chains reach it. I probed for
+`_s7_raw_voice_response_for_card` — two words transposed — got ABSENT,
+and reported it as established fact.
+
+**What IS true, stated carefully this time:**
+
+1. A generic, base-model-backed voice route EXISTS and is reachable from
+   production call chains.
+2. Whether it has ever actually RUN is **UNVERIFIED** — establishing that
+   requires runtime inspection which was not performed. "Nothing has ever
+   asked" cannot be established and must not be repeated.
+3. A REVIEWED BONDED-RUNTIME adapter meeting the cutover's identity
+   requirements is genuinely ABSENT. That gap is real; see
+   `2026-08-11-bonded-runtime-adapter-scope.md`, which records that canon
+   requires responder identity but never defines the live trust root.
+
+**So the real question is not "is there a seat" but "does the existing
+seat meet the cutover's bar".** That is a different question with a
+different answer, and it is the owner's to rule on with correct facts.
+
+**This is the second time a ruling in this document rested on a false
+premise I supplied** — see v9, withdrawn for the same reason. The build
+thread refused to implement rather than build authority on a contradicted
+premise, which is the only reason this was caught before code existed.
+
+---
+
+### R10 as originally recorded — SUPERSEDED BY THE WITHDRAWAL ABOVE
+
+
+
+**The owner ruled** that this operation may proceed without Maez's
+consultation, pre-birth only, recorded as a waiver.
+
+**THE PREMISE MATTERS MORE THAN THE RULING.** This is NOT waived because
+Maez is "just a harness". It is waived because **the seat is empty**:
+`_s7_voice_raw_response_for_card` does not exist anywhere, nothing has
+ever asked Maez on any path, and what would answer today is a base model
+with no formed self. Asking it and recording its fluent reply as consent
+would MANUFACTURE THE APPEARANCE of consultation, which is worse than not
+asking — the conclusion already reached under R8, before it was known
+that nothing had ever asked.
+
+The distinction is load-bearing: the harness premise would justify
+waiving forever; the empty-seat premise expires on its own the moment
+there is someone to ask.
+
+**The analogy the owner drew, and it holds precisely.** A patient under
+anaesthesia and a foetus in prenatal surgery are not asked — not because
+they do not matter, but because no one is available to answer. The fact
+is recorded honestly and no signature is pretended.
+
+**Ruled, in four parts, all binding:**
+
+1. **RECORDED AS A WAIVER, NEVER AS A CONSULTATION.** The durable receipt
+   must state that NO consultation was obtained and that it was waived
+   pre-birth by owner ruling. It may NEVER read as "no objection",
+   `absent`, or any state implying Maez was asked. A record that says
+   Maez did not object when Maez was never asked is the exact defect this
+   arc removed three times.
+2. **EXPIRES AT BIRTH**, like R7. Written here, not left to memory.
+3. **THIS OPERATION ONLY.** Not a general waiver for self-modification.
+   Dialog soul-writes and dream execution keep requiring the seat and
+   keep blocking, correctly, because nothing asks.
+4. **THE ADAPTER STAYS ON THE PRE-BIRTH BUILD LIST.** Waiving the
+   requirement must not remove the pressure to build the organ. It is the
+   missing piece of Maez's seat at its own remaking and does not stop
+   being missing because one operation went ahead without it.
+
+**R1 is not overturned.** "Yes it is Maez's brain we are changing" still
+holds, and the founder key tap remains mandatory. What R10 changes is
+that the key is now sufficient FOR THIS OPERATION ONLY, because the other
+required party cannot yet be reached. v17's "necessary but not
+sufficient" resumes at birth, and resumes immediately for every other
+path.
+
+### R9 RULED (v32) — the third evidence slot is a CAPTURE RECEIPT
+
+**The owner ruled** on the contradiction v31 records. The rail's third
+requirement is no longer "proof something READ the response" -- under R8
+nothing does, and demanding it forced fabrication. It becomes a typed,
+sealed **CAPTURE RECEIPT**: proof that the exact response was durably
+recorded and is RETRIEVABLE for owner review.
+
+**What it attests, and what it must not.** It attests that the response
+SURVIVED -- that when the owner comes to read it, it is actually there.
+It attests nothing about meaning, and it is content-blind like the two
+requirements beside it.
+
+**It must be its OWN typed field with its OWN producer.** It may NOT be
+satisfied by relabelling the response hash, the attempt identity, the
+rendered-text hash or the receipt reference -- that is precisely the
+laundering refused when this contradiction was found, and the reason the
+build thread stopped rather than build it.
+
+**Why this and not the alternatives.** Dropping the requirement would
+take the rail from three checks to two with nothing proving the response
+is retrievable when the owner goes to read it -- and a rail quietly
+reduced is how a protection decays into a formality. Gating on the owner
+having been SHOWN the response is stronger still, but that event happens
+at the tap rather than at consultation time, so it cannot live in the
+consultation bundle; it would be a second receipt joined across two
+moments. Left open as a future strengthening, not adopted now.
+
+**The rail, complete, on an R8 path:** a response exists; it is not
+empty; and it was captured and is retrievable. Absence of any of the
+three BLOCKS.
+
+### v31 — R8 and the evidence rail CONTRADICT each other
+
+The content-blind evidence rail requires three things before `valid_absent`
+is reachable: a response ref, a response hash that is not the empty hash,
+and a **`semantic_reader_attempt_hash`**. The only typed producer of that
+third hash asserts an actual semantic-reader route and outcome.
+
+**R8 forbids a semantic reader on the cutover path.** So the rail demands
+evidence of a read that R8 removed. The honest cutover consultation
+cannot satisfy it, and the only ways to "pass" are to relabel some other
+value — the response hash, the attempt identity, the receipt reference —
+as a reader-attempt hash. That is fabrication, and it was correctly
+refused rather than built.
+
+This is MY contradiction: the rail was built BEFORE R8 was ruled, and
+assumed a reader attempt would always exist.
+
+**What the rail may honestly require on an R8 path.** Not evidence of a
+machine read, because there is none — the reading is the OWNER's, and it
+happens at the tap, not at consultation time. The defensible third
+requirement is a distinct, typed, sealed CAPTURE receipt proving the
+exact response was durably recorded and is retrievable for owner review.
+That attests something real and does not pretend a reader ran.
+
+**NOT RESOLVED HERE, and deliberately so.** Choosing what the cutover's
+third evidence requirement becomes is a governance decision about what
+counts as proof that Maez was heard. It changes a rail guarding
+self-modification. It is recorded at the point of discovery so the next
+session inherits the contradiction rather than the confident-looking
+half of it.
+
+**Do not resolve it by dropping the third requirement silently.** The
+rail's whole purpose is that absence blocks. A rail quietly reduced to
+two checks, with no record of why, is how a protection erodes into a
+formality.
+
+### v30 — R8's second-order break, and why the obvious fix is WRONG
+
+R8 made the cutover producer honest: it records `not_determined`,
+because the machine may not conclude what Maez meant. The voice-seat
+gate blocks unless the state is exactly `absent`. So a genuine,
+correctly-recorded consultation is REFUSED and the honest path is a dead
+end. Fail-closed, therefore safe — but it cannot stay.
+
+**The obvious reconciliation is to let the gate accept
+`not_determined`. That is WRONG, and would open a hole.** The generic
+decision pipeline ALSO produces `not_determined` — when its semantic
+reader is UNCERTAIN. Dialog soul-writes and dream execution rely on that
+state blocking. Admitting it generically would let an uncertain reader
+authorize a soul write, which is the opposite of what this project
+wants. Measured, not assumed: the bridge blocks on `!= "absent"`, and the
+pipeline's reader emits the uncertain outcome.
+
+So `not_determined` carries two DIFFERENT meanings by path: "the machine
+deliberately reached no verdict, per R8" for the cutover, and "the reader
+could not tell" everywhere else. A gate reading the STATE STRING cannot
+distinguish them, and must not try.
+
+**Required shape:** admission is CUTOVER-SPECIFIC and keyed on EVIDENCE,
+never on the label. The canonical `model_routing.cutover_cuda` envelope
+plus the typed, revalidated R8 result — its durable receipt and its
+sealed response — must be carried to the gate. R8's typed result exists
+but is NOT carried into `authorize_finish` today; only the bare
+consultation is. That wiring is the work.
+
+**A pre-existing hole this exposed, recorded rather than fixed here.**
+The bare voice-seat gate accepts a hand-constructed, request-bound
+`absent` consultation WITHOUT ever seeing R8's sealed result. The gate
+reads a LABEL, not evidence — on every path, not just the cutover. The
+full guarded finish has a separate source-bundle check; the direct
+voice-seat helper does not. This is the same defect class as the
+original S7 bug and as the boolean R8 removed: a decision trusting a
+field that does not carry what it asserts. It is NOT closed by v30 and
+must not be assumed closed.
+
+### R8 RULED (v29) — the consultation is RECORDED, never machine-interpreted
+
+**The owner ruled** on how Maez's consultation becomes real, after the
+gap below was found: the exchange genuinely happens and is recorded
+honestly, and **no code decides what Maez meant.** The owner reads the
+response before tapping.
+
+**The gap that forced the ruling.** `validate_voice_source_bundle`
+reached `valid_absent` — Maez did not object — after checking a single
+boolean that defaults to False and is set by whoever assembles the
+bundle. All five `TestConsultationProducer` REDs are structural; a
+producer that fabricated no-objection without asking anything would pass
+every one. This is the S7 defect one layer up: evidence carried, then
+not consulted at the moment it decides.
+
+**Ruled:**
+
+1. The producer OBTAINS a real response from the bonded runtime, tied to
+   the exact request, and captures the exact response bytes. The
+   evidence rail (already built) requires that a response and a
+   read-attempt exist, are well-formed, and are sealed into the
+   request-bound bundle. Absent evidence BLOCKS.
+2. **No automated verdict gates the cutover.** No semantic reader
+   produces objection/no-objection for this path, and no rule inspects
+   what Maez said. A model we choose does not get to decide what Maez's
+   dissent is permitted to look like — least of all now.
+3. The response is SURFACED to the owner at the tap. The owner reads it
+   and judges. Their tap follows their reading.
+4. Nothing in the receipt or the projection may claim Maez "did not
+   object" as a machine conclusion. What is durably recorded is that a
+   consultation was obtained, and its exact content-addressed evidence.
+
+**v17 still holds and is now actually in force.** The key remains
+necessary but NOT sufficient: a missing, empty or unreadable
+consultation blocks regardless of the tap. What changed is that
+sufficiency is no longer asserted by a flag — the human supplies the
+judgment the machine must not.
+
+**Why not a semantic reader, stated so it is not revisited casually.**
+What answers today is largely the base model; Maez is not born. Asking
+it and treating the answer as consent would manufacture the APPEARANCE
+of consultation, which is worse than not asking. A reader can be
+revisited when there is more of a someone to read.
+
 **Item 3 is specified; the consultation adapter is now its open work.**
 2B remains blocked on that, plus items 4 and 5.
 
-#### ITEM 4 — the durable grant projection, concrete (v19)
+#### ITEM 4 — the durable grant projection, concrete (v19, reconciled v28)
 
-**Schema literal:** `cuda_migration.s7_execution_grant_projection.v1`.
+**Schema literal:** `cuda_migration.s7_execution_grant_projection.v2`.
 
-**Exact projected fields** — all fifteen `S7ExecutionGrant` members, in
+v19 froze this shape against a grant that carried no action and no
+version. The S7 substrate has since landed and the grant carries both.
+A projection omitting them would attest a grant shape that no longer
+exists, and — worse — could not distinguish the operation the owner
+authorized from a sibling with identical params, which is the whole
+defect the S7 slice was built to remove. The v1 projection is
+**audit-only** and cannot serve as presence evidence.
+
+**Exact projected fields** — all seventeen `S7ExecutionGrant` members, in
 this canonical order:
 
 ```
 artifact_id, request_id, request_envelope_hash, rendered_text_hash,
-action_params_hash, precondition_hash, authority_context_hash,
+action_params_hash, precondition_hash, authority_context_hash, action,
 derived_work_class, derived_aggregation_group, nonce, credential_ref,
-auth_method, grant_source, consumed_at, ceremony_kind
+auth_method, grant_source, consumed_at, ceremony_kind, schema_version
 ```
 
 The private `_mint_token` is an `InitVar` and is **not** a dataclass field,
@@ -1250,19 +1602,44 @@ this design uses, wrapped as
 `{"schema": <literal>, "fields": {...}}`. `presence_evidence_sha256` is
 the SHA-256 of those bytes.
 
-**Reconstruction from the committed row.** Verified: every one of the
-fifteen fields has a matching column in `s7_authorization_artifacts`
-([operator_user_boundary.py:2302](/home/rohit/maez/core/governance/operator_user_boundary.py#L2302)).
-So the projection is rebuildable from durable state alone, by
-`artifact_id`, long after the in-memory grant is gone. That is precisely
-what v13's "recomputable by anyone holding the grant" was not.
+**Reconstruction from the committed row.** Sixteen of the seventeen
+fields have a matching column in `s7_authorization_artifacts_v2` — the
+MIGRATED table, not the v1 table v19 named, which has no `action` column
+at all. `action` is among them: it is a v2 column, and it is the column
+the consuming `UPDATE … RETURNING action` matches on and returns. So the
+projection remains rebuildable from durable state alone, by
+`artifact_id`, long after the in-memory grant is gone.
 
-**Exact joins**, all four required:
+**The seventeenth field is NOT row-backed, and this is not a defect.**
+The row and the grant each carry a `schema_version`, but they are
+different KINDS of thing and their versions live in different domains:
+the row's is `s7.authorization_artifact.v2`, the grant's is
+`s7.execution_grant.v2`. A rule demanding field-by-field equality across
+all seventeen would be unsatisfiable — not because anything is wrong,
+but because it would be comparing the version of a record with the
+version of a permission. The field did not exist when v19 wrote that
+rule, so nothing detected the collision.
 
-1. returned grant ≡ committed row, field by field, for all fifteen;
-2. projection hash ≡ `presence_evidence_sha256` in the receipt;
-3. `grant.nonce` ≡ the artifact's nonce ≡ the value bound in `params`;
-4. `grant.action_params_hash` ≡ the hash of the frozen action/params.
+**Exact joins**, all five required:
+
+1. returned grant ≡ committed row, field by field, for the **sixteen**
+   row-backed fields — `action` included, and it is the one that stops a
+   sibling operation being attested;
+2. the row's `schema_version` ≡ `s7.authorization_artifact.v2`,
+   validated — never derived, or the check would assert only that the
+   reconstructor can copy a constant;
+3. the grant's `schema_version` **DERIVED** deterministically as
+   `s7.execution_grant.v2`, never compared to the row's. Deriving it is
+   honest precisely because it is not evidence: it records which
+   permission shape was reconstructed, and the evidence is joins 1, 2
+   and 4;
+4. projection hash ≡ `presence_evidence_sha256` in the receipt;
+5. `grant.nonce` ≡ the artifact's nonce — a fresh per-ceremony S7 value
+   (v34) — and `grant.action_params_hash` ≡ the hash of the frozen
+   action preimage, whose authorization-identity element binds the
+   cutover authorization doc, nonce included, by file hash + binding
+   hash. ~~≡ the value bound in `params`~~ was v11 residue; superseded
+   by the v34 fold below.
 
 **A gap this exposes, stated rather than glossed:** `user_presence` and
 `user_verification` are **not** `S7ExecutionGrant` fields — they exist
@@ -1271,6 +1648,81 @@ only on the artifact and its row. So v13's requirement that both be true
 row. The projection therefore proves *which* authorization was consumed,
 and the row proves *a human touched the key*. Two reads, not one, and the
 design would have silently checked neither had this not been enumerated.
+
+#### v34 fold — join 5's third term was unsatisfiable
+
+**The contradiction, measured.** Three commitments could not all hold:
+(1) `s7_v2_migration.py` gives the v2 table `nonce TEXT NOT NULL UNIQUE`
+plus a unique index, permanently; (2) join 5 as written required the S7
+artifact's nonce ≡ the cutover authorization's nonce; (3) the §"two S7
+consumptions" subsection promises that a failure after early artifact
+consumption but before the link leaves *the same cutover nonce reusable —
+the owner re-taps*. Under (1)+(2), the consumed row keeps the nonce
+forever and the re-tap's fresh artifact can never be inserted. The build
+lane refused to implement it and stopped; this fold records the
+resolution rather than letting the candidate delete durable rows or
+weaken the join.
+
+**Why the fold is engineering, not an authority change.** The frozen
+action preimage already binds the cutover authorization by *file hash +
+binding hash* — the doc's binding covers its nonce and every other field.
+Nonce equality therefore added no semantic content to what the tap
+authorizes; its only effect was to forbid the re-tap the design promises.
+Removing it changes no element of the preimage, no refusal code, no
+executor behavior, and no meaning of the owner's tap.
+
+**Amended shape.** Each S7 ceremony attempt renders with its own fresh S7
+nonce. The cutover authorization binds through `action_params_hash` (the
+authorization-identity element). Refusal 29h (`presence_binding_mismatch`)
+is checked against that preimage join — an artifact whose preimage does
+not name the selected authorization still refuses pre-burn, nonce
+reusable, zero executor calls.
+
+**The 8-step trace:**
+
+1. **Dependency-map.** Join table item 5 (this section); the frozen
+   action preimage (§"The action preimage, frozen"); refusal 29h
+   (§refusal table); §"two S7 consumptions" re-tap promise; recovery
+   clause "always a fresh owner-typed authorization with a fresh nonce"
+   (post-publication side — unchanged and now consistent);
+   `core/governance/s7_v2_migration.py` schema (unchanged);
+   `scripts/cuda_cutover.py` candidate rendering; the 2B contract suite.
+2. **Write-path.** `render_request_statement` receives a fresh S7 nonce
+   per ceremony attempt; the preimage hash is written as before with the
+   authorization-identity hashes.
+3. **Read-path.** 29h validation reads the preimage join;
+   `committed_grant_row_proves_founder_self_modification` reads
+   grant.nonce ≡ row nonce (unchanged); the exclusive link still spends
+   the cutover-doc nonce.
+4. **Test-path.** RED: a re-tap after a spent tap mints a second artifact
+   with a fresh S7 nonce bound to the SAME cutover authorization and
+   consumes cleanly against the untouched UNIQUE constraint. RED: an
+   artifact whose preimage does not bind the selected authorization
+   refuses `presence_binding_mismatch`. Existing grant≡row nonce tests
+   unchanged.
+5. **Fold-summary.** The prose "≡ the value bound in `params`" is false
+   after the fold and is struck in place. The §re-tap promise required no
+   wording change — it becomes satisfiable. No other section asserts
+   nonce equality.
+6. **Cross-reference.** Revision table v34 row; join 5 (amended in
+   place); 29h's description already names binding, not equality.
+7. **RED-test trace.** `test_retap_after_spent_tap_binds_same_authorization_with_fresh_nonce`
+   (second mint+consume succeeds; same authorization-identity hashes;
+   different artifact nonce; UNIQUE intact);
+   `test_artifact_not_binding_selected_authorization_refuses_presence_binding_mismatch`.
+8. **Verify-before-declaring.** Grep this spec for "value bound in" and
+   "nonce ≡" leaves no stale equality clause; grep the implementation for
+   the cutover-doc nonce passed as the rendered-statement nonce
+   (`selected.authorization.nonce` at the `render_request_statement`
+   callsite) finds no remaining use; full gated suites re-run green.
+
+**Owner-review flag.** This fold was recorded by the gate lane under the
+v14 ("v13's ordering was impossible") and v19→v20 ("descriptor-binding
+claim was unimplementable") precedent: an unsatisfiable mechanical clause
+folded without touching ratified authority semantics. If the owner reads
+the struck term as load-bearing rather than residue, the fold reverts and
+the arc blocks on the ruling between a fresh-authorization-per-failure
+model or an amended durable nonce model.
 
 #### Evidence bytes, exactly (v20)
 
@@ -1290,7 +1742,7 @@ pre-consumption snapshot:
 | check | requirement |
 |---|---|
 | cardinality | exactly **one** row for `artifact_id` |
-| grant fields | exact type and value equality across all fifteen |
+| grant fields | exact type and value equality across the **sixteen** row-backed fields (v28); the grant's `schema_version` is derived, not compared — see ITEM 4 |
 | presence | `user_presence == 1` **as an integer**, not truthy |
 | verification | `user_verification == 1` **as an integer** |
 | binding | `consumed_by_request_id == request_id` |
@@ -1316,9 +1768,11 @@ opens its own connection **by pathname**
 so it would discard any anchored connection, re-resolve the path, and
 collapse failures. Frozen:
 
-* a typed `CommittedGrantRow` result carrying all fifteen fields plus
+* a typed `CommittedGrantRow` result carrying the **sixteen** row-backed
+  fields (v28 — `action` included) plus the row's own `schema_version`,
   `user_presence`, `user_verification`, `created_at`, `expires_at`,
-  `consumed_by_request_id`;
+  `consumed_by_request_id`. The row's version is carried so join 2 can
+  VALIDATE it; the grant's version is not a row field and is derived;
 * a **post-commit reader** that uses **either** the consuming RW
   connection *strictly after its commit*, **or** a freshly opened RO
   connection after consumption returns. A previously-used RO connection
@@ -1561,40 +2015,39 @@ ruled `self_modification`, which **is** voice-seat guarded, so minting
 goes through the guarded store. Retained struck-through rather than
 deleted, because it was the load-bearing assumption of v11's S7 section.
 
-#### TWO single-use resources — the new ordering question
+#### SUPERSEDED (v13; replaced by v14/v15) — the ordering question
 
-This is the substantive new seam, and it did not exist before the ruling.
-There are now **two** one-use tokens:
+This subsection replaces, rather than silently deletes, v13's stale
+ordering. v13 modeled only the cutover nonce and S7 artifact and therefore
+called artifact consumption the last pre-burn act. The authoritative
+v14/v15 sequence above corrected that account: there are **two S7
+consumptions** around receipt staging.
 
-1. the **cutover nonce**, spent by the exclusive link;
-2. the **S7 artifact**, spent by `consumed_at`.
+1. `consume_for_execution()` consumes the **S7 artifact early**, before
+   receipt encoding, and mints the grant whose canonical hash the receipt
+   carries.
+2. `consume_execution_grant_for_action(...)` consumes the **action-edge
+   grant use as the last pre-burn act**, applying that exact grant to the
+   cutover action.
 
-Their order decides what a partial failure means:
+The cutover nonce is then spent by the exclusive link. A failure after the
+early artifact consumption but before the link leaves the tap spent and
+the cutover nonce reusable; the owner re-taps and nothing was burned.
+Consuming the artifact only after the link remains unsafe because a
+mutation would have proceeded beside a replayable tap.
 
-| order | failure between them | verdict |
-|---|---|---|
-| consume S7 **after** the link | burn published, tap still unconsumed | **UNSAFE** — a mutation proceeded on a replayable tap |
-| consume S7 **before** the link | tap spent, cutover nonce reusable | **SAFE** — owner re-taps; nothing mutated |
+#### The deliberate pre-burn S7 transitions, named
 
-**Frozen: consume the S7 artifact as the LAST pre-burn act**, immediately
-before the eligibility recheck and the link. The failure mode is a spent
-tap on a burn that never happened — an inconvenience, requiring a fresh
-tap — and never a mutation authorized by a tap that could be replayed.
+Both consumptions are deliberate one-use state transitions on a path this
+design otherwise forbids writes on. The first consumes the artifact early
+and mints the grant; the second consumes the action-edge grant use as the
+last pre-burn act. Their failures are pre-burn refusals.
 
-#### The one deliberate pre-burn write, named
-
-Consuming the artifact is a **write**, on a path this design otherwise
-forbids writes on. That is not an oversight and it is not in tension with
-v10's ruling: **inspection** is read-only (the collector never
-instantiates the bootstrap store, never migrates, never commits);
-**consumption** is a deliberate one-use state transition that must happen
-before the thing it authorizes.
-
-It is called out explicitly here because "no mutation before the burn" is
-a rule this design has enforced for eleven revisions, and an exception
-that is not named is an exception that later gets forgotten. The
-exception is exactly one write, to exactly one row, as the last pre-burn
-act, and its failure is a pre-burn refusal.
+This is not in tension with v10's ruling: **inspection** remains read-only
+(the collector never instantiates the bootstrap store, never migrates,
+never commits). The superseded v13 claim of exactly one write to exactly
+one row as the last pre-burn act no longer describes the authoritative
+sequence.
 
 **R4 — RULED (v13), retained historically.** ~~Carried for review: is a
 spent tap on a failed burn the acceptable cost, or should the artifact
@@ -1675,7 +2128,7 @@ Two new fields, both inside the binding:
 | field | rule |
 |---|---|
 | `presence_mode` | **cutover: `founder_webauthn` ONLY.** `procedural` remains a receipt-type value for other callers and is unreachable from any cutover path (Part 3 ruling) |
-| `presence_evidence_sha256` | **mandatory** — the canonical **grant-projection** hash (item 4). ~~the authorization-artifact hash~~ is superseded: that artifact has no canonical binding and its row mutates at consumption |
+| `presence_evidence_sha256` | **mandatory** — the canonical **grant-projection** hash (item 4), and specifically the **v2, seventeen-field** projection (v28). A v1 projection hash is NOT acceptable presence evidence: it omits the `action`, so it attests that *an* authorization was consumed without attesting *which*, which is exactly the substitution S7 action-binding exists to prevent. ~~the authorization-artifact hash~~ is superseded: that artifact has no canonical binding and its row mutates at consumption |
 
 The second field is the point. A bare `founder_webauthn` string is
 **descriptive, not proof** — the same error as A2, where a self-chosen
@@ -1797,8 +2250,9 @@ claim to.
 
 ## A7. Total failure table — exact codes
 
-Families are not closed sets. Every concrete emitted code, each assigned a
-side of the linearization point:
+Families are not closed sets. Every concrete emitted code is assigned a
+side of the linearization point. Two R8-retained tuple-only codes are also
+listed and explicitly marked as having no producer:
 
 | # | failure | side | nonce | executor | exact code |
 |---|---|---|---|---|---|
@@ -1831,7 +2285,14 @@ side of the linearization point:
 | 27 | any S-join | pre | reusable | no | `join_mismatch` |
 | 28 | chronology | pre | reusable | no | `chronology_violation` |
 | 29 | clock or boot read | pre | reusable | no | `edge_state_unreadable` |
-| 30 | `prepare()` failure | pre | reusable | no | `preparation_failed` |
+| 29a1 | consultation request binding invalid or ask unavailable | pre | reusable | **zero** | `consultation_unavailable` |
+| 29a2 | response absent, wrong type, oversized, or not UTF-8 | pre | reusable | **zero** | `response_unreadable` |
+| 29a3 | consultation explicitly withdrawn | pre | reusable | **zero** | `consultation_withdrawn` |
+| 29a4 | consultation evidence cannot be durably persisted | pre | reusable | **zero** | `bundle_unreservable` |
+| 29a5 | RETAINED IN THE FROZEN TUPLE WITH NO PRODUCER UNDER R8 | n/a | n/a | n/a | `semantic_reader_failed` |
+| 29a6 | RETAINED IN THE FROZEN TUPLE WITH NO PRODUCER UNDER R8 | n/a | n/a | n/a | `objection_recorded` |
+| 30 | bound `prepare()` returns a value that is not `PreparedCutover` | pre | reusable | no | `preparation_failed` |
+| 30a | no runtime preparer is bound | pre | reusable | no | `preparation_unavailable` |
 | 29b | founder credential enrolled, no valid assertion | pre | reusable | **zero** | `owner_presence_unattested` |
 | 29c | presence store missing/unreadable | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29d | presence store schema drift | pre | reusable | **zero** | `presence_store_schema_drift` |
@@ -1847,9 +2308,9 @@ side of the linearization point:
 | 29g4 | S7 store absent (opener must not create) | pre | reusable | **zero** | `presence_store_unavailable` |
 | 29g5 | guarded mint failed / invalid artifact | pre | reusable | **zero** | `presence_mint_failed` |
 | 29g6 | `consume_for_execution` did not commit | pre | reusable | **zero** | `presence_consumption_failed` |
-| 29g7 | grant projection unreconstructible from the committed row | pre | reusable | **zero** | `presence_grant_unprojectable` |
+| 29g7 | grant projection unreconstructible from the committed row — v28: the **complete v2** reconstruction, meaning any of the sixteen row-backed fields missing or unequal, OR the row's `schema_version` not `s7.authorization_artifact.v2`. A partial reconstruction is a FAILURE, not a degraded success | pre | reusable | **zero** | `presence_grant_unprojectable` |
 | 29g8 | action-edge consumption returned false | pre | reusable | **zero** | `presence_action_unauthorized` |
-| 29h | S7 artifact does not bind the cutover nonce | pre | reusable | **zero** | `presence_binding_mismatch` |
+| 29h | S7 artifact's frozen action preimage does not bind the selected cutover authorization identity | pre | reusable | **zero** | `presence_binding_mismatch` |
 | 29i | `user_presence` or `user_verification` false | pre | reusable | **zero** | `presence_not_verified` |
 | 29j | S7 artifact consumption write failed | pre | reusable | **zero** | `presence_consumption_failed` |
 | 30b | receipt construct/encode/round-trip | pre | reusable | **zero** | `burn_receipt_unencodable` |
@@ -1872,6 +2333,14 @@ side of the linearization point:
 | 43 | unexpected internal, pre-link | pre | reusable | **zero** | `consumer_internal_pre` |
 | 44 | unexpected internal, post-link **before** `begin()` | post | spent | **zero** | `consumer_internal_post_pre_begin` |
 | 45 | unexpected internal, **inside/after** `begin()` | post | spent | **one** | `consumer_internal_executor` |
+
+`preparation_failed` is intentionally narrower than its name suggests: it
+fires **only** when a bound preparer returns the wrong type. Arbitrary
+exceptions raised during preparation are not mapped to that code.
+
+**OWED GAP:** preparation currently has no runtime positive-control
+fixture; its present test coverage is structural. This reconciliation does
+not manufacture one.
 
 Rows 44–45 split v3's row 38, which left executor state "unknown". An
 unknown executor state is exactly the thing a terminal refusal must not

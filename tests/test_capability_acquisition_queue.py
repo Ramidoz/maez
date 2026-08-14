@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tests.s7_store_fixture import fresh_store_at
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -735,6 +736,7 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
                 request_id=card.request_id,
                 request_envelope_hash=s7.work_request_envelope_hash(env),
                 rendered_text_hash=rendered.rendered_text_hash,
+                action=rendered.action,
                 action_params_hash=params_hash,
                 precondition_hash=env.precondition_hash,
                 authority_context_hash=s7.authority_context_hash(authority),
@@ -750,7 +752,7 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
                 expires_at="2026-05-17T17:00:00+00:00",
                 consumed_at=None,
             )
-            auth_store = s7.S7AuthorizationStore(Path(td) / "s7_authorization.db")
+            auth_store = fresh_store_at(Path(td) / "s7_authorization.db")
             auth_store.put(artifact)
 
             def consume_capability_artifact(transition):

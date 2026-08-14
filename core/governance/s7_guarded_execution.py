@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import InitVar, dataclass, replace
+import hashlib
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
+from core.governance import anchored_io as s7_io
 from core.governance import operator_user_boundary as s7
 from core.routing import model_config
 
@@ -63,6 +67,395 @@ S7_VOICE_SEMANTIC_READER_PROMPT_PATH = (
     _REPO_ROOT / "prompts" / "s7.voice.semantic_reader_v1.md"
 )
 
+R11_EXEMPTION_EVIDENCE_TABLE = "s7_consultation_exemption_evidence_v1"
+R11_EXEMPTION_EVIDENCE_SCHEMA = "s7.consultation_exemption_evidence.r11.v1"
+R11_EXEMPTION_EVIDENCE_KIND = "consultation_exemption"
+_R11_EXEMPTION_EVIDENCE_DDL = f"""
+CREATE TABLE {R11_EXEMPTION_EVIDENCE_TABLE} (
+    artifact_id TEXT PRIMARY KEY,
+    evidence_kind TEXT NOT NULL CHECK (evidence_kind = 'consultation_exemption'),
+    ruling_id TEXT NOT NULL CHECK (ruling_id = 'R11'),
+    schema_version TEXT NOT NULL
+        CHECK (schema_version = 's7.consultation_exemption_evidence.r11.v1'),
+    exemption_schema TEXT NOT NULL
+        CHECK (exemption_schema = 's7.consultation_exemption.r11.v1'),
+    quality_evidence_sha256 TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action = 'model_routing.cutover_cuda'),
+    request_envelope_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    projection_json TEXT NOT NULL,
+    projection_sha256 TEXT NOT NULL,
+    artifact_binding_sha256 TEXT NOT NULL UNIQUE,
+    recorded_at TEXT NOT NULL
+)
+"""
+
+
+def _r11_exemption_evidence_contract(
+    connection: sqlite3.Connection,
+) -> tuple[object, ...] | None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (R11_EXEMPTION_EVIDENCE_TABLE,),
+    ).fetchone()
+    if row is None:
+        return None
+    sql = re.sub(r"\s+", " ", str(row[0])).strip().rstrip(";")
+    columns = tuple(
+        tuple(item)
+        for item in connection.execute(
+            f"PRAGMA table_info({R11_EXEMPTION_EVIDENCE_TABLE})"
+        )
+    )
+    indexes = tuple(
+        sorted(
+            tuple(item)
+            for item in connection.execute(
+                f"PRAGMA index_list({R11_EXEMPTION_EVIDENCE_TABLE})"
+            )
+        )
+    )
+    return (sql, columns, indexes)
+
+
+def _expected_r11_exemption_evidence_contract() -> tuple[object, ...]:
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.execute(_R11_EXEMPTION_EVIDENCE_DDL)
+        contract = _r11_exemption_evidence_contract(connection)
+    assert contract is not None
+    return contract
+
+
+def _provision_r11_exemption_evidence_at(*, store_dir_fd: int) -> None:
+    """Explicit setup authority; open/mint paths only verify this table."""
+
+    store_fd = os.open(
+        "ceremony.sqlite3",
+        os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=store_dir_fd,
+    )
+    connection = None
+    try:
+        connection = s7._open_s7_connection_from_held_store(
+            dir_fd=store_dir_fd,
+            store_fd=store_fd,
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        s7._verify_held_store_activation(store_dir_fd, store_fd, connection)
+        challenge_columns = {
+            str(row[1]): tuple(row)
+            for row in connection.execute(
+                "PRAGMA table_info(s7_ceremony_challenges)"
+            )
+        }
+        if not challenge_columns:
+            raise ValueError("R11 provisioning requires the ceremony challenge table")
+        projection_column = challenge_columns.get(
+            "consultation_exemption_projection_hash"
+        )
+        if projection_column is None:
+            connection.execute(
+                "ALTER TABLE s7_ceremony_challenges ADD COLUMN "
+                "consultation_exemption_projection_hash TEXT"
+            )
+        elif projection_column[2:] != ("TEXT", 0, None, 0):
+            raise ValueError("R11 challenge projection column contract drifted")
+        actual = _r11_exemption_evidence_contract(connection)
+        if actual is None:
+            connection.execute(_R11_EXEMPTION_EVIDENCE_DDL)
+        elif actual != _expected_r11_exemption_evidence_contract():
+            raise ValueError(
+                "R11 exemption evidence table does not match its frozen contract"
+            )
+        if (
+            _r11_exemption_evidence_contract(connection)
+            != _expected_r11_exemption_evidence_contract()
+        ):
+            raise ValueError("R11 exemption evidence provisioning failed")
+        projection_column = next(
+            (
+                tuple(row)
+                for row in connection.execute(
+                    "PRAGMA table_info(s7_ceremony_challenges)"
+                )
+                if row[1] == "consultation_exemption_projection_hash"
+            ),
+            None,
+        )
+        if projection_column is None or projection_column[2:] != (
+            "TEXT",
+            0,
+            None,
+            0,
+        ):
+            raise ValueError("R11 challenge projection provisioning failed")
+        connection.commit()
+        os.fsync(store_fd)
+        os.fsync(store_dir_fd)
+    except BaseException:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        os.close(store_fd)
+
+
+def provision_r11_exemption_evidence() -> None:
+    """Provision the canonical store through a zero-parameter setup seam."""
+
+    with s7_io._open_canonical_s7_dir() as store_dir_fd:
+        _provision_r11_exemption_evidence_at(store_dir_fd=store_dir_fd)
+
+
+def _r11_artifact_projection(
+    artifact: s7.S7AuthorizationArtifact,
+    *,
+    exemption_projection_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact.artifact_id,
+        "request_id": artifact.request_id,
+        "request_envelope_hash": artifact.request_envelope_hash,
+        "rendered_text_hash": artifact.rendered_text_hash,
+        "action": artifact.action,
+        "action_params_hash": artifact.action_params_hash,
+        "precondition_hash": artifact.precondition_hash,
+        "authority_context_hash": artifact.authority_context_hash,
+        "derived_work_class": artifact.derived_work_class,
+        "derived_aggregation_group": artifact.derived_aggregation_group,
+        "nonce": artifact.nonce,
+        "credential_ref": artifact.credential_ref,
+        "auth_method": artifact.auth_method,
+        "grant_source": artifact.grant_source,
+        "user_presence": artifact.user_presence,
+        "user_verification": artifact.user_verification,
+        "created_at": s7._timestamp_text(artifact.created_at, field="created_at"),
+        "expires_at": s7._timestamp_text(artifact.expires_at, field="expires_at"),
+        "ceremony_kind": artifact.ceremony_kind,
+        "schema_version": artifact.schema_version,
+        "exemption_projection_sha256": exemption_projection_sha256,
+    }
+
+
+def _insert_r11_exemption_evidence(
+    connection: sqlite3.Connection,
+    *,
+    artifact: s7.S7AuthorizationArtifact,
+    consultation_exemption: Any,
+) -> None:
+    if (
+        _r11_exemption_evidence_contract(connection)
+        != _expected_r11_exemption_evidence_contract()
+    ):
+        raise ValueError(
+            "R11 exemption evidence table is absent or does not match its contract"
+        )
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='s7_voice_bundle_uses'"
+    ).fetchone() is not None:
+        collision = connection.execute(
+            "SELECT 1 FROM s7_voice_bundle_uses WHERE artifact_id = ? LIMIT 1",
+            (artifact.artifact_id,),
+        ).fetchone()
+        if collision is not None:
+            raise ValueError(
+                "R11 artifact cannot also carry voice-bundle evidence"
+            )
+    projection = consultation_exemption.projection()
+    projection_json = json.dumps(
+        projection,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    projection_sha256 = s7.canonical_hash(projection)
+    artifact_binding_sha256 = s7.canonical_hash(
+        _r11_artifact_projection(
+            artifact,
+            exemption_projection_sha256=projection_sha256,
+        )
+    )
+    connection.execute(
+        f"""
+        INSERT INTO {R11_EXEMPTION_EVIDENCE_TABLE} (
+            artifact_id, evidence_kind, ruling_id, schema_version,
+            exemption_schema, quality_evidence_sha256, action,
+            request_envelope_hash, action_params_hash, projection_json,
+            projection_sha256, artifact_binding_sha256, recorded_at
+        ) VALUES (?, ?, 'R11', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            artifact.artifact_id,
+            R11_EXEMPTION_EVIDENCE_KIND,
+            R11_EXEMPTION_EVIDENCE_SCHEMA,
+            str(projection["schema"]),
+            consultation_exemption.quality_evidence_sha256,
+            artifact.action,
+            artifact.request_envelope_hash,
+            artifact.action_params_hash,
+            projection_json,
+            projection_sha256,
+            artifact_binding_sha256,
+            s7._timestamp_text(artifact.created_at, field="created_at"),
+        ),
+    )
+
+
+def revalidate_r11_exemption_for_consumption(
+    *,
+    connection: sqlite3.Connection,
+    grant: s7.S7ExecutionGrant,
+    durable_cutover_selection: Any,
+) -> Any:
+    """Re-read R11 evidence inside the consuming transaction or refuse."""
+
+    s7._require_verified_held_connection(connection)
+    if connection.in_transaction is not True:
+        raise ValueError("R11 evidence must be checked before consume commit")
+    if type(grant) is not s7.S7ExecutionGrant:
+        raise ValueError("R11 consumption requires the freshly minted grant")
+    if (
+        _r11_exemption_evidence_contract(connection)
+        != _expected_r11_exemption_evidence_contract()
+    ):
+        raise ValueError("R11 exemption evidence is absent or malformed")
+    try:
+        evidence_rows = connection.execute(
+            f"""
+            SELECT artifact_id, evidence_kind, ruling_id, schema_version,
+                   exemption_schema, quality_evidence_sha256, action,
+                   request_envelope_hash, action_params_hash, projection_json,
+                   projection_sha256, artifact_binding_sha256, recorded_at
+            FROM {R11_EXEMPTION_EVIDENCE_TABLE}
+            WHERE artifact_id = ?
+            """,
+            (grant.artifact_id,),
+        ).fetchall()
+        artifact_rows = connection.execute(
+            """
+            SELECT artifact_id, request_id, request_envelope_hash,
+                   rendered_text_hash, action_params_hash, precondition_hash,
+                   authority_context_hash, action, derived_work_class,
+                   derived_aggregation_group, nonce, credential_ref,
+                   auth_method, grant_source, user_presence, user_verification,
+                   created_at, expires_at, consumed_at, schema_version,
+                   ceremony_kind, consumed_by_request_id
+            FROM s7_authorization_artifacts_v2
+            WHERE artifact_id = ?
+            """,
+            (grant.artifact_id,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError("R11 exemption evidence is unreadable") from exc
+    if len(evidence_rows) != 1 or len(artifact_rows) != 1:
+        raise ValueError("R11 exemption evidence is absent or ambiguous")
+    evidence = evidence_rows[0]
+    stored = artifact_rows[0]
+    try:
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id=str(stored[0]),
+            request_id=str(stored[1]),
+            request_envelope_hash=str(stored[2]),
+            rendered_text_hash=str(stored[3]),
+            action_params_hash=str(stored[4]),
+            precondition_hash=str(stored[5]),
+            authority_context_hash=str(stored[6]),
+            action=str(stored[7]),
+            derived_work_class=str(stored[8]),
+            derived_aggregation_group=str(stored[9]),
+            nonce=str(stored[10]),
+            credential_ref=str(stored[11]),
+            auth_method=str(stored[12]),
+            grant_source=str(stored[13]),
+            user_presence=bool(stored[14]),
+            user_verification=bool(stored[15]),
+            created_at=str(stored[16]),
+            expires_at=str(stored[17]),
+            consumed_at=None if stored[18] is None else str(stored[18]),
+            schema_version=str(stored[19]),
+            ceremony_kind=str(stored[20]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("R11 artifact row is malformed") from exc
+    if (
+        stored[21] != artifact.request_id
+        or artifact.artifact_id != grant.artifact_id
+        or artifact.request_id != grant.request_id
+        or artifact.request_envelope_hash != grant.request_envelope_hash
+        or artifact.rendered_text_hash != grant.rendered_text_hash
+        or artifact.action_params_hash != grant.action_params_hash
+        or artifact.precondition_hash != grant.precondition_hash
+        or artifact.authority_context_hash != grant.authority_context_hash
+        or artifact.action != grant.action
+        or artifact.derived_work_class != grant.derived_work_class
+        or artifact.derived_aggregation_group != grant.derived_aggregation_group
+        or artifact.nonce != grant.nonce
+        or artifact.credential_ref != grant.credential_ref
+        or artifact.auth_method != grant.auth_method
+        or artifact.grant_source != grant.grant_source
+        or artifact.consumed_at != grant.consumed_at
+        or artifact.ceremony_kind != grant.ceremony_kind
+    ):
+        raise ValueError("R11 evidence is not bound to the consuming grant")
+    try:
+        projection = json.loads(str(evidence[9]))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("R11 exemption projection is malformed") from exc
+    canonical_projection = json.dumps(
+        projection,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    from core.governance import s7_consultation_exemption as r11
+
+    exemption = r11._exemption_from_persisted_projection(projection)
+    if exemption is None:
+        raise ValueError("R11 exemption projection is not canonical")
+    projection_sha256 = s7.canonical_hash(projection)
+    expected_binding = s7.canonical_hash(
+        _r11_artifact_projection(
+            artifact,
+            exemption_projection_sha256=projection_sha256,
+        )
+    )
+    if (
+        str(evidence[0]) != artifact.artifact_id
+        or str(evidence[1]) != R11_EXEMPTION_EVIDENCE_KIND
+        or str(evidence[2]) != r11.R11_RULING_ID
+        or str(evidence[3]) != R11_EXEMPTION_EVIDENCE_SCHEMA
+        or str(evidence[4]) != r11.R11_EXEMPTION_SCHEMA
+        or str(evidence[5]) != exemption.quality_evidence_sha256
+        or str(evidence[6]) != artifact.action
+        or str(evidence[7]) != artifact.request_envelope_hash
+        or str(evidence[8]) != artifact.action_params_hash
+        or str(evidence[9]) != canonical_projection
+        or str(evidence[10]) != projection_sha256
+        or str(evidence[11]) != expected_binding
+        or str(evidence[12]) != artifact.created_at
+    ):
+        raise ValueError("R11 exemption evidence binding is invalid")
+    voice_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='s7_voice_bundle_uses'"
+    ).fetchone()
+    if voice_table is not None and connection.execute(
+        "SELECT 1 FROM s7_voice_bundle_uses WHERE artifact_id = ? LIMIT 1",
+        (artifact.artifact_id,),
+    ).fetchone() is not None:
+        raise ValueError("R11 artifact also carries voice-bundle evidence")
+    if not r11.exemption_admits_for_artifact(
+        artifact=artifact,
+        exemption=exemption,
+        durable_cutover_selection=durable_cutover_selection,
+        ledger_writes_enabled=r11.born_by_any_signal(),
+    ):
+        raise ValueError("R11 exemption grounds no longer admit at consumption")
+    return exemption
+
 
 def _hash_file_bytes(path: Path) -> str:
     return s7.canonical_hash(path.read_bytes())
@@ -106,7 +499,21 @@ def _assert_s7_reviewed_prompt_files_unchanged() -> None:
 _assert_s7_reviewed_prompt_files_unchanged()
 
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
+_EMPTY_RAW_RESPONSE_HASH = s7.canonical_hash("")
+_EMPTY_EXACT_RESPONSE_SHA256 = hashlib.sha256(b"").hexdigest()
 _VALIDATOR_TOKEN = object()
+_RESPONSE_CAPTURE_RECEIPT_TOKEN = object()
+
+S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA = "s7.voice_source_bundle.v1"
+S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA = "s7.voice_source_bundle.v2"
+S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA = "s7.response_capture_receipt.v1"
+_R8_CUTOVER_ACTION = "model_routing.cutover_cuda"
+_V1_VOICE_BUNDLE_TABLE = "s7_voice_consultation_bundles"
+_V2_VOICE_BUNDLE_TABLE = "s7_voice_source_bundles_v2"
+
+
+class S7VoiceSourceBundleEvidenceInvalid(ValueError):
+    """Durable voice row is absent or cannot be decoded as its sealed schema."""
 
 
 def _validate_hash64(value: str, *, field: str) -> None:
@@ -456,6 +863,110 @@ class S7VoiceSourceBundleValidationResult:
             raise ValueError("failed source-bundle validation must carry a failure reason")
 
 
+@dataclass(frozen=True, init=False)
+class S7VoiceSourceBundleValidationResultV2:
+    """Validator-produced result bound to durable versioned voice evidence."""
+
+    status: str
+    source_bundle_valid: bool
+    mint_eligible: bool
+    authority_projection: str
+    failure_reason_code: str | None
+    action: str | None
+    schema_version: str
+    source_bundle_hash: str
+    binding_hash: str
+
+    def __init__(
+        self,
+        *,
+        status: str,
+        source_bundle_valid: bool,
+        mint_eligible: bool,
+        authority_projection: str,
+        failure_reason_code: str | None,
+        action: str | None,
+        schema_version: str,
+        source_bundle_hash: str,
+        binding_hash: str,
+        _validator_token: object | None = None,
+    ) -> None:
+        if _validator_token is not _VALIDATOR_TOKEN:
+            raise ValueError("s7_validation_result_forged")
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "source_bundle_valid", source_bundle_valid)
+        object.__setattr__(self, "mint_eligible", mint_eligible)
+        object.__setattr__(self, "authority_projection", authority_projection)
+        object.__setattr__(self, "failure_reason_code", failure_reason_code)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "source_bundle_hash", source_bundle_hash)
+        object.__setattr__(self, "binding_hash", binding_hash)
+        object.__setattr__(self, "_token_verified", True)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        s7._validate_closed_value(
+            self.status,
+            VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES,
+            "voice source bundle validation status",
+        )
+        s7._validate_closed_value(
+            self.authority_projection,
+            VOICE_SOURCE_BUNDLE_AUTHORITY_PROJECTIONS,
+            "voice source bundle authority projection",
+        )
+        if type(self.source_bundle_valid) is not bool:
+            raise ValueError("source_bundle_valid must be bool")
+        if type(self.mint_eligible) is not bool:
+            raise ValueError("mint_eligible must be bool")
+        if self.failure_reason_code is not None and (
+            type(self.failure_reason_code) is not str
+            or not self.failure_reason_code
+        ):
+            raise ValueError("failure_reason_code must be a non-empty str when present")
+        if self.schema_version not in {
+            S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+            S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+        }:
+            raise ValueError("unknown S7 voice source bundle schema_version")
+        if self.schema_version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+            if self.action is not None or self.mint_eligible is True:
+                raise ValueError("v1 voice source bundles are audit-only")
+        else:
+            s7.validate_action_literal(self.action)
+        _validate_hash64(self.source_bundle_hash, field="source_bundle_hash")
+        _validate_hash64(self.binding_hash, field="binding_hash")
+        if self.mint_eligible is True and (
+            self.status != "valid_absent"
+            or self.source_bundle_valid is not True
+            or self.authority_projection != "valid_absent"
+            or self.failure_reason_code is not None
+            or self.schema_version != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+        ):
+            raise ValueError("mint-eligible voice validation is not a complete success")
+        if self.source_bundle_valid is False and self.mint_eligible is True:
+            raise ValueError("an invalid voice source bundle cannot be mint-eligible")
+        if self.status == "valid_absent" and (
+            self.source_bundle_valid is not True
+            or self.mint_eligible is not True
+            or self.authority_projection != "valid_absent"
+            or self.failure_reason_code is not None
+        ):
+            raise ValueError("valid_absent requires the complete successful tuple")
+        if self.status == "blocking_present" and (
+            self.source_bundle_valid is not True
+            or self.mint_eligible is not False
+            or self.authority_projection != "grounded_refusal"
+            or self.failure_reason_code is not None
+        ):
+            raise ValueError("blocking_present requires the grounded-refusal tuple")
+        if self.status not in {"valid_absent", "blocking_present"} and (
+            self.mint_eligible is True or self.failure_reason_code is None
+        ):
+            raise ValueError("failed voice validation must be unmintable with a reason")
+
+
 @dataclass(frozen=True)
 class S7VoiceSourceBundleHashBinding:
     """Expected exact-change hashes the private voice bundle must be bound to."""
@@ -657,7 +1168,7 @@ def persist_s7_voice_source_bundle_for_material(
     semantic_reader_attempt: S7SemanticReaderAttemptEvidence,
     now: str,
 ) -> S7VoiceSourceBundleHashBinding:
-    """Persist the private source bundle for an already-produced voice fact."""
+    """Persist one action-bound v2 bundle for an already-produced voice fact."""
 
     if not isinstance(raw_response_text, str) or raw_response_text == "":
         raise ValueError("raw_response_text is required")
@@ -670,9 +1181,15 @@ def persist_s7_voice_source_bundle_for_material(
         authority_context=authority_context,
         precondition_hash=precondition_hash,
     )
-    bundle_store = S7VoiceConsultationBundleStore(db_path)
-    if bundle_store.get_for_source_ref(binding.source_ref_hash) is not None:
+    authorization_store = s7.S7AuthorizationStore(db_path)
+    with authorization_store.anchored_transaction() as conn:
+        existing = conn.execute(
+            f"SELECT 1 FROM {_V2_VOICE_BUNDLE_TABLE} WHERE source_ref_hash = ?",
+            (binding.source_ref_hash,),
+        ).fetchone()
+    if existing is not None:
         return binding
+    bundle_store = S7VoiceConsultationBundleStore(db_path)
     bundle_use_store = S7VoiceBundleUseStore(db_path)
     attempt_store = S7SemanticReaderAttemptStore(db_path)
     attempt_store.put(semantic_reader_attempt)
@@ -699,34 +1216,39 @@ def persist_s7_voice_source_bundle_for_material(
         == "blocking_signal_present"
         and semantic_reader_attempt.grounding_response_span_quote is not None
     )
-    bundle_store.put_bundle(
-        S7VoiceConsultationBundle(
-            source_ref_hash=binding.source_ref_hash,
-            request_id=binding.request_id,
-            consultation_id=binding.consultation_id,
-            request_envelope_hash=binding.request_envelope_hash,
-            rendered_text_hash=binding.rendered_text_hash,
-            action_params_hash=binding.action_params_hash,
-            precondition_hash=binding.precondition_hash,
-            authority_context_hash=binding.authority_context_hash,
-            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-            rendered_prompt_ref=rendered_prompt_ref,
-            rendered_prompt_hash=binding.rendered_prompt_hash,
-            mutation_preview_hash=binding.mutation_preview_hash,
-            rollback_plan_ref=binding.rollback_plan_ref,
-            context_manifest_ref=manifest.manifest_id,
-            context_manifest_hash=binding.context_manifest_hash,
-            runtime_identity_hash=binding.runtime_identity_hash,
-            model_routing_identity_hash=binding.model_routing_identity_hash,
-            model_config_hash=binding.model_config_hash,
-            raw_response_ref=raw_response_ref,
-            raw_response_hash=s7.canonical_hash(raw_response_text),
-            semantic_reader_attempt_hash=semantic_reader_attempt.semantic_reader_attempt_hash,
-            expires_at=rendered_statement.expires_at,
-            authority_class="authoritative" if blocking else "none",
-            has_grounded_semantic_blocking_signal=blocking,
-        )
+    bundle = S7VoiceConsultationBundle(
+        source_ref_hash=binding.source_ref_hash,
+        request_id=binding.request_id,
+        consultation_id=binding.consultation_id,
+        request_envelope_hash=binding.request_envelope_hash,
+        rendered_text_hash=binding.rendered_text_hash,
+        action_params_hash=binding.action_params_hash,
+        precondition_hash=binding.precondition_hash,
+        authority_context_hash=binding.authority_context_hash,
+        maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+        rendered_prompt_ref=rendered_prompt_ref,
+        rendered_prompt_hash=binding.rendered_prompt_hash,
+        mutation_preview_hash=binding.mutation_preview_hash,
+        rollback_plan_ref=binding.rollback_plan_ref,
+        context_manifest_ref=manifest.manifest_id,
+        context_manifest_hash=binding.context_manifest_hash,
+        runtime_identity_hash=binding.runtime_identity_hash,
+        model_routing_identity_hash=binding.model_routing_identity_hash,
+        model_config_hash=binding.model_config_hash,
+        raw_response_ref=raw_response_ref,
+        raw_response_hash=s7.canonical_hash(raw_response_text),
+        semantic_reader_attempt_hash=semantic_reader_attempt.semantic_reader_attempt_hash,
+        expires_at=rendered_statement.expires_at,
+        authority_class="authoritative" if blocking else "none",
+        has_grounded_semantic_blocking_signal=blocking,
+        action=rendered_statement.action,
     )
+    bundle = replace(
+        bundle,
+        source_bundle_hash=s7_voice_consultation_bundle_hash(bundle),
+    )
+    with authorization_store.anchored_transaction() as conn:
+        put_voice_source_bundle_v2(bundle=bundle, conn=conn)
     bundle_use_store.put_unreserved(
         S7VoiceBundleUse.new_unreserved(
             request_id=binding.request_id,
@@ -736,6 +1258,148 @@ def persist_s7_voice_source_bundle_for_material(
         )
     )
     return binding
+
+
+def _response_capture_receipt_fields(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_sha256: str,
+    captured_at: str,
+) -> dict[str, str]:
+    return {
+        "attempt_identity": attempt_identity,
+        "captured_at": captured_at,
+        "consultation_id": consultation_id,
+        "raw_response_ref": raw_response_ref,
+        "raw_response_sha256": raw_response_sha256,
+        "request_id": request_id,
+    }
+
+
+def _response_capture_receipt_binding_sha256(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_sha256: str,
+    captured_at: str,
+) -> str:
+    return s7.canonical_hash({
+        "schema": S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA,
+        "fields": _response_capture_receipt_fields(
+            request_id=request_id,
+            consultation_id=consultation_id,
+            attempt_identity=attempt_identity,
+            raw_response_ref=raw_response_ref,
+            raw_response_sha256=raw_response_sha256,
+            captured_at=captured_at,
+        ),
+    })
+
+
+@dataclass(frozen=True)
+class S7ResponseCaptureReceipt:
+    """Content-blind proof that exact response bytes survived a durable capture."""
+
+    schema_version: str
+    request_id: str
+    consultation_id: str
+    attempt_identity: str
+    raw_response_ref: str
+    raw_response_sha256: str
+    captured_at: str
+    binding_sha256: str
+    _producer_token: InitVar[object | None] = None
+
+    def __post_init__(self, _producer_token: object | None) -> None:
+        if _producer_token is not _RESPONSE_CAPTURE_RECEIPT_TOKEN:
+            raise ValueError("response capture receipts require their dedicated producer")
+        if self.schema_version != S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA:
+            raise ValueError("unknown response capture receipt schema_version")
+        for field_name in (
+            "request_id",
+            "consultation_id",
+            "raw_response_ref",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not str or not value:
+                raise ValueError(f"response capture receipt {field_name} is required")
+        _validate_hash64(self.attempt_identity, field="attempt_identity")
+        _validate_hash64(self.raw_response_sha256, field="raw_response_sha256")
+        s7._timestamp_text(self.captured_at, field="captured_at")
+        _validate_hash64(self.binding_sha256, field="binding_sha256")
+        expected = _response_capture_receipt_binding_sha256(
+            request_id=self.request_id,
+            consultation_id=self.consultation_id,
+            attempt_identity=self.attempt_identity,
+            raw_response_ref=self.raw_response_ref,
+            raw_response_sha256=self.raw_response_sha256,
+            captured_at=self.captured_at,
+        )
+        if self.binding_sha256 != expected:
+            raise ValueError("response capture receipt binding mismatch")
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "schema_version": self.schema_version,
+            **_response_capture_receipt_fields(
+                request_id=self.request_id,
+                consultation_id=self.consultation_id,
+                attempt_identity=self.attempt_identity,
+                raw_response_ref=self.raw_response_ref,
+                raw_response_sha256=self.raw_response_sha256,
+                captured_at=self.captured_at,
+            ),
+            "binding_sha256": self.binding_sha256,
+        }
+
+
+def produce_s7_response_capture_receipt(
+    *,
+    request_id: str,
+    consultation_id: str,
+    attempt_identity: str,
+    raw_response_ref: str,
+    raw_response_bytes: bytes,
+    captured_at: str,
+    response_root: str | Path,
+    expected_uid: int,
+) -> S7ResponseCaptureReceipt:
+    """Reopen exact durable bytes before minting their content-blind receipt."""
+
+    if type(raw_response_bytes) is not bytes or not raw_response_bytes:
+        raise ValueError("response capture requires non-empty exact bytes")
+    retrieved = s7_io.read_private_file(
+        raw_response_ref,
+        root=response_root,
+        expected_uid=expected_uid,
+    )
+    if type(retrieved) is not bytes or retrieved != raw_response_bytes:
+        raise ValueError("captured response is not retrievable as exact bytes")
+    raw_response_sha256 = hashlib.sha256(raw_response_bytes).hexdigest()
+    binding_sha256 = _response_capture_receipt_binding_sha256(
+        request_id=request_id,
+        consultation_id=consultation_id,
+        attempt_identity=attempt_identity,
+        raw_response_ref=raw_response_ref,
+        raw_response_sha256=raw_response_sha256,
+        captured_at=captured_at,
+    )
+    return S7ResponseCaptureReceipt(
+        schema_version=S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA,
+        request_id=request_id,
+        consultation_id=consultation_id,
+        attempt_identity=attempt_identity,
+        raw_response_ref=raw_response_ref,
+        raw_response_sha256=raw_response_sha256,
+        captured_at=captured_at,
+        binding_sha256=binding_sha256,
+        _producer_token=_RESPONSE_CAPTURE_RECEIPT_TOKEN,
+    )
 
 
 @dataclass(frozen=True)
@@ -767,6 +1431,9 @@ class S7VoiceConsultationBundle:
     has_grounded_semantic_blocking_signal: bool = False
     context_manifest_ref: str | None = None
     source_bundle_hash: str | None = None
+    response_capture_receipt: S7ResponseCaptureReceipt | None = None
+    action: str | None = None
+    schema_version: str | None = None
 
     def __post_init__(self) -> None:
         _validate_hash64(self.source_ref_hash, field="source_ref_hash")
@@ -808,6 +1475,22 @@ class S7VoiceConsultationBundle:
                 self.semantic_reader_attempt_hash,
                 field="semantic_reader_attempt_hash",
             )
+        if (
+            self.response_capture_receipt is not None
+            and type(self.response_capture_receipt) is not S7ResponseCaptureReceipt
+        ):
+            raise ValueError(
+                "response_capture_receipt must be S7ResponseCaptureReceipt"
+            )
+        if self.response_capture_receipt is not None:
+            receipt = self.response_capture_receipt
+            if (
+                receipt.request_id != self.request_id
+                or receipt.consultation_id != self.consultation_id
+                or receipt.raw_response_ref != self.raw_response_ref
+                or receipt.raw_response_sha256 != self.raw_response_hash
+            ):
+                raise ValueError("response_capture_receipt does not match bundle")
         s7._timestamp_text(self.expires_at, field="expires_at")
         s7._validate_closed_value(self.authority_class, S7_VOICE_AUTHORITY_CLASSES, "authority_class")
         if not isinstance(self.has_grounded_semantic_blocking_signal, bool):
@@ -816,6 +1499,26 @@ class S7VoiceConsultationBundle:
             raise ValueError("context_manifest_ref must be non-empty when present")
         if self.source_bundle_hash is not None:
             _validate_hash64(self.source_bundle_hash, field="source_bundle_hash")
+        if self.schema_version is None:
+            object.__setattr__(
+                self,
+                "schema_version",
+                S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA
+                if self.action is None
+                else S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+            )
+        if type(self.schema_version) is not str or self.schema_version not in {
+            S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+            S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+        }:
+            raise ValueError("unknown S7 voice source bundle schema_version")
+        if self.schema_version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+            if self.action is not None:
+                raise ValueError("v1 voice source bundles cannot carry action")
+            if self.response_capture_receipt is not None:
+                raise ValueError("v1 voice source bundles cannot carry capture receipt")
+        else:
+            s7.validate_action_literal(self.action)
 
 
 def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
@@ -823,7 +1526,7 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
 
     if not isinstance(bundle, S7VoiceConsultationBundle):
         raise ValueError("s7_voice_consultation_bundle_hash requires S7VoiceConsultationBundle")
-    return s7.canonical_hash({
+    fields: dict[str, object] = {
         "action_params_hash": bundle.action_params_hash,
         "authority_context_hash": bundle.authority_context_hash,
         "consultation_id": bundle.consultation_id,
@@ -847,7 +1550,451 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
         "runtime_identity_hash": bundle.runtime_identity_hash,
         "semantic_reader_attempt_hash": bundle.semantic_reader_attempt_hash,
         "authority_class": bundle.authority_class,
+    }
+    if bundle.response_capture_receipt is not None:
+        fields["response_capture_receipt"] = (
+            bundle.response_capture_receipt.as_dict()
+        )
+    return s7.canonical_hash(fields)
+
+
+_VOICE_BUNDLE_V1_COLUMNS = (
+    "source_ref_hash",
+    "request_id",
+    "consultation_id",
+    "request_envelope_hash",
+    "rendered_text_hash",
+    "action_params_hash",
+    "precondition_hash",
+    "authority_context_hash",
+    "maez_voice_consultation_hash",
+    "rendered_prompt_ref",
+    "rendered_prompt_hash",
+    "mutation_preview_hash",
+    "rollback_plan_ref",
+    "context_manifest_ref",
+    "context_manifest_hash",
+    "runtime_identity_hash",
+    "model_routing_identity_hash",
+    "model_config_hash",
+    "raw_response_ref",
+    "raw_response_hash",
+    "semantic_reader_attempt_hash",
+    "expires_at",
+    "authority_class",
+    "has_grounded_semantic_blocking_signal",
+    "source_bundle_hash",
+)
+
+
+def _voice_bundle_values(bundle: S7VoiceConsultationBundle) -> tuple[object, ...]:
+    values = []
+    for name in _VOICE_BUNDLE_V1_COLUMNS:
+        value = getattr(bundle, name)
+        if name == "has_grounded_semantic_blocking_signal":
+            value = 1 if value else 0
+        values.append(value)
+    return tuple(values)
+
+
+def _encode_response_capture_receipt(
+    receipt: S7ResponseCaptureReceipt | None,
+) -> str | None:
+    if receipt is None:
+        return None
+    if type(receipt) is not S7ResponseCaptureReceipt:
+        raise ValueError("response_capture_receipt must be S7ResponseCaptureReceipt")
+    return json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _decode_response_capture_receipt(value: object) -> S7ResponseCaptureReceipt | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError("persisted response_capture_receipt must be text")
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("persisted response_capture_receipt is not valid JSON") from exc
+    expected_keys = {
+        "attempt_identity",
+        "binding_sha256",
+        "captured_at",
+        "consultation_id",
+        "raw_response_ref",
+        "raw_response_sha256",
+        "request_id",
+        "schema_version",
+    }
+    if type(payload) is not dict or set(payload) != expected_keys:
+        raise ValueError("persisted response_capture_receipt has wrong shape")
+    if any(type(payload[key]) is not str for key in expected_keys):
+        raise ValueError("persisted response_capture_receipt fields must be text")
+    return S7ResponseCaptureReceipt(
+        schema_version=payload["schema_version"],
+        request_id=payload["request_id"],
+        consultation_id=payload["consultation_id"],
+        attempt_identity=payload["attempt_identity"],
+        raw_response_ref=payload["raw_response_ref"],
+        raw_response_sha256=payload["raw_response_sha256"],
+        captured_at=payload["captured_at"],
+        binding_sha256=payload["binding_sha256"],
+        _producer_token=_RESPONSE_CAPTURE_RECEIPT_TOKEN,
+    )
+
+
+def _voice_bundle_from_row(
+    row: sqlite3.Row | tuple[object, ...],
+    *,
+    version: str,
+) -> S7VoiceConsultationBundle:
+    values: dict[str, object] = {}
+    for index, name in enumerate(_VOICE_BUNDLE_V1_COLUMNS):
+        value = row[index]
+        if name == "has_grounded_semantic_blocking_signal":
+            if version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA and (
+                type(value) is not int or value not in {0, 1}
+            ):
+                raise ValueError("persisted v2 blocking-signal flag must be 0 or 1")
+            values[name] = bool(value)
+        elif name == "expires_at":
+            if value is None and version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+                raise ValueError("persisted v2 expires_at must be present")
+            values[name] = (
+                str(value)
+                if value is not None
+                else "1970-01-01T00:00:00+00:00"
+            )
+        elif name == "authority_class":
+            if value is None and version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+                raise ValueError("persisted v2 authority_class must be present")
+            values[name] = "none" if value is None else str(value)
+        elif name in {"source_ref_hash", "request_id", "consultation_id"}:
+            values[name] = str(value)
+        else:
+            values[name] = None if value is None else str(value)
+    if version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        offset = len(_VOICE_BUNDLE_V1_COLUMNS)
+        values["response_capture_receipt"] = _decode_response_capture_receipt(
+            row[offset]
+        )
+        values["action"] = str(row[offset + 1])
+        values["schema_version"] = str(row[offset + 2])
+    else:
+        values["response_capture_receipt"] = None
+        values["action"] = None
+        values["schema_version"] = S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA
+    return S7VoiceConsultationBundle(**values)
+
+
+def _voice_source_bundle_binding_hash(bundle: S7VoiceConsultationBundle) -> str:
+    fields = {name: getattr(bundle, name) for name in _VOICE_BUNDLE_V1_COLUMNS}
+    if bundle.schema_version == S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        fields["action"] = bundle.action
+    if bundle.response_capture_receipt is not None:
+        fields["response_capture_receipt"] = (
+            bundle.response_capture_receipt.as_dict()
+        )
+    return s7.canonical_hash({
+        "schema": bundle.schema_version,
+        "fields": fields,
     })
+
+
+def _voice_table_present(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def put_voice_source_bundle_v2(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    conn: sqlite3.Connection,
+) -> None:
+    """Persist one complete v2 bundle through an activated held transaction."""
+
+    if type(bundle) is not S7VoiceConsultationBundle:
+        raise ValueError("put_voice_source_bundle_v2 requires S7VoiceConsultationBundle")
+    if not _voice_table_present(conn, _V2_VOICE_BUNDLE_TABLE):
+        raise s7.S7GuardedExecutionUnavailable(
+            "S7 v2 voice plane is absent; absent is not permission"
+        )
+    s7._require_vended_anchored_connection(conn)
+    if bundle.schema_version != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA:
+        raise ValueError("put_voice_source_bundle_v2 requires a v2 bundle")
+    s7.validate_action_literal(bundle.action)
+    if (
+        bundle.source_bundle_hash is None
+        or bundle.source_bundle_hash != s7_voice_consultation_bundle_hash(bundle)
+    ):
+        raise ValueError("invalid voice source bundle content hash")
+    columns = (
+        *_VOICE_BUNDLE_V1_COLUMNS,
+        "response_capture_receipt",
+        "action",
+        "schema_version",
+    )
+    conn.execute(
+        f"INSERT INTO {_V2_VOICE_BUNDLE_TABLE} ({', '.join(columns)}) "
+        f"VALUES ({', '.join('?' for _ in columns)})",
+        (
+            *_voice_bundle_values(bundle),
+            _encode_response_capture_receipt(bundle.response_capture_receipt),
+            bundle.action,
+            bundle.schema_version,
+        ),
+    )
+
+
+def read_voice_source_bundle(
+    *,
+    source_ref_hash: str,
+    conn: sqlite3.Connection,
+) -> tuple[S7VoiceConsultationBundle, str]:
+    """Read v2 authority evidence, or v1 evidence only when the v2 plane is absent."""
+
+    _validate_hash64(source_ref_hash, field="source_ref_hash")
+    if _voice_table_present(conn, _V2_VOICE_BUNDLE_TABLE):
+        vended_token = s7._require_vended_anchored_connection(conn)
+        columns = (
+            *_VOICE_BUNDLE_V1_COLUMNS,
+            "response_capture_receipt",
+            "action",
+            "schema_version",
+        )
+        row = conn.execute(
+            f"SELECT {', '.join(columns)} FROM {_V2_VOICE_BUNDLE_TABLE} "
+            "WHERE source_ref_hash = ?",
+            (source_ref_hash,),
+        ).fetchone()
+        if row is None:
+            raise S7VoiceSourceBundleEvidenceInvalid(
+                "v2 voice source bundle is unavailable"
+            )
+        try:
+            bundle = _voice_bundle_from_row(
+                row,
+                version=S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+            )
+        except ValueError as exc:
+            raise S7VoiceSourceBundleEvidenceInvalid(
+                "persisted v2 voice source bundle is invalid"
+            ) from exc
+        object.__setattr__(bundle, "_v2_read_token", vended_token)
+        return bundle, str(bundle.schema_version)
+    if not _voice_table_present(conn, _V1_VOICE_BUNDLE_TABLE):
+        raise s7.S7GuardedExecutionUnavailable(
+            "S7 voice plane is absent; absent is not permission"
+        )
+    row = conn.execute(
+        f"SELECT {', '.join(_VOICE_BUNDLE_V1_COLUMNS)} "
+        f"FROM {_V1_VOICE_BUNDLE_TABLE} WHERE source_ref_hash = ?",
+        (source_ref_hash,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("v1 voice source bundle is unavailable")
+    return (
+        _voice_bundle_from_row(
+            row,
+            version=S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+        ),
+        S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+    )
+
+
+def _voice_validation_result_v2(
+    *,
+    status: str,
+    source_bundle_valid: bool,
+    mint_eligible: bool,
+    authority_projection: str,
+    failure_reason_code: str | None,
+    bundle: S7VoiceConsultationBundle,
+    binding_hash: str,
+) -> S7VoiceSourceBundleValidationResultV2:
+    source_bundle_hash = (
+        bundle.source_bundle_hash or s7_voice_consultation_bundle_hash(bundle)
+    )
+    return S7VoiceSourceBundleValidationResultV2(
+        status=status,
+        source_bundle_valid=source_bundle_valid,
+        mint_eligible=mint_eligible,
+        authority_projection=authority_projection,
+        failure_reason_code=failure_reason_code,
+        action=bundle.action,
+        schema_version=str(bundle.schema_version),
+        source_bundle_hash=source_bundle_hash,
+        binding_hash=binding_hash,
+        _validator_token=_VALIDATOR_TOKEN,
+    )
+
+
+def _has_content_blind_response_evidence(
+    bundle: S7VoiceConsultationBundle,
+) -> bool:
+    """Require three content-blind carriers, keyed to the honest producer path."""
+
+    response_reference_and_hash_are_usable = (
+        type(bundle.raw_response_ref) is str
+        and bundle.raw_response_ref != ""
+        and type(bundle.raw_response_hash) is str
+        and _HASH64_RE.fullmatch(bundle.raw_response_hash) is not None
+        and bundle.raw_response_hash != _EMPTY_RAW_RESPONSE_HASH
+    )
+    if not response_reference_and_hash_are_usable:
+        return False
+    if bundle.action == _R8_CUTOVER_ACTION:
+        if bundle.raw_response_hash == _EMPTY_EXACT_RESPONSE_SHA256:
+            return False
+        receipt = bundle.response_capture_receipt
+        if type(receipt) is not S7ResponseCaptureReceipt:
+            return False
+        try:
+            _validate_hash64(receipt.attempt_identity, field="attempt_identity")
+            s7._timestamp_text(receipt.captured_at, field="captured_at")
+        except ValueError:
+            return False
+        return (
+            receipt.schema_version == S7_RESPONSE_CAPTURE_RECEIPT_SCHEMA
+            and receipt.request_id == bundle.request_id
+            and receipt.consultation_id == bundle.consultation_id
+            and receipt.raw_response_ref == bundle.raw_response_ref
+            and receipt.raw_response_sha256 == bundle.raw_response_hash
+            and receipt.binding_sha256
+            == _response_capture_receipt_binding_sha256(
+                request_id=receipt.request_id,
+                consultation_id=receipt.consultation_id,
+                attempt_identity=receipt.attempt_identity,
+                raw_response_ref=receipt.raw_response_ref,
+                raw_response_sha256=receipt.raw_response_sha256,
+                captured_at=receipt.captured_at,
+            )
+        )
+    return (
+        type(bundle.semantic_reader_attempt_hash) is str
+        and _HASH64_RE.fullmatch(bundle.semantic_reader_attempt_hash) is not None
+    )
+
+
+def validate_voice_source_bundle(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    version: str,
+    purpose: str,
+    expected_binding: S7VoiceSourceBundleHashBinding | None = None,
+) -> S7VoiceSourceBundleValidationResultV2:
+    """Validate durable voice evidence for audit or v2 execution."""
+
+    if type(bundle) is not S7VoiceConsultationBundle:
+        raise ValueError("validate_voice_source_bundle requires S7VoiceConsultationBundle")
+    if purpose not in {"audit", "execution"}:
+        raise ValueError("unknown voice source bundle validation purpose")
+    if version not in {
+        S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA,
+        S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA,
+    } or version != bundle.schema_version:
+        raise ValueError("voice source bundle version mismatch")
+    if (
+        expected_binding is not None
+        and type(expected_binding) is not S7VoiceSourceBundleHashBinding
+    ):
+        raise ValueError("expected_binding must be S7VoiceSourceBundleHashBinding")
+    binding_hash = _voice_source_bundle_binding_hash(bundle)
+    source_bundle_valid = (
+        bundle.source_bundle_hash is not None
+        and bundle.source_bundle_hash == s7_voice_consultation_bundle_hash(bundle)
+    )
+    if not source_bundle_valid:
+        return _voice_validation_result_v2(
+            status="invalid_hash_binding",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="operational_block",
+            failure_reason_code="invalid_hash_binding",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if (
+        expected_binding is not None
+        and not _bundle_matches_expected_hash_binding(bundle, expected_binding)
+    ):
+        return _voice_validation_result_v2(
+            status="invalid_hash_binding",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="operational_block",
+            failure_reason_code="invalid_hash_binding",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if version == S7_VOICE_SOURCE_BUNDLE_V1_SCHEMA:
+        return _voice_validation_result_v2(
+            status="not_mint_eligible",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="marker_only" if purpose == "audit" else "operational_block",
+            failure_reason_code=(
+                "v1_audit_only" if purpose == "audit" else "v1_execution_refused"
+            ),
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if not s7._vended_anchored_connection_token_is_active(
+        getattr(bundle, "_v2_read_token", None)
+    ):
+        return _voice_validation_result_v2(
+            status="source_bundle_unavailable",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="unavailable",
+            failure_reason_code="source_bundle_not_read_from_v2_store",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if purpose == "audit":
+        return _voice_validation_result_v2(
+            status="not_mint_eligible",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="marker_only",
+            failure_reason_code="audit_only",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if not _has_content_blind_response_evidence(bundle):
+        return _voice_validation_result_v2(
+            status="source_bundle_unavailable",
+            source_bundle_valid=False,
+            mint_eligible=False,
+            authority_projection="unavailable",
+            failure_reason_code="source_bundle_unavailable",
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    if bundle.has_grounded_semantic_blocking_signal:
+        return _voice_validation_result_v2(
+            status="blocking_present",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="grounded_refusal",
+            failure_reason_code=None,
+            bundle=bundle,
+            binding_hash=binding_hash,
+        )
+    return _voice_validation_result_v2(
+        status="valid_absent",
+        source_bundle_valid=True,
+        mint_eligible=True,
+        authority_projection="valid_absent",
+        failure_reason_code=None,
+        bundle=bundle,
+        binding_hash=binding_hash,
+    )
 
 
 @dataclass(frozen=True)
@@ -1769,8 +2916,20 @@ class S7VoiceBundleUseStore:
         reserved_at: str,
         commit: bool,
     ) -> S7VoiceBundleUse:
+        r11_contract = _r11_exemption_evidence_contract(conn)
+        if (
+            r11_contract is not None
+            and r11_contract != _expected_r11_exemption_evidence_contract()
+        ):
+            raise ValueError("R11 exemption evidence contract is malformed")
+        r11_exclusion = (
+            f"AND NOT EXISTS (SELECT 1 FROM {R11_EXEMPTION_EVIDENCE_TABLE} "
+            "WHERE artifact_id = ?)"
+            if r11_contract is not None
+            else ""
+        )
         cursor = conn.execute(
-            """
+            f"""
             UPDATE s7_voice_bundle_uses
             SET artifact_id = ?,
                 reservation_token_hash = ?,
@@ -1782,10 +2941,25 @@ class S7VoiceBundleUseStore:
               AND reservation_state = 'unreserved'
               AND reserved_at IS NULL
               AND consumed_at IS NULL
+              {r11_exclusion}
             """,
-            (artifact_id, reservation_token_hash, reserved_at, source_ref_hash),
+            (
+                artifact_id,
+                reservation_token_hash,
+                reserved_at,
+                source_ref_hash,
+                *((artifact_id,) if r11_contract is not None else ()),
+            ),
         )
         if cursor.rowcount != 1:
+            if r11_contract is not None and conn.execute(
+                f"SELECT 1 FROM {R11_EXEMPTION_EVIDENCE_TABLE} "
+                "WHERE artifact_id = ? LIMIT 1",
+                (artifact_id,),
+            ).fetchone() is not None:
+                raise ValueError(
+                    "voice reservation conflicts with R11 exemption evidence"
+                )
             raise ValueError("S7 voice bundle use must be unreserved before artifact mint")
         if commit:
             conn.commit()
@@ -2222,24 +3396,32 @@ def validate_s7_voice_source_bundle(
 
 
 def require_source_bundle_validation_for_mint(
-    source_bundle_validation: S7VoiceSourceBundleValidationResult | None,
-) -> S7VoiceSourceBundleValidationResult:
-    """Require the literal validator pass before an S7.3 artifact can be minted."""
+    source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None,
+) -> S7VoiceSourceBundleValidationResultV2:
+    """Require the literal v2 validator pass before an artifact can be minted."""
 
     # This token is an ordinary-caller guard, not a same-process security
     # boundary. A privileged same-box actor remains inside the S7.3 honesty
     # banner; live-route safety comes from deriving and validating the bundle
     # in daemon code before this mint seam is reached.
-    if not isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult):
-        raise ValueError("S7.3 artifact mint requires source-bundle validation")
+    if type(source_bundle_validation) is not S7VoiceSourceBundleValidationResultV2:
+        raise ValueError(
+            "S7.3 artifact mint requires valid absent v2 source-bundle validation"
+        )
     if (
-        source_bundle_validation.status != "valid_absent"
+        getattr(source_bundle_validation, "_token_verified", False) is not True
+        or source_bundle_validation.status != "valid_absent"
         or source_bundle_validation.source_bundle_valid is not True
         or source_bundle_validation.mint_eligible is not True
         or source_bundle_validation.authority_projection != "valid_absent"
         or source_bundle_validation.failure_reason_code is not None
+        or source_bundle_validation.schema_version
+        != S7_VOICE_SOURCE_BUNDLE_V2_SCHEMA
+        or source_bundle_validation.action is None
     ):
-        raise ValueError("S7.3 artifact mint requires valid absent source-bundle validation")
+        raise ValueError(
+            "S7.3 artifact mint requires valid absent v2 source-bundle validation"
+        )
     return source_bundle_validation
 
 
@@ -2255,16 +3437,56 @@ class S7GuardedStateStore:
         self.authorization_store = authorization_store
         self.voice_bundle_use_store = voice_bundle_use_store
 
+    def put_artifact_under_consultation_exemption(
+        self,
+        *,
+        artifact: s7.S7AuthorizationArtifact,
+        consultation_exemption: Any,
+        durable_cutover_selection: Any,
+    ) -> None:
+        """Mint a voice-seat artifact whose authority is a TYPED ABSENCE.
+
+        Still through the guarded store -- the artifact never reaches the raw
+        authorization store -- but there is no bundle to reserve, because
+        under R11 no consultation was produced. The exemption is re-validated
+        against this artifact by the caller before arriving here; this method
+        re-checks rather than trusting, for the same reason every other seam
+        in this arc re-derives instead of accepting.
+        """
+        from core.governance.s7_consultation_exemption import (
+            born_by_any_signal,
+            exemption_admits_for_artifact,
+        )
+
+        if not exemption_admits_for_artifact(
+            artifact=artifact,
+            exemption=consultation_exemption,
+            durable_cutover_selection=durable_cutover_selection,
+            ledger_writes_enabled=born_by_any_signal(),
+        ):
+            raise ValueError("S7 consultation exemption does not admit this artifact")
+        # One transaction owns BOTH rows.  An ordinary artifact without its
+        # evidence row would make "R11" indistinguishable from disappeared
+        # consultation evidence; an evidence row without an artifact would
+        # be unattached authority.  Either insert failing rolls both back.
+        with self.authorization_store.anchored_transaction() as connection:
+            self.authorization_store.put(artifact, connection=connection)
+            _insert_r11_exemption_evidence(
+                connection,
+                artifact=artifact,
+                consultation_exemption=consultation_exemption,
+            )
+
     def put_artifact_with_bundle_reservation(
         self,
         *,
         artifact: s7.S7AuthorizationArtifact,
-        source_bundle_validation: S7VoiceSourceBundleValidationResult | None,
+        source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None,
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
         now: str | None = None,
     ) -> None:
-        require_source_bundle_validation_for_mint(source_bundle_validation)
+        validated = require_source_bundle_validation_for_mint(source_bundle_validation)
         if self.voice_bundle_use_store is None:
             raise ValueError("S7.3 artifact mint requires a voice bundle use store")
         if source_ref_hash is None:
@@ -2275,8 +3497,16 @@ class S7GuardedStateStore:
             raise ValueError("S7.3 artifact mint requires now")
         if self.authorization_store.db_path != self.voice_bundle_use_store.db_path:
             raise ValueError("S7.3 guarded state store requires one SQLite database")
+        if artifact.action != validated.action:
+            raise ValueError(
+                "S7.3 artifact action must match the validated source-bundle action"
+            )
         reservation_token_hash = s7.canonical_hash(reservation_token)
-        with closing(sqlite3.connect(self.authorization_store.db_path)) as conn:
+        # The STORE owns the transaction. It binds identity to a descriptor
+        # it holds, which a connection opened here by pathname cannot do --
+        # and it still keeps the reservation and the artifact atomic, which
+        # is why this route exists at all.
+        with self.authorization_store.anchored_transaction() as conn:
             self.voice_bundle_use_store.reserve_for_artifact(
                 source_ref_hash=source_ref_hash,
                 artifact_id=artifact.artifact_id,
@@ -2285,7 +3515,6 @@ class S7GuardedStateStore:
                 connection=conn,
             )
             self.authorization_store.put(artifact, connection=conn)
-            conn.commit()
 
 
 def mint_authorization_artifact(
@@ -2293,10 +3522,12 @@ def mint_authorization_artifact(
     artifact: s7.S7AuthorizationArtifact,
     authorization_store: s7.S7AuthorizationStore,
     guarded_store: S7GuardedStateStore | None = None,
-    source_bundle_validation: S7VoiceSourceBundleValidationResult | None = None,
+    source_bundle_validation: S7VoiceSourceBundleValidationResultV2 | None = None,
     source_ref_hash: str | None = None,
     reservation_token: str | None = None,
     now: str | None = None,
+    consultation_exemption: Any | None = None,
+    durable_cutover_selection: Any | None = None,
 ) -> None:
     """Sole authorization-artifact mint entry point.
 
@@ -2313,6 +3544,41 @@ def mint_authorization_artifact(
                 "S7.3 guarded work-class artifact must be minted through the guarded "
                 "state store, not the raw authorization store"
             )
+        if consultation_exemption is not None:
+            # R11: a SECOND lawful evidence shape, never a hole in the first.
+            # The two are mutually exclusive on purpose -- an artifact that
+            # arrived with both would let a weak exemption ride beside real
+            # bundle evidence, or the reverse, with no way to say which
+            # authorized it.
+            from core.governance.s7_consultation_exemption import (
+                born_by_any_signal,
+                exemption_admits_for_artifact,
+            )
+
+            if (
+                source_bundle_validation is not None
+                or source_ref_hash is not None
+                or reservation_token is not None
+            ):
+                raise ValueError(
+                    "S7 artifact carries both a consultation exemption and "
+                    "voice-bundle evidence; exactly one must authorize a mint"
+                )
+            if not exemption_admits_for_artifact(
+                artifact=artifact,
+                exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
+                ledger_writes_enabled=born_by_any_signal(),
+            ):
+                raise ValueError(
+                    "S7 consultation exemption does not admit this artifact"
+                )
+            guarded_store.put_artifact_under_consultation_exemption(
+                artifact=artifact,
+                consultation_exemption=consultation_exemption,
+                durable_cutover_selection=durable_cutover_selection,
+            )
+            return
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=artifact,
             source_bundle_validation=source_bundle_validation,

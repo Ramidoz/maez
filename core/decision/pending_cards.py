@@ -319,6 +319,10 @@ class CardStoreError(RuntimeError):
     pass
 
 
+class S7CardTransitionRefused(CardStoreError):
+    """The S7 transition predicate evaluated normally and denied the grant."""
+
+
 _COMPLETED_SUMMARY_RE = re.compile(
     r"^\s*(?:"
     r"created|wrote|sent|deleted|marked|removed|completed|done|finished|"
@@ -845,20 +849,19 @@ class PendingCardStore:
         if not _s7_guarded_work_class(card.action, card.params):
             raise CardStoreError("approve_and_mark_running is only for S7 guarded cards")
         del s7_verified_for_transition
-        try:
-            from core.governance import operator_user_boundary as s7
+        from core.governance import operator_user_boundary as s7
 
-            authorized = s7.execution_grant_authorizes_card_transition(
-                s7_execution_grant,
-                request_id=request_id,
-                action=card.action,
-                params=s7_execution_params if s7_execution_params is not None else card.params,
-                artifact_id=s7_artifact_id,
-            )
-        except Exception:
-            authorized = False
+        authorized = s7.execution_grant_authorizes_card_transition(
+            s7_execution_grant,
+            request_id=request_id,
+            action=card.action,
+            params=s7_execution_params if s7_execution_params is not None else card.params,
+            artifact_id=s7_artifact_id,
+        )
         if not authorized:
-            raise CardStoreError("S7 guarded card cannot run without consumed S7 execution grant")
+            raise S7CardTransitionRefused(
+                "S7 guarded card cannot run without consumed S7 execution grant"
+            )
 
         if current_state_fields is not None and card.state_hash != "empty":
             now_hash = compute_state_hash(current_state_fields)
@@ -975,6 +978,34 @@ class PendingCardStore:
             extras={
                 "execution_success": 0,
                 "execution_error": error,
+            },
+        )
+
+    def mark_s7_seam_failed(
+        self,
+        request_id: str,
+        *,
+        reason_code: str,
+        exception_type: str,
+    ) -> CardRecord:
+        """Record broken S7 infrastructure distinctly from authorization refusal."""
+        if not reason_code or not exception_type:
+            raise CardStoreError("S7 seam failure requires reason code and exception type")
+        return self._transition(
+            request_id,
+            CardStatus.FAILED.value,
+            allow_from={
+                CardStatus.OPEN.value,
+                CardStatus.DEFERRED.value,
+                CardStatus.APPROVED.value,
+                CardStatus.RUNNING.value,
+            },
+            extras={
+                "resolved_at": time.time(),
+                "resolved_via": "s7_error",
+                "resolution_notes": reason_code,
+                "execution_success": 0,
+                "execution_error": f"{reason_code}:{exception_type}",
             },
         )
 

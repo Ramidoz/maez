@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import sqlite3
@@ -16,6 +17,7 @@ from core.action_classifier import ClassificationResult, IntentCategory
 from core import decision_pipeline as _dp
 from core.decision_pipeline import DecisionPipeline
 from core.decision.pending_cards import CardStatus, CardStoreError, PendingCardStore
+from tests.s7_store_fixture import fresh_v2_store_at
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -390,10 +392,13 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             S7VoiceConsultationBundle,
             S7VoiceConsultationBundleStore,
             S7VoiceSourceBundleHashBinding,
-            validate_s7_voice_source_bundle,
+            put_voice_source_bundle_v2,
+            read_voice_source_bundle,
+            s7_voice_consultation_bundle_hash,
+            validate_voice_source_bundle,
         )
 
-        auth_store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+        auth_store = fresh_v2_store_at(bootstrap_store.db_path)
         bundle_store = S7VoiceConsultationBundleStore(bootstrap_store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
         attempt_store = S7SemanticReaderAttemptStore(bootstrap_store.db_path)
@@ -432,32 +437,46 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             f"rendered-prompt-{card.request_id}",
             rendered_prompt_text,
         )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                source_ref_hash=consultation.source_ref_hash,
-                request_id=env.request_id,
-                consultation_id=consultation.consultation_id,
-                request_envelope_hash=binding.request_envelope_hash,
-                rendered_text_hash=binding.rendered_text_hash,
-                action_params_hash=binding.action_params_hash,
-                precondition_hash=binding.precondition_hash,
-                authority_context_hash=binding.authority_context_hash,
-                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-                rendered_prompt_ref=f"rendered-prompt-{card.request_id}",
-                rendered_prompt_hash=binding.rendered_prompt_hash,
-                mutation_preview_hash=binding.mutation_preview_hash,
-                rollback_plan_ref=binding.rollback_plan_ref,
-                context_manifest_ref=manifest.manifest_id,
-                context_manifest_hash=binding.context_manifest_hash,
-                runtime_identity_hash=binding.runtime_identity_hash,
-                model_routing_identity_hash=binding.model_routing_identity_hash,
-                model_config_hash=binding.model_config_hash,
-                raw_response_ref=f"raw-response-{card.request_id}",
-                raw_response_hash=s7.canonical_hash(raw_text),
-                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
-                expires_at="2026-05-18T11:05:00+00:00",
-            )
+        bundle = S7VoiceConsultationBundle(
+            source_ref_hash=consultation.source_ref_hash,
+            request_id=env.request_id,
+            consultation_id=consultation.consultation_id,
+            request_envelope_hash=binding.request_envelope_hash,
+            rendered_text_hash=binding.rendered_text_hash,
+            action_params_hash=binding.action_params_hash,
+            precondition_hash=binding.precondition_hash,
+            authority_context_hash=binding.authority_context_hash,
+            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+            rendered_prompt_ref=f"rendered-prompt-{card.request_id}",
+            rendered_prompt_hash=binding.rendered_prompt_hash,
+            mutation_preview_hash=binding.mutation_preview_hash,
+            rollback_plan_ref=binding.rollback_plan_ref,
+            context_manifest_ref=manifest.manifest_id,
+            context_manifest_hash=binding.context_manifest_hash,
+            runtime_identity_hash=binding.runtime_identity_hash,
+            model_routing_identity_hash=binding.model_routing_identity_hash,
+            model_config_hash=binding.model_config_hash,
+            raw_response_ref=f"raw-response-{card.request_id}",
+            raw_response_hash=s7.canonical_hash(raw_text),
+            semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            expires_at="2026-05-18T11:05:00+00:00",
+            action=rendered.action,
         )
+        bundle = replace(
+            bundle,
+            source_bundle_hash=s7_voice_consultation_bundle_hash(bundle),
+        )
+        with auth_store.anchored_transaction() as conn:
+            put_voice_source_bundle_v2(bundle=bundle, conn=conn)
+            persisted_bundle, version = read_voice_source_bundle(
+                source_ref_hash=consultation.source_ref_hash,
+                conn=conn,
+            )
+            validation = validate_voice_source_bundle(
+                bundle=persisted_bundle,
+                version=version,
+                purpose="execution",
+            )
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=env.request_id,
@@ -469,14 +488,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         guarded_store = S7GuardedStateStore(
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
-        )
-        validation = validate_s7_voice_source_bundle(
-            consultation=consultation,
-            bundle_store=bundle_store,
-            bundle_use_store=bundle_use_store,
-            semantic_reader_attempt_store=attempt_store,
-            expected_binding=binding,
-            now=NOW,
         )
         begin = service.authorize_begin(
             now=NOW,
@@ -499,6 +510,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
             guarded_store=guarded_store,
+            source_bundle_binding=binding,
             source_bundle_validation=validation,
             source_ref_hash=consultation.source_ref_hash,
             reservation_token=f"reservation-token-{card.request_id}",
@@ -800,7 +812,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 1)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertEqual(consumed_at, s7._timestamp_text(NOW, field="now"))
@@ -812,6 +824,240 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertIsNotNone(fresh_dialog)
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "executed")
+
+    def test_ratified_self_mod_dialog_grant_refusal_records_refusal_reason(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+        original_check = s7.execution_grant_authorizes_card_transition
+        check_calls = 0
+
+        def real_transition_check_then_refuse(*args, **kwargs):
+            nonlocal check_calls
+            check_calls += 1
+            if check_calls == 1:
+                return original_check(*args, **kwargs)
+            mismatched = dict(kwargs)
+            mismatched["request_id"] = f"{kwargs['request_id']}-mismatch"
+            return original_check(*args, **mismatched)
+
+        refusal_reason = "missing or invalid S7 execution authorization"
+        with patch.object(
+            s7,
+            "execution_grant_authorizes_card_transition",
+            side_effect=real_transition_check_then_refuse,
+        ):
+            result = self.pipeline._handle_dialog_reply_for_card(
+                card=card,
+                text="yes",
+                user_id="rohit",
+                s7_execution_authorization=authorization,
+            )
+
+        self.assertEqual(check_calls, 2)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, _dp.PipelineStatus.BLOCKED)
+        self.assertEqual(result.message, refusal_reason)
+        self.assertEqual(len(self.engine.calls), 0)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.BLOCKED.value)
+        self.assertEqual(fresh.resolution_notes, refusal_reason)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
+        self.assertEqual(fresh_dialog.s7_block_reason, refusal_reason)
+
+    def test_ratified_self_mod_dialog_transition_grant_refusal_records_refusal_reason(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+        original_check = s7.execution_grant_authorizes_card_transition
+        check_calls = 0
+
+        def real_mismatched_transition_check(*args, **kwargs):
+            nonlocal check_calls
+            check_calls += 1
+            mismatched = dict(kwargs)
+            mismatched["request_id"] = f"{kwargs['request_id']}-mismatch"
+            return original_check(*args, **mismatched)
+
+        refusal_reason = "missing or invalid S7 execution authorization"
+        with patch.object(
+            s7,
+            "execution_grant_authorizes_card_transition",
+            side_effect=real_mismatched_transition_check,
+        ):
+            result = self.pipeline._handle_dialog_reply_for_card(
+                card=card,
+                text="yes",
+                user_id="rohit",
+                s7_execution_authorization=authorization,
+            )
+
+        self.assertEqual(check_calls, 1)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, _dp.PipelineStatus.BLOCKED)
+        self.assertEqual(result.message, refusal_reason)
+        self.assertEqual(len(self.engine.calls), 0)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.BLOCKED.value)
+        self.assertEqual(fresh.resolution_notes, refusal_reason)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
+        self.assertEqual(fresh_dialog.s7_block_reason, refusal_reason)
+
+    def test_ratified_self_mod_dialog_transition_grant_check_exception_preserves_type(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+
+        with patch.object(
+            s7,
+            "execution_grant_authorizes_card_transition",
+            side_effect=ValueError("injected transition connection verification break"),
+        ):
+            with self.assertLogs(
+                "core.decision.decision_pipeline",
+                level="ERROR",
+            ) as logs:
+                result = self.pipeline._handle_dialog_reply_for_card(
+                    card=card,
+                    text="yes",
+                    user_id="rohit",
+                    s7_execution_authorization=authorization,
+                )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, _dp.PipelineStatus.ERROR)
+        self.assertEqual(result.message, "s7_approval_seam_broken")
+        self.assertEqual(
+            result.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        rendered_logs = "\n".join(logs.output)
+        self.assertIn("ValueError", rendered_logs)
+        self.assertIn("pre_execute_hook", rendered_logs)
+        self.assertEqual(len(self.engine.calls), 0)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.FAILED.value)
+        self.assertEqual(
+            fresh.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        self.assertNotEqual(
+            fresh.resolution_notes,
+            "missing or invalid S7 execution authorization",
+        )
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "failed")
+        self.assertEqual(
+            fresh_dialog.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        self.assertIsNone(fresh_dialog.s7_block_reason)
+
+    def test_ratified_self_mod_dialog_grant_check_exception_is_loud_failure_not_refusal(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+        original_check = s7.execution_grant_authorizes_card_transition
+        check_calls = 0
+
+        def real_transition_check_then_break(*args, **kwargs):
+            nonlocal check_calls
+            check_calls += 1
+            if check_calls == 1:
+                return original_check(*args, **kwargs)
+            raise ValueError("injected connection verification break")
+
+        with patch.object(
+            s7,
+            "execution_grant_authorizes_card_transition",
+            side_effect=real_transition_check_then_break,
+        ):
+            with self.assertLogs(
+                "core.decision.decision_pipeline",
+                level="ERROR",
+            ) as logs:
+                result = self.pipeline._handle_dialog_reply_for_card(
+                    card=card,
+                    text="yes",
+                    user_id="rohit",
+                    s7_execution_authorization=authorization,
+                )
+
+        self.assertEqual(check_calls, 2)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, _dp.PipelineStatus.ERROR)
+        self.assertEqual(result.message, "s7_approval_seam_broken")
+        self.assertEqual(
+            result.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        rendered_logs = "\n".join(logs.output)
+        self.assertIn("ValueError", rendered_logs)
+        self.assertIn("grant_authorization_check", rendered_logs)
+        self.assertEqual(len(self.engine.calls), 0)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.FAILED.value)
+        self.assertEqual(
+            fresh.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        self.assertNotEqual(
+            fresh.resolution_notes,
+            "missing or invalid S7 execution authorization",
+        )
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "failed")
+        self.assertEqual(
+            fresh_dialog.execution_error,
+            "s7_approval_seam_broken:ValueError",
+        )
+        self.assertIsNone(fresh_dialog.s7_block_reason)
 
     def test_s7_execution_authorization_must_match_card_action_params(self):
         from dataclasses import replace
@@ -838,7 +1084,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -928,7 +1174,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNotNone(consumed_at)
@@ -1000,7 +1246,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1106,7 +1352,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization_a.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization_a.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1115,7 +1361,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
 
-    def test_s7_running_transition_failure_does_not_consume_or_execute(self):
+    def test_s7_running_transition_failure_is_loud_and_does_not_consume_or_execute(self):
         card = self._card()
         authorization = self._authorization_bundle(card)
         dialog = self._open_dialog(
@@ -1129,26 +1375,52 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
 
         self.card_store.approve_and_mark_running = fail_running_transition  # type: ignore[method-assign]
 
-        result = self.pipeline._handle_dialog_reply_for_card(
-            card=card,
-            text="yes",
-            user_id="rohit",
-            s7_execution_authorization=authorization,
-        )
+        with self.assertLogs(
+            "core.decision.decision_pipeline",
+            level="ERROR",
+        ) as logs:
+            result = self.pipeline._handle_dialog_reply_for_card(
+                card=card,
+                text="yes",
+                user_id="rohit",
+                s7_execution_authorization=authorization,
+            )
 
         self.assertIsNotNone(result)
         assert result is not None
+        self.assertEqual(result.status, _dp.PipelineStatus.ERROR)
+        self.assertEqual(result.message, "s7_approval_seam_broken")
+        self.assertEqual(
+            result.execution_error,
+            "s7_approval_seam_broken:CardStoreError",
+        )
+        rendered_logs = "\n".join(logs.output)
+        self.assertIn("CardStoreError", rendered_logs)
+        self.assertIn("pre_execute_hook", rendered_logs)
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
         fresh_dialog = self.dialog_store.get(dialog.dialog_id)
         self.assertIsNotNone(fresh_dialog)
         assert fresh_dialog is not None
-        self.assertEqual(fresh_dialog.stage, "blocked")
+        self.assertEqual(fresh_dialog.stage, "failed")
+        self.assertEqual(
+            fresh_dialog.execution_error,
+            "s7_approval_seam_broken:CardStoreError",
+        )
+        self.assertIsNone(fresh_dialog.s7_block_reason)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.FAILED.value)
+        self.assertEqual(
+            fresh.execution_error,
+            "s7_approval_seam_broken:CardStoreError",
+        )
 
     def test_will_i_refusal_after_s7_dialog_ratification_marks_dialog_blocked(self):
         card = self._card()
@@ -1181,7 +1453,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(len(self.engine.calls), 0)
         with sqlite3.connect(authorization.store.db_path) as conn:
             consumed_at = conn.execute(
-                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                "SELECT consumed_at FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?",
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
@@ -1356,6 +1628,7 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                 verifier=_S7RouteVerifier(),
                 store_factory=lambda: bootstrap_store,
             )
+            store = fresh_v2_store_at(bootstrap_store.db_path)
             begin = service.authorize_begin(
                 now=NOW,
                 rendered_statement=rendered,
@@ -1377,7 +1650,6 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                     "authentication_response": {"clientDataJSON": "valid-auth"},
                 },
             )
-            store = s7.S7AuthorizationStore(bootstrap_store.db_path)
             grant, _ = store.consume_for_execution(
                 finish.body["artifact_id"],
                 rendered=rendered,

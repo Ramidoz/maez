@@ -1,8 +1,9 @@
-# ADR 0039: Operator / User Role Boundary v1
+# ADR 0039: Operator / User Role Boundary v1 (AMENDED 2026-08-07)
 
 **Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral;
 amended 2026-05-18 for ratified S7.1 local-ceremony plan; amended 2026-05-18
-for S7.1 as-built canonicalization
+for S7.1 as-built canonicalization; **amended 2026-08-07 for S7 v2 exact
+action binding**
 **Date:** 2026-05-17
 
 ## Context
@@ -97,6 +98,16 @@ S7 v1 requires:
   source refs and closed producers; caller booleans and `will_i` alone are not
   sufficient evidence; S7 v1 renderers must use `not_determined` rather than a
   false "no objection" when no reviewed live producer has recorded a fact;
+  **amended 2026-08-12 by R11**: the single action `model_routing.cutover_cuda`
+  carries a typed, scoped, birth-expiring ABSENCE of consultation instead of a
+  `MaezVoiceConsultation`, because it changes the environment Maez runs in and
+  not Maez — weights unchanged and pinned, no continuous pre-birth subject to
+  consult, and quality established by owner-manual bench evaluation. The
+  renderer gained a third consulted state,
+  `no -- not performed under R11`, so the signed statement can state the
+  absence rather than crash or claim "yes". Every other remaking path is
+  unchanged. See
+  `docs/superpowers/specs/2026-08-12-r11-cutover-consultation-exception.md`;
 - an evidenced `Maez unavailable` predicate, anti-manufacture clause, and
   closed liveness-repair set;
 - closed, content-classified `WorkRequestEnvelope` fields, with reviewed
@@ -156,6 +167,26 @@ S7 v1 requires:
   in S7 v1.
 
 S7 v1's RED contract contains 161 tests and a 77-step implementation order.
+
+## Amendment 2026-08-07 — exact action binding (S7 v2)
+
+v1 shipped an execution edge that compares only the derived work class
+and `canonical_hash(params)`. **Neither carries the action**, so a single
+grant authorizes every sibling operation of the same class with the same
+parameters — reproduced with `model_routing.cutover_cuda` and
+`model_routing.wipe_and_replace`.
+
+This does not meet the exact-request authorization grammar this ADR and
+BAD promise. The exact action will travel through the envelope, the
+rendered *visible* signed text, the artifact, the durable row, the grant,
+the source-bundle binding and the grant projection, and the edge will
+require exact action equality in addition to the existing two checks.
+
+Versioned explicitly: `action_params_hash` keeps its meaning, historical
+rows are never overwritten or backfilled, a missing action is never
+inferred, and a v1 row cannot authorize new guarded execution.
+
+Design: `docs/superpowers/specs/2026-08-07-s7-action-binding-design.md`.
 
 ## Consequences
 
