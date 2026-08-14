@@ -4964,14 +4964,19 @@ def render_request_statement(
         # reads this line before tapping, so it says plainly that nothing was
         # asked and names the ruling that says why.
         from core.governance.s7_consultation_exemption import (
+            born_by_any_signal,
             consultation_exemption_admits,
         )
 
+        # Derived, not hardcoded (full-body audit): every other R11 seam
+        # asks born_by_any_signal(); this one passed a literal False, so
+        # post-birth the renderer would still print "no consultation was
+        # performed, per R11" to the owner before the gate refused.
         if not consultation_exemption_admits(
             envelope=envelope,
             exemption=consultation_exemption,
             durable_cutover_selection=durable_cutover_selection,
-            ledger_writes_enabled=False,
+            ledger_writes_enabled=born_by_any_signal(),
         ) or action_params_hash != getattr(
             consultation_exemption, "action_params_hash", None
         ):

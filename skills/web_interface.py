@@ -1954,17 +1954,23 @@ def _daemon_cockpit_state_proxy(timeout=1.5):
 def api_daemon_state():
     """Daemon state for the cockpit face.
 
-    MAEZ_COCKPIT_REAL_STATE (strict) gates the rollout:
-      - OFF (default): the legacy best-effort log-scrape + SQLite reconstruction
-        below (byte-identical to before this slice).
-      - ON: proxy the daemon's fast /internal/cockpit/state verbatim — real
-        in-memory substrate state, true-by-construction, no fabricated mood.
+    Real state is the DEFAULT (full-body audit, 2026-08-14): the old
+    default log-scrape seeded mood="attentive" unconditionally and
+    regex-scraped scores -- the UI faithfully rendered a value the API
+    invented, undercutting the cockpit-honesty cut one layer up. The
+    honest proxy returns real in-memory substrate state and says
+    "unreachable" rather than fabricating. The scrape survives ONLY
+    behind an explicit legacy opt-in, and no longer invents a mood.
+
+      - default: proxy the daemon's /internal/cockpit/state verbatim.
+      - MAEZ_COCKPIT_LEGACY_SCRAPE (strict): the old reconstruction,
+        de-fabricated (mood is None unless a real source provides one).
     """
     if not _owner_private_auth_ok():
         return _owner_private_auth_required_response()
-    if strict_env_flag("MAEZ_COCKPIT_REAL_STATE"):
-        return jsonify(_daemon_cockpit_state_proxy())
-    return _api_daemon_state_log_scrape()
+    if strict_env_flag("MAEZ_COCKPIT_LEGACY_SCRAPE"):
+        return _api_daemon_state_log_scrape()
+    return jsonify(_daemon_cockpit_state_proxy())
 
 
 def _api_daemon_state_log_scrape():
@@ -1976,7 +1982,9 @@ def _api_daemon_state_log_scrape():
     lines = _tail_log_lines(_MAEZ_LOG_PATH, 400)
     cycle = None
     last_cycle_ts = None
-    mood = "attentive"
+    # De-fabricated (full-body audit): "attentive" was an invented value
+    # seeded unconditionally. Unknown is unknown.
+    mood = None
     currentThought = ""
     scratchpad = []
     score = None
@@ -2294,9 +2302,16 @@ def _s7_cockpit_status_proxy():
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
+    # The daemon route now requires the internal channel (full-body
+    # audit); the cockpit's own trust posture is unchanged -- this web
+    # process holds the token, exactly as every other S7 proxy does.
+    token = os.environ.get("S7_INTERNAL_CHANNEL_TOKEN", "")
+    if not token:
+        return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 503
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/internal/s7/webauthn/status",
+            headers={"X-Maez-S7-Internal-Channel": token},
             method="GET",
         )
         with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:

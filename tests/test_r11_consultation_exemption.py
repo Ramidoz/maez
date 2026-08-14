@@ -1730,3 +1730,17 @@ def test_the_projection_says_not_performed_in_words() -> None:
     flattened = " ".join(str(v).lower() for v in projected.values())
     assert "no objection" not in flattened
     assert "absent" not in flattened
+
+
+def test_rendering_refuses_r11_after_birth(monkeypatch) -> None:
+    """Full-body audit: the renderer hardcoded ledger_writes_enabled=False
+    while every other R11 seam derives it, so post-birth the owner would
+    be SHOWN 'no consultation was performed, per R11' before the gate
+    refused. The renderer now derives birth like everyone else."""
+    from core.governance import s7_consultation_exemption as r11
+
+    monkeypatch.setattr(r11, "born_by_any_signal", lambda: True)
+
+    envelope = _envelope()
+    with pytest.raises(ValueError, match="does not admit"):
+        _render(envelope, _exemption(envelope))

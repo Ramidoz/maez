@@ -12247,6 +12247,11 @@ class MaezDaemon:
 
         @app.route("/internal/s7/webauthn/status", methods=["GET"])
         def s7_webauthn_status():
+            # Full-body audit: this was the ONE internal S7 route without
+            # the channel check, disclosing credential recovery mode and
+            # active credential count unauthenticated.
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             service = S7LocalWebAuthnCeremonyService(
                 verifier=S7ProductionWebAuthnVerifier(),
                 store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),

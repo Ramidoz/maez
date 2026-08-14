@@ -162,11 +162,36 @@ class TestWebProxyFlag(unittest.TestCase):
         wi.app.config["TESTING"] = True
         return wi, wi.app.test_client()
 
-    def test_flag_off_uses_log_scrape_shape(self):
+    def test_default_is_the_honest_proxy_not_the_scrape(self):
+        """Flipped 2026-08-14 (full-body audit): the fabricating scrape
+        was the default while the honest proxy sat behind a flag. Real
+        state is now the default; no flag required."""
+        wi, client = self._client()
+        real_payload = {"status": "ok", "cycle_count": 3}
+
+        class _Resp:
+            def __init__(self, data):
+                self._data = json.dumps(data).encode()
+            def read(self):
+                return self._data
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
+            os.environ.pop("MAEZ_COCKPIT_REAL_STATE", None)
+            os.environ.pop("MAEZ_COCKPIT_LEGACY_SCRAPE", None)
+            with mock.patch("urllib.request.urlopen", return_value=_Resp(real_payload)):
+                resp = client.get("/api/v1/daemon/state")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), real_payload)
+
+    def test_legacy_scrape_needs_explicit_flag_and_invents_no_mood(self):
         wi, client = self._client()
         with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
-                mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("MAEZ_COCKPIT_REAL_STATE", None)
+                mock.patch.dict(os.environ, {"MAEZ_COCKPIT_LEGACY_SCRAPE": "1"}, clear=False):
             with mock.patch.object(wi, "_tail_log_lines", return_value=[]):
                 resp = client.get("/api/v1/daemon/state")
         self.assertEqual(resp.status_code, 200)
@@ -175,6 +200,9 @@ class TestWebProxyFlag(unittest.TestCase):
         self.assertIn("cycle", body)
         self.assertIn("scratchpad", body)
         self.assertIn("sampledAt", body)
+        # De-fabricated: with no real source, mood is unknown, not
+        # "attentive".
+        self.assertIsNone(body.get("mood"))
 
     def test_flag_on_proxies_daemon_verbatim(self):
         wi, client = self._client()
