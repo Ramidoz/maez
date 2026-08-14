@@ -2563,3 +2563,55 @@ class TestPresenceRefusalPrintsTheCeremonyError:
         assert "s7_authentication_invalid" in printed
         assert "detail=InvalidSignature" in printed
         assert "reason=Could not verify authentication signature" in printed
+
+
+class TestInstallOverExistingDestination:
+    """The FOURTH live failure's root cause, proven by strace: uutils
+    install 0.8.0 runs a same-file guard ONLY when the destination already
+    exists, and that guard resolves /proc/self/fd magic links by walking
+    them as STRINGS -- a memfd source resolves to the literal text
+    '/memfd:... (deleted)', which is no path at all, so install exits with
+    a bare ENOENT. Every earlier probe passed because scratch destinations
+    were empty; the live recovery directory held prior copies. The
+    prepared program now removes each destination (rm -f, dispatched
+    through the SAME pinned multi-call binary) before installing."""
+
+    def test_the_burn_replaces_existing_destinations(self, tmp_path) -> None:
+        evidence = TestExecutorEvidence()
+        prepared, recovery = evidence._prepared(tmp_path)
+        # The live condition: destinations already hold earlier copies.
+        (recovery / "llama-server.service").write_bytes(b"stale copy\n")
+        (recovery / "llama-server.service").chmod(0o600)
+        (recovery / "mtp.conf").write_bytes(b"stale dropin\n")
+        (recovery / "mtp.conf").chmod(0o600)
+        override_dir = tmp_path / "override-parent"
+        (override_dir / "zz-b9596-cuda.conf").write_bytes(b"stale override\n")
+        (override_dir / "zz-b9596-cuda.conf").chmod(0o600)
+
+        # The reboot-proof systemctl seat fails at daemon_reload -- AFTER
+        # both install operations, which must now have succeeded.
+        with pytest.raises(cutover.CutoverRefusal, match=r"^executor_failed$"):
+            prepared.begin()
+
+        assert (recovery / "llama-server.service").read_bytes() == b"unit\n"
+        assert (recovery / "mtp.conf").read_bytes() == b"dropin\n"
+        assert (
+            override_dir / "zz-b9596-cuda.conf"
+        ).read_bytes() == b"override\n"
+
+    def test_every_install_is_preceded_by_rm_of_its_destination(
+        self, tmp_path
+    ) -> None:
+        evidence = TestExecutorEvidence()
+        prepared, _recovery = evidence._prepared(tmp_path)
+
+        for operation in prepared.operations[:2]:
+            argvs = [command.argv for command in operation.commands]
+            assert len(argvs) % 2 == 0, argvs
+            for rm_argv, install_argv in zip(
+                argvs[0::2], argvs[1::2], strict=True
+            ):
+                assert rm_argv[:2] == ("rm", "-f")
+                assert install_argv[:3] == ("install", "-m", "0600")
+                # The rm targets exactly the path install writes.
+                assert rm_argv[2] == install_argv[4]

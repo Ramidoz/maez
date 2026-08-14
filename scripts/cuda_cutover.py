@@ -2534,27 +2534,52 @@ def _prepare_cutover_resources_at(
         override_source_child_fd = child_fd_base + 3
         override_dir_child_fd = child_fd_base + 4
 
+        # Each install is preceded by rm -f of its exact destination,
+        # dispatched through the SAME pinned multi-call binary (argv[0]
+        # selects the applet). Live scar, 2026-08-14, proven by strace:
+        # uutils install 0.8.0 runs its same-file guard only when the
+        # destination already exists, and that guard walks /proc/self/fd
+        # magic links as STRINGS -- a memfd source becomes the literal
+        # text "/memfd:... (deleted)", which is no path, so install exits
+        # with a bare ENOENT. Four founder taps failed on it; every probe
+        # passed because scratch destinations were empty. An absent
+        # destination never enters the guard, and rm -f on an absent
+        # target is exit 0, so the pair is idempotent.
         recovery_commands = tuple(
-            PreparedCommand(
-                executable_fd=install.fd,
-                argv=(
-                    "install",
-                    "-m",
-                    "0600",
-                    f"/proc/self/fd/{recovery_source_child_fds[index]}",
-                    f"/proc/self/fd/{recovery_dir_child_fd}/{leaf}",
-                ),
-                child_fd_map=(
-                    (artifact.source_fd, recovery_source_child_fds[index]),
-                    (recovery_dir.fd, recovery_dir_child_fd),
-                ),
-            )
+            command
             for index, (artifact, (_path, leaf)) in enumerate(
                 zip(
                     recovery_artifacts,
                     recovery_sources,
                     strict=True,
                 )
+            )
+            for command in (
+                PreparedCommand(
+                    executable_fd=install.fd,
+                    argv=(
+                        "rm",
+                        "-f",
+                        f"/proc/self/fd/{recovery_dir_child_fd}/{leaf}",
+                    ),
+                    child_fd_map=(
+                        (recovery_dir.fd, recovery_dir_child_fd),
+                    ),
+                ),
+                PreparedCommand(
+                    executable_fd=install.fd,
+                    argv=(
+                        "install",
+                        "-m",
+                        "0600",
+                        f"/proc/self/fd/{recovery_source_child_fds[index]}",
+                        f"/proc/self/fd/{recovery_dir_child_fd}/{leaf}",
+                    ),
+                    child_fd_map=(
+                        (artifact.source_fd, recovery_source_child_fds[index]),
+                        (recovery_dir.fd, recovery_dir_child_fd),
+                    ),
+                ),
             )
         )
         operations = (
@@ -2571,6 +2596,18 @@ def _prepare_cutover_resources_at(
                     "install_cuda_override"
                 ],
                 commands=(
+                    PreparedCommand(
+                        executable_fd=install.fd,
+                        argv=(
+                            "rm",
+                            "-f",
+                            f"/proc/self/fd/{override_dir_child_fd}/"
+                            "zz-b9596-cuda.conf",
+                        ),
+                        child_fd_map=(
+                            (override_dir.fd, override_dir_child_fd),
+                        ),
+                    ),
                     PreparedCommand(
                         executable_fd=install.fd,
                         argv=(
