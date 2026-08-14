@@ -159,3 +159,18 @@ tmpx_*/
 /maez_architecture_ascii.py
 .worktrees/
 memory/s7_1_webauthn/
+
+# Agent-harness dir that slipped the net (2026-08-14 audit)
+.kilo/
+
+# Runtime state, regenerable or append-only (2026-08-14 audit):
+# surface cache holds OWNER MEDIA -- must never be one `git add .` from the index
+memory/surface/
+memory/dispatcher_archetype_cache.json
+memory/owner_identity_audit.jsonl
+memory/backup_receipts.jsonl
+
+# Per-window UI state / derived churn (join workspace*/app.json)
+docs/.obsidian/graph.json
+memory/project_planner.json
+scripts/judge_bench/results.md
