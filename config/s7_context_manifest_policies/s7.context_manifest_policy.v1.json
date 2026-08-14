@@ -1,0 +1,29 @@
+{
+  "schema": "s7.context_manifest_policy.v1",
+  "policy_id": "s7-context-policy-v1",
+  "schema_version": "1",
+  "reviewed_at": "2026-05-21T00:00:00+00:00",
+  "allowed_fields": [
+    "preview_ref",
+    "dialog_context_ref",
+    "rollback_path_class"
+  ],
+  "dialog_context_rules": [
+    "no_private_raw_text"
+  ],
+  "body": [
+    "The context manifest names WHAT the consultation prompt was assembled",
+    "from, never the content itself. Exactly three fields may appear:",
+    "preview_ref (a private store reference to the rendered proposal",
+    "preview), dialog_context_ref (None for ordinary S7.3 v1 consultation",
+    "turns; a reviewed bounded reference only under the self_mod_dialog",
+    "policy), and rollback_path_class (the closed vocabulary class).",
+    "No private raw text may ride in the manifest: references only,",
+    "resolved by the validator against the private store at replay time.",
+    "Ruled in docs/slices/s7.3-guarded-self-modification-execution/spec.md",
+    "(the reviewed manifest policy carrier section). This file is the",
+    "durable PRE-IMAGE of policy_body_hash: the hash is frozen in",
+    "core/governance/s7_guarded_execution.py and a test binds the two,",
+    "per the freeze-a-hash/persist-its-pre-image covenant."
+  ]
+}

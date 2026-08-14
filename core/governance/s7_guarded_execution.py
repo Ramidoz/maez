@@ -606,7 +606,36 @@ class S7ContextManifestPolicy:
         })
 
 
+#: The REAL policy body hash (full-body audit, 2026-08-14). The previous
+#: value was the literal "f"*64 -- a hash field named for a binding that
+#: bound nothing, the exact defect class R11's own comments condemn. The
+#: pre-image is durable at
+#: config/s7_context_manifest_policies/s7.context_manifest_policy.v1.json
+#: (the location the S7.3 spec ruled and nobody ever created); a test
+#: recomputes this digest from that file's bytes, per the
+#: freeze-a-hash/persist-its-pre-image covenant.
+S7_CONTEXT_MANIFEST_POLICY_BODY_SHA256 = (
+    "cbcd362e1463f795a8b80bedfd9b50ccf8b1ba70009e5efff86c57c766709cfb"
+)
+S7_CONTEXT_MANIFEST_POLICY_BODY_PATH = (
+    "config/s7_context_manifest_policies/s7.context_manifest_policy.v1.json"
+)
+
 S7_REVIEWED_CONTEXT_MANIFEST_POLICY = S7ContextManifestPolicy(
+    policy_id="s7-context-policy-v1",
+    schema_version="1",
+    allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
+    dialog_context_rules=("no_private_raw_text",),
+    reviewed_at="2026-05-21T00:00:00+00:00",
+    policy_body_hash=S7_CONTEXT_MANIFEST_POLICY_BODY_SHA256,
+)
+
+#: GRANDFATHERED: bundles persisted before 2026-08-14 carry the
+#: placeholder-era policy hash. Same ruled content, dishonest digest --
+#: named here as legacy rather than silently laundered into "reviewed".
+#: Remove once the live store's pre-audit bundles are re-validated or
+#: retired.
+_LEGACY_PLACEHOLDER_POLICY = S7ContextManifestPolicy(
     policy_id="s7-context-policy-v1",
     schema_version="1",
     allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
@@ -616,7 +645,8 @@ S7_REVIEWED_CONTEXT_MANIFEST_POLICY = S7ContextManifestPolicy(
 )
 
 REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES = frozenset({
-    S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash
+    S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash,
+    _LEGACY_PLACEHOLDER_POLICY.policy_hash,
 })
 
 
