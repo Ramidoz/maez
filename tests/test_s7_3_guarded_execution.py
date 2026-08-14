@@ -187,12 +187,37 @@ class S73ReviewedReaderRouteTests(unittest.TestCase):
 class S73GuardedMintPreconditionTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self._db_path_override: Path | None = None
 
     def tearDown(self):
         self._tmp.cleanup()
 
     def _db_path(self) -> Path:
+        if self._db_path_override is not None:
+            return self._db_path_override
         return Path(self._tmp.name) / "s7_3_guarded.db"
+
+    def _activated_auth_store(self):
+        """Slice-B migration: the mint writes v2 evidence, which demands
+        an ACTIVATED v2 plane on the authorization store, not merely a
+        created table. Same pattern as the validator class."""
+        import os
+
+        from core.governance import s7_v2_migration
+
+        root = Path(self._tmp.name) / "activated"
+        root.mkdir()
+        db_path = root / "ceremony.sqlite3"
+        store = fresh_store_at(db_path)
+        dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            s7_v2_migration._migrate_authorization_store_to_v2_at(
+                store_dir_fd=dir_fd
+            )
+        finally:
+            os.close(dir_fd)
+        self._db_path_override = db_path
+        return store
 
     def _artifact(self, *, artifact_id: str = "artifact-s7-3-1"):
         from core.governance import operator_user_boundary as s7
@@ -278,120 +303,55 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
     def _artifact_count(self) -> int:
+        """Slice-B migration: an activated store mints into the v2
+        artifacts table; count both planes, tolerating absent tables."""
+        total = 0
         with closing(sqlite3.connect(self._db_path())) as conn:
-            return conn.execute("SELECT COUNT(*) FROM s7_authorization_artifacts").fetchone()[0]
+            for table in (
+                "s7_authorization_artifacts",
+                "s7_authorization_artifacts_v2",
+            ):
+                try:
+                    total += conn.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
+                except sqlite3.OperationalError:
+                    pass
+        return total
 
-    def _valid_source_bundle_validation(self, artifact, *, source_ref_hash: str = "c" * 64):
-        from core.governance import operator_user_boundary as s7
-        from core.governance.s7_guarded_execution import (
-            S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
-            S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
-            S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
-            S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
-            S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
-            S7_VOICE_SEMANTIC_READER_PROVIDER,
-            S7_VOICE_SEMANTIC_READER_ROUTE_ID,
-            S7SemanticReaderAttemptEvidence,
-            S7SemanticReaderAttemptStore,
-            S7VoiceBundleUseStore,
-            S7VoiceConsultationBundle,
-            S7VoiceConsultationBundleStore,
-            S7VoiceSourceBundleHashBinding,
-            validate_s7_voice_source_bundle,
+    def _valid_v2_source_bundle_validation(self, artifact):
+        """Slice-B migration: the mint seam demands the V2 validation
+        (require_source_bundle_validation_for_mint) with
+        validation.action == artifact.action; the old helper produced
+        the retired V1 result type. Built with the v2 suite's own
+        fixtures so the two files cannot drift."""
+        from pathlib import Path as _Path
+
+        from tests.test_s7_voice_bundle_v2 import (
+            _migrated_store,
+            _require_voice_api,
+            _voice_bundle,
         )
 
-        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
-        attempt_store = S7SemanticReaderAttemptStore(self._db_path())
-        attempt = S7SemanticReaderAttemptEvidence(
-            semantic_reader_route_id=S7_VOICE_SEMANTIC_READER_ROUTE_ID,
-            semantic_reader_provider=S7_VOICE_SEMANTIC_READER_PROVIDER,
-            semantic_reader_provider_model=S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
-            semantic_reader_model_snapshot=S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
-            semantic_reader_decoding_params_hash=S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
-            semantic_reader_prompt_hash=S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
-            semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+        root = _Path(self._tmp.name) / f"v2-{artifact.artifact_id}"
+        root.mkdir()
+        store = _migrated_store(root)
+        writer = _require_voice_api("put_voice_source_bundle_v2")
+        reader = _require_voice_api("read_voice_source_bundle")
+        validator = _require_voice_api("validate_voice_source_bundle")
+        bundle = _voice_bundle(
+            seed=f"mint-{artifact.artifact_id}", action=artifact.action
         )
-        attempt_store.put(attempt)
-        raw_text = "Maez says there is no objection."
-        rendered_prompt_text = f"S7 voice consultation prompt for {artifact.request_id}"
-        rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
-        manifest = bundle_store.put_reviewed_context_manifest(
-            manifest_id=f"context-{artifact.artifact_id}",
-            preview_ref=f"preview-{artifact.artifact_id}",
-            request_envelope_hash=artifact.request_envelope_hash,
-            precondition_hash=artifact.precondition_hash,
-            created_at=NOW,
-        )
-        binding = S7VoiceSourceBundleHashBinding(
-            request_id=artifact.request_id,
-            consultation_id=f"voice-{artifact.artifact_id}",
-            source_ref_hash=source_ref_hash,
-            request_envelope_hash=artifact.request_envelope_hash,
-            rendered_text_hash=artifact.rendered_text_hash,
-            action_params_hash=artifact.action_params_hash,
-            precondition_hash=artifact.precondition_hash,
-            authority_context_hash=artifact.authority_context_hash,
-            maez_voice_consultation_hash="6" * 64,
-            rendered_prompt_hash=rendered_prompt_hash,
-            mutation_preview_hash="8" * 64,
-            rollback_plan_ref="9" * 64,
-            context_manifest_hash=manifest.context_manifest_hash,
-            runtime_identity_hash="b" * 64,
-            model_routing_identity_hash="d" * 64,
-            model_config_hash="e" * 64,
-        )
-        bundle_store.put_raw_response(f"raw-{artifact.artifact_id}", raw_text)
-        bundle_store.put_rendered_prompt(
-            f"prompt-{artifact.artifact_id}",
-            rendered_prompt_text,
-        )
-        bundle_store.put_bundle(
-            S7VoiceConsultationBundle(
-                source_ref_hash=source_ref_hash,
-                request_id=artifact.request_id,
-                consultation_id=f"voice-{artifact.artifact_id}",
-                request_envelope_hash=binding.request_envelope_hash,
-                rendered_text_hash=binding.rendered_text_hash,
-                action_params_hash=binding.action_params_hash,
-                precondition_hash=binding.precondition_hash,
-                authority_context_hash=binding.authority_context_hash,
-                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-                rendered_prompt_ref=f"prompt-{artifact.artifact_id}",
-                rendered_prompt_hash=binding.rendered_prompt_hash,
-                mutation_preview_hash=binding.mutation_preview_hash,
-                rollback_plan_ref=binding.rollback_plan_ref,
-                context_manifest_ref=manifest.manifest_id,
-                context_manifest_hash=binding.context_manifest_hash,
-                runtime_identity_hash=binding.runtime_identity_hash,
-                model_routing_identity_hash=binding.model_routing_identity_hash,
-                model_config_hash=binding.model_config_hash,
-                raw_response_ref=f"raw-{artifact.artifact_id}",
-                raw_response_hash=s7.canonical_hash(raw_text),
-                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
-                expires_at=FUTURE,
+        with store.anchored_transaction() as conn:
+            writer(bundle=bundle, conn=conn)
+        with store.anchored_transaction() as conn:
+            read_back, version = reader(
+                source_ref_hash=bundle.source_ref_hash, conn=conn
             )
-        )
-        consultation = s7.MaezVoiceConsultation(
-            consultation_id=f"voice-{artifact.artifact_id}",
-            request_id=artifact.request_id,
-            request_envelope_hash=artifact.request_envelope_hash,
-            producer="self_mod_dialog_terminal_state",
-            source_ref_kind="self_mod_dialog_exchange",
-            source_ref_hash=source_ref_hash,
-            maez_voice_consulted=True,
-            maez_objection_state="absent",
-            maez_withdrew_request=False,
-            unavailable_reason_code=None,
-            created_at=NOW,
-        )
-        return validate_s7_voice_source_bundle(
-            consultation=consultation,
-            bundle_store=bundle_store,
-            bundle_use_store=S7VoiceBundleUseStore(self._db_path()),
-            semantic_reader_attempt_store=attempt_store,
-            expected_binding=binding,
-            now=NOW,
-        )
+            return validator(
+                bundle=read_back, version=version, purpose="execution"
+            )
+
 
     def test_mint_refuses_to_skip_voice_source_bundle_validation(self):
         from core.governance.s7_guarded_execution import S7GuardedStateStore
@@ -440,7 +400,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
         artifact = self._artifact()
-        auth_store = fresh_store_at(self._db_path())
+        auth_store = self._activated_auth_store()
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
@@ -454,7 +414,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = self._valid_source_bundle_validation(artifact)
+        validation = self._valid_v2_source_bundle_validation(artifact)
 
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=artifact,
@@ -491,7 +451,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
 
         first_artifact = self._artifact(artifact_id="artifact-s7-3-first")
         second_artifact = self._artifact(artifact_id="artifact-s7-3-second")
-        auth_store = fresh_store_at(self._db_path())
+        auth_store = self._activated_auth_store()
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
@@ -505,7 +465,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = self._valid_source_bundle_validation(first_artifact)
+        validation = self._valid_v2_source_bundle_validation(first_artifact)
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=first_artifact,
             source_bundle_validation=validation,
@@ -538,7 +498,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
         artifact = self._artifact()
-        auth_store = fresh_store_at(self._db_path())
+        auth_store = self._activated_auth_store()
         auth_store.put(artifact)
         bundle_use_store = S7VoiceBundleUseStore(self._db_path())
         bundle_use_store.put_unreserved(
@@ -553,7 +513,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = self._valid_source_bundle_validation(artifact)
+        validation = self._valid_v2_source_bundle_validation(artifact)
 
         with self.assertRaises(sqlite3.IntegrityError):
             guarded_store.put_artifact_with_bundle_reservation(
@@ -577,12 +537,39 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
 class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self._db_path_override: Path | None = None
 
     def tearDown(self):
         self._tmp.cleanup()
 
     def _db_path(self) -> Path:
+        if self._db_path_override is not None:
+            return self._db_path_override
         return Path(self._tmp.name) / "s7_3_validator.db"
+
+    def _activated_db_path(self) -> Path:
+        """A REAL initialised + v2-activated store, for the persistence
+        path (S7AuthorizationStore verifies and never creates; the v2
+        bundle write needs the migrated plane). Slice-B fixture debt:
+        this test predates v2 activation and built no store at all. The
+        migration seam requires the canonical leaf name."""
+        import os
+
+        from core.governance import s7_v2_migration
+
+        root = Path(self._tmp.name) / "activated"
+        root.mkdir()
+        db_path = root / "ceremony.sqlite3"
+        fresh_store_at(db_path)
+        dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            s7_v2_migration._migrate_authorization_store_to_v2_at(
+                store_dir_fd=dir_fd
+            )
+        finally:
+            os.close(dir_fd)
+        self._db_path_override = db_path
+        return db_path
 
     def _persistable_voice_material(self, *, nonce: str = "nonce-validator-1"):
         from core.governance import operator_user_boundary as s7
@@ -905,6 +892,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             persist_s7_voice_source_bundle_for_material,
         )
 
+        self._activated_db_path()
         rendered, envelope, consultation, authority = self._persistable_voice_material(
             nonce="nonce-validator-first",
         )
@@ -935,11 +923,20 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             now=NOW,
         )
 
-        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
-        bundle = bundle_store.get_for_source_ref(first_binding.source_ref_hash)
+        # Slice-B migration: persistence writes the V2 plane; the old
+        # v1 store reader returned None. Verify through the v2 reader
+        # inside the activated store's anchored transaction.
+        from core.governance.s7_guarded_execution import read_voice_source_bundle
+
+        auth_store = s7.S7AuthorizationStore(self._db_path())
+        with auth_store.anchored_transaction() as conn:
+            bundle, version = read_voice_source_bundle(
+                source_ref_hash=first_binding.source_ref_hash, conn=conn
+            )
         self.assertIsNotNone(bundle)
         assert bundle is not None
         self.assertEqual(bundle.rendered_text_hash, first_binding.rendered_text_hash)
+        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
         self.assertEqual(
             bundle_store.read_raw_response(bundle.raw_response_ref),
             "Maez says there is no objection.",

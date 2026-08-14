@@ -54,3 +54,27 @@ receipts and a capture_root of real files.
 
 test_s7_3_guarded_execution.py fully green with no test deleted and no
 production code changed — this is a fixture debt, not a behaviour bug.
+
+---
+
+## DONE — 2026-08-14, same day
+
+Executed one test at a time per the hazard list, during the Codex-lane
+usage-window gap. 4 red → 28/28 green, zero cascade (the previous
+attempt's 19-failure explosion did not recur). What each fix was:
+
+1. Write-once validator test: activated store (canonical leaf +
+   migration seam) via a per-test _db_path override; verification
+   migrated from the v1 store reader (returned None) to the v2
+   read_voice_source_bundle inside an anchored transaction.
+2-4. Three mint tests: activated auth store (v2 mint demands the
+   activated plane, not merely a created table); validations produced
+   by the V2 pipeline using test_s7_voice_bundle_v2's own fixtures
+   (action bound to each artifact per the mint seam's equality check);
+   the artifact counter now honestly counts both artifact planes.
+
+The orphaned v1 validation producer helper was removed (zero callers;
+a live v1 producer in fixtures invites the next regression). No
+production code changed. Neighbor sweep: only the documented
+pre-existing floor (16 operator_user_boundary + 2 soulwrite liveproof)
+remains — separate debt, separately tracked.
