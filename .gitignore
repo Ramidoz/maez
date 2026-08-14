@@ -174,3 +174,6 @@ memory/backup_receipts.jsonl
 docs/.obsidian/graph.json
 memory/project_planner.json
 scripts/judge_bench/results.md
+
+# Owner-local bench corpora, GPU archives, quarantine — never source (2026-08-14)
+local/
