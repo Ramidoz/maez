@@ -224,3 +224,63 @@ preflight first.
   (designs blocked at `e556fd7`, `cb025ff`; canon D10 ruled authoritative,
   template not yet rewritten).
 * RULINGS 1 and 2, owner-only.
+
+---
+
+# CLOSED — 2026-08-14T00:30Z. Maez runs on CUDA.
+
+Cold-boot witnessed: host restarted 19:30:18 CDT, llama-server active
+nine seconds later on CUDA0 (RTX 4090, 24 GB), llama-judge active, model
+loaded, listening. Same weights, same model file, new engine. The R11
+typed absence carried the authorization exactly as ruled; nothing was
+consulted and nothing pretended to be.
+
+## The ledger: six windows, six taps, every refusal real
+
+1. `presence_assertion_invalid` -> /usr/bin/python3 had no py_webauthn;
+   the venv did. Preflight now checks the dependency under the invoking
+   interpreter (ce84585).
+2. `owner_presence_unattested` -> the finish reader demanded a
+   challenge_id the gate never printed. The gate now prints a fillable
+   finish template (a62f5e2).
+3. `presence_mint_failed` -> blocker 5's exact-type gate refused the
+   ceremony's own held-inode store subclass. isinstance + same-db_path,
+   witnessed both ways (916378e).
+4. `authorization_boot_mismatch` / `permit_unreconstructible` -> a power
+   cut killed the boot the authorization was pinned to, and the
+   authorization is a stage-2 input, so re-mint means re-assemble.
+5. `authorization_consumed` -> the burn-once marker is the WINDOW's
+   nonce; a failed executor spends the window. By design.
+6. `executor_failed` at the first install, three taps running blind ->
+   executor evidence built in stages (pin identity verification
+   bdfa1a3, spawn postmortem 13d9aec/efaf13e, ceremony-error printing
+   cd50a0c), then strace: uutils install 0.8.0's same-file guard runs
+   only when the DESTINATION exists and resolves /proc/self/fd magic
+   links as strings -- a memfd source becomes the literal
+   "/memfd:... (deleted)". Every probe had empty destinations; the live
+   recovery dir held Aug 3 copies. Fixed: rm -f before each install
+   through the same pinned multi-call binary (7aae133). The next
+   ceremony ran straight through.
+7. The final `systemctl reboot` was denied by GNOME session block
+   inhibitors; the owner rebooted interactively. Everything before it
+   had completed.
+
+## Scars written to memory
+
+* A begin()-reaching test pinned the real systemctl and REBOOTED the
+  host three times before the correlation was seen. Executor tests now
+  fill every executable seat with a harmless ELF and tripwire-verify.
+* uutils coreutils quirks on this host (multicall argv[0] dispatch,
+  same-file guard vs memfd, shebang-via-fd failure) are recorded for
+  every future organ that spawns coreutils against fd-relative paths.
+
+## Still owed
+
+* Preflight: selection window must match the live authorization; the
+  window's burn marker must not already exist; both said READY tonight
+  while the ceremony refused.
+* `s7_challenge_replayed` deserves its own refusal name (the 5-minute
+  challenge TTL was exceeded twice by browser round-trips).
+* The burn's reboot operation should account for session inhibitors.
+* Slice-B fixture regression; the bonded consultation organ for
+  soul-write / dream / decision-pipeline; RULINGS 1 and 2 (owner-only).
