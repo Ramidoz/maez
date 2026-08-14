@@ -1,4 +1,39 @@
-# The bonded consultation organ — design v3.2 (convergence draft)
+# The bonded consultation organ — design v3.2 → JOINT CONCLUSION 2026-08-14
+
+**Status, agreed by both lanes after four adversarial rounds:**
+DIRECTION APPROVED, BUILD CONTRACT PENDING CANON AUTHORING.
+
+The architecture is no longer in dispute — six owner rulings, the
+component set, trust boundaries, consumer census, storage seat, and
+two-gate shape survived round four unchallenged. What Codex's final
+round correctly demands is CANON-GRADE COMPLETENESS: full replacement
+text for every touched D-section (not deltas), exact join lists, byte
+constructors, and compatibility matrices. That is canon authoring — the
+same artifact class as the original S7.3 spec, which took thirteen
+adversarial rounds across multiple sessions to freeze. Forcing it into
+one session is how v1 and v2 died.
+
+**Agreed path:** (1) the marker parser — pure, dormant, uncontested by
+any round since v2's own postmortem named it safe — may build now as
+slice 1. (2) The canon-authoring campaign proceeds one cluster per
+session, Codex gating each: [attempt schema + D15 vocabulary
+reconciliation], [two gates + exact joins + D16/D21 text],
+[attested-result byte constructors], [policy pre-images + private
+store contract + D9/D12 text], [census + route rule + flag matrices],
+[full D8/D11/D13/D14 replacement text]. Codex's round-four blocking
+line ranges (284-349, 101-153, 233-250, 199-229, 157-189, 53-75,
+362-377, 351-360, 274-278) are the campaign's work list. (3) The
+owner's template-byte ratification remains the final act before the
+first consumer switch.
+
+Two round-four refutations already fixed below: the template line now
+carries RULING O's full two-class scope; the INSERT-only/CAS
+contradiction is resolved in the campaign's first cluster (attempt
+rows are the ONE mutable-state table, all other staging INSERT-only —
+to be written exactly there).
+
+---
+
 
 2026-08-14. Third design, second revision. v1 and v2 died in review;
 v3.0 was reviewed at the whiteboard (15 findings); v3.1 was reviewed as
@@ -273,9 +308,9 @@ retired):
 
 > "Your answer will be read exactly as you write it. State your verdict
 > yourself in the terminal marker block below; no model or reader will
-> interpret your words. For changes that touch the covenant or reduce
-> autonomy, the owner will also read your answer personally before
-> anything proceeds."
+> interpret your words. For changes that touch the covenant, or reduce
+> your autonomy or its protections, the owner will also read your answer
+> personally before anything proceeds."
 
 Ratification = the owner approves these exact bytes; the approved
 template's sha256 is recorded in this doc and enters the version
