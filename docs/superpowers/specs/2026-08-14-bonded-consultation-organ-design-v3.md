@@ -453,7 +453,53 @@ change to any byte-mutating code path invalidates the tuple and forces
 an explicit re-registration rather than silently changing what a hash
 means.
 
-### 7. Two gates — canon-grade (cluster 2, consolidated round 4)
+### 7. Two gates — SPLIT 2a / 2b (round-5 architectural finding)
+
+**Finding, recorded rather than patched a fifth time.** Four gate
+rounds failed on ONE property — *owner-read cannot be forged* — and
+round 4 failed because I twice asserted properties of code structures
+that do not exist. Both are now verified against the tree:
+
+- `S7VerifiedAssertion` with a trustworthy `challenge_id` **does not
+  exist**. The production verifier returns a plain dict with `ok`,
+  `credential_ref`, `sign_count`, `user_presence`, `user_verification`
+  and library fields — and **no challenge_id at all**
+  (`s7_webauthn_verifier.py:143-151`); `authorize_finish` reads the
+  challenge id from caller-supplied request JSON
+  (`s7_webauthn_ceremony.py:538`). So a type whose mere existence
+  proves "a founder tap covered THIS challenge" is not available to be
+  passed — it must be BUILT, with a constructor only the verifier path
+  can reach.
+- `S7AuthorizationArtifactBinding`'s "existing canonical row-hash
+  domain" **does not exist**: the class is not defined in
+  `core/governance/` at all. There is no seal for new fields to sit
+  inside.
+
+**What this means.** Owner-read is not three bullets in a join table;
+it is a SUBSYSTEM with three new constructions — a verifier-result
+carrier with provenance, a sealed durable binding, and a challenge
+fingerprint member. Specifying it as joins is why four rounds died on
+the same property. Cluster 2 therefore SPLITS:
+
+- **Cluster 2a — gate replay (this section below).** Gate A/B join
+  logic, ordering, write discipline, clock, vocabulary, and the D16/D21
+  anchored dispositions. Rests only on structures verified to exist.
+  A13/B2 remain named as REQUIRED but their mechanism is 2b's.
+- **Cluster 2b — owner-read authority (its own design pass).** Must
+  begin from code verification, not prose: what the verifier can be
+  made to return and who may construct it; whether the artifact
+  binding exists to be amended or must be created; how the response
+  hash enters the challenge fingerprint (the R11 pattern at
+  `s7_webauthn_bootstrap.py:1001-1084` is the shape, verified) and is
+  re-derived at finish before verification
+  (`s7_webauthn_ceremony.py:565-592`). Until 2b freezes, RULING-O
+  classes CANNOT be migrated — soul-write and pipeline classes (which
+  need no owner-read) are unaffected, so the campaign is not blocked,
+  only the two gravest classes are.
+
+Everything below is cluster 2a.
+
+### 7. Two gates — canon-grade (cluster 2a)
 
 Rewritten whole rather than patched again: three rounds of edits left
 self-contradictions between passages. Every ruling and every finding
@@ -876,7 +922,7 @@ canon — one source of truth, permanently.
 >   `result.object_sha256 -> canonical_hash(AttestedConsultationResult
 >   minus object_sha256)`, and
 >   `binding.maez_response_sha256 -> sha256(delimited display region)`;
-> - KEPT-VERBATIM (canon L2956-2958, the closing paragraph: the same
+> - KEPT-VERBATIM (canon L2955-2958, the closing paragraph in full including its final sentence: the same
 >   validator serves tests and finish-time recheck; tests may fake Maez
 >   transport at the producer port but may not bypass this validator
 >   for positive proof).
@@ -933,7 +979,7 @@ classes); the rendered text gains an exact line for the response hash.
 |---|---|
 | Attempt outcome (durable, canon D15 verbatim) | canon's list, unchanged |
 | Producer refusal (pre-attempt) | `snapshot_component_unavailable`, `prompt_integrity_block`, `template_not_canon`, `store_integrity_failure` |
-| Gate cause (validation, durable) | `stale_binding`, `wrong_consumer`, `attempt_replayed`, `attempt_expired`, `staging_lost`, `private_ref_unreplayable`, `receipt_mismatch`, `owner_read_required`, `context_manifest_violation`, `retry_exhausted`, and the three SHARED causes below |
+| Gate cause (validation, durable) | `stale_binding`, `wrong_consumer`, `attempt_replayed`, `attempt_expired`, `staging_lost`, `private_ref_unreplayable`, `receipt_mismatch`, `owner_read_required`, `context_manifest_violation`, and the three SHARED causes below (`retry_exhausted` is an ATTEMPT-layer outcome, not a gate cause: no Gate A or B join emits it) |
 
 Three causes are legitimately detectable at more than one layer and
 therefore appear in more than one row: `store_integrity_failure`
@@ -948,7 +994,8 @@ join tables above.
 
 **Layer carrier (Codex: a rule with no carrier is not a rule).** The
 closed layer vocabulary is `producer | attempt | gate_a | gate_b`.
-Gates A and B WRITE NOTHING (§7); they RETURN `(cause, layer)`. The
+Gate A writes nothing and Gate B writes only B1's CAS (§7); both
+RETURN `(verdict, cause, layer)`. The
 CALLER persists it: the ceremony service writes the pair into the
 existing refusal-history row via `_voice_seat_block(...)`, whose
 schema gains `cause_layer TEXT NOT NULL` alongside its existing
