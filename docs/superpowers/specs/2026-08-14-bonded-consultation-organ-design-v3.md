@@ -152,9 +152,10 @@ family. Its columns divide exactly:
   `state`, `outcome`, `reserved_at`, `finished_at`, `result_row_ref`,
   `consumed_by_artifact`.
 
-`row_seal_hash = canonical_hash` over the immutable columns in the
-order listed. The validator recomputes it at both gates; any drift
-refuses `store_integrity_failure`. All OTHER staging tables
+`row_seal_hash = canonical_hash` over exactly the twelve columns
+named before it in the immutable list, in that order — never over
+itself. The validator recomputes it at both gates; any drift refuses
+`store_integrity_failure`. All OTHER staging tables
 (`s7_consult_snapshots_v1`, `s7_consult_results_v1`,
 `s7_consult_version_tuples_v1`) are strictly INSERT-only.
 
@@ -219,16 +220,25 @@ CHECK (typeof(retry_index) = 'integer'
        AND retry_index BETWEEN 0 AND 2)      -- three-row ceiling, typed
 CHECK (outcome IS NULL OR outcome != 'not_asked')
 
--- canonical UTC form on every timestamp column, so lexicographic
--- comparison IS chronological comparison; nullable columns allow NULL:
-CHECK (created_at GLOB
-  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
-CHECK (expires_at GLOB
-  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
-CHECK (reserved_at IS NULL OR reserved_at GLOB
-  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
-CHECK (finished_at IS NULL OR finished_at GLOB
-  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+-- Timestamp validity, honestly scoped: the schema enforces FORM and
+-- FIELD RANGES (the checks below); calendar validity (e.g. Feb 30)
+-- is guaranteed by the sole writer being the daemon's _now_z, and the
+-- gate validator re-parses every timestamp strictly at replay. With
+-- form + ranges checked, lexicographic comparison IS chronological
+-- for all values the writer can produce. VALID_TS(c) abbreviates,
+-- and is written out in full for each of the four columns:
+--
+--   c GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+--   AND CAST(substr(c,  6, 2) AS INTEGER) BETWEEN 1 AND 12   -- month
+--   AND CAST(substr(c,  9, 2) AS INTEGER) BETWEEN 1 AND 31   -- day
+--   AND CAST(substr(c, 12, 2) AS INTEGER) BETWEEN 0 AND 23   -- hour
+--   AND CAST(substr(c, 15, 2) AS INTEGER) BETWEEN 0 AND 59   -- minute
+--   AND CAST(substr(c, 18, 2) AS INTEGER) BETWEEN 0 AND 59   -- second
+--
+CHECK (VALID_TS(created_at))
+CHECK (VALID_TS(expires_at))
+CHECK (reserved_at IS NULL OR VALID_TS(reserved_at))
+CHECK (finished_at IS NULL OR VALID_TS(finished_at))
 
 CREATE UNIQUE INDEX s7_consult_one_in_flight
   ON s7_consult_attempts_v1 (consultation_id)
