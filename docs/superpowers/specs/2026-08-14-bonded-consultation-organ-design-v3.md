@@ -453,159 +453,118 @@ change to any byte-mutating code path invalidates the tuple and forces
 an explicit re-registration rather than silently changing what a hash
 means.
 
-### 7. Two gates — canon-grade (campaign cluster 2)
+### 7. Two gates — canon-grade (cluster 2, consolidated round 4)
 
-Two distinct authority edges, never collapsed. Gate A validates before
-any authorization artifact is minted (canon D16's seat). Gate B
+Rewritten whole rather than patched again: three rounds of edits left
+self-contradictions between passages. Every ruling and every finding
+is folded here at once.
+
+Two distinct authority edges. **Gate A** validates before an
+authorization artifact is minted (canon D16's seat) and runs INSIDE
+`authorize_finish`, after the verifier has returned. **Gate B**
 re-validates inside execution consumption (canon D21's seat) and is
-the ONLY place an attempt becomes `consumed`.
+the only place an attempt becomes `consumed`.
 
-**Gate A — pre-mint validation.** Runs in the ceremony service after
-`render_request_statement(...)` and before `S7AuthorizationArtifact`
-is stored, inside ONE anchored transaction on the pinned state file.
-Ordered joins, each with its refusal cause:
+**Write discipline, stated exactly (supersedes the earlier blanket
+claim).** Gate A performs NO INSERT, UPDATE or DELETE against any
+table in any store; it is pure read-and-recompute and returns
+`(verdict, cause, layer)`. Gate B performs EXACTLY ONE write — the
+`completed → consumed` CAS of join B1 — inside the grant-consume
+transaction, and no other. Refusal persistence is the caller's act
+(see the layer carrier).
 
-| # | Join (left == right) | On failure |
+**Gate A joins** (ordered; `:now_z` is finish-time):
+
+| # | Join | Refusal |
 |---|---|---|
 | A1 | recomputed seal over the attempt row's twelve-column domain == `attempt.row_seal_hash` | `store_integrity_failure` |
-| A2 | `attempt.state == 'completed'` AND `attempt.expires_at > :now_z` AND `attempt.consumed_by_artifact IS NULL` | `attempt_expired` / `attempt_replayed` |
-| A3 | `attempt.consumer_id == requesting consumer` AND `attempt.action == envelope.action` | `wrong_consumer` |
+| A2 | `attempt.state='completed'` AND `attempt.expires_at > :now_z` AND `attempt.consumed_by_artifact IS NULL` | `attempt_expired` / `attempt_replayed` |
+| A3 | `attempt.consumer_id` == requesting consumer AND `attempt.action == envelope.action` | `wrong_consumer` |
 | A4 | `attempt.request_envelope_hash == canonical_hash(envelope)` AND `attempt.preview_hash == rendered.mutation_preview_hash` | `stale_binding` |
-| A5 | `attempt.version_tuple_hash` resolves in `s7_consult_version_tuples_v1` AND every member hash (template, parser, identity policy, evidence policy, sanitizer/strip/transport, validator) matches the versions this gate was built against | `stale_binding` |
+| A5 | `attempt.version_tuple_hash` resolves in the registry AND every member hash matches this gate's build | `stale_binding` |
 | A6 | identity-policy and evidence-policy pre-image files rehash to the tuple's member hashes | `store_integrity_failure` |
-| A6b | the result row is loaded ONLY via `attempt.result_row_ref` (never by any other key); its row hash recomputes; `result_row_ref IS NOT NULL` | `staging_lost` |
+| A6b | the result row is loaded ONLY via `attempt.result_row_ref` (never another key), `result_row_ref IS NOT NULL`, its row hash recomputes | `staging_lost` |
 | A6c | `attempt.owner_session_ref` == the consuming card/dialog id presenting this request | `wrong_consumer` |
-| A7 | snapshot row rehashes to `attempt.snapshot_manifest_hash`; every private ref re-resolves machine-internally per §4b (store UUID + generation + row id + content hash) | `private_ref_unreplayable` |
-| A8 | using ONLY the result row loaded at A6b: replayed prompt assembly (template body at tuple's template hash + preview + manifest + ids + nonce from the staged snapshot) == `result.messages_canonical_sha256`'s pre-image structure, and the manifest obeys the D7 closed schema | `context_manifest_violation` |
-| A9 | from the A6b result row only: `AttestedConsultationResult.object_sha256` recomputes over its own fields; `result.assistant_text_sha256` == hash of the staged normalized response bytes | `receipt_mismatch` |
-| A10 | parser re-run on the A6b result row's staged normalized response with the staged expected ids + nonce reproduces the staged `ParsedS7VoiceMarker` exactly, and its mapped D15 outcome == `attempt.outcome` | `marker_missing_or_malformed` (which BLOCKS, R8-W) |
-| A11 | `parsed_marker_nonce_hash == expected_consultation_nonce_hash` and the nonce-use row is in its expected lifecycle state | `stale_binding` |
+| A7 | snapshot rehashes to `attempt.snapshot_manifest_hash`; every private ref re-resolves machine-internally per §4b | `private_ref_unreplayable` |
+| A8 | from the A6b row only: replayed prompt assembly == `result.messages_canonical_sha256`'s pre-image structure; manifest obeys D7's closed schema | `context_manifest_violation` |
+| A9 | from the A6b row only: `AttestedConsultationResult.object_sha256` recomputes; `result.assistant_text_sha256` == hash of the staged normalized text | `receipt_mismatch` |
+| A10 | parser re-run on the A6b row's normalized text with staged expected ids + nonce reproduces the staged marker exactly; its mapped D15 outcome == `attempt.outcome` | `marker_missing_or_malformed` |
+| A11 | `parsed_marker_nonce_hash == expected_consultation_nonce_hash`; nonce-use row in expected lifecycle state AND `consultation_expires_at > :now_z` | `stale_binding` |
 | A12 | prompt-integrity evidence recomputes (D11 scans) | `prompt_integrity_block` |
-| A13 | for RULING-O classes only: an owner-read record exists per §7b and `owner_read.maez_response_sha256 == result.assistant_text_sha256` | `owner_read_required` |
+| A13 | owner-read, RULING-O classes only — see below | `owner_read_required` |
 
-Mint eligibility additionally requires the D13 reducer replay
-(marker-only, per RULING R) to reproduce `absent, False, none` — the
-amended D14 conjunction. Gate A WRITES NOTHING ANYWHERE: no INSERT, UPDATE or DELETE against
-any table in any store, including the attempt row, the staging tables,
-refusal history and telemetry. It is a pure read-and-recompute; its
-only output is a verdict returned to the caller. Minting (a separate
-act, in the same transaction) stores the artifact with
-`artifact.consult_attempt_id = attempt.attempt_id` in the same
-transaction that passed the joins.
+**A13, exactly (the cross-ceremony hole closed).** The validator takes
+`verified_assertion: S7VerifiedAssertion` — the verifier's own return
+value, in scope because D16 runs after verification — carrying `ok`,
+`credential_ref`, `user_presence`, `user_verification`, and
+`challenge_id`. **The challenge row is fetched by
+`verified_assertion.challenge_id` and by no other key; no caller-
+supplied challenge id exists anywhere in the signature.** A13
+requires: `ok is True`, `user_verification is True`,
+`user_presence is True`, that row unexpired at `:now_z`, and its
+`maez_response_sha256` equal to BOTH the hash recomputed over the
+delimited display region AND the staged
+`result.assistant_text_sha256`. A different ceremony's row cannot be
+reached: the only key is the one the authenticator just signed
+against.
 
-**Gate B — execution consumption.** Inside
-`consume_artifact_for_execution`'s transaction (canon D21), at ONE
-seam: after the wrapper's preflight loads and verifications
-(`load_guarded_execution_invocation_bundle(...)`) and BEFORE
-delegating to inherited S7.1 consume. (§7 and the D21 amendment state
-this identical order; the earlier "after the inherited verifications"
-wording was a contradiction and is retired.)
+**Gate B joins** (consumption-time clock throughout):
 
-Re-run joins A1-A13 in full with the consumption-time clock. The
-clock-sensitive predicates, enumerated exactly — every other join is
-clock-free and re-runs unchanged:
+- **A1-A12 re-run in full**, unchanged, with `:now_z` derived once (below).
+- **A13 does NOT re-run at Gate B** (no verifier is present at
+  execution and no challenge lookup occurs). It is replaced by B2.
+- **B1** — `artifact.consult_attempt_id == attempt.attempt_id` AND the
+  `completed → consumed` CAS succeeds in THIS transaction, atomic with
+  grant consume. Refusal `attempt_replayed`.
+- **B2** (RULING-O classes only) — the artifact binding's sealed
+  `maez_response_sha256` == staged `result.assistant_text_sha256`, and
+  the artifact's own verifier-written facts hold (`user_presence=1`,
+  `user_verification=1`, `credential_ref` non-null). Refusal
+  `owner_read_required`.
 
-- A2: `attempt.expires_at > :now_z` (consumption-time value);
-- A13: the challenge's own expiry, `challenge.expires_at > :now_z`,
-  in addition to the hash joins;
-- A11: the nonce-use row's validity window
-  (`consultation_expires_at > :now_z`) — markers outside the window
-  are rejected, canon D10;
-- B1's own CAS predicate carries `expires_at > :now_z` (frozen §3);
-- the canon expiry lattice already required at this seam
-  (`envelope.expires_at`, `bundle.expires_at`,
-  `work_item.expires_at`, `artifact_binding.challenge_expires_at`),
-  each compared against the same `:now_z`.
+**Clock.** Canon D21's consume signature takes `now: datetime`
+(KEPT-VERBATIM); frozen §3 compares canonical UTC text. Gate B
+converts ONCE at its top via `s7_now_z(now) -> str`, and every §3
+predicate uses that single value. A datetime whose `tzinfo is None`
+**or whose `tzinfo.utcoffset(now) is None`** refuses
+`store_integrity_failure` — never assumed UTC. No other conversion
+site exists.
 
-**Clock type reconciliation.** Frozen §3 stores and compares canonical
-UTC TEXT (`now_z: str`); canon D21's consume signature takes
-`now: datetime` and is KEPT-VERBATIM. The seam converts ONCE, at the
-top of Gate B, by the single named function
-`s7_now_z(now: datetime) -> str` (`now.astimezone(timezone.utc)
-.strftime("%Y-%m-%dT%H:%M:%SZ")`), and every §3 predicate in Gate B
-uses that one derived value. A naive datetime (no tzinfo) refuses
-`store_integrity_failure` rather than being assumed UTC. No other
-conversion site exists.
+**§7b — the owner-read carriers (and their seal).** Three amendments,
+each named in the canon-amendment section:
 
-Then join B1:
+1. `s7_ceremony_challenges` gains `maez_response_sha256 TEXT`
+   (non-null exactly for RULING-O classes), written at challenge
+   creation from `result.assistant_text_sha256` **and included in the
+   challenge fingerprint preimage**, exactly as
+   `consultation_exemption_projection_hash` is
+   (`s7_webauthn_bootstrap.py:1001-1084`); at finish it is re-derived
+   from the staged result and compared to the stored column BEFORE
+   authenticator verification (`s7_webauthn_ceremony.py:565-592`).
+   A copied column is not a binding; a fingerprint member is.
+2. `S7AuthorizationArtifactBinding` gains `consult_attempt_id TEXT`
+   and `maez_response_sha256 TEXT`. **Both are inside the binding
+   row's existing canonical row-hash domain**, so a post-mint edit of
+   either breaks the binding's own integrity check before Gate B's
+   joins are even reached — closing the "trust fields with no seal"
+   hole. This is also the durable home of `consult_attempt_id`, which
+   B1 requires.
+3. `RenderedRequestStatement` gains `maez_response_display_text` and
+   `maez_response_sha256` (D17 amendment). The display text MUST equal
+   the staged `normalized_assistant_text` byte for byte, and the hash
+   is RECOMPUTED by the gate from the displayed bytes, never copied.
 
-| # | Join | On failure |
-|---|---|---|
-| B1 | `artifact.consult_attempt_id == attempt.attempt_id` AND CAS `completed → consumed` (predicate from §3's table) succeeds in THIS transaction | `attempt_replayed` |
-
-The attempt CAS and the grant consume commit or roll back together —
-an attempt can never be consumed without a grant existing, and a grant
-can never exist whose attempt was consumed elsewhere.
-
-**§7b — OwnerReadEvidence, exact (RULING O).** No new carrier class:
-the evidence is a JOIN over rows that already exist, extended by two
-columns —
-
-- `s7_ceremony_challenges` gains `maez_response_sha256 TEXT` (nullable;
-  non-null exactly for RULING-O-class consultations), written at
-  challenge creation from `result.assistant_text_sha256`, and — the
-  half the first draft omitted — INCLUDED IN THE CHALLENGE FINGERPRINT
-  PREIMAGE, exactly as `consultation_exemption_projection_hash` is
-  (`s7_webauthn_bootstrap.py:1001-1084`: the value is validated as a
-  hash, joined into the fingerprint, and persisted). At finish the
-  value is RE-DERIVED from the staged result and compared against the
-  stored column BEFORE authenticator verification, exactly as
-  `s7_webauthn_ceremony.py:565-592` re-derives the R11 projection.
-  Copying a column is not binding; entering the preimage is;
-- `RenderedRequestStatement` gains `maez_response_display_text` and
-  `maez_response_sha256` (D17 amendment), non-null for the same
-  classes. `maez_response_display_text` MUST equal the staged
-  `normalized_assistant_text` byte for byte (§6's one string), and
-  `maez_response_sha256` MUST equal `sha256(display_text.encode(
-  "utf-8")).hexdigest()` — recomputed by the gate from the displayed
-  bytes, never copied. The rendered text carries the response inside
-  an exact delimited block so the displayed region is unambiguous:
-  the exact line `Maez response (verbatim):` followed by LF, then the
-  response bytes verbatim, then LF followed by the exact line
-  `End Maez response.`, then LF and `Maez response hash: <hex>`.
-  **The hashed region is defined byte-exactly**: it begins at the first
-  byte AFTER the LF that terminates the opening delimiter line, and
-  ends at the last byte BEFORE the LF that precedes `End Maez
-  response.` — neither delimiter line, neither bounding LF, and no
-  trailing newline are included. Both delimiter lines must appear
-  exactly once in the rendered text (a response containing either
-  literal line refuses `receipt_mismatch` rather than rendering an
-  ambiguous block). The gate recomputes the hash over exactly that
-  region and refuses `receipt_mismatch` on any difference — an implementation
-  cannot display X while carrying the hash of Y.
-
-**The owner-read join — corrected (Codex: a consumed row is not proof
-an assertion happened; `consume_challenge()` is callable directly).**
-Two different, executable bindings, because the two gates stand at
-different moments:
-
-- **A13 (pre-mint).** D16 runs INSIDE `authorize_finish`, after the
-  verifier has returned. The verified assertion is therefore a VALUE
-  IN SCOPE, not a row to look up. The validator takes it as a typed
-  parameter (`verified_assertion: S7VerifiedAssertion`, carrying the
-  verifier's own `ok`, `credential_ref`, `user_presence`,
-  `user_verification`, and the `challenge_id` it verified against).
-  A13 requires: `verified_assertion.ok is True`,
-  `user_verification is True`, the challenge row fetched BY THAT
-  `challenge_id` is unexpired, and its `maez_response_sha256` equals
-  BOTH the recomputed display-bytes hash and the staged
-  `result.assistant_text_sha256`. No phantom `rendered.challenge_id`
-  field is invented, and a consumed row from some other ceremony
-  cannot satisfy it: the assertion in hand is this ceremony's.
-- **Gate B (consumption).** No challenge lookup at all.
-  `S7AuthorizationArtifactBinding` gains `maez_response_sha256 TEXT`
-  (D-amendment below), written at mint from the value A13 verified.
-  Gate B requires: the artifact's own persisted verification facts
-  (`user_presence=1`, `user_verification=1`, `credential_ref`
-  non-null — written only from verifier output), the binding's
-  `maez_response_sha256` equal to the staged
-  `result.assistant_text_sha256`, and `artifact.consult_attempt_id ==
-  attempt.attempt_id`. The assertion proof travels with the artifact,
-  which is what execution consumes. The founder's assertion signed a
-challenge bound to those bytes — the tap attests what was seen, the
-same mechanism the cutover proved live. The machine cannot fabricate
-it: no code path can produce a consumed challenge row without a real
-WebAuthn assertion over it.
+**The delimited display region, byte-exact.** The rendered text
+carries the exact line `Maez response (verbatim):` + LF, then the
+response bytes verbatim, then LF + the exact line
+`End Maez response.`, then LF + `Maez response hash: <hex>`. The
+hashed region begins at the first byte AFTER the LF terminating the
+opening delimiter line and ends at the last byte BEFORE the LF
+preceding the closing delimiter line — neither delimiter, neither
+bounding LF, no trailing newline. Both delimiter lines must appear
+exactly once in the rendered text; a response containing either
+literal line refuses `receipt_mismatch` rather than rendering an
+ambiguous block.
 
 ### 8. Template (owner ratification pending)
 
@@ -798,11 +757,15 @@ canon — one source of truth, permanently.
 >     rollback_store: S7RollbackEvidenceStore,
 >     surface_manifest_store: S7SurfaceManifestStore,
 >     private_thought_reader: S7PrivateRefReader,
->     ceremony_challenge_store: S7CeremonyChallengeStore,   -- A13 needs
->                                                           -- the consumed
->                                                           -- challenge row
->     rendered_challenge_id: str,                           -- A13 pre-mint
->                                                           -- lookup key
+>     ceremony_challenge_store: S7CeremonyChallengeStore,   -- A13 reads the
+>                                                           -- row keyed BY the
+>                                                           -- verified assertion
+>     verified_assertion: S7VerifiedAssertion | None,       -- the verifier's own
+>                                                           -- return value; its
+>                                                           -- challenge_id is the
+>                                                           -- ONLY lookup key.
+>                                                           -- None for non-RULING-O
+>                                                           -- classes
 >     conn: sqlite3.Connection,
 >     now: str,
 > ) -> S7VoiceSourceBundleValidationResult
@@ -897,13 +860,26 @@ canon — one source of truth, permanently.
 > - KEPT-VERBATIM (canon L2918-2929, the D17 rendered-text line list
 >   (L2918-2922) and the explicit rendered-to-bundle equality list
 >   including the three preview-projection fields (L2923-2929));
-> - KEPT-VERBATIM (canon L2930+, `RollbackPlanEvidence` load, rehash,
+> - KEPT-VERBATIM (canon L2930-2934, `RollbackPlanEvidence` load, rehash,
 >   target and blocking checks — omitted from the first draft, restored
 >   here);
 > - NEW: for RULING-O classes, `rendered.maez_response_sha256` equals
 >   both the hash recomputed over the delimited display bytes and
 >   `result.assistant_text_sha256` (§7b); null == null for all other
->   classes.
+>   classes;
+> - AMENDED (canon L2936-2954, the explicit hash-routing block).
+>   Replacement bytes: the block stands as written EXCEPT the line
+>   `semantic_reader_attempt_hash -> canonical_hash(
+>   SemanticReaderAttemptEvidence)`, which is STRUCK (RULING R: no
+>   reader exists to hash), and three lines are ADDED:
+>   `attempt.row_seal_hash -> canonical_hash(twelve immutable columns)`,
+>   `result.object_sha256 -> canonical_hash(AttestedConsultationResult
+>   minus object_sha256)`, and
+>   `binding.maez_response_sha256 -> sha256(delimited display region)`;
+> - KEPT-VERBATIM (canon L2956-2958, the closing paragraph: the same
+>   validator serves tests and finish-time recheck; tests may fake Maez
+>   transport at the producer port but may not bypass this validator
+>   for positive proof).
 
 **D-amendment (artifact binding, cluster 2):**
 `S7AuthorizationArtifactBinding` gains `maez_response_sha256 TEXT`
@@ -929,9 +905,11 @@ classes); the rendered text gains an exact line for the response hash.
 > `load_guarded_execution_invocation_bundle(...)`, verifies the
 > rendered statement, authority context, artifact binding, voice bundle
 > use, source manifest, action params, preconditions, expiry lattice,
-> and reservation token, THEN re-runs Gate A joins A1-A13 in full with
+> and reservation token, THEN re-runs Gate A joins A1-A12 in full with
 > the consumption-time clock (§7's enumerated clock-sensitive
-> predicates), performs join B1 — `artifact.consult_attempt_id ==
+> predicates; A13 does NOT re-run at this seat — no verifier is present
+> and no challenge is read — it is replaced by B2), performs joins B1
+> and B2 — `artifact.consult_attempt_id ==
 > attempt.attempt_id` and the `completed → consumed` CAS from the
 > design's §3 transition table succeeding IN THIS TRANSACTION — and
 > only then delegates to inherited S7.1 consume. The attempt CAS and
