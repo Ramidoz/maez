@@ -140,11 +140,14 @@ RULING 1, not a cryptographic exclusion).
 `s7_consult_attempts_v1` is the ONE mutable-state table in the staging
 family. Its columns divide exactly:
 
-- IMMUTABLE (written once at row creation, covered by `row_seal_hash`):
-  `attempt_id`, `consultation_id`, `retry_index`, `consumer_id`,
-  `action`, `request_envelope_hash`, `preview_hash`,
-  `snapshot_manifest_hash`, `version_tuple_hash`, `owner_session_ref`,
-  `created_at`, `expires_at`.
+- IMMUTABLE (written once at row creation): `attempt_id`,
+  `consultation_id`, `retry_index`, `consumer_id`, `action`,
+  `request_envelope_hash`, `preview_hash`, `snapshot_manifest_hash`,
+  `version_tuple_hash`, `owner_session_ref`, `created_at`,
+  `expires_at`, and `row_seal_hash` itself — the seal is immutable but
+  EXCLUDED from its own hash domain (a hash cannot cover itself); it
+  covers exactly the twelve columns preceding it in this list, in this
+  order.
 - MUTABLE (via CAS transitions only, never covered by the seal):
   `state`, `outcome`, `reserved_at`, `finished_at`, `result_row_ref`,
   `consumed_by_artifact`.
@@ -197,21 +200,45 @@ inside a held-store anchored transaction, keyed by `attempt_id`;
 | (none) | `pending` | INSERT (constraints below enforce uniqueness, ceiling, single-in-flight) | full row + seal | producer issues |
 | `pending` | `reserved` | `attempt_id=:id AND state='pending' AND expires_at > :now_z` | `reserved_at=:now_z` | immediately before inference |
 | `reserved` | `completed` | `attempt_id=:id AND state='reserved' AND expires_at > :now_z` | `outcome`, `finished_at=:now_z`, `result_row_ref` — same txn as the result row + attested result | response received and parsed |
-| `reserved` | `failed` | `attempt_id=:id AND state='reserved'` | `outcome`, `finished_at=:now_z` | transport failure, integrity block, producer refusal |
+| `reserved` | `failed` | `attempt_id=:id AND state='reserved'` — takes `:now_z` for the write; no TTL predicate (failure is recordable even late) | `outcome`, `finished_at=:now_z` | transport failure, integrity block, producer refusal |
 | `pending` | `expired` | `attempt_id=:id AND state='pending' AND expires_at <= :now_z` | `finished_at=:now_z` | TTL sweep / next producer touch |
 | `reserved` | `expired` | `attempt_id=:id AND state='reserved' AND expires_at <= :now_z` | `finished_at=:now_z` | TTL sweep; see ambiguous transport |
-| `completed` | `consumed` | `attempt_id=:id AND state='completed' AND consumed_by_artifact IS NULL` | `consumed_by_artifact` — same txn as grant mint (§7a-ii) | execution consumption |
+| `completed` | `consumed` | `attempt_id=:id AND state='completed' AND consumed_by_artifact IS NULL AND expires_at > :now_z` | `consumed_by_artifact`, `finished_at=:now_z` — same txn as grant mint (§7a-ii) | execution consumption (an expired completed answer is not consumable) |
 
-**Structural constraints (schema, not prose):**
+**Structural constraints (schema, not prose).** All four staging
+tables are declared `STRICT` (SQLite strict typing — the type-affinity
+bypass Codex witnessed live, inserting retry_index 0.25, is impossible
+in a STRICT table because a REAL cannot enter an INTEGER column), with
+a typeof belt so even a non-STRICT rebuild refuses:
 
 ```sql
+CREATE TABLE s7_consult_attempts_v1 ( ... ) STRICT;
+
 UNIQUE (consultation_id, retry_index)
-CHECK (retry_index BETWEEN 0 AND 2)          -- three-row ceiling
+CHECK (typeof(retry_index) = 'integer'
+       AND retry_index BETWEEN 0 AND 2)      -- three-row ceiling, typed
 CHECK (outcome IS NULL OR outcome != 'not_asked')
+
+-- canonical UTC form on every timestamp column, so lexicographic
+-- comparison IS chronological comparison; nullable columns allow NULL:
+CHECK (created_at GLOB
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+CHECK (expires_at GLOB
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+CHECK (reserved_at IS NULL OR reserved_at GLOB
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+CHECK (finished_at IS NULL OR finished_at GLOB
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+
 CREATE UNIQUE INDEX s7_consult_one_in_flight
   ON s7_consult_attempts_v1 (consultation_id)
   WHERE state IN ('pending', 'reserved');    -- single-in-flight
 ```
+
+`:now_z` is universal: every transition takes it and writes it into
+its timestamp column; TTL predicates use it only where expiry governs
+(reserve, complete, expire, consume — a `failed` write records lateness
+honestly rather than refusing to record it).
 
 Single-in-flight makes the first-blocking lock STRUCTURAL, not
 advisory: at most one nonterminal attempt exists per consultation, so
