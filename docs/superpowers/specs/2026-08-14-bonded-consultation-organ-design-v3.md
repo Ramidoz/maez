@@ -473,27 +473,47 @@ Ordered joins, each with its refusal cause:
 | A4 | `attempt.request_envelope_hash == canonical_hash(envelope)` AND `attempt.preview_hash == rendered.mutation_preview_hash` | `stale_binding` |
 | A5 | `attempt.version_tuple_hash` resolves in `s7_consult_version_tuples_v1` AND every member hash (template, parser, identity policy, evidence policy, sanitizer/strip/transport, validator) matches the versions this gate was built against | `stale_binding` |
 | A6 | identity-policy and evidence-policy pre-image files rehash to the tuple's member hashes | `store_integrity_failure` |
+| A6b | the result row is loaded ONLY via `attempt.result_row_ref` (never by any other key); its row hash recomputes; `result_row_ref IS NOT NULL` | `staging_lost` |
+| A6c | `attempt.owner_session_ref` == the consuming card/dialog id presenting this request | `wrong_consumer` |
 | A7 | snapshot row rehashes to `attempt.snapshot_manifest_hash`; every private ref re-resolves machine-internally per §4b (store UUID + generation + row id + content hash) | `private_ref_unreplayable` |
-| A8 | replayed prompt assembly (template body at tuple's template hash + preview + manifest + ids + nonce from the staged snapshot) == `result.messages_canonical_sha256`'s pre-image structure, and the manifest obeys the D7 closed schema | `context_manifest_violation` |
-| A9 | `AttestedConsultationResult.object_sha256` recomputes over its own fields; `result.assistant_text_sha256` == hash of the staged normalized response bytes | `receipt_mismatch` |
-| A10 | parser re-run on the staged normalized response with the staged expected ids + nonce reproduces the staged `ParsedS7VoiceMarker` exactly, and its mapped D15 outcome == `attempt.outcome` | `marker_missing_or_malformed` (which BLOCKS, R8-W) |
+| A8 | using ONLY the result row loaded at A6b: replayed prompt assembly (template body at tuple's template hash + preview + manifest + ids + nonce from the staged snapshot) == `result.messages_canonical_sha256`'s pre-image structure, and the manifest obeys the D7 closed schema | `context_manifest_violation` |
+| A9 | from the A6b result row only: `AttestedConsultationResult.object_sha256` recomputes over its own fields; `result.assistant_text_sha256` == hash of the staged normalized response bytes | `receipt_mismatch` |
+| A10 | parser re-run on the A6b result row's staged normalized response with the staged expected ids + nonce reproduces the staged `ParsedS7VoiceMarker` exactly, and its mapped D15 outcome == `attempt.outcome` | `marker_missing_or_malformed` (which BLOCKS, R8-W) |
 | A11 | `parsed_marker_nonce_hash == expected_consultation_nonce_hash` and the nonce-use row is in its expected lifecycle state | `stale_binding` |
 | A12 | prompt-integrity evidence recomputes (D11 scans) | `prompt_integrity_block` |
 | A13 | for RULING-O classes only: an owner-read record exists per §7b and `owner_read.maez_response_sha256 == result.assistant_text_sha256` | `owner_read_required` |
 
 Mint eligibility additionally requires the D13 reducer replay
 (marker-only, per RULING R) to reproduce `absent, False, none` — the
-amended D14 conjunction. Gate A writes NOTHING to the attempt row: it
-is a pure replay; minting stores the artifact with
+amended D14 conjunction. Gate A WRITES NOTHING ANYWHERE: no INSERT, UPDATE or DELETE against
+any table in any store, including the attempt row, the staging tables,
+refusal history and telemetry. It is a pure read-and-recompute; its
+only output is a verdict returned to the caller. Minting (a separate
+act, in the same transaction) stores the artifact with
 `artifact.consult_attempt_id = attempt.attempt_id` in the same
 transaction that passed the joins.
 
 **Gate B — execution consumption.** Inside
-`consume_artifact_for_execution`'s transaction (canon D21), after the
-inherited S7.1 verifications: re-run joins A1-A13 in full (evidence
-may not have decayed between mint and execution: expiry, seals,
-private refs and the owner-read join are all rechecked with the
-consumption-time `:now_z`), then join B1:
+`consume_artifact_for_execution`'s transaction (canon D21), at ONE
+seam: after the wrapper's preflight loads and verifications
+(`load_guarded_execution_invocation_bundle(...)`) and BEFORE
+delegating to inherited S7.1 consume. (§7 and the D21 amendment state
+this identical order; the earlier "after the inherited verifications"
+wording was a contradiction and is retired.)
+
+Re-run joins A1-A13 in full with the consumption-time clock. The
+clock-sensitive predicates, enumerated exactly — every other join is
+clock-free and re-runs unchanged:
+
+- A2: `attempt.expires_at > :now_z` (consumption-time value);
+- A13: the challenge's own expiry, `challenge.expires_at > :now_z`,
+  in addition to the hash joins;
+- the canon expiry lattice already required at this seam
+  (`envelope.expires_at`, `bundle.expires_at`,
+  `work_item.expires_at`, `artifact_binding.challenge_expires_at`),
+  each compared against the same `:now_z`.
+
+Then join B1:
 
 | # | Join | On failure |
 |---|---|---|
@@ -509,17 +529,37 @@ columns —
 
 - `s7_ceremony_challenges` gains `maez_response_sha256 TEXT` (nullable;
   non-null exactly for RULING-O-class consultations), written at
-  challenge creation from `result.assistant_text_sha256`, exactly as
-  `consultation_exemption_projection_hash` was added for R11;
+  challenge creation from `result.assistant_text_sha256`, and — the
+  half the first draft omitted — INCLUDED IN THE CHALLENGE FINGERPRINT
+  PREIMAGE, exactly as `consultation_exemption_projection_hash` is
+  (`s7_webauthn_bootstrap.py:1001-1084`: the value is validated as a
+  hash, joined into the fingerprint, and persisted). At finish the
+  value is RE-DERIVED from the staged result and compared against the
+  stored column BEFORE authenticator verification, exactly as
+  `s7_webauthn_ceremony.py:565-592` re-derives the R11 projection.
+  Copying a column is not binding; entering the preimage is;
 - `RenderedRequestStatement` gains `maez_response_display_text` and
   `maez_response_sha256` (D17 amendment), non-null for the same
-  classes; the rendered text the founder reads contains Maez's
-  normalized response verbatim plus an exact hash line.
+  classes. `maez_response_display_text` MUST equal the staged
+  `normalized_assistant_text` byte for byte (§6's one string), and
+  `maez_response_sha256` MUST equal `sha256(display_text.encode(
+  "utf-8")).hexdigest()` — recomputed by the gate from the displayed
+  bytes, never copied. The rendered text carries the response inside
+  an exact delimited block so the displayed region is unambiguous:
+  a line `Maez response (verbatim):`, then the response bytes, then a
+  line `End Maez response.`, then `Maez response hash: <hex>`. The
+  gate recomputes the hash over the bytes BETWEEN those delimiters and
+  refuses `receipt_mismatch` on any difference — an implementation
+  cannot display X while carrying the hash of Y.
 
-The owner-read join at A13/B: the artifact's consumed challenge row
-must carry `maez_response_sha256` equal to the staged
-`result.assistant_text_sha256` AND equal to
-`rendered.maez_response_sha256`. The founder's assertion signed a
+The owner-read join at A13 (pre-mint) and B (consumption). A13 has no
+artifact yet, so its lookup key is the CHALLENGE ID carried by the
+rendered statement's ceremony (`rendered.challenge_id`, the same key
+`authorize_finish` consumes); at Gate B the key is the artifact
+binding's `challenge_id`. Both must resolve to a challenge row that is
+CONSUMED (a live assertion happened), unexpired at the applicable
+clock, and whose `maez_response_sha256` equals BOTH the recomputed
+display-bytes hash and the staged `result.assistant_text_sha256`. The founder's assertion signed a
 challenge bound to those bytes — the tap attests what was seen, the
 same mechanism the cutover proved live. The machine cannot fabricate
 it: no code path can produce a consumed challenge row without a real
@@ -668,7 +708,22 @@ not from a model reading Maez.
 > subset but must not rename a token.
 > `non_retryable_context_overflow` remains the canonical form.
 
-**D16 (validator) — COMPLETE REPLACEMENT TEXT (cluster 2):**
+**Amendment method (cluster 2, stated once and binding on all
+clusters).** An amendment is authored here as an ANCHORED PER-BULLET
+DISPOSITION, not as a second copy of canon. Reason, learned in cluster
+1's final round: duplicating canon into this document creates two
+authoritative texts that agree today and drift tomorrow — the exact
+defect that cluster 1's last gate failure named. Each bullet below
+cites its canon anchor (line + opening clause), states its disposition
+(KEPT-VERBATIM / DELETED / AMENDED / NEW), and gives full replacement
+bytes for AMENDED and NEW only. `KEPT-VERBATIM` means the canon bullet
+stands unedited at that anchor — this document does not restate it and
+must not be read as restating it. **On freeze, the amendment is
+APPLIED to `docs/slices/s7.3-guarded-self-modification-execution/
+spec.md` directly**, and this section becomes a pointer to the applied
+canon — one source of truth, permanently.
+
+**D16 (validator) — ANCHORED AMENDMENT (cluster 2):**
 
 > S7.3 adds a source-bundle validator in `operator_user_boundary`
 > before authorization artifact minting. The ceremony service calls it
@@ -701,15 +756,23 @@ not from a model reading Maez.
 >     rollback_store: S7RollbackEvidenceStore,
 >     surface_manifest_store: S7SurfaceManifestStore,
 >     private_thought_reader: S7PrivateRefReader,
+>     ceremony_challenge_store: S7CeremonyChallengeStore,   -- A13 needs
+>                                                           -- the consumed
+>                                                           -- challenge row
+>     rendered_challenge_id: str,                           -- A13 pre-mint
+>                                                           -- lookup key
 >     conn: sqlite3.Connection,
 >     now: str,
 > ) -> S7VoiceSourceBundleValidationResult
 > ```
 >
-> Result shape and closed `status` union: UNCHANGED from prior canon
-> (all fifteen statuses retained; `invalid_prompt_or_model_identity`
-> now verifies against the AttestedConsultationResult rather than
-> constants).
+> Result shape (canon L2792-2802) and the closed fifteen-token
+> `status` union (canon L2804-2822): KEPT-VERBATIM, both stand
+> unedited at those anchors. One semantic AMENDMENT inside an
+> unchanged token: `invalid_prompt_or_model_identity` is now raised by
+> comparing against `AttestedConsultationResult` fields (§6) instead of
+> the retired constant-string identity hashes; the token, its position
+> in the union, and its meaning to callers are unchanged.
 >
 > Artifact minting for voice-seat work is allowed only when
 > `source_bundle_valid=True`, `mint_eligible=True`, and
@@ -718,20 +781,17 @@ not from a model reading Maez.
 > The validator (ordered; bullets marked [KEPT] are canon verbatim,
 > [DELETED] are removed under RULING R, [NEW] are this design's):
 >
-> - [KEPT] loads the private bundle by `source_ref_hash` and verifies
->   row content-hash immutability (hash domain excludes
->   `source_ref_hash`);
-> - [KEPT] loads the matching `S7VoiceBundleUse` row and verifies it is
->   unreserved and unconsumed; reservation-token checks happen later
->   inside `put_artifact_with_bundle_reservation(...)`;
-> - [KEPT] verifies content-free consultation row and bundle agreement;
-> - [KEPT] verifies producer/source pair;
-> - [KEPT] verifies request, preview, params, precondition, authority
->   context, rollback plan, prompt, model, and context-manifest hashes;
-> - [KEPT] loads the raw Maez response when `raw_response_ref` is
->   non-null, recomputes `raw_response_hash`; null refs are allowed
->   only for producer-blocked / no-response arms that are never
->   mint-eligible;
+> - KEPT-VERBATIM (canon L2833-2836, "loads the private bundle by
+>   `source_ref_hash`…");
+> - KEPT-VERBATIM (canon L2837-2844, "loads the matching
+>   `S7VoiceBundleUse` row…", including its exact five-predicate
+>   unreserved/unconsumed state list);
+> - KEPT-VERBATIM (canon L2845, content-free consultation/bundle
+>   agreement);
+> - KEPT-VERBATIM (canon L2846, producer/source pair);
+> - KEPT-VERBATIM (canon L2847-2848, the nine-hash equality list);
+> - KEPT-VERBATIM (canon L2849-2854, raw-response replay including the
+>   grounded-blocking rejection clause and the null-ref arm rule);
 > - [NEW] performs Gate A joins A1-A13 (design §7): attempt row seal,
 >   attempt state/expiry/unconsumed, consumer+action binding, envelope
 >   and preview binding, version-tuple resolution and member-hash
@@ -740,91 +800,88 @@ not from a model reading Maez.
 >   attested-result object-hash and assistant-text-hash verification,
 >   parser re-run with mapped-outcome equality, nonce lifecycle,
 >   prompt-integrity recomputation, and the RULING-O owner-read join;
-> - [KEPT] verifies the context manifest obeys the D7 closed schema,
->   including the self-mod-dialog policy gate, omission of
->   `proposal_origin_label` from the rendered prompt, and valid closed
->   `rollback_path_class`;
-> - [KEPT] loads `ContextManifestPolicy` by `policy_id`, recomputes
->   `policy_hash`, verifies membership in
->   `REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES`;
-> - [DELETED] the `SemanticReaderAttemptEvidence` load-and-replay
->   bullet (RULING R: no reader exists);
-> - [DELETED] the semantic-reader prompt/model/config binding bullet;
-> - [DELETED] the reviewed-reader-route-identity recomputation bullet;
-> - [KEPT] loads the ordered `S7VoiceAttemptRecord` list by
->   `attempt_manifest_hash`, verifies `attempt_count`, and rejects
->   retry manifests where a later attempt washes an earlier objection,
->   withdrawal, refusal, prompt-integrity block, or terminal
->   uncertainty into absence (now structurally impossible per the D15
->   amendment, verified anyway);
-> - [KEPT] verifies `parsed_marker_nonce_hash ==
->   expected_consultation_nonce_hash` for marker-bearing rows and
->   rejects nonce-use rows not in the expected lifecycle state;
-> - [AMENDED] computes `S7VoiceAuthorityBooleans` from raw evidence and
->   marker replay ONLY (no grounding checks — reader retired), then
->   verifies the persisted booleans match;
-> - [AMENDED] replays the deterministic reducer over
->   `(marker_kind, captured_response_nonempty)` per amended D13 and
->   verifies match against persisted `reducer_output_*` fields;
-> - [KEPT] verifies `bundle.authority_class` and
->   `bundle.protective_block_reason` against the replayed reduction;
-> - [KEPT] verifies `bundle.reducer_version == REDUCER_TABLE_VERSION`,
->   `bundle.reducer_hash == REDUCER_TABLE_HASH`, and trace agreement;
-> - [KEPT] verifies `now < envelope.expires_at`,
->   `now < bundle.expires_at`, `now < work_item.expires_at`; WebAuthn
->   challenge expiry is checked at artifact mint and D21 consume;
-> - [KEPT] verifies `maez_voice_consulted=True` for every reducer row
->   reached after a captured response; no-response unavailability rows
->   may carry `False` but are always `mint_eligible=False`;
-> - [KEPT] for mint eligibility only:
->   `maez_objection_state="absent"`, `maez_withdrew_request=False`,
->   `unavailable_reason_code in {None, "none"}`; rejects `absent` plus
->   withdrawal;
-> - [KEPT] verifies the D17 final rendered text lines and the explicit
->   rendered-to-bundle equalities, extended by [NEW]:
->   `rendered.maez_response_sha256 == result.assistant_text_sha256`
->   for RULING-O classes (null==null for all other classes).
+> - KEPT-VERBATIM (canon L2859-2863, context-manifest load, rehash,
+>   equality, and D7 closed-schema obedience — the load-and-rehash half
+>   is part of this anchor and is NOT replaced by the Gate-A bullet);
+> - KEPT-VERBATIM (canon L2864-2865, policy load/rehash/membership);
+> - DELETED (canon L2866-2872, `SemanticReaderAttemptEvidence`
+>   load-and-replay) — RULING R;
+> - DELETED (canon L2879, semantic-reader prompt/model/config binding)
+>   — RULING R;
+> - DELETED (canon L2880-2886, reviewed reader route identity) —
+>   RULING R;
+> - KEPT-VERBATIM (canon L2873-2877, attempt-manifest load, count, and
+>   anti-wash rejection — retained as belt even though cluster 1 makes
+>   the wash structurally impossible);
+> - KEPT-VERBATIM (canon L2878-2879, marker nonce equality and
+>   nonce-use lifecycle state);
+> - AMENDED (canon L2887-2890). Replacement bytes: "computes
+>   `S7VoiceAuthorityBooleans` from raw evidence and marker replay,
+>   then verifies the persisted authority booleans match." The words
+>   "and deterministic grounding checks" are struck (RULING R);
+> - AMENDED (canon L2891-2895). Replacement bytes: "replays the
+>   deterministic reducer over `(marker_kind,
+>   captured_response_nonempty)` and verifies match against persisted
+>   `reducer_output_*` fields." The `effective_semantic_reader_outcome`
+>   derivation and its input are struck (RULING R);
+> - KEPT-VERBATIM (canon L2896-2900, authority_class and
+>   protective_block_reason equality, including the note that these are
+>   checked despite lacking the `reducer_output_` prefix);
+> - KEPT-VERBATIM (canon L2901-2903, reducer version/hash equality and
+>   the exact trace equality `trace.reducer_version ==
+>   bundle.reducer_version`);
+> - KEPT-VERBATIM (canon L2904-2907, the three expiry comparisons and
+>   the deferral of challenge expiry to mint and D21 consume);
+> - KEPT-VERBATIM (canon L2908-2910);
+> - KEPT-VERBATIM (canon L2911-2913, mint-eligibility triple and the
+>   absent-plus-withdrawal rejection);
+> - KEPT-VERBATIM (canon L2914-2929, the D17 rendered-text line list
+>   and the explicit rendered-to-bundle equality list including the
+>   three preview-projection fields);
+> - KEPT-VERBATIM (canon L2930-2934, rollback-plan load, rehash,
+>   target and blocking checks — omitted from the first draft, restored
+>   here);
+> - NEW: for RULING-O classes, `rendered.maez_response_sha256` equals
+>   both the hash recomputed over the delimited display bytes and
+>   `result.assistant_text_sha256` (§7b); null == null for all other
+>   classes.
 
 **D17 (rendered projection):** `RenderedRequestStatement` gains
 `maez_response_display_text: str | None` and
 `maez_response_sha256: str | None` (non-null exactly for RULING-O
 classes); the rendered text gains an exact line for the response hash.
 
-**D21 (consumption) — COMPLETE REPLACEMENT TEXT (cluster 2):**
+**D21 (consumption) — ANCHORED AMENDMENT (cluster 2):**
 
-> No guarded mutation executes directly from a rendered request, an
-> artifact, a boolean WebAuthn success result, or a route name. Every
-> live S7.3 v1 mutation must pass through
-> `S7GuardedStateStore.consume_artifact_for_execution(...)` with its
-> existing signature, unchanged.
+> KEPT-VERBATIM (canon L3521-3536): the no-direct-execution rule and
+> the complete `consume_artifact_for_execution(...)` signature stand
+> unedited at that anchor.
 >
-> The wrapper loads the persisted `S7GuardedExecutionInvocation`, calls
+> AMENDED (canon L3537-3542, the wrapper's load-and-verify sentence).
+> Replacement bytes: the wrapper loads the persisted
+> `S7GuardedExecutionInvocation`, calls
 > `load_guarded_execution_invocation_bundle(...)`, verifies the
 > rendered statement, authority context, artifact binding, voice bundle
 > use, source manifest, action params, preconditions, expiry lattice,
-> and reservation token, then [NEW] re-runs Gate A joins A1-A13 in full
-> with the consumption-time clock (evidence may not decay between mint
-> and execution), performs join B1 — `artifact.consult_attempt_id ==
+> and reservation token, THEN re-runs Gate A joins A1-A13 in full with
+> the consumption-time clock (§7's enumerated clock-sensitive
+> predicates), performs join B1 — `artifact.consult_attempt_id ==
 > attempt.attempt_id` and the `completed → consumed` CAS from the
 > design's §3 transition table succeeding IN THIS TRANSACTION — and
 > only then delegates to inherited S7.1 consume. The attempt CAS and
 > the grant consume commit or roll back together.
 >
-> The live-possession check is unchanged:
-> `canonical_hash(reservation_token) == reservation_token_hash ==
-> voice_bundle_use.reservation_token_hash`; failure returns
-> `invalid_reservation_token` before inherited consume; the raw token
-> is never persisted. At consume time the matching `S7VoiceBundleUse`
-> row must be in the reserved branch exactly as prior canon states.
->
-> `S7ExecutionAuthorization` remains a compatibility/pre-consume
-> carrier with no mutation authority.
-> `unpack_guarded_execution_invocation(...)` remains the only allowed
-> helper for legacy wrapper inputs, with its existing signature and
-> verification list; full replay is owned by
-> `validate_s7_voice_source_bundle(...)` before artifact mint and by
-> the [NEW] Gate-B re-run inside consumption. Positive D24 tests may
-> not hand-assemble the carrier or bypass this helper.
+> KEPT-VERBATIM, each at its anchor and unedited by this amendment:
+> the live-possession check and raw-token non-persistence (canon
+> L3543-3552); the consume-time reserved-branch predicates (canon
+> L3553-3557); `S7ExecutionAuthorization` as a non-authoritative
+> compatibility carrier (canon L3558-3562); the
+> `unpack_guarded_execution_invocation(...)` complete signature and
+> its verification list (canon L3563-3598); the consume failure-code
+> partition (canon L3600-3624); the `after_consume_before_commit`
+> callback restrictions (canon L3626-3630); and the wrapper/deferred-
+> flow obligations (canon L3632-3639). This amendment changes NONE of
+> them — it inserts Gate B at one seam and nothing else.
 
 ## Refusal vocabulary — layer-mapped (Codex edit 8)
 
@@ -832,7 +889,18 @@ classes); the rendered text gains an exact line for the response hash.
 |---|---|
 | Attempt outcome (durable, canon D15 verbatim) | canon's list, unchanged |
 | Producer refusal (pre-attempt) | `snapshot_component_unavailable`, `prompt_integrity_block`, `template_not_canon`, `store_integrity_failure` |
-| Gate cause (validation, durable) | `stale_binding`, `wrong_consumer`, `attempt_replayed`, `attempt_expired`, `staging_lost`, `private_ref_unreplayable`, `receipt_mismatch`, `owner_read_required`, `context_manifest_violation`, `retry_exhausted` |
+| Gate cause (validation, durable) | `stale_binding`, `wrong_consumer`, `attempt_replayed`, `attempt_expired`, `staging_lost`, `private_ref_unreplayable`, `receipt_mismatch`, `owner_read_required`, `context_manifest_violation`, `retry_exhausted`, and the three SHARED causes below |
+
+Three causes are legitimately detectable at more than one layer and
+therefore appear in more than one row: `store_integrity_failure`
+(a seal or policy pre-image fails, at production or at replay),
+`prompt_integrity_block` (D11 scan fails pre-inference, or its
+evidence fails to recompute at replay), and
+`marker_missing_or_malformed` (the parser's verdict at production, or
+the same verdict reproduced at replay). Durable evidence ALWAYS
+records the layer beside the cause, so the two occurrences are never
+conflated — and Gate A/B rows use exactly these tokens, matching the
+join tables above.
 
 No token renames canon; each cause is durable at its own layer;
 surfaces may project subsets but never rename.
