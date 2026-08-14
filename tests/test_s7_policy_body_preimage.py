@@ -42,19 +42,15 @@ def test_preimage_fields_match_the_shipped_policy():
     assert doc["reviewed_at"] == policy.reviewed_at
 
 
-def test_legacy_placeholder_is_grandfathered_not_laundered():
-    """The pre-audit bundles in the live store carry the placeholder-era
-    policy hash. It stays admitted -- NAMED as legacy -- so historical
-    evidence still validates, and the placeholder digest itself never
-    appears as the reviewed policy's own body hash again."""
+def test_placeholder_era_is_fully_retired():
+    """Codex review killed the first fix's grandfather clause: expected
+    bindings re-derive with the reviewed policy upstream of the allow-set
+    check, so a legacy member was UNREACHABLE -- compat theater. The set
+    has exactly one member and the placeholder digest appears nowhere."""
     from core.governance import s7_guarded_execution as guarded
 
     assert (
         guarded.S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_body_hash
         != "f" * 64
     )
-    assert (
-        guarded._LEGACY_PLACEHOLDER_POLICY.policy_hash
-        in guarded.REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES
-    )
-    assert len(guarded.REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES) == 2
+    assert len(guarded.REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES) == 1

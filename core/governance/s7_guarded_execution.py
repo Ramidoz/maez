@@ -630,23 +630,14 @@ S7_REVIEWED_CONTEXT_MANIFEST_POLICY = S7ContextManifestPolicy(
     policy_body_hash=S7_CONTEXT_MANIFEST_POLICY_BODY_SHA256,
 )
 
-#: GRANDFATHERED: bundles persisted before 2026-08-14 carry the
-#: placeholder-era policy hash. Same ruled content, dishonest digest --
-#: named here as legacy rather than silently laundered into "reviewed".
-#: Remove once the live store's pre-audit bundles are re-validated or
-#: retired.
-_LEGACY_PLACEHOLDER_POLICY = S7ContextManifestPolicy(
-    policy_id="s7-context-policy-v1",
-    schema_version="1",
-    allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
-    dialog_context_rules=("no_private_raw_text",),
-    reviewed_at="2026-05-21T00:00:00+00:00",
-    policy_body_hash="f" * 64,
-)
-
+#: NO grandfather for the placeholder era (Codex review): expected
+#: bindings are re-derived with the reviewed policy upstream of the
+#: allow-set check, so a legacy member here would be UNREACHABLE -- compat
+#: theater, its own small lie. Pre-audit bundles that fail re-validation
+#: refuse honestly; refusal is the safe direction, and reconstruction is
+#: never disguised as continuity.
 REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES = frozenset({
     S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash,
-    _LEGACY_PLACEHOLDER_POLICY.policy_hash,
 })
 
 

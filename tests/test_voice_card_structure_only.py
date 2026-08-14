@@ -28,3 +28,32 @@ def test_continuity_envelope_carries_no_owner_interest_conclusion():
     source = inspect.getsource(envelope)
     assert "local AI" not in source
     assert "what's being built" not in source
+
+
+def test_no_owner_interest_premise_anywhere_in_owned_code():
+    """Codex review: the retired premise survived verbatim in a validate
+    harness the first regression didn't scan. Repo-wide now (owned code
+    and prompts; vendored/docs excluded -- docs may QUOTE the scar)."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    offenders = []
+    for root in ("core", "daemon", "skills", "scripts", "prompts", "config"):
+        base = repo / root
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if path.suffix not in {".py", ".md", ".json", ".txt"}:
+                continue
+            if "vendor" in path.parts or "node_modules" in path.parts:
+                continue
+            try:
+                text = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            if "local AI, what's being built" in text or (
+                "local AI, the things being built" in text
+            ):
+                offenders.append(str(path.relative_to(repo)))
+    assert offenders == [], offenders
+

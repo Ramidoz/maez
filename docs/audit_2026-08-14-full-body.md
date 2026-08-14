@@ -230,8 +230,9 @@ v1 WebAuthn stack in `operator_user_boundary.py`.
 
 **Now (hours, high value):**
 1. Three alias words + README rule → **run the Slice 8 bake-off**.
-2. Persist the S7 arming flags durably (config/unit file) + restart
-   the daemon (closes code/process drift AND re-arms provenantly).
+2. ~~Persist the S7 arming flags durably~~ CORRECTED: they already
+   were (unit EnvironmentFile — see finding 4); restart the daemon to
+   close code/process drift. DONE 2026-08-14.
 3. Recall-fallback receipt: make the silent downgrade visible.
 4. Hygiene batch: gitignore gaps, sandbox-ledger quarantine, push
    main, commit the owner's three WIP pieces (wondering-pursuit

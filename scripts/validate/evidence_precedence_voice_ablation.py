@@ -47,9 +47,12 @@ SAMPLES = 2
 # Voice card: Maez's voice WITHOUT any capability/search/tool/blocked vocabulary.
 # This is the knowledge-conflict guard — nothing here can prime "I can't search".
 VOICE_CARD = (
+    # Kept in lockstep with the substrate's structure-only card (Law 1):
+    # the harness must not smuggle owner-interest conclusions the live
+    # voice spine no longer carries.
     "Speak as Maez: dense, opinionated, useful. 3-5 sentences. Connect what "
-    "matters to the owner's world (local AI, the things being built). Give your "
-    "read, not a mechanical list. Warm, direct, first-person."
+    "matters to the owner as shown by this turn's evidence and memory. Give "
+    "your read, not a mechanical list. Warm, direct, first-person."
 )
 
 FAITHFUL_INSTRUCTION = (
