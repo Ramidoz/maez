@@ -284,3 +284,30 @@ consulted and nothing pretended to be.
 * The burn's reboot operation should account for session inhibitors.
 * Slice-B fixture regression; the bonded consultation organ for
   soul-write / dream / decision-pipeline; RULINGS 1 and 2 (owner-only).
+
+## Cross-lane review closure — 2026-08-14, ruling recorded
+
+Three Codex passes over 96a4821..HEAD. Passes one and two found real,
+in-scope defects, all fixed and re-verified: the postmortem re-executing
+a refused reboot, the isinstance store gate, non-atomic rm+install, pipe
+drain deadlocks, an import-only webauthn preflight, and a genuine TOCTOU
+in phase_migrate from d2f4f29's rewiring. The third pass's residual
+findings all require a CONCURRENT SAME-UID ADVERSARY racing the burn on
+the owner's own host: a staged-name symlink swap between install and mv,
+a hostile require_current_named_identity callback swapping fds after the
+gate, and sub-second check-then-spawn windows.
+
+**RULED (gate lane): out of threat model.** The S7 authority boundary
+defends against a REMOTELY COMPROMISED agent minting authority without
+the founder key. A hostile process already running as the owner's uid
+does not need to win any race -- it can write the unit files, edit the
+ceremony source, or open the store directly. Hardening microsecond
+windows against an actor with full host authority adds ceremony, not
+safety. The one accident-class core in those findings -- a concurrent
+tool replacing the store LEAF mid-phase in the prep tool -- is closed
+with a start/end inode identity check.
+
+Codex's remaining note that the test-suite result is unverified from its
+side is correct and expected: its lane is prohibited from the shared
+venv. The suite (415 tests across the s7/cutover surface) runs green in
+the build lane. Merge is the owner's act.

@@ -93,6 +93,7 @@ def _run_phase(label: str, work) -> int:
     try:
         try:
             before = _digest_via(dir_fd, STORE.name)
+            start_stat = os.stat(STORE.name, dir_fd=dir_fd, follow_symlinks=False)
         except FileNotFoundError:
             print(f"live store absent: {STORE}")
             return 1
@@ -110,6 +111,20 @@ def _run_phase(label: str, work) -> int:
             print(f"restore with : cp {STORE_DIR / backup_name} {STORE}")
             return 1
         after = _digest_via(dir_fd, STORE.name)
+        # The LEAF must still be the inode the phase started on (Codex
+        # third pass): the held dir fd anchors the directory, not the
+        # database file, so a concurrent tool replacing the leaf mid-
+        # phase would leave the backup covering one store and the writes
+        # on another. The migration mutates in place, so identity is
+        # stable across an honest run.
+        end_stat = os.stat(STORE.name, dir_fd=dir_fd, follow_symlinks=False)
+        if (start_stat.st_dev, start_stat.st_ino) != (
+            end_stat.st_dev,
+            end_stat.st_ino,
+        ):
+            print("\nPHASE FAILED: the store file was replaced mid-phase")
+            print(f"backup covers the ORIGINAL store: {backup_name}")
+            return 1
     finally:
         os.close(dir_fd)
     print(f"store after  : {after}")

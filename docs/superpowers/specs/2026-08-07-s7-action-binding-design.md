@@ -482,7 +482,7 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `provision_r11_exemption_evidence` | durable_writer | call:_provision_r11_exemption_evidence_at | 209 |
 | `scripts/s7_migration_rehearsal.py` | `rehearse` | durable_writer | call:_provision_r11_exemption_evidence_at | 155 |
 | `scripts/s7_migration_rehearsal.py` | `rehearse` | durable_writer | call:_provision_r11_exemption_evidence_at | 159 |
-| `scripts/s7_prepare_store.py` | `phase_provision` | durable_writer | call:_provision_r11_exemption_evidence_at | 136 |
+| `scripts/s7_prepare_store.py` | `phase_provision` | durable_writer | call:_provision_r11_exemption_evidence_at | 151 |
 | `core/governance/s7_guarded_execution.py` | `provision_r11_exemption_evidence` | durable_writer | definition | 205 |
 | `core/governance/s7_guarded_execution.py` | `put_artifact_under_consultation_exemption` | durable_writer | call:_insert_r11_exemption_evidence | 3474 |
 | `core/governance/s7_guarded_execution.py` | `put_artifact_under_consultation_exemption` | validator | call:exemption_admits_for_artifact | 3461 |
