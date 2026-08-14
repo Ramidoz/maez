@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import secrets
+import select
 import signal
 import sqlite3
 import stat as stat_module
@@ -1246,11 +1247,20 @@ class PinnedFile:
 
 @dataclass(frozen=True, slots=True)
 class PinnedDirectory:
-    """An already-opened directory used through its descriptor after burn."""
+    """An already-opened directory used through its descriptor after burn.
+
+    `canonical_path` is retained so the executor can prove, before every
+    operation, that the NAME still leads to the held inode (Codex review:
+    fstat of the fd alone proves the descriptor lives, not that the
+    canonical name agrees -- a renamed-and-replaced directory would let
+    installs write through the old inode while daemon-reload follows the
+    new name). Stored as str so the executor never constructs paths.
+    """
 
     label: str
     fd: int
     identity: tuple[int, int, int, int]
+    canonical_path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -2014,11 +2024,17 @@ class PreparedCutover:
                 for held_dir in self.directories:
                     try:
                         held_stat = os.fstat(held_dir.fd)
+                        named_stat = os.stat(held_dir.canonical_path)
                     except OSError:
-                        held_stat = None
+                        held_stat = named_stat = None
                     if (
                         held_stat is None
                         or _directory_identity(held_stat) != held_dir.identity
+                        # The NAME must still lead to the held inode (Codex
+                        # review): a renamed-and-replaced directory would
+                        # let installs write through the old inode while
+                        # daemon-reload follows the new name.
+                        or _directory_identity(named_stat) != held_dir.identity
                     ):
                         print(
                             "executor: pinned directory lost before spawn: "
@@ -2042,24 +2058,45 @@ class PreparedCutover:
                         )
                         os.close(stderr_write)
                         stderr_write = -1
-                        _pid, status = self._waitpid(pid, 0)
-                        # Read after wait: these commands emit at most a few
-                        # hundred bytes, far under the pipe buffer, so the
-                        # child cannot block on a full pipe before exiting.
-                        # Non-blocking drain (Codex finding): a descendant
-                        # still holding the write end must delay nothing --
-                        # whatever is already in the pipe is read, and the
-                        # refusal proceeds.
+                        # Drain WHILE waiting (Codex re-review): draining
+                        # only after waitpid deadlocks against a child
+                        # whose output exceeds pipe capacity, and a
+                        # descendant holding the write end must delay
+                        # nothing. Reads past the cap are discarded but
+                        # still drained so the child can always exit; the
+                        # truncation is marked, never silent.
                         os.set_blocking(stderr_read, False)
                         captured = bytearray()
-                        while len(captured) < 8192:
+                        truncated = False
+                        exited = False
+                        status = 0
+                        while True:
                             try:
-                                chunk = os.read(stderr_read, 1024)
+                                chunk = os.read(stderr_read, 4096)
                             except BlockingIOError:
+                                chunk = None
+                            if chunk:
+                                if len(captured) < 8192:
+                                    captured.extend(chunk)
+                                else:
+                                    truncated = True
+                                continue
+                            if chunk == b"":
                                 break
-                            if not chunk:
+                            if exited:
                                 break
-                            captured.extend(chunk)
+                            waited, wait_status = self._waitpid(
+                                pid, os.WNOHANG
+                            )
+                            if waited == pid:
+                                exited = True
+                                status = wait_status
+                                continue
+                            select.select([stderr_read], [], [], 0.05)
+                        if not exited:
+                            _pid, status = self._waitpid(pid, 0)
+                        if truncated:
+                            captured.extend(b" ...(truncated)")
                     finally:
                         if stderr_write >= 0:
                             os.close(stderr_write)
@@ -2151,17 +2188,38 @@ def _spawn_failure_postmortem(
                 )
                 os.close(pipe_write)
                 pipe_write = -1
-                _pid, probe_status = waitpid(pid, 0)
+                # Same drain-while-wait discipline as the executor: never
+                # deadlock against a chatty child, never truncate silently.
                 os.set_blocking(pipe_read, False)
                 captured = bytearray()
-                while len(captured) < 16384:
+                truncated = False
+                exited = False
+                probe_status = 0
+                while True:
                     try:
                         chunk = os.read(pipe_read, 4096)
                     except BlockingIOError:
+                        chunk = None
+                    if chunk:
+                        if len(captured) < 16384:
+                            captured.extend(chunk)
+                        else:
+                            truncated = True
+                        continue
+                    if chunk == b"":
                         break
-                    if not chunk:
+                    if exited:
                         break
-                    captured.extend(chunk)
+                    waited, wait_status = waitpid(pid, os.WNOHANG)
+                    if waited == pid:
+                        exited = True
+                        probe_status = wait_status
+                        continue
+                    select.select([pipe_read], [], [], 0.05)
+                if not exited:
+                    _pid, probe_status = waitpid(pid, 0)
+                if truncated:
+                    captured.extend(b" ...(truncated)")
                 return (
                     os.waitstatus_to_exitcode(probe_status),
                     bytes(captured).decode("utf-8", "replace").rstrip(),
@@ -2373,6 +2431,7 @@ def _pin_directory(
             label=label,
             fd=fd,
             identity=_directory_identity(held),
+            canonical_path=str(path),
         )
         fd = -1
         return pinned
@@ -2483,17 +2542,50 @@ def _prepare_cutover_resources_at(
         override_source_child_fd = child_fd_base + 3
         override_dir_child_fd = child_fd_base + 4
 
-        # Each install is preceded by rm -f of its exact destination,
-        # dispatched through the SAME pinned multi-call binary (argv[0]
-        # selects the applet). Live scar, 2026-08-14, proven by strace:
-        # uutils install 0.8.0 runs its same-file guard only when the
-        # destination already exists, and that guard walks /proc/self/fd
-        # magic links as STRINGS -- a memfd source becomes the literal
-        # text "/memfd:... (deleted)", which is no path, so install exits
-        # with a bare ENOENT. Four founder taps failed on it; every probe
-        # passed because scratch destinations were empty. An absent
-        # destination never enters the guard, and rm -f on an absent
-        # target is exit 0, so the pair is idempotent.
+        # Each destination is written as rm-staged / install-staged /
+        # mv-over-destination, all dispatched through the SAME pinned
+        # multi-call binary (argv[0] selects the applet). Two scars meet
+        # here. First (2026-08-14, proven by strace): uutils install 0.8.0
+        # runs its same-file guard only when the destination exists, and
+        # that guard walks /proc/self/fd magic links as STRINGS -- a memfd
+        # source becomes the literal "/memfd:... (deleted)", no path at
+        # all, so install exits with a bare ENOENT; four founder taps
+        # failed on it. Installing to a staged name that never pre-exists
+        # dodges the guard. Second (Codex review): a plain rm-then-install
+        # of the REAL destination leaves it absent if install fails --
+        # for the override, a live systemd config. mv is rename(2):
+        # the real destination is replaced atomically or not at all, and
+        # the leading rm touches only the staged temp name.
+        def _replace_commands(source_fd, source_child_fd, dir_fd, dir_child_fd, leaf):
+            staged = f"/proc/self/fd/{dir_child_fd}/.{leaf}.staged"
+            final = f"/proc/self/fd/{dir_child_fd}/{leaf}"
+            return (
+                PreparedCommand(
+                    executable_fd=install.fd,
+                    argv=("rm", "-f", staged),
+                    child_fd_map=((dir_fd, dir_child_fd),),
+                ),
+                PreparedCommand(
+                    executable_fd=install.fd,
+                    argv=(
+                        "install",
+                        "-m",
+                        "0600",
+                        f"/proc/self/fd/{source_child_fd}",
+                        staged,
+                    ),
+                    child_fd_map=(
+                        (source_fd, source_child_fd),
+                        (dir_fd, dir_child_fd),
+                    ),
+                ),
+                PreparedCommand(
+                    executable_fd=install.fd,
+                    argv=("mv", "-f", staged, final),
+                    child_fd_map=((dir_fd, dir_child_fd),),
+                ),
+            )
+
         recovery_commands = tuple(
             command
             for index, (artifact, (_path, leaf)) in enumerate(
@@ -2503,32 +2595,12 @@ def _prepare_cutover_resources_at(
                     strict=True,
                 )
             )
-            for command in (
-                PreparedCommand(
-                    executable_fd=install.fd,
-                    argv=(
-                        "rm",
-                        "-f",
-                        f"/proc/self/fd/{recovery_dir_child_fd}/{leaf}",
-                    ),
-                    child_fd_map=(
-                        (recovery_dir.fd, recovery_dir_child_fd),
-                    ),
-                ),
-                PreparedCommand(
-                    executable_fd=install.fd,
-                    argv=(
-                        "install",
-                        "-m",
-                        "0600",
-                        f"/proc/self/fd/{recovery_source_child_fds[index]}",
-                        f"/proc/self/fd/{recovery_dir_child_fd}/{leaf}",
-                    ),
-                    child_fd_map=(
-                        (artifact.source_fd, recovery_source_child_fds[index]),
-                        (recovery_dir.fd, recovery_dir_child_fd),
-                    ),
-                ),
+            for command in _replace_commands(
+                artifact.source_fd,
+                recovery_source_child_fds[index],
+                recovery_dir.fd,
+                recovery_dir_child_fd,
+                leaf,
             )
         )
         operations = (
@@ -2544,34 +2616,12 @@ def _prepare_cutover_resources_at(
                 affected_refs=CUTOVER_EXECUTOR_OPERATION_AFFECTED_REFS[
                     "install_cuda_override"
                 ],
-                commands=(
-                    PreparedCommand(
-                        executable_fd=install.fd,
-                        argv=(
-                            "rm",
-                            "-f",
-                            f"/proc/self/fd/{override_dir_child_fd}/"
-                            "zz-b9596-cuda.conf",
-                        ),
-                        child_fd_map=(
-                            (override_dir.fd, override_dir_child_fd),
-                        ),
-                    ),
-                    PreparedCommand(
-                        executable_fd=install.fd,
-                        argv=(
-                            "install",
-                            "-m",
-                            "0600",
-                            f"/proc/self/fd/{override_source_child_fd}",
-                            f"/proc/self/fd/{override_dir_child_fd}/"
-                            "zz-b9596-cuda.conf",
-                        ),
-                        child_fd_map=(
-                            (override.fd, override_source_child_fd),
-                            (override_dir.fd, override_dir_child_fd),
-                        ),
-                    ),
+                commands=_replace_commands(
+                    override.fd,
+                    override_source_child_fd,
+                    override_dir.fd,
+                    override_dir_child_fd,
+                    "zz-b9596-cuda.conf",
                 ),
             ),
             PreparedOperation(

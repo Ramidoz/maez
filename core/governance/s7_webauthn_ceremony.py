@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+import os
 import uuid
 
 from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
@@ -677,6 +678,35 @@ class S7LocalWebAuthnCeremonyService:
                     body={"ok": False, "error": "s7_guarded_state_store_required"},
                     status_code=409,
                 )
+            if type(exempt_store) is s7.S7HeldAuthorizationStore:
+                # A held store writes through its DESCRIPTOR, so db_path
+                # equality alone is a claim, not proof (Codex re-review):
+                # an exact-typed held store can carry fds for a different
+                # database while asserting this ceremony's path. The
+                # descriptor must BE the database the challenge and
+                # credential live in -- same device, same inode.
+                try:
+                    held_stat = os.fstat(exempt_store._opened._db_fd)
+                    named_stat = os.stat(store.db_path)
+                except (AttributeError, OSError, TypeError):
+                    return S7CeremonyServiceResult(
+                        body={
+                            "ok": False,
+                            "error": "s7_guarded_state_store_required",
+                        },
+                        status_code=409,
+                    )
+                if (held_stat.st_dev, held_stat.st_ino) != (
+                    named_stat.st_dev,
+                    named_stat.st_ino,
+                ):
+                    return S7CeremonyServiceResult(
+                        body={
+                            "ok": False,
+                            "error": "s7_guarded_state_store_required",
+                        },
+                        status_code=409,
+                    )
             authorization_store = exempt_store
         elif voice_seat_work:
             from core.governance import s7_guarded_execution as guarded

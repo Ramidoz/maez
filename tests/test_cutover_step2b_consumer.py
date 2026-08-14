@@ -2599,19 +2599,32 @@ class TestInstallOverExistingDestination:
             override_dir / "zz-b9596-cuda.conf"
         ).read_bytes() == b"override\n"
 
-    def test_every_install_is_preceded_by_rm_of_its_destination(
-        self, tmp_path
-    ) -> None:
+    def test_every_destination_is_replaced_atomically(self, tmp_path) -> None:
+        """rm-staged / install-staged / mv triplets (Codex review): the
+        REAL destination is only ever touched by mv -- rename(2), atomic
+        replace -- so no failure mode leaves it absent. The leading rm
+        clears a stale staged temp only; install writes to a name that
+        never pre-exists, dodging uutils' same-file guard entirely."""
         evidence = TestExecutorEvidence()
         prepared, _recovery = evidence._prepared(tmp_path)
 
         for operation in prepared.operations[:2]:
             argvs = [command.argv for command in operation.commands]
-            assert len(argvs) % 2 == 0, argvs
-            for rm_argv, install_argv in zip(
-                argvs[0::2], argvs[1::2], strict=True
+            assert len(argvs) % 3 == 0, argvs
+            for rm_argv, install_argv, mv_argv in zip(
+                argvs[0::3], argvs[1::3], argvs[2::3], strict=True
             ):
                 assert rm_argv[:2] == ("rm", "-f")
                 assert install_argv[:3] == ("install", "-m", "0600")
-                # The rm targets exactly the path install writes.
-                assert rm_argv[2] == install_argv[4]
+                assert mv_argv[:2] == ("mv", "-f")
+                # rm and install touch only the staged temp name...
+                staged = install_argv[4]
+                assert staged.endswith(".staged")
+                assert rm_argv[2] == staged
+                assert mv_argv[2] == staged
+                # ...and mv is the only command naming the real target.
+                final = mv_argv[3]
+                assert not final.endswith(".staged")
+                assert final.rsplit("/", 1)[1] == (
+                    staged.rsplit("/", 1)[1].removeprefix(".").removesuffix(".staged")
+                )

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,45 +36,82 @@ STORE_DIR = REPO / "memory" / "s7_1_webauthn"
 STORE = STORE_DIR / "ceremony.sqlite3"
 
 
-def _digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _read_via(dir_fd: int, name: str) -> bytes:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    try:
+        chunks = []
+        offset = 0
+        while True:
+            chunk = os.pread(fd, 1024 * 1024, offset)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+            offset += len(chunk)
+    finally:
+        os.close(fd)
 
 
-def _backup(label: str) -> Path:
+def _digest_via(dir_fd: int, name: str) -> str:
+    return hashlib.sha256(_read_via(dir_fd, name)).hexdigest()
+
+
+def _backup(label: str, dir_fd: int) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = STORE_DIR / f"ceremony.sqlite3.pre-{label}-{stamp}.bak"
-    if target.exists():
-        raise SystemExit(f"refusing to overwrite an existing backup: {target}")
-    shutil.copyfile(STORE, target)
-    target.chmod(0o600)
-    if _digest(target) != _digest(STORE):
+    name = f"ceremony.sqlite3.pre-{label}-{stamp}.bak"
+    payload = _read_via(dir_fd, STORE.name)
+    fd = os.open(
+        name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dir_fd
+    )
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if _digest_via(dir_fd, name) != hashlib.sha256(payload).hexdigest():
         raise SystemExit("backup does not match the store; refusing to proceed")
-    return target
+    return name
 
 
 def _run_phase(label: str, work) -> int:
-    if not STORE.exists():
-        print(f"live store absent: {STORE}")
-        return 1
-    before = _digest(STORE)
-    print(f"store before : {before}")
-    backup = _backup(label)
-    print(f"backup       : {backup.name}")
-
-    dir_fd = os.open(STORE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # ONE held descriptor from before the backup until after the write
+    # (Codex review, 2026-08-14): the previous shape took the backup under
+    # a pathname observation and then let the phase re-walk the canonical
+    # path, so a directory swap in between meant the backup covered store
+    # A while the migration -- and the printed restore instruction --
+    # targeted store B. Every read, the backup, and the phase itself now
+    # go through this fd; the pathname is walked exactly once.
     try:
-        work(dir_fd)
-    except Exception as exc:
-        # Loud, and never mistaken for an ordinary refusal. The backup above
-        # is the recovery path and its name is printed before any write.
-        print(f"\nPHASE FAILED: {type(exc).__name__}: {exc}")
-        print(f"store is at  : {_digest(STORE)}")
-        print(f"restore with : cp {backup} {STORE}")
+        dir_fd = os.open(
+            STORE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+    except FileNotFoundError:
+        print(f"live store dir absent: {STORE_DIR}")
         return 1
+    try:
+        try:
+            before = _digest_via(dir_fd, STORE.name)
+        except FileNotFoundError:
+            print(f"live store absent: {STORE}")
+            return 1
+        print(f"store before : {before}")
+        backup_name = _backup(label, dir_fd)
+        print(f"backup       : {backup_name}")
+        try:
+            work(dir_fd)
+        except Exception as exc:
+            # Loud, and never mistaken for an ordinary refusal. The backup
+            # above is the recovery path; its name is printed before any
+            # write, and the digest below reads through the SAME held fd.
+            print(f"\nPHASE FAILED: {type(exc).__name__}: {exc}")
+            print(f"store is at  : {_digest_via(dir_fd, STORE.name)}")
+            print(f"restore with : cp {STORE_DIR / backup_name} {STORE}")
+            return 1
+        after = _digest_via(dir_fd, STORE.name)
     finally:
         os.close(dir_fd)
-
-    after = _digest(STORE)
     print(f"store after  : {after}")
     print("\nunchanged." if after == before else "\nstore updated.")
     print("Now run:  python3 -m scripts.s7_r11_preflight")
@@ -83,16 +119,15 @@ def _run_phase(label: str, work) -> int:
 
 
 def phase_migrate(dir_fd: int) -> None:
-    # Through the PUBLIC anchored entrypoint: this phase targets exactly the
-    # canonical store, and the public edge walks the frozen path itself --
-    # calling the descriptor-injection helper here was a second production
-    # callsite of a private surface whose allowlist has exactly one. The
-    # injected dir_fd (which _run_phase opens for the backup) is deliberately
-    # unused; only provisioning, which has no anchored public edge, takes it.
-    del dir_fd
+    # Through the descriptor-injection helper ON PURPOSE (reversal of
+    # d2f4f29's rewiring, Codex review 2026-08-14): the public edge
+    # re-walks the canonical path, which reopened the swap window between
+    # the backup and the migration. The held fd IS the store the backup
+    # covered; the migration must target exactly that inode. The private
+    # helper's callsite allowlist names this caller and why.
     from core.governance import s7_v2_migration as migration
 
-    migration.migrate_authorization_store_to_v2()
+    migration._migrate_authorization_store_to_v2_at(store_dir_fd=dir_fd)
 
 
 def phase_provision(dir_fd: int) -> None:

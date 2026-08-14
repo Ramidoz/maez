@@ -651,16 +651,22 @@ class TestPrivateHelperHasExactlyOneProductionCallsite:
     # byte-identical scratch COPY of the live store and so cannot use the
     # public edge -- that edge walks the frozen canonical path by design.
     # This is the descriptor-injection use the helper's own docstring names.
-    # d2f4f29 also made `s7_prepare_store.phase_migrate` a THIRD caller
-    # against the live store itself; that one had no such excuse -- it
-    # targets exactly the canonical store -- and was rewired to the public
-    # entrypoint rather than allowlisted here. Both changes landed without
-    # this pin being updated, so the failure sat unrecorded; the pin stays
-    # exact equality so the next addition fails loudly again.
+    #
+    # Reversal (2026-08-14, Codex review): d2f4f29's rewiring of
+    # `s7_prepare_store.phase_migrate` through the public edge -- done to
+    # keep this allowlist at one production caller -- created a TOCTOU:
+    # the phase took its backup under one pathname observation, then the
+    # public edge re-walked the canonical path, so a directory swap in
+    # between meant the backup covered store A while the migration wrote
+    # store B. phase_migrate now holds ONE descriptor from before the
+    # backup through the write and injects it here; that discipline is its
+    # excuse, the same one the rehearsal has. The pin stays exact equality
+    # so the next addition fails loudly again.
     ALLOWED = [
         ("core/governance/s7_v2_migration.py",
          "migrate_authorization_store_to_v2"),
         ("scripts/s7_migration_rehearsal.py", "rehearse"),
+        ("scripts/s7_prepare_store.py", "phase_migrate"),
     ]
 
     @classmethod

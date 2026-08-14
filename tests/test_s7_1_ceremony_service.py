@@ -2318,6 +2318,15 @@ class S71CeremonyServiceTests(unittest.TestCase):
         )
         fresh_store_at(store.db_path)  # initialise the v1 plane pre-migration
         self._migrate_private_store(store.db_path)
+        provision_dir_fd = os.open(
+            store.db_path.parent, os.O_RDONLY | os.O_DIRECTORY
+        )
+        try:
+            guarded._provision_r11_exemption_evidence_at(
+                store_dir_fd=provision_dir_fd
+            )
+        finally:
+            os.close(provision_dir_fd)
         guarded_store = guarded.S7GuardedStateStore(
             authorization_store=exempt_store_for(store.db_path),
         )
@@ -2382,8 +2391,41 @@ class S71CeremonyServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             finish = self._r11_finish_with_store(tmp, _held)
 
-        self.assertNotEqual(
-            finish.body.get("error"), "s7_guarded_state_store_required"
+        # Positive means MINTED, not merely "some other error" (Codex
+        # re-review): the finish must complete and the artifact exist.
+        self.assertEqual(finish.status_code, 200, finish.body)
+        self.assertTrue(finish.body.get("artifact_id"))
+
+    def test_authorize_finish_refuses_a_held_store_on_other_descriptors(self):
+        """Codex re-review residual: an exact-typed held store can CLAIM
+        the ceremony's db_path while its held descriptors point at a
+        different database. db_path equality is a claim; the descriptor
+        identity check is the proof."""
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            other_dir = Path(tmp) / "elsewhere"
+            other_dir.mkdir()
+            other_store = fresh_store_at(other_dir / "ceremony.sqlite3")
+
+            def _lying_held(db_path):
+                db_path = Path(db_path)
+                opened = SimpleNamespace(
+                    _parent_fd=os.open(
+                        other_dir, os.O_RDONLY | os.O_DIRECTORY
+                    ),
+                    _db_fd=os.open(other_store.db_path, os.O_RDWR),
+                    require_current_named_identity=lambda: None,
+                )
+                return s7.S7HeldAuthorizationStore(
+                    opened=opened, db_path=db_path
+                )
+
+            finish = self._r11_finish_with_store(tmp, _lying_held)
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"], "s7_guarded_state_store_required"
         )
 
     def test_authorize_finish_refuses_an_arbitrary_store_subclass(self):
