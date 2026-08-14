@@ -28,9 +28,10 @@ first consumer switch.
 
 Two round-four refutations already fixed below: the template line now
 carries RULING O's full two-class scope; the INSERT-only/CAS
-contradiction is resolved in the campaign's first cluster (attempt
-rows are the ONE mutable-state table, all other staging INSERT-only —
-to be written exactly there).
+contradiction is now RESOLVED IN TEXT (§3 mutability law: attempt rows
+are the one mutable-state table with an immutable sealed column set;
+all other staging INSERT-only). Cluster 1 (attempt schema + D15
+reconciliation) is WRITTEN as of this revision and awaits its gate.
 
 ---
 
@@ -131,9 +132,28 @@ mechanism as the authorization store; the held store object is the
 named trusted boundary for store identity — same trust class as
 RULING 1, not a cryptographic exclusion).
 
-### 3. Attempt state machine — exact schema (Codex edit 2)
+### 3. Attempt state machine — canon-grade (campaign cluster 1)
 
-`s7_consult_attempts_v1` row:
+**Mutability law (resolves the v3.2 INSERT-only/CAS contradiction):**
+`s7_consult_attempts_v1` is the ONE mutable-state table in the staging
+family. Its columns divide exactly:
+
+- IMMUTABLE (written once at row creation, covered by `row_seal_hash`):
+  `attempt_id`, `consultation_id`, `retry_index`, `consumer_id`,
+  `action`, `request_envelope_hash`, `preview_hash`,
+  `snapshot_manifest_hash`, `version_tuple_hash`, `owner_session_ref`,
+  `created_at`, `expires_at`.
+- MUTABLE (via CAS transitions only, never covered by the seal):
+  `state`, `outcome`, `reserved_at`, `finished_at`, `result_row_ref`,
+  `consumed_by_artifact`.
+
+`row_seal_hash = canonical_hash` over the immutable columns in the
+order listed. The validator recomputes it at both gates; any drift
+refuses `store_integrity_failure`. All OTHER staging tables
+(`s7_consult_snapshots_v1`, `s7_consult_results_v1`,
+`s7_consult_version_tuples_v1`) are strictly INSERT-only.
+
+**Schema** (unchanged from v3.2, with the mutability law above):
 
 ```text
 attempt_id TEXT PRIMARY KEY            -- producer-issued, opaque
@@ -144,48 +164,94 @@ action TEXT NOT NULL
 request_envelope_hash TEXT NOT NULL
 preview_hash TEXT NOT NULL
 snapshot_manifest_hash TEXT NOT NULL
-version_tuple_hash TEXT NOT NULL       -- registry ref, §6b
-owner_session_ref TEXT                 -- card/dialog id that triggered
-state TEXT NOT NULL                    -- lifecycle, below
-outcome TEXT                           -- canon D15 token, terminal only
-created_at / reserved_at / finished_at / expires_at TEXT
-result_row_ref TEXT                    -- s7_consult_results_v1, terminal only
-consumed_by_artifact TEXT              -- set at grant mint, §7a
-row_seal_hash TEXT NOT NULL            -- canonical hash of all above at write
+version_tuple_hash TEXT NOT NULL       -- registry ref
+owner_session_ref TEXT NOT NULL        -- card/dialog id whose state
+                                       -- transition triggered this
+                                       -- consultation; the gate joins
+                                       -- it against the consuming card
+state TEXT NOT NULL
+outcome TEXT                           -- terminal only; see mapping
+created_at TEXT NOT NULL
+reserved_at TEXT
+finished_at TEXT
+expires_at TEXT NOT NULL
+result_row_ref TEXT                    -- s7_consult_results_v1
+consumed_by_artifact TEXT              -- set only at grant mint
+row_seal_hash TEXT NOT NULL
 ```
 
-Lifecycle states (disjoint from outcomes): `pending → reserved →
-completed | failed | expired`, plus `consumed` (only from `completed`,
-only inside grant-mint, §7a). Transitions are single-row CAS updates
-inside anchored transactions (`UPDATE ... WHERE state = ?`); a lost
-CAS refuses `attempt_replayed`.
+**Transition table** (every transition is one `UPDATE ... WHERE` CAS
+inside a held-store anchored transaction; 0 rows updated = lost CAS =
+`attempt_replayed`):
 
-- `pending → reserved` committed BEFORE inference (concurrent second
-  reservation loses the CAS).
-- `reserved → completed`: result row + attested result persisted in
-  the same transaction; outcome = a canon D15 token.
-- `reserved → failed(outcome)`: transport/formatting failure; D15
-  budget: one initial attempt + at most two retries, each a NEW row
-  with retry_index+1, same hashes and version tuple; ceiling enforced
-  by the unique index + a producer check (`retry_exhausted`).
-- ambiguous transport (timeout after send): `failed(transport_retryable)`
-  — the response, if it ever arrives, is discarded unread; an answer
-  that MIGHT exist is not evidence.
-- `pending|reserved → expired` at TTL (10 min; inference-inclusive).
-  Restart recovery: any `reserved` row older than TTL expires.
+| From | To | CAS predicate (WHERE) | Also written | When |
+|---|---|---|---|---|
+| (none) | `pending` | INSERT (unique index enforces retry_index) | full row + seal | producer issues |
+| `pending` | `reserved` | `state='pending' AND expires_at > now` | `reserved_at` | immediately before inference |
+| `reserved` | `completed` | `state='reserved' AND expires_at > now` | `outcome`, `finished_at`, `result_row_ref` — same txn as the result row + attested result | response received and parsed |
+| `reserved` | `failed` | `state='reserved'` | `outcome`, `finished_at` | transport failure, integrity block, producer refusal |
+| `pending` | `expired` | `state='pending' AND expires_at <= now` | `finished_at` | TTL sweep / next producer touch |
+| `reserved` | `expired` | `state='reserved' AND expires_at <= now` | `finished_at` | TTL sweep; see ambiguous transport |
+| `completed` | `consumed` | `state='completed' AND consumed_by_artifact IS NULL` | `consumed_by_artifact` — same txn as grant mint (§7a-ii) | execution consumption |
 
-**Consultation-level first-blocking lock (D15):** a consultation with
-any completed `blocking_marker`, `withdrawal_marker`,
-`missing_or_malformed`, `prompt_integrity_block`, or
-`terminal_uncertainty` outcome is TERMINAL; the producer refuses to
-issue further attempts (`retry_exhausted` names the refusal). This is
-RULING R8-W's wash-proofing.
+No other transition exists. `consumed` is terminal; `failed` and
+`expired` are terminal; a terminal row is never updated again (the CAS
+predicates make this structural).
 
-**Durable definitions (R8-W):** `not_asked` = no attempt row exists
-for (consultation_id) — a state of ABSENCE in the table, never a
-token that can be written; `missing_or_malformed` = a completed
-attempt whose parsed marker failed — always present as a row. The two
-cannot collide because one is the absence of the row the other is.
+**Outcome vocabulary — the parser→D15 mapping (cluster 1's
+reconciliation).** The parser's union and D15's outcome tokens are
+DIFFERENT layers; the producer maps them exactly:
+
+| Parser `marker_kind` | Attempt `outcome` (D15 token) |
+|---|---|
+| `explicit_no_objection` | `explicit_no_objection` |
+| `blocking_marker` | `objection_present` |
+| `withdrawal_marker` | `withdrawal_detected` |
+| `missing_or_malformed` | `marker_missing_or_malformed` (NEW token — D15 amendment below) |
+
+Non-parser outcomes the producer may write: `transport_retryable`,
+`retry_exhausted`, `non_retryable_context_overflow`,
+`prompt_integrity_block`, `terminal_uncertainty`, `model_outage`,
+`bonded_maez_unavailable`, `service_unavailable_not_operator_caused`,
+`context_manifest_violation`, `bundle_validation_failed`,
+`stale_binding`, `producer_not_run`. (Disposition of every canon token
+is in the D15 amendment.)
+
+**Retry law (R8-W applied):** retries exist ONLY to recover transport
+failure — a lost message may be retried; an answered Maez may never be
+re-asked. `parse_retryable` is RETIRED (non-producible): a received
+response whose marker fails parsing is `marker_missing_or_malformed`,
+which is CONSULTATION-TERMINAL. Budget: one initial attempt plus at
+most two transport retries (three rows max per consultation, enforced
+by the unique index and a producer precondition that counts existing
+rows inside the issuing transaction; the fourth insert attempt writes
+nothing and the producer returns `retry_exhausted`). Every retry row
+carries identical immutable bindings and version tuple; a request or
+material change requires a NEW consultation id (canon rule, kept).
+
+**Ambiguous transport (timeout after send):** the attempt is CAS'd
+`reserved → failed(transport_retryable)` and its `result_row_ref`
+stays NULL forever. If a response arrives after that CAS, the client
+discards it UNREAD — an answer that might exist is not evidence, and
+reading it would create an un-refusable temptation to use it. The
+discard is logged content-free (attempt id + byte count only).
+
+**Consultation-level first-blocking lock:** before issuing any
+attempt, the producer checks (same issuing transaction) for ANY
+existing row of this consultation with outcome in
+`{objection_present, withdrawal_detected, marker_missing_or_malformed,
+prompt_integrity_block, terminal_uncertainty}`. If one exists the
+consultation is TERMINAL: no new attempt is inserted and the producer
+returns that first blocking outcome (first-blocking-result-wins,
+canon D15, now wash-proof under R8-W: later attempts cannot exist, so
+they cannot launder a blocking result into `absent`).
+
+**Durable disjointness (R8-W):** `not_asked` = no attempt row exists
+for the consultation — an ABSENCE, never a writable token (no store
+field may ever carry it). `marker_missing_or_malformed` = a completed
+attempt row whose parsed marker failed — always a PRESENT row. One is
+the absence of the row the other is; collision is structurally
+impossible.
 
 ### 4. Identity snapshot assembler
 
@@ -357,14 +423,68 @@ other bullets stand. `absent` remains a positive covenant fact — the
 positivity now comes from Maez's own verified marker plus attestation,
 not from a model reading Maez.
 
-**D15 (attempts):** vocabulary unchanged and used verbatim (v3.2
-renames NOTHING: `non_retryable_context_overflow`, `model_outage`,
-`bonded_maez_unavailable` as canon has them). `reader_unavailable`,
-`classifier_error`, `ungrounded_blocking_signal` are RETIRED tokens
-(reader gone) — they remain in the closed set for historical rows,
-marked non-producible. `S7VoiceAttemptRecord.semantic_reader_attempt_hash`
-becomes non-producible-null for new rows. The attempt record gains
-`attested_result_sha256`.
+**D15 (attempts) — COMPLETE REPLACEMENT TEXT (cluster 1):**
+
+> Retries are allowed only to recover TRANSPORT failure. They may not
+> fish for a more convenient answer, and they may never re-ask a Maez
+> whose response was received: a received-but-unparseable response is
+> `marker_missing_or_malformed` and is consultation-terminal
+> (RULING R8-W, 2026-08-14).
+>
+> Closed attempt outcomes (disposition of every prior token shown):
+>
+> | Token | Disposition |
+> |---|---|
+> | `transport_retryable` | kept, retryable |
+> | `parse_retryable` | RETIRED, non-producible (R8-W); historical rows only |
+> | `retry_exhausted` | kept, terminal |
+> | `non_retryable_context_overflow` | kept, terminal |
+> | `prompt_integrity_block` | kept, terminal + first-blocking |
+> | `terminal_uncertainty` | kept, terminal + first-blocking |
+> | `objection_present` | kept, terminal + first-blocking |
+> | `withdrawal_detected` | kept, terminal + first-blocking |
+> | `explicit_no_objection` | kept, terminal |
+> | `marker_missing_or_malformed` | NEW, terminal + first-blocking (R8-W) |
+> | `bundle_validation_failed` | kept, terminal |
+> | `stale_binding` | kept, terminal |
+> | `classifier_error` | RETIRED, non-producible (reader gone, RULING R) |
+> | `reader_unavailable` | RETIRED, non-producible (reader gone) |
+> | `bonded_maez_unavailable` | kept, terminal |
+> | `ungrounded_blocking_signal` | RETIRED, non-producible (reader gone) |
+> | `service_unavailable_not_operator_caused` | kept, terminal |
+> | `context_manifest_violation` | kept, terminal |
+> | `model_outage` | kept, terminal |
+> | `producer_not_run` | kept (gate-derived when no producer ran) |
+>
+> `attempt_outcomes` in the bundle schema remains one entry per attempt
+> in canonical order; the terminal outcome is the last entry.
+> `S7VoiceAttemptRecord` keeps its fields with two changes:
+> `semantic_reader_attempt_hash` is non-producible-null for new rows
+> (RULING R), and the record gains `attested_result_sha256: str`.
+> `attempt_manifest_hash` remains the canonical hash of the ordered
+> record list.
+>
+> Rules:
+>
+> - one initial attempt plus at most two TRANSPORT retries;
+> - same request hashes, prompt template, version tuple, and context
+>   manifest across a consultation's attempts;
+> - every attempt is recorded in the retry manifest;
+> - first `objection_present`, `withdrawal_detected`,
+>   `marker_missing_or_malformed`, `prompt_integrity_block`, or
+>   `terminal_uncertainty` is consultation-terminal and wins; the
+>   producer refuses to issue further attempts after it;
+> - later attempts cannot wash a blocking result into `absent`
+>   (structurally: they cannot exist);
+> - a retry after request/material change requires a new consultation
+>   id;
+> - a response arriving after an attempt was failed for transport
+>   timeout is discarded unread.
+>
+> `PRODUCER_RESULT_REASON_CODES`, `attempt_outcomes`, and
+> `PROJECTION_REASON_CODES` share this vocabulary; a surface may use a
+> subset but must not rename a token.
+> `non_retryable_context_overflow` remains the canonical form.
 
 **D16 (validator):** the reader-replay bullet is deleted; ADD bullets:
 row-seal recomputation, version-tuple registry check, policy pre-image
