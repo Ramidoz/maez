@@ -2355,28 +2355,56 @@ class S71CeremonyServiceTests(unittest.TestCase):
             durable_cutover_selection=self._r11_selection(),
         )
 
-    def test_authorize_finish_admits_the_held_store_subclass(self):
-        """Live tap, 2026-08-13: the cutover's _HeldS7AuthorizationStore --
-        a SUBCLASS whose every transaction stays on the held inode, strictly
-        stricter than the plain store -- was refused by blocker 5's exact-type
-        check as if it were a fake. The owner's real assertion died at
-        presence_mint_failed. Blocker 5 landed with no test naming its error,
-        so the collision between the two hardening passes was first observed
-        mid-ceremony. The gate's job is 'no fake store, no other database';
-        a genuine subclass on the SAME database is neither."""
+    def test_authorize_finish_admits_the_core_held_store(self):
+        """Live tap, 2026-08-13: the cutover's held-inode store facade --
+        strictly stricter than the plain store -- was refused by blocker 5's
+        exact-type check as if it were a fake, and the owner's real
+        assertion died at presence_mint_failed. The first repair widened
+        the gate to isinstance; Codex's cross-lane review then named what
+        that reopened (an arbitrary subclass overriding write behavior).
+        The facade now lives in core as S7HeldAuthorizationStore and the
+        gate is exact-type against the CLOSED two-member set."""
+        from core.governance import operator_user_boundary as s7
+
+        def _held(db_path):
+            db_path = Path(db_path)
+            # A real held-open protocol: the finish path WRITES the minted
+            # artifact through this store, so the fds must be live.
+            opened = SimpleNamespace(
+                _parent_fd=os.open(
+                    db_path.parent, os.O_RDONLY | os.O_DIRECTORY
+                ),
+                _db_fd=os.open(db_path, os.O_RDWR),
+                require_current_named_identity=lambda: None,
+            )
+            return s7.S7HeldAuthorizationStore(opened=opened, db_path=db_path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            finish = self._r11_finish_with_store(tmp, _held)
+
+        self.assertNotEqual(
+            finish.body.get("error"), "s7_guarded_state_store_required"
+        )
+
+    def test_authorize_finish_refuses_an_arbitrary_store_subclass(self):
+        """Codex finding 1 (2026-08-14): isinstance admitted ANY subclass,
+        which can skip the real constructor and override every write
+        method while carrying a matching db_path. The gate is a closed
+        set; a subclass outside it refuses, matching blocker 5's original
+        guarantee."""
         from core.governance import operator_user_boundary as s7
 
         class _HeldLike(s7.S7AuthorizationStore):
             def __init__(self, db_path):
-                # Mirrors the facade: binds path facts, skips super().__init__.
                 self.db_path = Path(db_path)
                 self._vended = set()
 
         with tempfile.TemporaryDirectory() as tmp:
             finish = self._r11_finish_with_store(tmp, _HeldLike)
 
-        self.assertNotEqual(
-            finish.body.get("error"), "s7_guarded_state_store_required"
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.body["error"], "s7_guarded_state_store_required"
         )
 
     def test_authorize_finish_still_refuses_a_lookalike_store(self):

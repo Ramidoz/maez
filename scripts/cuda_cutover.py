@@ -1027,47 +1027,10 @@ def open_existing_authorization_store(
             parent_chain.close()
 
 
-class _HeldS7AuthorizationStore(s7.S7AuthorizationStore):
-    """S7 mutating facade whose every transaction stays on one held inode."""
-
-    def __init__(
-        self,
-        *,
-        opened: ExistingAuthorizationStore,
-        db_path: Path,
-    ) -> None:
-        self.db_path = Path(db_path)
-        self._vended: set[int] = set()
-        self._opened = opened
-
-    @contextmanager
-    def anchored_transaction(self):
-        self._opened.require_current_named_identity()
-        connection = s7._open_s7_connection_from_held_store(
-            dir_fd=self._opened._parent_fd,
-            store_fd=self._opened._db_fd,
-        )
-        connection.execute("BEGIN IMMEDIATE")
-        s7._verify_held_store_activation(
-            self._opened._parent_fd,
-            self._opened._db_fd,
-            connection,
-        )
-        vended_token = s7._S7VendedAnchoredConnectionToken()
-        connection._s7_vended_token = vended_token
-        self._vended.add(id(connection))
-        try:
-            yield connection
-        except BaseException:
-            connection.rollback()
-            raise
-        else:
-            connection.commit()
-        finally:
-            self._vended.discard(id(connection))
-            vended_token.active = False
-            connection._s7_vended_token = None
-            connection.close()
+#: The held-inode store facade moved to core (2026-08-14, Codex finding 1)
+#: so the ceremony's exemption-branch gate can be exact-type against the
+#: closed set {S7AuthorizationStore, S7HeldAuthorizationStore}.
+_HeldS7AuthorizationStore = s7.S7HeldAuthorizationStore
 
 
 class ExistingS7CeremonyStore(s7_bootstrap.S7WebAuthnBootstrapStore):

@@ -1689,7 +1689,8 @@ class TestHeldStoreVerificationHasAnExactCallsiteAllowlist:
         "S7AuthorizationStore.anchored_transaction",
         "core/governance/operator_user_boundary.py::"
         "consume_for_execution_on_connection",
-        "scripts/cuda_cutover.py::_HeldS7AuthorizationStore.anchored_transaction",
+        "core/governance/operator_user_boundary.py::"
+        "S7HeldAuthorizationStore.anchored_transaction",
     ]
 
     def _callsites(self) -> list[str]:

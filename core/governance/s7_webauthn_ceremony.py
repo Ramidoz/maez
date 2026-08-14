@@ -653,23 +653,24 @@ class S7LocalWebAuthnCeremonyService:
             # challenge and credential consumed in one database while the
             # artifact was written to another, or to nothing at all.
             #
-            # The inner store is isinstance, not exact type. Exact typing here
-            # refused the cutover's _HeldS7AuthorizationStore -- a subclass
-            # whose every transaction stays on the ceremony's HELD inode,
-            # strictly stricter than the plain store -- and the owner's first
-            # real assertion died at presence_mint_failed (2026-08-13; the two
-            # hardening passes had never run together, and this gate landed
-            # with no test naming its error). The guarantee is unchanged:
-            # structural fakes are not instances, and a store addressing any
-            # other database still refuses on db_path below. A subclass can
-            # only come from code already holding the real class, which is the
-            # same in-process authority that could construct the exact type.
+            # The inner store is exact-type against a CLOSED two-member set.
+            # History, both directions: exact typing against the plain class
+            # alone refused the cutover's held-inode facade -- strictly
+            # stricter than the plain store -- and the owner's first real
+            # assertion died at presence_mint_failed (2026-08-13). The first
+            # repair widened to isinstance; Codex's cross-lane review then
+            # showed isinstance admits ANY subclass, which can skip the real
+            # constructor and override every write method while carrying a
+            # matching db_path. The facade now lives in core as
+            # S7HeldAuthorizationStore, so the set is closed again and both
+            # legitimate producers are named.
             from core.governance import s7_guarded_execution as guarded
 
             exempt_store = getattr(guarded_store, "authorization_store", None)
             if (
                 type(guarded_store) is not guarded.S7GuardedStateStore
-                or not isinstance(exempt_store, s7.S7AuthorizationStore)
+                or type(exempt_store)
+                not in {s7.S7AuthorizationStore, s7.S7HeldAuthorizationStore}
                 or exempt_store.db_path != store.db_path
             ):
                 return S7CeremonyServiceResult(

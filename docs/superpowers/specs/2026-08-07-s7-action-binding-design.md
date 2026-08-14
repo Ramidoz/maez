@@ -389,17 +389,17 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `_read_committed_grant_row_after_commit` | source_bundle | definition | 2920 |
 | `core/governance/operator_user_boundary.py` | `_require_verified_held_connection` | validator | definition | 2663 |
 | `core/governance/operator_user_boundary.py` | `authorization_artifact_matches` | validator | definition | 2304 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3778 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3794 |
-| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 3677 |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 3724 |
-| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 3728 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:brain_swap_execution_precondition_hash | 3831 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_authorized` | hash | call:work_request_envelope_hash | 3847 |
+| `core/governance/operator_user_boundary.py` | `brain_swap_execution_precondition_hash` | hash | definition | 3730 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | hash | call:brain_swap_execution_precondition_hash | 3777 |
+| `core/governance/operator_user_boundary.py` | `build_brain_swap_work_request_envelope` | producer | call:build_work_request_envelope | 3781 |
 | `core/governance/operator_user_boundary.py` | `build_request_history_record` | hash | call:work_request_envelope_hash | 1282 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | call:WorkRequestEnvelope | 1440 |
 | `core/governance/operator_user_boundary.py` | `build_work_request_envelope` | producer | definition | 1402 |
 | `core/governance/operator_user_boundary.py` | `committed_grant_row_proves_founder_self_modification` | validator | definition | 2497 |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 3528 |
-| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 3521 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | call:execution_grant_authorizes_action | 3581 |
+| `core/governance/operator_user_boundary.py` | `consume_execution_grant_for_action` | execution_edge | definition | 3574 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | call:consume_for_execution_on_connection | 3434 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution` | durable_writer | definition | 3418 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_on_connection` | constructor | call:_mint_s7_execution_grant | 3082 |
@@ -410,15 +410,15 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_with_committed_row` | durable_writer | call:consume_for_execution_on_connection | 3127 |
 | `core/governance/operator_user_boundary.py` | `consume_for_execution_with_committed_row` | durable_writer | definition | 3111 |
 | `core/governance/operator_user_boundary.py` | `consume_verified` | durable_writer | call:consume_for_execution | 3401 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 3484 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 3555 |
-| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 3539 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_action` | execution_edge | definition | 3537 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | call:execution_grant_authorizes_action | 3608 |
+| `core/governance/operator_user_boundary.py` | `execution_grant_authorizes_card_transition` | execution_edge | definition | 3592 |
 | `core/governance/operator_user_boundary.py` | `maez_voice_consultation_hash` | hash | definition | 1518 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 4977 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | validator | call:consultation_exemption_admits | 4917 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4937 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 4948 |
-| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4871 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | call:RenderedRequestStatement | 5030 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | validator | call:consultation_exemption_admits | 4970 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:maez_voice_consultation_hash | 4990 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | hash | call:work_request_envelope_hash | 5001 |
+| `core/governance/operator_user_boundary.py` | `render_request_statement` | renderer | definition | 4924 |
 | `core/governance/operator_user_boundary.py` | `voice_consultation_satisfies_request` | hash | call:work_request_envelope_hash | 1536 |
 | `core/governance/operator_user_boundary.py` | `work_request_envelope_hash` | hash | definition | 1197 |
 | `core/governance/s7_consultation_exemption.py` | `_action_params_hash_from_durable_selection` | hash | call:_action_params_hash_from_durable_selection | 508 |
@@ -480,6 +480,9 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | durable_writer | call:put_voice_source_bundle_v2 | 1251 |
 | `core/governance/s7_guarded_execution.py` | `persist_s7_voice_source_bundle_for_material` | hash | call:s7_voice_consultation_bundle_hash | 1248 |
 | `core/governance/s7_guarded_execution.py` | `provision_r11_exemption_evidence` | durable_writer | call:_provision_r11_exemption_evidence_at | 209 |
+| `scripts/s7_migration_rehearsal.py` | `rehearse` | durable_writer | call:_provision_r11_exemption_evidence_at | 155 |
+| `scripts/s7_migration_rehearsal.py` | `rehearse` | durable_writer | call:_provision_r11_exemption_evidence_at | 159 |
+| `scripts/s7_prepare_store.py` | `phase_provision` | durable_writer | call:_provision_r11_exemption_evidence_at | 101 |
 | `core/governance/s7_guarded_execution.py` | `provision_r11_exemption_evidence` | durable_writer | definition | 205 |
 | `core/governance/s7_guarded_execution.py` | `put_artifact_under_consultation_exemption` | durable_writer | call:_insert_r11_exemption_evidence | 3474 |
 | `core/governance/s7_guarded_execution.py` | `put_artifact_under_consultation_exemption` | validator | call:exemption_admits_for_artifact | 3461 |
@@ -503,22 +506,22 @@ now emitted by the same generator and counted with everything else.
 | `core/governance/s7_guarded_execution.py` | `validate_voice_source_bundle` | hash | call:s7_voice_consultation_bundle_hash | 1910 |
 | `core/governance/s7_webauthn_bootstrap.py` | `S7WebAuthnBootstrapStore.authorization_challenge_for_finish` | source_bundle | definition | 1113 |
 | `core/governance/s7_webauthn_bootstrap.py` | `S7WebAuthnBootstrapStore.create_authorization_challenge` | durable_writer | definition | 991 |
-| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1328 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | hash | call:maez_voice_consultation_hash | 1134 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 1143 |
-| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 1149 |
-| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | call:_action_params_hash_from_durable_selection | 1487 |
-| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | source_bundle | call:_envelope_from_durable_selection | 1490 |
-| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | call:work_request_envelope_hash | 1496 |
-| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | definition | 1459 |
-| `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 996 |
+| `core/governance/s7_webauthn_ceremony.py` | `_consume_backup_registration_authorization` | durable_writer | call:consume_for_execution | 1341 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | hash | call:maez_voice_consultation_hash | 1147 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | source_bundle | call:read_voice_source_bundle | 1156 |
+| `core/governance/s7_webauthn_ceremony.py` | `_generic_voice_evidence_revalidated_at_gate` | validator | call:validate_voice_source_bundle | 1162 |
+| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | call:_action_params_hash_from_durable_selection | 1500 |
+| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | source_bundle | call:_envelope_from_durable_selection | 1503 |
+| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | call:work_request_envelope_hash | 1509 |
+| `core/governance/s7_webauthn_ceremony.py` | `_r11_challenge_projection_hash` | hash | definition | 1472 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorization_voice_seat_recheck` | validator | call:consultation_exemption_admits | 1009 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_begin` | hash | call:_r11_challenge_projection_hash | 426 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_begin` | durable_writer | call:create_authorization_challenge | 467 |
-| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 825 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:S7AuthorizationArtifact | 838 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | hash | call:_r11_challenge_projection_hash | 564 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | source_bundle | call:authorization_challenge_for_finish | 546 |
 | `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | validator | call:consultation_exemption_admits | 640 |
-| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 849 |
+| `core/governance/s7_webauthn_ceremony.py` | `authorize_finish` | constructor | call:mint_authorization_artifact | 862 |
 | `core/governance/s7_webauthn_ceremony.py` | `build_backup_registration_envelope` | producer | call:build_work_request_envelope | 61 |
 | `core/governance/s7_webauthn_ceremony.py` | `build_disable_credential_envelope` | producer | call:build_work_request_envelope | 101 |
 | `daemon/maez_daemon.py` | `_s7_authorization_route_material` | source_bundle | call:authorization_challenge_for_finish | 562 |
@@ -529,29 +532,39 @@ now emitted by the same generator and counted with everything else.
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:derive_s7_voice_source_bundle_hash_binding | 625 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | source_bundle | call:read_voice_source_bundle | 634 |
 | `daemon/maez_daemon.py` | `_s7_voice_source_validation_for_material` | validator | call:validate_voice_source_bundle | 638 |
-| `scripts/cuda_cutover.py` | `ValidatedCutoverSelection.__post_init__` | constructor | definition | 229 |
-| `scripts/cuda_cutover.py` | `_action_params_hash_from_durable_selection` | hash | call:_cutover_action_preimage | 280 |
-| `scripts/cuda_cutover.py` | `_action_params_hash_from_durable_selection` | hash | definition | 272 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | hash | call:_cutover_action_preimage | 2839 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:_cutover_envelope_from_durable_selection | 2861 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | durable_writer | call:consume_for_execution_with_committed_row | 2995 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:mint_consultation_exemption | 2867 |
-| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | renderer | call:render_request_statement | 2876 |
-| `scripts/cuda_cutover.py` | `_conn` | constructor | call:_open_s7_connection_from_held_store | 1086 |
-| `scripts/cuda_cutover.py` | `_cutover_action_preimage` | hash | definition | 238 |
-| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | hash | call:_cutover_action_preimage | 297 |
-| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | producer | call:build_work_request_envelope | 294 |
-| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | producer | definition | 283 |
-| `scripts/cuda_cutover.py` | `_reconstruct_selected_cutover_at` | constructor | call:ValidatedCutoverSelection | 636 |
-| `scripts/cuda_cutover.py` | `_reconstruct_selected_cutover_at` | constructor | definition | 442 |
-| `scripts/cuda_cutover.py` | `_revalidate_r11_after_consume` | validator | call:revalidate_r11_exemption_for_consumption | 2976 |
-| `scripts/cuda_cutover.py` | `anchored_transaction` | constructor | call:_open_s7_connection_from_held_store | 949 |
-| `scripts/cuda_cutover.py` | `open_existing_authorization_store` | constructor | call:_open_s7_connection_from_held_store | 886 |
-| `scripts/cuda_cutover.py` | `publish_and_validate_burn` | execution_edge | call:consume_execution_grant_for_action | 1629 |
-| `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 706 |
+| `scripts/cuda_cutover.py` | `ValidatedCutoverSelection.__post_init__` | constructor | definition | 306 |
+| `scripts/cuda_cutover.py` | `_action_params_hash_from_durable_selection` | hash | call:_cutover_action_preimage | 357 |
+| `scripts/cuda_cutover.py` | `_action_params_hash_from_durable_selection` | hash | definition | 349 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | hash | call:_cutover_action_preimage | 3180 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:_cutover_envelope_from_durable_selection | 3202 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | durable_writer | call:consume_for_execution_with_committed_row | 3337 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | producer | call:mint_consultation_exemption | 3208 |
+| `scripts/cuda_cutover.py` | `_authorize_and_stage_selected_cutover` | renderer | call:render_request_statement | 3217 |
+| `scripts/cuda_cutover.py` | `_conn` | constructor | call:_open_s7_connection_from_held_store | 1146 |
+| `scripts/cuda_cutover.py` | `_cutover_action_preimage` | hash | definition | 315 |
+| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | hash | call:_cutover_action_preimage | 374 |
+| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | producer | call:build_work_request_envelope | 371 |
+| `scripts/cuda_cutover.py` | `_cutover_envelope_from_durable_selection` | producer | definition | 360 |
+| `scripts/cuda_cutover.py` | `_reconstruct_selected_cutover_at` | constructor | call:ValidatedCutoverSelection | 733 |
+| `scripts/cuda_cutover.py` | `_reconstruct_selected_cutover_at` | constructor | definition | 533 |
+| `scripts/cuda_cutover.py` | `_revalidate_r11_after_consume` | validator | call:revalidate_r11_exemption_for_consumption | 3318 |
+| `core/governance/operator_user_boundary.py` | `anchored_transaction` | constructor | call:_open_s7_connection_from_held_store | 3477 |
+| `scripts/cuda_cutover.py` | `open_existing_authorization_store` | constructor | call:_open_s7_connection_from_held_store | 983 |
+| `scripts/cuda_cutover.py` | `publish_and_validate_burn` | execution_edge | call:consume_execution_grant_for_action | 1689 |
+| `scripts/cuda_cutover.py` | `require_current_named_identity` | constructor | call:_require_verified_held_connection | 803 |
 | `skills/surface/s7_ceremony_bridge.py` | `s7_request_envelope_hash_for_card` | hash | call:work_request_envelope_hash | 68 |
 
-**Counts, derived mechanically:** constructor 20, durable_writer 29, execution_edge 10, hash 47, producer 14, renderer 4, source_bundle 23, validator 36 — **total 183**.
+**Counts, derived mechanically:** constructor 20, durable_writer 32, execution_edge 10, hash 47, producer 14, renderer 4, source_bundle 23, validator 36 — **total 186**.
+
+**Amendment (2026-08-14):** three durable_writer rows added for the
+store-preparation tools that provisioned the live store's R11 evidence
+plane — `s7_migration_rehearsal.rehearse` (twice: the rehearsal proves
+idempotence by provisioning a disposable fixture store two times) and
+`s7_prepare_store.phase_provision` (the owner-run provisioning act
+itself). Both need the parametrized `_provision_r11_exemption_evidence_at`
+because the zero-parameter public wrapper opens the CANONICAL store, and
+a rehearsal must never aim there. Surfaced by the repo-wide discovery
+guard during the post-cutover Codex review.
 
 The broad scan is retained separately as a **discovery guard** — it fires
 when a new candidate site appears anywhere, and narrowing it is then a

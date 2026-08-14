@@ -3448,6 +3448,59 @@ class S7AuthorizationStore:
             return grant, callback_result
 
 
+class S7HeldAuthorizationStore(S7AuthorizationStore):
+    """S7 mutating facade whose every transaction stays on one held inode.
+
+    Moved here from the cutover script (2026-08-14) so the ceremony's
+    exemption-branch store gate can be exact-type against a CLOSED
+    two-member set -- {S7AuthorizationStore, S7HeldAuthorizationStore} --
+    instead of isinstance, which Codex's cross-lane review showed admits
+    arbitrary subclasses that skip the real constructor and override
+    write behavior. `opened` is duck-typed on purpose: it must provide
+    `require_current_named_identity()`, `_parent_fd` and `_db_fd`, and is
+    consulted only at write time, so construction alone touches nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        opened: Any,
+        db_path: Path,
+    ) -> None:
+        self.db_path = Path(db_path)
+        self._vended: set[int] = set()
+        self._opened = opened
+
+    @contextmanager
+    def anchored_transaction(self):
+        self._opened.require_current_named_identity()
+        connection = _open_s7_connection_from_held_store(
+            dir_fd=self._opened._parent_fd,
+            store_fd=self._opened._db_fd,
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_held_store_activation(
+            self._opened._parent_fd,
+            self._opened._db_fd,
+            connection,
+        )
+        vended_token = _S7VendedAnchoredConnectionToken()
+        connection._s7_vended_token = vended_token
+        self._vended.add(id(connection))
+        try:
+            yield connection
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+        finally:
+            self._vended.discard(id(connection))
+            vended_token.active = False
+            connection._s7_vended_token = None
+            connection.close()
+
+
 @dataclass(frozen=True)
 class S7ExecutionAuthorization:
     """Exact authorization bundle consumed at the execution edge."""
