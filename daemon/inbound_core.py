@@ -758,6 +758,7 @@ async def run_inbound_turn(
                             recall_items=jarvis_recall_items,
                             subjective_duration_owner_auth=subjective_duration_owner_auth,
                             send_intermediate=send_progress_receipt,
+                            brain_failed=brain_failed,
                         )
                     ),
                 )

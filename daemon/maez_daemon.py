@@ -6939,6 +6939,28 @@ class MaezDaemon:
                     type(log_exc).__name__,
                 )
 
+    def _note_recall_downgrade(self, *, source: str, reason: str) -> None:
+        """Record that this turn runs on the LEGACY recall organ, visibly.
+
+        Content-free by construction: surface label and closed reason code
+        only. The last downgrade is kept on the daemon so real-state
+        surfaces can report it instead of implying the triad served the
+        turn.
+        """
+        note = {
+            "schema": "recall_downgrade.v0",
+            "at_ts": time.time(),
+            "source": str(source),
+            "reason": str(reason),
+        }
+        self._last_recall_downgrade = note
+        logger.warning(
+            "recall_mode_downgrade schema=recall_downgrade.v0 reason=%s "
+            "surface=%s served_by=legacy_pre_triad",
+            reason,
+            source,
+        )
+
     def handle_message(
         self,
         text: str,
@@ -6955,6 +6977,7 @@ class MaezDaemon:
         recall_items: "list | tuple | None" = None,
         subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
         send_intermediate=None,
+        brain_failed: bool = False,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -6995,6 +7018,14 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        if brain_failed:
+            # Full-body audit 2026-08-14: a brain_loop exception silently
+            # substituted the PRE-TRIAD legacy recall for the whole turn --
+            # an older organ swapped in with nothing but a generic warning.
+            # A dormant organ is honest; a silent substitution is not. The
+            # downgrade is now visible state: one content-free structured
+            # line plus a snapshot the cockpit can read.
+            self._note_recall_downgrade(source=source, reason="brain_loop_exception")
         try:
             _record_owner_interaction(self)
         except Exception as _activity_exc:
