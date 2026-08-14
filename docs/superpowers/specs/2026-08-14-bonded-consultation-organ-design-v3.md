@@ -34,8 +34,9 @@ all other staging INSERT-only). **Cluster 1 (attempt schema + D15
 reconciliation) is FROZEN — gate PASSED at facbaee after five rounds
 (15→9→3→2→1→0 findings), with live SQLite witnesses on both lanes for
 the retry ceiling, the timestamp checks, and the not_asked exclusion.
-Cluster 2 (two gates + exact joins + D16/D21 complete text) is
-WRITTEN as of this revision and awaits its gate.**
+Cluster 2 (two gates + exact joins + D16/D21 complete text) and
+cluster 3 (attested-result byte constructors) are WRITTEN and await
+their gates.**
 
 ---
 
@@ -369,39 +370,88 @@ the real prompt — public verbatim, private hash+ref) with the census
 and route rule of §5b. The producer's result union maps 1:1 onto canon
 D15 attempt outcomes (no new vocabulary).
 
-### 6. AttestedConsultationResult — byte-exact (Codex edit 4)
+### 6. AttestedConsultationResult — byte constructors (campaign cluster 3)
 
 One object, constructed ONLY inside the LLM client's consultation call
-(constructor is module-private; the daemon/LLM client is the trusted
-boundary per RULING 1 — this is an atomicity-of-API carrier, not
-cryptography; tests that mock it are labeled dataflow-only and the
-first activation requires an unmocked live witness):
+(module-private constructor). Honest trust statement, unchanged: the
+daemon and its LLM client are the NAMED TRUSTED BOUNDARY per RULING 1
+— this is an atomicity-of-API carrier, not cryptographic proof against
+daemon code. Tests that substitute it are labeled dataflow-only; the
+first activation of each consumer requires an unmocked live witness.
+
+**Why four byte forms and not one.** The live client mutates bytes
+twice on the OpenAI-compatible path: `_sanitize_messages_for_llamacpp`
+rewrites the REQUEST (stripping control tokens llama-server chokes on),
+and `_strip_special_tokens` rewrites the RESPONSE. So "the prompt" is
+three different byte sets and "the answer" is two. Hashing only one
+would let a replay compare the wrong pair and pass. Each form below is
+defined by its constructor, not by prose.
+
+**Constructors (each produces bytes; each hash is
+`sha256(bytes).hexdigest()`):**
+
+| Field | Constructor — exact |
+|---|---|
+| `messages_canonical_sha256` | `json.dumps([[m["role"], m["content"]] for m in messages], ensure_ascii=False, separators=(",", ":")).encode("utf-8")` over the ordered message list AS THE PRODUCER BUILT IT, before any client mutation. Ordered list of two-element arrays — never a dict — so key order cannot vary. |
+| `messages_transmitted_sha256` | The identical constructor applied to the list actually handed to the transport, i.e. AFTER `_sanitize_messages_for_llamacpp` on the llama.cpp path (and equal to canonical on paths with no sanitizer). `sanitizer_version` names which sanitizer ran; `"none"` when none did. |
+| `request_body_sha256` | The exact HTTP request body bytes as serialized by the transport, before TLS/socket write. On the OpenAI-compatible path this is the SDK's serialized JSON body; when the SDK does not expose it, the field is `None` and `transport_body_available=False` — an honest absence, never a re-serialized guess. |
+| `response_body_sha256` | The exact HTTP response body bytes as received, before any parsing. Same honesty rule and same `transport_body_available` flag. |
+| `assistant_text_sha256` | `normalized_assistant_text.encode("utf-8")` where normalized = the client's post-strip content (`_strip_special_tokens` applied), i.e. exactly the string handed back to the producer. `strip_version` names the strip. |
+
+**The parser/display/replay invariant.** The marker parser runs on
+`normalized_assistant_text`; the owner-display bytes (§7b) ARE that
+same string; Gate A/B recompute `assistant_text_sha256` from the staged
+copy of it. One string, three consumers, one hash — so "what was
+parsed", "what the owner read", and "what is replayed" cannot diverge.
+The staged result row persists `normalized_assistant_text` verbatim;
+raw transport bodies are NOT persisted (they may carry provider
+metadata and add no authority the hashes lack).
+
+**Full carrier:**
 
 ```text
 AttestedConsultationResult(
-  call_id: str
-  endpoint: str                        -- URL actually dialed
-  model_file_sha256: str               -- digest read at call time
-  config_hash: str                     -- serving config canonical hash
-  started_at / finished_at: str
-  messages_canonical_sha256: str       -- ordered [(role, text)] list,
-                                       -- UTF-8, canonical JSON, PRE-sanitizer
-  messages_transmitted_sha256: str     -- same shape, POST-sanitizer
-                                       -- (sanitizer_version recorded)
-  request_body_sha256: str             -- exact HTTP body bytes
-  response_body_sha256: str            -- exact HTTP response bytes
-  assistant_text_sha256: str           -- post-strip normalized text
-                                       -- (strip_version recorded)
-  sanitizer_version / strip_version / transport_schema_version: str
-  object_sha256: str                   -- canonical hash of all above
+  call_id: str                      -- uuid4 minted at call entry
+  endpoint: str                     -- base URL actually dialed
+  model_file_sha256: str            -- digest of the served model file,
+                                    -- read at call time (not config)
+  config_hash: str                  -- canonical_hash of the serving
+                                    -- config dict actually sent
+                                    -- (model, temperature, max_tokens,
+                                    -- extra_body)
+  started_at: str                   -- canonical UTC, _now_z form
+  finished_at: str
+  messages_canonical_sha256: str
+  messages_transmitted_sha256: str
+  request_body_sha256: str | None
+  response_body_sha256: str | None
+  transport_body_available: bool
+  assistant_text_sha256: str
+  normalized_assistant_text: str    -- the one string (persisted)
+  sanitizer_version: str
+  strip_version: str
+  transport_schema_version: str
+  object_sha256: str                -- canonical_hash over every field
+                                    -- above, in declaration order,
+                                    -- EXCLUDING object_sha256 itself
 )
 ```
 
-The parser runs on the NORMALIZED assistant text; the owner-display
-bytes ARE the normalized text; both facts recorded so D16-replay
-compares like with like. Missing/partial receipt refuses
-`routing_receipt_unavailable` (gate-layer cause: `receipt_mismatch`
-when present-but-disagreeing).
+**Construction rules.** Every field is populated inside the single
+call; a call that cannot populate a required field raises rather than
+returning a partial object — there is no path that yields a result
+whose receipt half is empty. `model_file_sha256` is read from the
+serving model file at call time; if the daemon cannot read it, the
+consultation refuses `routing_receipt_unavailable` (an unknown
+responder is not a responder). Absence is representable ONLY for the
+two transport-body fields, and only jointly with
+`transport_body_available=False`.
+
+**Version pins.** `sanitizer_version`, `strip_version`, and
+`transport_schema_version` are members of the §6b version tuple, so a
+change to any byte-mutating code path invalidates the tuple and forces
+an explicit re-registration rather than silently changing what a hash
+means.
 
 ### 7. Two gates — canon-grade (campaign cluster 2)
 
