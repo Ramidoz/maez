@@ -5,6 +5,8 @@ import json
 import os
 from unittest import mock
 
+from PIL import Image
+
 import skills.screen_perception as sp
 
 
@@ -74,6 +76,37 @@ class PreflightFailSafeTests(unittest.TestCase):
             return_value={"class": "Bitwarden", "title": "Vault"},
         ):
             self.assertTrue(sp._is_excluded_active_window())
+
+    def test_title_only_window_is_excluded_as_class_unavailable(self):
+        reason = sp.active_window_preflight_reason(
+            {"class": "", "title": "ordinary document"}
+        )
+
+        self.assertEqual(reason, "class_unavailable")
+
+    def test_supplied_snapshot_uses_authority_without_rereading_window(self):
+        snapshot = {"class": "Code", "title": "plan.md"}
+        with mock.patch(
+            "core.memory.ambient.active_window_for_preflight",
+            side_effect=AssertionError("supplied snapshot must not be re-read"),
+        ):
+            reason = sp.active_window_preflight_reason(snapshot)
+
+        self.assertIsNone(reason)
+
+    def test_oversized_title_or_class_is_excluded_before_matching(self):
+        self.assertEqual(
+            sp.active_window_preflight_reason(
+                {"class": "Code", "title": "x" * 1025}
+            ),
+            "window_schema_invalid",
+        )
+        self.assertEqual(
+            sp.active_window_preflight_reason(
+                {"class": "x" * 257, "title": "ordinary"}
+            ),
+            "class_unavailable",
+        )
 
     def test_observe_excludes_before_capture_when_window_unreadable(self):
         with mock.patch.object(sp, "_is_enabled", return_value=True), \
@@ -153,6 +186,121 @@ class CaptureSelectionTests(unittest.TestCase):
                  return_value=[{"name": "x", "fn": lambda tmp: False}],
              ):
             self.assertIsNone(sp._capture_screenshot())
+
+    def test_curtain_stops_entire_capture_loop_before_any_candidate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            curtain = os.path.join(tmpdir, "curtain")
+            with open(curtain, "w", encoding="utf-8"):
+                pass
+            screencast = mock.Mock(return_value=False)
+            def would_capture(path):
+                with open(path, "wb") as handle:
+                    handle.write(b"captured despite curtain")
+                return True
+
+            gnome_dbus = mock.Mock(side_effect=would_capture)
+            portal = mock.Mock(return_value=True)
+            candidates = [
+                {"name": "screencast", "fn": screencast},
+                {"name": "gnome-shell-dbus", "fn": gnome_dbus},
+                {"name": "portal", "fn": portal},
+            ]
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_SCREEN_CURTAIN_FILE": curtain},
+                clear=False,
+            ), mock.patch.object(sp, "_capture_candidates", return_value=candidates):
+                result = sp._capture_screenshot()
+
+        self.assertIsNone(result)
+        screencast.assert_not_called()
+        gnome_dbus.assert_not_called()
+        portal.assert_not_called()
+
+    def test_curtain_drawn_between_candidates_stops_all_fallbacks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            curtain = os.path.join(tmpdir, "curtain")
+
+            def screencast_observes_new_curtain(_path):
+                with open(curtain, "w", encoding="utf-8"):
+                    pass
+                return False
+
+            screencast = mock.Mock(side_effect=screencast_observes_new_curtain)
+            def fallback_would_capture(path):
+                with open(path, "wb") as handle:
+                    handle.write(b"fallback captured after curtain")
+                return True
+
+            gnome_dbus = mock.Mock(side_effect=fallback_would_capture)
+            portal = mock.Mock(return_value=True)
+            candidates = [
+                {"name": "screencast", "fn": screencast},
+                {"name": "gnome-shell-dbus", "fn": gnome_dbus},
+                {"name": "portal", "fn": portal},
+            ]
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_SCREEN_CURTAIN_FILE": curtain},
+                clear=False,
+            ), mock.patch.object(sp, "_capture_candidates", return_value=candidates):
+                result = sp._capture_screenshot()
+
+        self.assertIsNone(result)
+        screencast.assert_called_once()
+        gnome_dbus.assert_not_called()
+        portal.assert_not_called()
+
+    def test_curtain_drawn_during_success_discards_captured_bytes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            curtain = os.path.join(tmpdir, "curtain")
+
+            def captures_while_curtain_closes(path):
+                with open(path, "wb") as handle:
+                    handle.write(b"captured while curtain closed")
+                with open(curtain, "w", encoding="utf-8"):
+                    pass
+                return True
+
+            candidate = mock.Mock(side_effect=captures_while_curtain_closes)
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_SCREEN_CURTAIN_FILE": curtain},
+                clear=False,
+            ), mock.patch.object(
+                sp,
+                "_capture_candidates",
+                return_value=[{"name": "successful", "fn": candidate}],
+            ):
+                result = sp._capture_screenshot()
+
+        self.assertIsNone(result)
+        candidate.assert_called_once()
+
+    def test_curtain_drawn_during_encoding_blocks_every_return_path(self):
+        def write_raw(path):
+            with open(path, "wb") as handle:
+                handle.write(b"raw bytes")
+            return True
+
+        def write_png(path):
+            Image.new("RGB", (2, 2), color=(1, 2, 3)).save(path, format="PNG")
+            return True
+
+        for writer in (write_raw, write_png):
+            with self.subTest(writer=writer.__name__), mock.patch.object(
+                sp,
+                "screen_privacy_state",
+                side_effect=[None, None, None, "curtain_drawn"],
+            ) as privacy, mock.patch.object(
+                sp,
+                "_capture_candidates",
+                return_value=[{"name": writer.__name__, "fn": writer}],
+            ):
+                result = sp._capture_screenshot()
+
+            self.assertIsNone(result)
+            self.assertEqual(privacy.call_count, 4)
 
 
 class GnomeShellCaptureTests(unittest.TestCase):

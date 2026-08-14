@@ -49,6 +49,22 @@ class ContractPromptTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_specificity_claims_are_shared(self):
+        from core.vision_contract.truth_contract import find_specificity_claims
+
+        claims = find_specificity_claims(
+            "Open Main.PY, then git push; after that run $ pytest"
+        )
+
+        self.assertEqual(
+            [(claim.kind, claim.value) for claim in claims],
+            [
+                ("filename", "Main.PY"),
+                ("shell_command", "git push"),
+                ("shell_prompt", "$ pytest"),
+            ],
+        )
+
     def test_verdict_carries_schema_version(self):
         for raw in (
             "REGION: titlebar\nTEXT: Settings\n",
