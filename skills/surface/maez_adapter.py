@@ -1124,6 +1124,7 @@ class MaezMessageHandler:
             jarvis_transcript = ""
             jarvis_tool_calls: list[dict] = []
             jarvis_recall_items = ()
+            brain_failed = False
             try:
                 from core import brain_loop as _brain_loop
 
@@ -1167,6 +1168,9 @@ class MaezMessageHandler:
                 jarvis_transcript = ""
                 jarvis_tool_calls = []
                 jarvis_recall_items = ()
+                # Codex review of b35bc94: the v2 inbound path forwards the
+                # downgrade; this flag-off rollback path swallowed it.
+                brain_failed = True
 
             # Synthesis stage — daemon.handle_message does the final text reply
             # and OWNS the pipeline: strip tool-call leaks, self-claim audit,
@@ -1209,6 +1213,7 @@ class MaezMessageHandler:
                                 recall_items=jarvis_recall_items,
                                 subjective_duration_owner_auth=subjective_duration_owner_auth,
                                 send_intermediate=_send_progress_receipt,
+                                brain_failed=brain_failed,
                             )
                         ),
                     )

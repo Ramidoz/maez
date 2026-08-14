@@ -351,3 +351,38 @@ wired to nothing.** Everything else waits on decomposition and on two
 owner decisions that are now on the critical path — the D13/R8
 reconciliation above, and RULING 1, which turns out to gate not just
 receipts but the very claim that Maez answered.
+
+---
+
+## REQUIRED PROPERTIES from the 2026-08-14 full-body audit (ruled, not optional)
+
+The audit found the CURRENT consultation wire lying in three ways that
+any accepted design must cure structurally -- they are requirements now,
+with evidence in docs/audit_2026-08-14-full-body.md:
+
+1. **The prompt that is hashed must be the prompt that was asked.** The
+   live wire persists rendered_prompt_hash over a SYNTHETIC 8-line
+   derivation (s7_guarded_execution.expected_s7_voice_rendered_prompt_text)
+   while decision_pipeline sends reviewed-template + rendered-proposal
+   text; the v2 validator then compares the derivation against itself.
+   The organ's evidence chain must persist the REAL prompt bytes (or
+   their hash + durable pre-image) and the validator must REPLAY, not
+   re-derive -- the dormant replaying validator
+   (validate_s7_voice_source_bundle) is the shape to promote, not
+   discard.
+2. **Responder identity must be bound or refused, never fabricated.**
+   runtime_identity_hash / model_routing_identity_hash /
+   model_config_hash are today computed from the string constants
+   "current" / "normal" / "reviewed_s7_voice_v1". The organ must bind
+   the actual serving identity (model file digest, route config, server
+   identity) or carry an explicit typed absence -- the
+   RESPONDER_IDENTITY_DISCLAIMER pattern -- but a hash field may never
+   again be a constant wearing a binding's name.
+3. **Consultation evidence must survive a restart.** The raw response
+   and reader attempt live in an in-memory dict
+   (_s7_pending_voice_source_bundles) between production and
+   persistence; a daemon restart mid-flow loses the owner-witnessed
+   bytes and later refuses under a misleading name
+   (invalid_hash_binding via the source_ref_hash write-once
+   short-circuit). The organ's staging must be durable and its
+   dedupe honest about WHICH consultation's bytes it serves.

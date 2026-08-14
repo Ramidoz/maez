@@ -773,13 +773,27 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         attempt_store.put(attempt)
         if store_rendered_prompt:
             bundle_store.put_rendered_prompt("rendered-prompt-1", rendered_prompt_text)
-        policy = S7ContextManifestPolicy(
-            policy_id="s7-context-policy-v1",
-            schema_version="1",
-            allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
-            dialog_context_rules=("no_private_raw_text",),
-            reviewed_at="2026-05-21T00:00:00+00:00",
-            policy_body_hash="f" * 64 if policy_reviewed else "0" * 64,
+        from core.governance.s7_guarded_execution import (
+            S7_CONTEXT_MANIFEST_POLICY_BODY_SHA256,
+            S7_REVIEWED_CONTEXT_MANIFEST_POLICY,
+        )
+
+        # The reviewed fixture IS the shipped reviewed policy -- the
+        # placeholder era ("f"*64) is fully retired (Codex review), so a
+        # fixture carrying it would encode the old lie into the tests.
+        policy = (
+            S7_REVIEWED_CONTEXT_MANIFEST_POLICY
+            if policy_reviewed
+            else S7ContextManifestPolicy(
+                policy_id="s7-context-policy-v1",
+                schema_version="1",
+                allowed_fields=(
+                    "preview_ref", "dialog_context_ref", "rollback_path_class"
+                ),
+                dialog_context_rules=("no_private_raw_text",),
+                reviewed_at="2026-05-21T00:00:00+00:00",
+                policy_body_hash="0" * 64,
+            )
         )
         if policy_reviewed:
             self.assertIn(policy.policy_hash, REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES)

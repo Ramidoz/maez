@@ -250,7 +250,10 @@ class OwnerSurfaceTests(unittest.TestCase):
                     self.assertEqual(response.get_json().get("error"), "owner_auth_required")
 
     def test_s7_status_still_uses_existing_proxy_shape(self):
-        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True):
+        import os
+
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "doors-test-token"}, clear=False):
             with mock.patch("urllib.request.urlopen") as urlopen:
                 response = mock.Mock()
                 response.status = 200

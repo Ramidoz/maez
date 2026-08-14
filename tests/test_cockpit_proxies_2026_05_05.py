@@ -239,12 +239,14 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
             captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
             return _make_urlopen_response(
                 b'{"ok": true, "live_flag_enabled": false}',
                 status=200,
             )
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+                patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "proxy-test-token"}, clear=False):
             response = self.client.get("/api/v1/s7/webauthn/status")
 
         body = json.loads(response.get_data())

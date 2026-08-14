@@ -78,10 +78,19 @@ class S71StatusProjectionTests(unittest.TestCase):
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
                 "S7_WEBAUTHN_STORE_ROOT": str(root),
+                "S7_INTERNAL_CHANNEL_TOKEN": "status-test-token",
             }
 
             with patch.dict(os.environ, env, clear=False):
-                response = _daemon_client().get("/internal/s7/webauthn/status")
+                # 2026-08-14 (full-body audit): the status route was the ONE
+                # internal S7 route without the channel check. Headerless is
+                # now refused; the projection needs the reviewed channel.
+                bare = _daemon_client().get("/internal/s7/webauthn/status")
+                self.assertEqual(bare.status_code, 403)
+                response = _daemon_client().get(
+                    "/internal/s7/webauthn/status",
+                    headers={"X-Maez-S7-Internal-Channel": "status-test-token"},
+                )
 
             body = response.get_json()
             self.assertEqual(response.status_code, 200)
