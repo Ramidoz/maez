@@ -2523,3 +2523,43 @@ class TestExecutorEvidence:
         # The installs before the failure really ran, into scratch only.
         assert (recovery / "llama-server.service").read_bytes() == b"unit\n"
         assert (recovery / "mtp.conf").read_bytes() == b"dropin\n"
+
+
+class TestPresenceRefusalPrintsTheCeremonyError:
+    """Four live attempts were spent guessing which ceremony error hid
+    behind presence_assertion_invalid. The closed refusal vocabulary
+    stays; the ceremony's own error code is printed for the owner."""
+
+    def test_the_ceremony_error_code_is_printed(self, capsys) -> None:
+        result = s7_ceremony.S7CeremonyServiceResult(
+            body={"ok": False, "error": "s7_challenge_replayed"},
+            status_code=410,
+        )
+
+        refusal = cutover._map_presence_finish_refusal(result)
+
+        assert str(refusal) == "presence_assertion_invalid"
+        assert (
+            "presence refusal: s7_challenge_replayed"
+            in capsys.readouterr().out
+        )
+
+    def test_verifier_detail_and_reason_are_printed_when_present(
+        self, capsys
+    ) -> None:
+        result = s7_ceremony.S7CeremonyServiceResult(
+            body={
+                "ok": False,
+                "error": "s7_authentication_invalid",
+                "detail": "InvalidSignature",
+                "reason": "Could not verify authentication signature",
+            },
+            status_code=400,
+        )
+
+        cutover._map_presence_finish_refusal(result)
+
+        printed = capsys.readouterr().out
+        assert "s7_authentication_invalid" in printed
+        assert "detail=InvalidSignature" in printed
+        assert "reason=Could not verify authentication signature" in printed

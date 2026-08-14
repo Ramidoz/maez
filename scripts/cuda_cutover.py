@@ -3045,6 +3045,18 @@ def _map_presence_finish_refusal(
     result: s7_ceremony.S7CeremonyServiceResult,
 ) -> CutoverRefusal:
     error = str(result.body.get("error") or "")
+    # The mapping below folds many distinct ceremony refusals into few
+    # cutover codes -- deliberately closed, but 2026-08-13/14 it cost four
+    # live attempts to guess WHICH ceremony error had fired (a missing
+    # dependency, then an expired challenge, then an unknown). The closed
+    # vocabulary stays; the ceremony's own error code, and the verifier's
+    # bounded detail when present, are printed for the owner first.
+    diagnostic = f"presence refusal: {error or '(no error code)'}"
+    for key in ("detail", "reason"):
+        value = result.body.get(key)
+        if value:
+            diagnostic += f" {key}={value}"
+    print(diagnostic, flush=True)
     if error == "s7_webauthn_dependency_missing":
         # The verifier loads py_webauthn LAZILY so a bare install fails
         # closed instead of arming -- correct -- but this default-mapped to
