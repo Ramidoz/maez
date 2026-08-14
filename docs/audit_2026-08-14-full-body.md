@@ -118,11 +118,14 @@ ledger (`MAEZ_LEDGER_WRITES` unset; `memory/ledger.db` verified
    `model_config_hash` are computed from constant strings. Named
    bindings that bind nothing — the exact defect class the R11 work
    condemned in its own comments.
-4. **Armed authority with no durable provenance.** Both S7 ceremony
-   arming flags exist only in pid 2834's environment — in no config
-   file, no unit file. A restart silently disarms the ceremony surface
-   (and separately: the running daemon is executing code hours older
-   than disk — restart is due anyway, deliberately).
+4. **Armed authority — CORRECTED during remediation.** The survey
+   claimed the arming flags existed only in the process environment;
+   in fact both live in `~/.config/maez/model.env`, the maez.service
+   EnvironmentFile the survey didn't check. Restarts re-arm correctly.
+   The real (smaller) finding: the provenance is off-repo and
+   undocumented — now pointed to from config/.env. The audit's OWN
+   claim failed verify-before-encode; recorded rather than erased.
+   (The code/process drift half stands: restart was due.)
 5. **Pytest full-discovery dies in a native interpreter crash**
    (Python 3.14.4 suspect confirmed still alive). The repo's own
    unittest-based floor runner sidesteps it; its receipt was 5 weeks /
