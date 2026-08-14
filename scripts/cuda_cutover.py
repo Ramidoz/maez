@@ -2083,9 +2083,17 @@ class PreparedCutover:
                         # Read after wait: these commands emit at most a few
                         # hundred bytes, far under the pipe buffer, so the
                         # child cannot block on a full pipe before exiting.
+                        # Non-blocking drain (Codex finding): a descendant
+                        # still holding the write end must delay nothing --
+                        # whatever is already in the pipe is read, and the
+                        # refusal proceeds.
+                        os.set_blocking(stderr_read, False)
                         captured = bytearray()
                         while len(captured) < 8192:
-                            chunk = os.read(stderr_read, 1024)
+                            try:
+                                chunk = os.read(stderr_read, 1024)
+                            except BlockingIOError:
+                                break
                             if not chunk:
                                 break
                             captured.extend(chunk)
@@ -2181,9 +2189,13 @@ def _spawn_failure_postmortem(
                 os.close(pipe_write)
                 pipe_write = -1
                 _pid, probe_status = waitpid(pid, 0)
+                os.set_blocking(pipe_read, False)
                 captured = bytearray()
                 while len(captured) < 16384:
-                    chunk = os.read(pipe_read, 4096)
+                    try:
+                        chunk = os.read(pipe_read, 4096)
+                    except BlockingIOError:
+                        break
                     if not chunk:
                         break
                     captured.extend(chunk)
@@ -2207,40 +2219,14 @@ def _spawn_failure_postmortem(
             f"(ls exit {listing_exit}):\n{listing}",
             flush=True,
         )
-        # Determinism: the SAME failed command, re-spawned identically.
-        retry_read = retry_write = -1
-        try:
-            retry_read, retry_write = os.pipe()
-            retry_actions = tuple(
-                (os.POSIX_SPAWN_DUP2, source_fd, child_fd)
-                for source_fd, child_fd in command.child_fd_map
-            ) + ((os.POSIX_SPAWN_DUP2, retry_write, 2),)
-            pid = posix_spawn(
-                f"/proc/self/fd/{command.executable_fd}",
-                command.argv,
-                environment,
-                file_actions=retry_actions,
-            )
-            os.close(retry_write)
-            retry_write = -1
-            _pid, retry_status = waitpid(pid, 0)
-            retry_err = bytearray()
-            while len(retry_err) < 8192:
-                chunk = os.read(retry_read, 1024)
-                if not chunk:
-                    break
-                retry_err.extend(chunk)
-            print(
-                "postmortem: identical re-spawn exited "
-                f"{os.waitstatus_to_exitcode(retry_status)}: "
-                + bytes(retry_err).decode("utf-8", "replace").strip(),
-                flush=True,
-            )
-        finally:
-            if retry_write >= 0:
-                os.close(retry_write)
-            if retry_read >= 0:
-                os.close(retry_read)
+        # There is deliberately NO re-spawn of the failed command here.
+        # The first postmortem carried one as a determinism probe during
+        # the memfd hunt; Codex's review named the defect: the "diagnostic"
+        # re-executed the real command -- including, live on 2026-08-14, a
+        # second `systemctl reboot` that only the session inhibitor
+        # stopped. A refusal decision must never be followed by another
+        # execution of the thing that was refused. The read-only probes
+        # below (ls, cat) are the postmortem's whole authority.
         # Can the child actually OPEN and read the mapped fds? readlink
         # (ls above) proves presence; cat proves the reopen that install
         # needs. Directories exit non-zero by nature; sources must read.

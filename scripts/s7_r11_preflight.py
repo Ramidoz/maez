@@ -236,6 +236,21 @@ def _check_webauthn_dependency() -> Check:
 
     state = S7ProductionWebAuthnVerifier().dependency_state()
     if state.get("ok") is True:
+        # Import alone is not capability (Codex finding): the ceremony
+        # needs the verify entrypoint itself. An incompatible version
+        # that imports but lacks it must FAIL here, not mid-ceremony.
+        import webauthn
+
+        if not callable(
+            getattr(webauthn, "verify_authentication_response", None)
+        ):
+            return Check(
+                "webauthn dependency",
+                False,
+                f"{state.get('library_name')} "
+                f"{state.get('library_version')} imports but lacks "
+                f"verify_authentication_response under {sys.executable}",
+            )
         return Check(
             "webauthn dependency",
             True,
