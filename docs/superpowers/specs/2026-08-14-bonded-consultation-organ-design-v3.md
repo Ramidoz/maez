@@ -152,9 +152,10 @@ family. Its columns divide exactly:
   `state`, `outcome`, `reserved_at`, `finished_at`, `result_row_ref`,
   `consumed_by_artifact`.
 
-`row_seal_hash = canonical_hash` over exactly the twelve columns
-named before it in the immutable list, in that order — never over
-itself. The validator recomputes it at both gates; any drift refuses
+`row_seal_hash = canonical_hash` over THE SEAL DOMAIN — which is
+defined in exactly one place: the immutable-list bullet above. This
+sentence is a reference, not a second definition. The validator
+recomputes the seal at both gates; any drift refuses
 `store_integrity_failure`. All OTHER staging tables
 (`s7_consult_snapshots_v1`, `s7_consult_results_v1`,
 `s7_consult_version_tuples_v1`) are strictly INSERT-only.
