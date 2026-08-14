@@ -298,6 +298,32 @@ class TestDecidePursuit(unittest.TestCase):
         )
         self.assertIsNone(result)
 
+    def test_quarantines_digestion_source_from_direct_pursuit_api(self):
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [
+            {
+                **_wondering(
+                    wid=1,
+                    question="continuity at restart",
+                    advance_count=5,
+                    last_advanced=time.time() - 86400 * 5,
+                ),
+                "source": "digestion",
+            },
+        ]
+
+        result = decide_pursuit(
+            wonderings,
+            goals=goals,
+            recent_owner_text="curious",
+            threshold=0.0,
+        )
+
+        self.assertIsNone(result)
+
 
 # ── phrasing ──────────────────────────────────────────────────────────
 

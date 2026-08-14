@@ -94,6 +94,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
+from core.evolution.wonderings import _QUARANTINED_SOURCES
 from core.memory.working_self import GoalHierarchy
 from core.memory.working_self import _tokenize as _ws_tokenize
 
@@ -589,6 +590,9 @@ def decide_pursuit(
     Eligibility rules:
     - Wondering must have status ``open`` or ``active``
       (resolved / abandoned / blocked_pending_approval are skipped).
+    - Digestion-sourced wonderings remain structurally quarantined
+      from pursuit until the consolidation-spine self-formation slice
+      deliberately lifts G2.
     - Wondering must have non-empty question text after stripping
       (audit M7 — empty/whitespace questions never surface).
     - Vulnerable conversational register hard-blocks all surfacing
@@ -624,6 +628,8 @@ def decide_pursuit(
     for w in wonderings:
         status = (w.get("status") or "").lower()
         if status not in _ELIGIBLE_STATUSES:
+            continue
+        if (w.get("source") or "") in _QUARANTINED_SOURCES:
             continue
         # Skip empty/whitespace questions (audit M7).
         question = (w.get("question") or "").strip()
