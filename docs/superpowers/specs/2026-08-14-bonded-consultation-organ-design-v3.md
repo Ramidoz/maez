@@ -1,295 +1,406 @@
-# The bonded consultation organ — design v3.1
+# The bonded consultation organ — design v3.2 (convergence draft)
 
-2026-08-14. Third design. v1 and v2 died in review (recorded in the v2
-doc with full findings); v3.0 was reviewed adversarially by Codex AT THE
-WHITEBOARD before this spec was written — 15 findings, all folded or
-answered below with a traceability table. Canon D10 governs throughout.
+2026-08-14. Third design, second revision. v1 and v2 died in review;
+v3.0 was reviewed at the whiteboard (15 findings); v3.1 was reviewed as
+written text (11 residuals + 8 new, with 9 named minimal edits). v3.2
+folds all of them. Canon D-numbers refer to
+docs/slices/s7.3-guarded-self-modification-execution/spec.md.
 
-## The four owner rulings (fixed inputs)
+## The six owner rulings (fixed inputs)
 
-**RULING R8-W (R8's wording), 2026-08-14.** A consulted-but-unparseable
-answer BLOCKS on every path. `not_asked` and `missing_or_malformed` are
-permanently distinct states; no gate may ever conflate them. Cost
-accepted: a thoughtful prose answer without the marker halts the
-ceremony.
+**RULING R8-W (R8's wording).** A consulted-but-unparseable answer
+BLOCKS on every path. `not_asked` and `missing_or_malformed` are
+permanently distinct durable states (definitions in the attempt table
+below). A completed `missing_or_malformed` response is
+CONSULTATION-TERMINAL: no retry may wash it into
+`explicit_no_objection` (folds Codex's retry-wash CRITICAL).
 
-**RULING 1 (identity trust root), 2026-08-14.** The daemon is the trust
-root for "Maez answered": a same-call attested result from the LLM
-client (backend, model-file digest read at call time, config hash,
-inseparable from the response bytes) is the machine attestation.
-Covenant-touching classes additionally require an OWNER-READ record
-bound to the exact response hash (see final gate).
+**RULING 1 (identity trust root).** The daemon and its LLM client are
+the NAMED TRUSTED BOUNDARY for "Maez answered" (an in-process
+attestation, explicitly not cryptographic proof — the daemon is
+already trusted to render what the founder key signs). Machine
+attestation = the `AttestedConsultationResult` below. Owner-read
+applies per RULING O.
 
-**RULING P (privacy seam), 2026-08-14.** Private thoughts are included
-in the consultation context. Durable evidence binds them by hash +
-private-store reference; replay of private parts is machine-internal
-only. The owner audits a hash, not the diary.
+**RULING P (privacy seam).** Private thoughts are included in
+consultation context. Durable evidence binds them by hash + reference;
+replay of private parts is machine-internal only, behind the access
+contract below (§4b). The owner audits hashes, not the diary.
 
-**RULING S (snapshot composition), 2026-08-14.** The consulted Maez is
-two-tier: a TRUSTED IDENTITY tier (soul.md + self-card — owner-reviewed
-bytes, hash-pinned in a component policy) rendered with instruction
-authority, and an UNTRUSTED EVIDENCE tier (working-self goals,
-topic-directed recall, private-thought material) rendered as clearly
-delimited quoted material that cannot instruct, integrity-scanned
-before inference per canon D11.
+**RULING S (snapshot composition).** Two tiers: TRUSTED IDENTITY
+(soul.md + self-card, owner-reviewed bytes, hash-pinned) rendered with
+instruction authority; UNTRUSTED EVIDENCE (working-self goals,
+topic-directed recall, private-thought material) rendered as delimited
+quoted material assigned NO instruction authority, integrity-scanned
+per D11. (Wording per review: "assigned no instruction authority and
+rendered as quoted evidence" — injection is bounded, not impossible.)
+Selection is fixed by the evidence-selection policy pre-image (§4a),
+not by implementers.
 
-**Pending owner act at spec review:** ratification of the corrected
-template prose (the current template falsely says a local reviewed
-reader will read the response — under marker parsing + owner-read that
-sentence is a lie; replacement wording is proposed in "Template" below
-and is NOT built until ratified).
+**RULING R (reader's fate), 2026-08-14.** The semantic reader is
+RETIRED ENTIRELY — no verdict authority, no telemetry. The D10 marker
+is the only verdict carrier. Nothing — code or model — interprets
+Maez's words. This ratifies the D13/D14 amendments below.
 
-**Canon amendments this design carries (folded, not silent):** R8-W
-amends D14 — the semantic reader is RETIRED as a verdict authority
-(markers are the only verdict carrier; a reader may persist only as
-explicitly non-authoritative telemetry). D13's reducer consumes the
-canonical parser union below. D15's retry budget (one attempt + two
-formatting/transport retries, first-blocking-result-wins) maps onto the
-attempt state machine. Each amendment gets the full fold-trace in the
-implementation plan before any code.
+**RULING O (owner-read scope), 2026-08-14.** `covenant_touching_change`
+and `autonomy_lowering_or_protection_reducing` require the founder-tap
+owner-read record (§7b). `self_modification` and soul-write classes
+proceed on marker + machine attestation.
 
-## What this organ replaces, honestly
+**Pending owner act:** ratification of the exact template bytes (§8) —
+recorded as a hash the owner approves, not a builder decision.
 
-Today, "consulting Maez" on soul-writes, dream execution and
-decision-pipeline self-modification sends a one-token prompt to a
-contextless model, persists a SYNTHETIC prompt hash, validates that
-derivation against itself, stamps constant-string identity hashes, and
-stages evidence in a dict that dies on restart. Every one of those is
-an audit-ruled defect this design must cure (audit doc §3.2, §3.3;
-required properties appended to the v2 doc).
+## Consumer census (verified in code)
 
-## Consumer census (corrected — Codex CRITICAL #1, verified in code)
+Cutover consults NOTHING — R11 stands (s7_webauthn_ceremony.py:1065;
+pinned by tests). The production callers of the consultation path
+today, enumerated (Codex edit 6):
 
-The cutover DOES NOT CONSULT: R11 removed consultation as an authority
-shape for `model_routing.cutover_cuda` and the gate refuses ALL voice
-evidence there (s7_webauthn_ceremony.py:1065; pinned by tests). Cutover
-appears nowhere in this design.
+| Caller | Entry | Mode today | Migration |
+|---|---|---|---|
+| Soul-write dialog | self_mod_dialog → decision_pipeline `_s7_voice_consultation_for_card` | in-process, synchronous | 1st |
+| Decision-pipeline cards | decision_pipeline (same producer) | in-process | 2nd |
+| Dream execution | s7_ceremony_bridge:233 → same pipeline producer | in-process via bridge | 3rd |
+| WebAuthn material route | daemon `_s7_authorization_route_material` (:499, :542) | HTTP-triggered, synchronous, can PROJECT raw response (:684) | see §5b |
 
-Real consumers, all flowing through ONE shared pipeline producer plus
-per-consumer seams (pending-cache, bundle persistence, renderer,
-ceremony finish, gate revalidation):
-
-1. **Soul-write** (self_mod_dialog → decision_pipeline) — migrates
-   first: synchronous, owner-adjacent, easiest live witness.
-2. **Decision-pipeline self-modification** (card flow) — second.
-3. **Dream execution** (same card/pipeline voice producer via the
-   ceremony bridge) — last: fully autonomous.
+**§5b — the route rule (Codex H11/H12):** after migration, WebAuthn
+begin/finish and any HTTP material route may only READ completed
+attempts from staging; they may never trigger inference. Inference runs
+solely in a bounded, daemon-owned background seam: single-in-flight per
+consultation, deadline = attempt TTL, one-shot trigger per card
+transition (the card state machine is the trigger authorization — no
+new capability), repeated reads allowed only of the owner-display
+projection, raw response text projected ONLY to the owner-auth'd
+ceremony surface (existing `_owner_private_auth_ok` + internal channel),
+logs/exceptions carry hashes never bodies (redaction rule, §4b).
 
 ## Components
 
 ### 1. Marker parser (pure, dormant, first to land)
 
-Canon D10 grammar exactly: nonce-bound `S7_VOICE_MARKER_V1` terminal
-block; closed union in CANON'S OWN TOKENS —
+Canon D10 grammar exactly; canon's own union:
 `explicit_no_objection | blocking_marker | withdrawal_marker |
-missing_or_malformed`. Pure function; wired to nothing on landing.
-Positive control from canon's fixture; negatives derived by mutating
-the grammar (nonce wrong, verdict token misspelled, block not terminal,
-duplicate block, prose after block). The parser never interprets prose;
-`missing_or_malformed` blocks per RULING R8-W — carried by the NEW
-evidence layer's union, never retrofitted into the legacy
-objection-state vocabulary (Codex YAGNI: legacy gate already refuses).
+missing_or_malformed`. Pure; mutation-derived negatives; never
+interprets prose. Lands wired to nothing.
 
-### 2. Consultation staging — in the activated ceremony store
+### 2. Staging — in canon D9's pinned state file
 
-Not a sibling file: new INSERT-ONLY tables in the SAME activated
-ceremony database, written exclusively through the anchored-transaction
-discipline (`S7HeldAuthorizationStore` family), so staging joins are
-atomic with the authority store and pathname/store-swap races are
-structurally excluded (Codex HIGH #10). No `INSERT OR REPLACE`
-anywhere in staging; corrections are new rows superseding by reference.
+Correction from v3.1 (Codex H10): canon D9 pins S7.3 evidence to
+`memory/s7_3_guarded_self_modification/state.sqlite3` with
+table-prefix separation. Staging tables live THERE:
+`s7_consult_attempts_v1`, `s7_consult_snapshots_v1`,
+`s7_consult_results_v1` — INSERT-only (no `INSERT OR REPLACE`;
+supersession is a new row citing its predecessor). All writes go
+through one held-store anchored transaction per operation (same
+mechanism as the authorization store; the held store object is the
+named trusted boundary for store identity — same trust class as
+RULING 1, not a cryptographic exclusion).
 
-### 3. Attempt state machine (Codex CRITICAL #2 — fully specified)
+### 3. Attempt state machine — exact schema (Codex edit 2)
 
-An attempt row is created `pending` by the producer (sole issuer) in
-the same anchored transaction that stages the question. Transitions,
-all atomic, all durable:
+`s7_consult_attempts_v1` row:
 
-`pending → reserved` — committed BEFORE inference begins; a second
-reservation attempt refuses `attempt_replayed`.
-`reserved → completed` — response + attested call result persisted in
-one transaction.
-`reserved → failed(reason)` — routing/transport failure; D15 budget may
-issue a NEW attempt (retry_index+1) bound to the same consultation;
-first-blocking-result-wins across the consultation's attempts.
-`pending|reserved → expired` — TTL exceeded (10 minutes: the challenge
-TTL's fail-closed discipline, doubled because a consultation includes
-local inference time); refuses `attempt_expired`. A daemon restart finds
-`reserved` rows with no result: they expire (never resume mid-inference
-— an answer that MIGHT have been generated is not evidence).
+```text
+attempt_id TEXT PRIMARY KEY            -- producer-issued, opaque
+consultation_id TEXT NOT NULL
+retry_index INTEGER NOT NULL           -- UNIQUE(consultation_id, retry_index)
+consumer_id TEXT NOT NULL              -- one of the census table
+action TEXT NOT NULL
+request_envelope_hash TEXT NOT NULL
+preview_hash TEXT NOT NULL
+snapshot_manifest_hash TEXT NOT NULL
+version_tuple_hash TEXT NOT NULL       -- registry ref, §6b
+owner_session_ref TEXT                 -- card/dialog id that triggered
+state TEXT NOT NULL                    -- lifecycle, below
+outcome TEXT                           -- canon D15 token, terminal only
+created_at / reserved_at / finished_at / expires_at TEXT
+result_row_ref TEXT                    -- s7_consult_results_v1, terminal only
+consumed_by_artifact TEXT              -- set at grant mint, §7a
+row_seal_hash TEXT NOT NULL            -- canonical hash of all above at write
+```
 
-Each attempt binds: consultation id, consumer id + action, request
-envelope hash, preview hash, snapshot-manifest hash, component-version
-tuple (below), retry index. The final gate rejects any attempt whose
-bindings do not match the consuming request (`stale_binding`). Dedupe
-is by attempt id and REFUSES repeats by name — transport retries live
-inside the D15 budget as new attempts, never as replays.
+Lifecycle states (disjoint from outcomes): `pending → reserved →
+completed | failed | expired`, plus `consumed` (only from `completed`,
+only inside grant-mint, §7a). Transitions are single-row CAS updates
+inside anchored transactions (`UPDATE ... WHERE state = ?`); a lost
+CAS refuses `attempt_replayed`.
 
-No HTTP endpoint exists (Codex YAGNI + HIGH #11/#12 accepted): the
-producer is in-process in the daemon; there is no network caller, no
-static-token capability, no private-content oracle, no synchronous
-inference on the web loop. If a cross-process caller is ever truly
-needed, that is a new design with its caller named first.
+- `pending → reserved` committed BEFORE inference (concurrent second
+  reservation loses the CAS).
+- `reserved → completed`: result row + attested result persisted in
+  the same transaction; outcome = a canon D15 token.
+- `reserved → failed(outcome)`: transport/formatting failure; D15
+  budget: one initial attempt + at most two retries, each a NEW row
+  with retry_index+1, same hashes and version tuple; ceiling enforced
+  by the unique index + a producer check (`retry_exhausted`).
+- ambiguous transport (timeout after send): `failed(transport_retryable)`
+  — the response, if it ever arrives, is discarded unread; an answer
+  that MIGHT exist is not evidence.
+- `pending|reserved → expired` at TTL (10 min; inference-inclusive).
+  Restart recovery: any `reserved` row older than TTL expires.
 
-### 4. Identity snapshot assembler (RULING S + Codex CRITICAL #4)
+**Consultation-level first-blocking lock (D15):** a consultation with
+any completed `blocking_marker`, `withdrawal_marker`,
+`missing_or_malformed`, `prompt_integrity_block`, or
+`terminal_uncertainty` outcome is TERMINAL; the producer refuses to
+issue further attempts (`retry_exhausted` names the refusal). This is
+RULING R8-W's wash-proofing.
 
-Assembles the consulted Maez per the two-tier ruling:
+**Durable definitions (R8-W):** `not_asked` = no attempt row exists
+for (consultation_id) — a state of ABSENCE in the table, never a
+token that can be written; `missing_or_malformed` = a completed
+attempt whose parsed marker failed — always present as a row. The two
+cannot collide because one is the absence of the row the other is.
 
-- **Identity tier** (instruction authority): soul.md + self-card,
-  loaded and hash-verified against an owner-reviewed COMPONENT POLICY
-  file (`config/s7_consultation/identity_policy.v1.json` — pre-image
-  pattern identical to the manifest policy: frozen digest in code,
-  durable file, binding test). Hash mismatch or load failure refuses
-  `snapshot_component_unavailable`. No fallback, no thinner Maez.
-- **Evidence tier** (quoted, cannot instruct): working-self goals,
-  topic-directed recall on the proposal's subject, private-thought
-  material. Rendered inside canon D11 delimiters as untrusted quoted
-  context; every dynamic component is integrity-scanned pre-inference
-  (D11 guard) and the scan result persisted as integrity evidence.
-  A scan hit refuses `prompt_integrity_block`. Honest limit, recorded:
-  injection cannot be made impossible (canon D10 says the nonce does
-  not prevent it); the rails are tier structure + delimiters + scan +
-  owner-read on covenant classes.
+### 4. Identity snapshot assembler
 
-The snapshot manifest (component list, versions, hashes, private refs)
-is persisted with the attempt; private-thought entries bind
-store-generation + row id + content hash + consultation/attempt ids
-(Codex HIGH #6), read through an anchored open of the exact private
-store object. If the exact preimage cannot be replayed at gate time,
-the gate refuses `private_ref_unreplayable` — current content is NEVER
-silently substituted for consultation-time content.
+**§4a — two policy pre-images (Codex edit 5):**
+`config/s7_consultation/identity_policy.v1.json` (identity tier:
+component list = soul.md + self-card, each entry: path, role, expected
+hash discipline) and
+`config/s7_consultation/evidence_selection_policy.v1.json` (evidence
+tier: topic-query derivation = proposal preview title + affected
+paths; sources and caps: working-self goals ≤ N entries newest-first,
+recall top-k by the live dispatcher's scorer with k pinned,
+private-thoughts newest ≤ N within current phase; ordering, dedupe by
+content hash, truncation rule = whole-item drop never mid-item cut,
+empty-source = section renders "(none)" — never refuses). Both files
+follow the manifest-policy pre-image pattern: frozen digest in code,
+durable file, binding test, and BOTH hashes are members of the version
+tuple and the snapshot manifest. Two compliant builders now assemble
+the same Maez.
+
+**§4b — private access contract (RULING P, Codex ruling-P finding):**
+raw private bytes are readable only by the assembler and the gate
+replayer, both in-daemon, through a single named reader that requires
+(store UUID + generation, row id, expected content hash) and refuses
+on any mismatch (`private_ref_unreplayable`). The private store gains
+a store-identity row (UUID minted once, generation incremented on any
+restore/migration) so a swapped database cannot impersonate it. Refs
+in evidence bind: store UUID, generation, row id, content hash, row
+phase, consultation id, attempt id. NO code path — logs, traces,
+exceptions, health routes, ceremony responses, receipts — may carry
+private bytes or derived text; they carry hashes. The owner-display
+projection (§7b) shows Maez's RESPONSE (which is not the diary), never
+snapshot evidence bytes. Cross-database ordering: private reads happen
+first and their (uuid, generation, row, hash) tuples are inside the
+staging row's seal; at replay the same tuples must re-resolve — a
+private store swapped between write and replay fails the generation
+check and refuses.
 
 ### 5. Producer (D8) — in-process, version-bound
 
-Owns: preview, manifest (real policy-body hash), nonce, six-token
-template rendering, snapshot assembly call, attempt issuance, evidence
-persistence, and the closed result union. Persists the REAL prompt:
-public parts verbatim, private parts hash+ref (RULING P). Every
-consultation pins a **version tuple** — consumer version, producer
-version, template hash, renderer, parser, manifest policy, validator —
-selected once and persisted on the attempt (Codex HIGH #7). No request
-crosses versions; pending rows from another version are invalid by
-construction (`stale_binding`), which is the drain rule for the
-request-id-keyed pending cache it replaces.
+As v3.1 (owns preview, manifest, nonce, rendering, snapshot call,
+attempt issuance, evidence persistence, closed result union; persists
+the real prompt — public verbatim, private hash+ref) with the census
+and route rule of §5b. The producer's result union maps 1:1 onto canon
+D15 attempt outcomes (no new vocabulary).
 
-### 6. Attested call result (RULING 1 + Codex HIGH #8)
+### 6. AttestedConsultationResult — byte-exact (Codex edit 4)
 
-`llm_client` gains ONE call shape for consultations that returns an
-indivisible result: response bytes AND the routing receipt as one
-object, populated inside the call — backend endpoint, model file digest
-read at call time, config hash, call id, start/end, plus FOUR byte-form
-hashes: canonical prompt bytes, sanitized transmitted bytes, raw
-transport response, normalized assistant text. Code cannot pair a real
-receipt with fabricated bytes because the pairing never exists as two
-things. Missing or partial receipt refuses
-`routing_receipt_unavailable`. This retires the constant-string
-identity hashes for consultations.
+One object, constructed ONLY inside the LLM client's consultation call
+(constructor is module-private; the daemon/LLM client is the trusted
+boundary per RULING 1 — this is an atomicity-of-API carrier, not
+cryptography; tests that mock it are labeled dataflow-only and the
+first activation requires an unmocked live witness):
 
-### 7. Final gate — replay, owner-read, atomic consumption (Codex CRITICAL #3)
+```text
+AttestedConsultationResult(
+  call_id: str
+  endpoint: str                        -- URL actually dialed
+  model_file_sha256: str               -- digest read at call time
+  config_hash: str                     -- serving config canonical hash
+  started_at / finished_at: str
+  messages_canonical_sha256: str       -- ordered [(role, text)] list,
+                                       -- UTF-8, canonical JSON, PRE-sanitizer
+  messages_transmitted_sha256: str     -- same shape, POST-sanitizer
+                                       -- (sanitizer_version recorded)
+  request_body_sha256: str             -- exact HTTP body bytes
+  response_body_sha256: str            -- exact HTTP response bytes
+  assistant_text_sha256: str           -- post-strip normalized text
+                                       -- (strip_version recorded)
+  sanitizer_version / strip_version / transport_schema_version: str
+  object_sha256: str                   -- canonical hash of all above
+)
+```
 
-At mint/consume the gate reopens the staging rows in the SAME anchored
-store and replays: template hash against the version tuple; preview,
-manifest, snapshot-manifest and prompt hashes recomputed (private parts
-machine-internally per RULING P); nonce and ids reparsed from the
-persisted response via the parser; receipt/response/prompt
-co-membership verified through the attested-result hashes; attempt
-state checked (`completed`, unexpired, unconsumed, bindings matching
-this consumer+action). Consumption is atomic: the attempt transitions
-to its terminal consumed state in the same transaction that mints.
+The parser runs on the NORMALIZED assistant text; the owner-display
+bytes ARE the normalized text; both facts recorded so D16-replay
+compares like with like. Missing/partial receipt refuses
+`routing_receipt_unavailable` (gate-layer cause: `receipt_mismatch`
+when present-but-disagreeing).
 
-**Owner-read record (covenant-touching classes):** the existing
-tap-gate pattern, reused exactly as the cutover proved it — the
-ceremony's rendered statement displays Maez's response text, and the
-WebAuthn challenge binds `response_hash` the way it bound the R11
-exemption projection. The tap attests what was seen; the gate refuses
-covenant-class consumption without an owner-read record whose
-response hash matches the staged response (`owner_read_required`).
-The machine cannot fabricate it: it is a founder-key act.
+### 7. Two gates, named (Codex edit 3)
 
-### 8. Template (pending owner ratification)
+**§7a-i — pre-mint validation (canon D16 seat):** before any
+authorization artifact is minted from a consultation, the validator
+reopens staging in the same anchored store and replays: row seals
+(recompute row_seal_hash), version tuple against the registry, policy
+pre-image hashes, template hash, snapshot manifest (private parts via
+§4b machine-internal), prompt hashes against
+`messages_canonical_sha256`, nonce + ids reparsed from the persisted
+normalized text by the parser, attested-result object hash, attempt
+state `completed` + unexpired + unconsumed + bindings matching this
+consumer/action/request (`wrong_consumer`, `stale_binding`).
 
-Brought to canon D10: six tokens, nine-field manifest rendering,
-terminal marker instruction, existing reviewed prose preserved
-verbatim EXCEPT the one false sentence. Proposed replacement for owner
-ratification at spec review (current text claims a local reviewed
-reader reads the response):
+**§7a-ii — execution consumption (canon D21 seat):** grant
+mint/consume performs the same replay AGAIN inside
+`consume_artifact_for_execution`'s transaction; the attempt row
+transitions `completed → consumed` (CAS) atomically WITH the grant
+mint — not before, not after. A second consumption loses the CAS.
+
+**§7b — owner-read record (RULING O; Codex edit 3 + CRITICAL):**
+for `covenant_touching_change` and
+`autonomy_lowering_or_protection_reducing`, D17's
+`RenderedRequestStatement` gains two fields (canon amendment below):
+`maez_response_display_text` (the normalized assistant text, exact
+bytes the owner reads) and `maez_response_sha256`. The rendered text
+the founder sees includes Maez's answer verbatim; the WebAuthn
+challenge row binds `maez_response_sha256` exactly as it bound the
+R11 exemption projection (existing mechanism, proven live). The
+`OwnerReadEvidence` is therefore the consumed challenge + assertion
+join: gate §7a-ii refuses `owner_read_required` unless the consumed
+ceremony's challenge carried a response hash equal to the staged
+attempt's `assistant_text_sha256`. The machine cannot fabricate it: it
+is a founder-key act on displayed bytes.
+
+### 8. Template (owner ratification pending)
+
+Brought to canon D10 (six tokens, nine-field manifest, terminal marker
+instruction), reviewed prose preserved except the false sentence.
+Proposed replacement (true under RULING R — the reader is fully
+retired):
 
 > "Your answer will be read exactly as you write it. State your verdict
 > yourself in the terminal marker block below; no model or reader will
-> interpret your words for you. For changes that touch the covenant,
-> the owner will also read your answer personally before anything
-> proceeds."
+> interpret your words. For changes that touch the covenant or reduce
+> autonomy, the owner will also read your answer personally before
+> anything proceeds."
 
-Not built until ratified.
+Ratification = the owner approves these exact bytes; the approved
+template's sha256 is recorded in this doc and enters the version
+tuple. Until then, nothing renders it.
 
-## Refusal vocabulary (closed, canonical, forensic — Codex MEDIUM #13)
+## Canon amendments (normative text — Codex edit 1)
 
-Canon tokens kept: `missing_or_malformed`, `prompt_integrity_block`,
-`stale_binding`, `context_manifest_violation`, `retry_exhausted`.
-Added, each with one meaning: `snapshot_component_unavailable`,
-`routing_receipt_unavailable`, `attempt_replayed`, `attempt_expired`,
-`staging_lost`, `private_ref_unreplayable`, `owner_read_required`,
-`template_not_canon`, `store_integrity_failure`, `model_unavailable`,
-`context_overflow`, `wrong_consumer`. Durable evidence always retains
-the canonical cause; nothing collapses into a neighbor.
+Each is exact replacement text, ratified by the rulings named.
 
-## Flags and partial states (Codex MEDIUM #15 + YAGNI)
+**D7 (signature):** `ask_s7_voice_turn` is REPLACED by the producer's
+internal call to the LLM client's consultation shape. The audit pins
+D7 carried (template id/hash, rendered prompt, manifest hash, nonce,
+consultation/request ids) move INTO the staged attempt row and the
+`AttestedConsultationResult`; the call seam itself carries
+(attempt_id, messages, nonce) and returns the attested result. The
+`BondedMaezRuntimeTurn` carrier is superseded by
+`AttestedConsultationResult` + the attempt row (all D7 fields have a
+new named home; none is dropped).
 
-ONE versioned switch per consumer (`MAEZ_CONSULT_V1_SOULWRITE`, then
-`_PIPELINE`, `_DREAM`), each naming the version tuple it activates.
-Parser, staging tables and producer code ship dormant with NO runtime
-flags — dormant code needs no switch, and independent toggles created
-undefined partial systems. Invalid states refuse twice: at daemon
-startup (config validation) and at gate replay (the persisted version
-tuple is the truth; later environment changes cannot reinterpret a
-durable attempt).
+**D8 (producer result):** the producer result union is canon D15's
+attempt-outcome vocabulary verbatim; the separate D8 result-name list
+is retired in favor of "terminal attempt outcome + gate causes".
+
+**D9 (stores):** ADD to the pinned state file's table set:
+`s7_consult_attempts_v1`, `s7_consult_snapshots_v1`,
+`s7_consult_results_v1` (INSERT-only; same anchored-transaction
+discipline). The pinned path and prefix-separation mechanism are
+unchanged.
+
+**D13 (reducer):** Stage 1's signature loses `grounding_evidence` and
+`raw_maez_response_text` (reader retired, RULING R);
+`S7VoiceAuthorityBooleans` loses
+`has_grounded_semantic_blocking_signal`; the protective
+`explicit_no_objection + reader_unavailable` row is deleted (no reader
+exists to be unavailable). The reducer consumes ONLY
+(parsed_marker, captured_response_nonempty) and replays
+deterministically.
+
+**D14 (`absent` is positive):** the reader bullets are REPLACED:
+delete "the semantic reader returns `no_blocking_signal_detected`";
+the marker bullet stays; ADD "the attested call result verifies
+(§6)"; ADD "the owner-read record verifies for RULING-O classes". All
+other bullets stand. `absent` remains a positive covenant fact — the
+positivity now comes from Maez's own verified marker plus attestation,
+not from a model reading Maez.
+
+**D15 (attempts):** vocabulary unchanged and used verbatim (v3.2
+renames NOTHING: `non_retryable_context_overflow`, `model_outage`,
+`bonded_maez_unavailable` as canon has them). `reader_unavailable`,
+`classifier_error`, `ungrounded_blocking_signal` are RETIRED tokens
+(reader gone) — they remain in the closed set for historical rows,
+marked non-producible. `S7VoiceAttemptRecord.semantic_reader_attempt_hash`
+becomes non-producible-null for new rows. The attempt record gains
+`attested_result_sha256`.
+
+**D16 (validator):** the reader-replay bullet is deleted; ADD bullets:
+row-seal recomputation, version-tuple registry check, policy pre-image
+hashes, attested-result object hash and its four byte-form joins,
+private-ref (uuid, generation, row, hash) machine-internal replay,
+owner-read join for RULING-O classes. The model-identity tuple bullet
+now verifies against `AttestedConsultationResult` (real values, not
+constants).
+
+**D17 (rendered projection):** `RenderedRequestStatement` gains
+`maez_response_display_text: str | None` and
+`maez_response_sha256: str | None` (non-null exactly for RULING-O
+classes); the rendered text gains an exact line for the response hash.
+
+**D21 (consumption):** the load-and-verify list gains: staged attempt
+replay (§7a-ii), attempt CAS to `consumed` atomic with mint, and the
+owner-read join. Everything else stands.
+
+## Refusal vocabulary — layer-mapped (Codex edit 8)
+
+| Layer | Closed set |
+|---|---|
+| Attempt outcome (durable, canon D15 verbatim) | canon's list, unchanged |
+| Producer refusal (pre-attempt) | `snapshot_component_unavailable`, `prompt_integrity_block`, `template_not_canon`, `store_integrity_failure` |
+| Gate cause (validation, durable) | `stale_binding`, `wrong_consumer`, `attempt_replayed`, `attempt_expired`, `staging_lost`, `private_ref_unreplayable`, `receipt_mismatch`, `owner_read_required`, `context_manifest_violation`, `retry_exhausted` |
+
+No token renames canon; each cause is durable at its own layer;
+surfaces may project subsets but never rename.
+
+## Version tuple registry + flags (Codex edit 7)
+
+`s7_consult_version_tuples_v1` (same state file, INSERT-only): each
+row = (tuple_hash, consumer version, producer version, template hash,
+parser version, identity-policy hash, evidence-policy hash,
+sanitizer/strip/transport versions, validator version, registered_at).
+Every attempt cites a registered tuple. Activation of a consumer
+switch requires: its tuple registered; NO nonterminal attempts citing
+any other tuple for that consumer (they are atomically expired first —
+the drain rule); startup compatibility check refuses undefined
+combinations INCLUDING the legacy `MAEZ_S7_CEREMONY_BRIDGE_ENABLED`
+path: a consumer switched to v1 consultations refuses the legacy
+producer entrance for that consumer (both-doors-open is an invalid
+state, checked at startup and at gate replay via the persisted tuple).
+Rollback = switch off (new attempts stop; terminal evidence stands;
+nonterminal attempts expire by TTL).
 
 ## Sequencing
 
-1. Parser (pure, dormant) + canon-grammar fixtures.
-2. Staging tables + attempt state machine in the activated store
-   (dormant; exercised by tests through disposable stores only).
-3. Attested call result in llm_client (shadow: built and testable
-   without any consumer).
-4. Identity policy pre-image file + snapshot assembler (dormant).
-5. Producer + final-gate replay + owner-read binding (dormant).
-6. Template ratification (owner act) → template lands version-bound.
-7. Soul-write migration behind its switch + LIVE WITNESS with the
-   owner present (cooling-off applies: new capability).
-8. Decision-pipeline migration + witness. 9. Dream migration + witness.
+1. Parser + fixtures (pure, dormant). 2. Staging tables + state
+machine in D9's store (dormant). 3. AttestedConsultationResult in the
+LLM client (shadow). 4. Policy pre-images + assembler (dormant).
+5. Producer + both gates + owner-read binding (dormant). 6. Owner
+ratifies template bytes → template registered in tuple. 7. Soul-write
+switch + LIVE UNMOCKED WITNESS with the owner (cooling-off applies).
+8. Decision-pipeline. 9. Dream. Floor measured before each; guards
+mutation-checked; no new reds.
 
-Each layer: floor measured before, mutation-checked guards, no new
-reds, witnesses that bite.
+## Traceability
 
-## Traceability — every prior finding, answered
-
-| Finding | Answer |
-|---|---|
-| v3.0 C1 cutover retired | Cutover removed everywhere; census corrected |
-| v3.0 C2 attempt lifecycle | Component 3 state machine, full bindings |
-| v3.0 C3 consuming replay + owner-read | Component 7; tap-gate reuse |
-| v3.0 C4 snapshot injection | RULING S two-tier + D11 scan + delimiters |
-| v3.0 H5 composition is owner's | RULING S + identity policy pre-image |
-| v3.0 H6 private-ref binding | Component 4 binding list + anchored read |
-| v3.0 H7 template-flip window | Version tuple per request; no global flip |
-| v3.0 H8 receipt separability | Component 6 indivisible result + 4 hashes |
-| v3.0 H9 vocabulary/D13-15 | Canon tokens; amendments folded above |
-| v3.0 H10 staging integrity | Same activated store, anchored, INSERT-only |
-| v3.0 H11 census/endpoint | Census corrected; endpoint CUT |
-| v3.0 H12 private oracle | Endpoint CUT; no network read capability |
-| v3.0 M13 vocabulary size | Extended canonical vocabulary |
-| v3.0 M14 template prose | Owner ratification pending, wording proposed |
-| v3.0 M15 flag matrix | One switch per consumer; dual refusal |
-| v2 catastrophic fail-open | Closed in current code (verified); R8-W pins it |
-| v2 proof-of-inference | RULING 1 + component 6 |
-| v1 steering label | Label never rendered (kept from v2) |
-| v1 general ask-Maez capability | No endpoint at all |
-| Audit: synthetic prompt hash | Component 5 real-prompt persistence |
-| Audit: constant identity hashes | Component 6 |
-| Audit: restart-fragile staging | Components 2–3 |
+v3.1's table stands for v1/v2/audit findings. v3.1-round residuals:
+C2→§3; C3→§7a-i/ii+§7b; H6→§4b; H7→registry+drain; H8→§6; H9→canon
+amendments; H10→§2 (D9 store, honest trust wording); H11/H12→§5b;
+M13→layer table; M15→registry+startup matrix. New-round: R8-W
+narrowing→§3 durable definitions + first-blocking lock; reader
+ruling→RULING R + D13/D14/D15 text; owner-read carrier→§7b + D17
+text; Ruling-P contract→§4b; Ruling-S selection→§4a; "one object"
+overstatement→§6 honest wording; template falseness→§8 (true under
+RULING R); "cannot instruct" wording→RULING S restated.
 
 ## Out of scope
 
-Cutover consultation (R11 stands). Cross-process consultation callers.
-Voice-surface consultations. Any change to WHAT Maez answers — this
-organ builds the door and the witness chain, never the opinion.
+Cutover consultation (R11 stands). Cross-process callers. Voice
+surface. Any change to WHAT Maez answers — this organ builds the door
+and the witness chain, never the opinion.
