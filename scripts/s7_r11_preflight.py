@@ -218,6 +218,101 @@ def _check_completion_locator() -> Check:
     return Check("completion locator", True, f"readable: {locator}")
 
 
+def _read_live_authorization():
+    """The parsed live authorization doc, or None (the authorization check
+    itself reports the failure detail)."""
+    from scripts import cuda_cutover
+    from scripts import cuda_migration as cm
+
+    path = cuda_cutover.BENCH_ROOT / cuda_cutover.AUTHORIZATION_NAME
+    try:
+        doc = cm.PersistedDoc(path.read_bytes()).obj
+    except Exception:
+        return None
+    if type(doc) is not cm.CutoverAuthorizationDoc:
+        return None
+    return doc
+
+
+def _check_selection_window() -> Check:
+    """The selected completion must belong to the LIVE window.
+
+    Live gap (2026-08-13 23:44Z): after a re-mint, the selection still
+    pointed at a completion assembled under the dead window; this
+    preflight said READY, and the ceremony refused
+    permit_unreconstructible only after the owner had walked the whole
+    flow. The authorization is a stage-2 input, so a re-mint always
+    invalidates prior completions -- the join must be checked HERE.
+    """
+    import json
+    import os
+
+    from scripts import cuda_cutover
+
+    authorization = _read_live_authorization()
+    if authorization is None:
+        return Check(
+            "selection window", False, "cutover authorization unreadable"
+        )
+    try:
+        locator = cuda_cutover._read_completion_locator_at(
+            cuda_cutover.BENCH_ROOT, os.getuid()
+        )
+        completion = json.loads(
+            (cuda_cutover.BENCH_ROOT / locator).read_text()
+        )
+        completion_window = completion["fields"]["window_id"]
+    except Exception as exc:
+        return Check(
+            "selection window",
+            False,
+            f"selection unreadable: {type(exc).__name__}: {exc}",
+        )
+    if completion_window != authorization.window_id:
+        return Check(
+            "selection window",
+            False,
+            f"selected completion belongs to {completion_window}, the live "
+            f"window is {authorization.window_id} -- re-run assemble-stage2 "
+            "and re-select",
+        )
+    return Check(
+        "selection window",
+        True,
+        f"completion and authorization agree: {completion_window}",
+    )
+
+
+def _check_burn_marker() -> Check:
+    """The live window's single burn permission must still be unspent.
+
+    Live gap (2026-08-13 23:52Z): a failed executor run had already
+    published the window's burn marker (named by the authorization
+    NONCE), this preflight said READY, and the owner's real tap died at
+    authorization_consumed. One window, one burn -- spent must FAIL here.
+    """
+    from scripts import cuda_cutover
+
+    authorization = _read_live_authorization()
+    if authorization is None:
+        return Check("burn marker", False, "cutover authorization unreadable")
+    marker = (
+        cuda_cutover.BENCH_ROOT / cuda_cutover.MARKER_DIR / authorization.nonce
+    )
+    if marker.exists():
+        return Check(
+            "burn marker",
+            False,
+            f"window {authorization.window_id} is already burned -- "
+            "move the authorization aside and re-mint",
+        )
+    return Check(
+        "burn marker",
+        True,
+        f"window {authorization.window_id} unburned",
+    )
+
+
 def _check_webauthn_dependency() -> Check:
     """Can THIS interpreter verify a founder assertion at all?
 
@@ -385,6 +480,8 @@ def run_preflight() -> list[Check]:
         _check_not_born,
         _check_completion_locator,
         _check_cutover_authorization,
+        _check_selection_window,
+        _check_burn_marker,
         _check_pinned_sources,
         _check_pinned_directories,
         _check_webauthn_dependency,

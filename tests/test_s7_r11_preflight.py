@@ -423,3 +423,118 @@ class TestWebAuthnDependencyCheck:
         names = {check.name for check in preflight.run_preflight()}
 
         assert "webauthn dependency" in names
+
+
+def _install_selection(tmp_path, monkeypatch, *, completion_window) -> None:
+    """A selection + completion terminal in the SAME bench root the
+    authorization fixture installs into."""
+    import json
+
+    import os
+
+    from scripts import cuda_cutover
+
+    root = cuda_cutover.BENCH_ROOT  # set by _install_authorization
+    os.chmod(root, 0o700)
+    locator = "command-assemble-stage2-attempt-099-terminal.json"
+    (root / locator).write_text(
+        json.dumps(
+            {
+                "schema": "cuda_bench_driver.command_completion.v1",
+                "binding_sha256": "c" * 64,
+                "fields": {
+                    "command": "assemble-stage2",
+                    "window_id": completion_window,
+                },
+            }
+        )
+    )
+    (root / locator).chmod(0o600)
+    from scripts import cuda_migration as cm
+
+    selection = {
+        "schema": cuda_cutover.COMPLETION_SELECTION_SCHEMA,
+        "fields": {"completion_locator": locator},
+    }
+    (root / cuda_cutover.COMPLETION_SELECTION_NAME).write_bytes(
+        cm._canonical_wrapper_bytes(selection)
+    )
+    (root / cuda_cutover.COMPLETION_SELECTION_NAME).chmod(0o600)
+
+
+class TestSelectionWindowCheck:
+    """Live gap, 2026-08-13 23:44Z: the selection pointed at a completion
+    assembled under a DEAD window and the preflight said READY; the
+    ceremony then refused permit_unreconstructible after the owner had
+    already gone through the flow. The completion's window must match the
+    live authorization's, and mismatch must FAIL before any ceremony."""
+
+    def test_matching_windows_PASS(self, monkeypatch, tmp_path) -> None:
+        _install_authorization(
+            tmp_path, monkeypatch, _authorization_doc(window_id="cutover-w1")
+        )
+        _install_selection(tmp_path, monkeypatch, completion_window="cutover-w1")
+
+        check = preflight._check_selection_window()
+
+        assert check.passed is True
+        assert "cutover-w1" in check.detail
+
+    def test_a_dead_window_selection_FAILS(self, monkeypatch, tmp_path) -> None:
+        _install_authorization(
+            tmp_path, monkeypatch, _authorization_doc(window_id="cutover-w2")
+        )
+        _install_selection(
+            tmp_path, monkeypatch, completion_window="cutover-OLD"
+        )
+
+        check = preflight._check_selection_window()
+
+        assert check.passed is False
+        assert "cutover-OLD" in check.detail
+        assert "cutover-w2" in check.detail
+
+
+class TestBurnMarkerCheck:
+    """Live gap, 2026-08-13 23:52Z: the window's single burn permission was
+    already spent by a failed executor run, the preflight said READY, and
+    the owner's tap died at authorization_consumed. The marker (named by
+    the authorization NONCE) must be proven absent before the ceremony."""
+
+    def test_an_unburned_window_PASSES(self, monkeypatch, tmp_path) -> None:
+        from scripts import cuda_cutover
+
+        _install_authorization(tmp_path, monkeypatch, _authorization_doc())
+        (cuda_cutover.BENCH_ROOT / cuda_cutover.MARKER_DIR).mkdir()
+
+        check = preflight._check_burn_marker()
+
+        assert check.passed is True
+
+    def test_a_burned_window_FAILS(self, monkeypatch, tmp_path) -> None:
+        from scripts import cuda_cutover
+
+        doc = _authorization_doc()
+        _install_authorization(tmp_path, monkeypatch, doc)
+        markers = cuda_cutover.BENCH_ROOT / cuda_cutover.MARKER_DIR
+        markers.mkdir()
+        (markers / doc.nonce).write_bytes(b"")
+
+        check = preflight._check_burn_marker()
+
+        assert check.passed is False
+        assert "burned" in check.detail.lower()
+
+    def test_both_checks_are_wired_into_run_preflight(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        store = _fixture_store(tmp_path)
+        monkeypatch.setattr(preflight, "STORE", store)
+        monkeypatch.setattr(
+            preflight, "RECEIPT", tmp_path / "s7_migration_receipt.json"
+        )
+
+        names = {check.name for check in preflight.run_preflight()}
+
+        assert "selection window" in names
+        assert "burn marker" in names

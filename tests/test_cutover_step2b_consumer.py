@@ -2275,6 +2275,20 @@ class TestPresenceRefusalNamesTheRealCause:
     def test_the_new_code_is_in_the_closed_vocabulary(self) -> None:
         assert "presence_dependency_missing" in cutover.CUTOVER_REFUSALS
 
+    def test_a_replayed_or_expired_challenge_is_named_as_such(self) -> None:
+        """Live, twice on 2026-08-13/14: the 5-minute challenge TTL was
+        exceeded by browser round-trips and the refusal surfaced as
+        presence_assertion_invalid -- blaming an assertion that was
+        cryptographically fine. Expiry-or-replay has its own name now."""
+        result = s7_ceremony.S7CeremonyServiceResult(
+            body={"ok": False, "error": "s7_challenge_replayed"},
+            status_code=410,
+        )
+
+        refusal = cutover._map_presence_finish_refusal(result)
+
+        assert str(refusal) == "presence_challenge_replayed"
+
     def test_an_unknown_error_still_defaults_to_assertion_invalid(self) -> None:
         result = s7_ceremony.S7CeremonyServiceResult(
             body={"ok": False, "error": "s7_authentication_invalid"},
@@ -2532,15 +2546,15 @@ class TestPresenceRefusalPrintsTheCeremonyError:
 
     def test_the_ceremony_error_code_is_printed(self, capsys) -> None:
         result = s7_ceremony.S7CeremonyServiceResult(
-            body={"ok": False, "error": "s7_challenge_replayed"},
-            status_code=410,
+            body={"ok": False, "error": "s7_d12_binding_mismatch"},
+            status_code=409,
         )
 
         refusal = cutover._map_presence_finish_refusal(result)
 
         assert str(refusal) == "presence_assertion_invalid"
         assert (
-            "presence refusal: s7_challenge_replayed"
+            "presence refusal: s7_d12_binding_mismatch"
             in capsys.readouterr().out
         )
 

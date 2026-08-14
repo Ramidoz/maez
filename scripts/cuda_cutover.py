@@ -194,6 +194,7 @@ CUTOVER_REFUSALS = frozenset(
         "presence_action_unauthorized",
         "presence_assertion_invalid",
         "presence_binding_mismatch",
+        "presence_challenge_replayed",
         "presence_consumption_failed",
         "presence_credential_unscoped",
         "presence_dependency_missing",
@@ -3162,6 +3163,11 @@ def _map_presence_finish_refusal(
         # dependency gate needs none, so the first symptom was a refusal
         # pointing at the wrong layer entirely.
         return CutoverRefusal("presence_dependency_missing")
+    if error == "s7_challenge_replayed":
+        # Expired or already-consumed challenge. Live, twice: the 5-minute
+        # TTL lost to browser round-trips and surfaced as an "invalid
+        # assertion" -- the assertion was fine, the clock had won.
+        return CutoverRefusal("presence_challenge_replayed")
     if error in {"s7_credential_disabled", "s7_credential_setup_incomplete"}:
         return CutoverRefusal("presence_credential_unscoped")
     if error in {
