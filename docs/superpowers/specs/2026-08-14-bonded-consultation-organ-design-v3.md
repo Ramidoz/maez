@@ -124,9 +124,11 @@ interprets prose. Lands wired to nothing.
 Correction from v3.1 (Codex H10): canon D9 pins S7.3 evidence to
 `memory/s7_3_guarded_self_modification/state.sqlite3` with
 table-prefix separation. Staging tables live THERE:
-`s7_consult_attempts_v1`, `s7_consult_snapshots_v1`,
-`s7_consult_results_v1` — INSERT-only (no `INSERT OR REPLACE`;
-supersession is a new row citing its predecessor). All writes go
+`s7_consult_snapshots_v1` and `s7_consult_results_v1` are strictly
+INSERT-only (no `INSERT OR REPLACE`; supersession is a new row citing
+its predecessor); `s7_consult_attempts_v1` is governed by §3's
+mutability law — immutable sealed columns plus CAS-only state columns,
+the ONE exception, stated once there and echoed nowhere else. All writes go
 through one held-store anchored transaction per operation (same
 mechanism as the authorization store; the held store object is the
 named trusted boundary for store identity — same trust class as
@@ -180,19 +182,44 @@ consumed_by_artifact TEXT              -- set only at grant mint
 row_seal_hash TEXT NOT NULL
 ```
 
+**Clock.** Every transition takes `now_z: str` — the daemon clock
+rendered `YYYY-MM-DDTHH:MM:SSZ` (UTC, the repo's `_now_z` form) —
+passed as a bound parameter, never SQL time functions. All stored
+times use the same form, so lexicographic TEXT comparison IS
+chronological comparison; the schema CHECKs the form on write.
+
 **Transition table** (every transition is one `UPDATE ... WHERE` CAS
-inside a held-store anchored transaction; 0 rows updated = lost CAS =
-`attempt_replayed`):
+inside a held-store anchored transaction, keyed by `attempt_id`;
+0 rows updated = lost CAS = `attempt_replayed`):
 
 | From | To | CAS predicate (WHERE) | Also written | When |
 |---|---|---|---|---|
-| (none) | `pending` | INSERT (unique index enforces retry_index) | full row + seal | producer issues |
-| `pending` | `reserved` | `state='pending' AND expires_at > now` | `reserved_at` | immediately before inference |
-| `reserved` | `completed` | `state='reserved' AND expires_at > now` | `outcome`, `finished_at`, `result_row_ref` — same txn as the result row + attested result | response received and parsed |
-| `reserved` | `failed` | `state='reserved'` | `outcome`, `finished_at` | transport failure, integrity block, producer refusal |
-| `pending` | `expired` | `state='pending' AND expires_at <= now` | `finished_at` | TTL sweep / next producer touch |
-| `reserved` | `expired` | `state='reserved' AND expires_at <= now` | `finished_at` | TTL sweep; see ambiguous transport |
-| `completed` | `consumed` | `state='completed' AND consumed_by_artifact IS NULL` | `consumed_by_artifact` — same txn as grant mint (§7a-ii) | execution consumption |
+| (none) | `pending` | INSERT (constraints below enforce uniqueness, ceiling, single-in-flight) | full row + seal | producer issues |
+| `pending` | `reserved` | `attempt_id=:id AND state='pending' AND expires_at > :now_z` | `reserved_at=:now_z` | immediately before inference |
+| `reserved` | `completed` | `attempt_id=:id AND state='reserved' AND expires_at > :now_z` | `outcome`, `finished_at=:now_z`, `result_row_ref` — same txn as the result row + attested result | response received and parsed |
+| `reserved` | `failed` | `attempt_id=:id AND state='reserved'` | `outcome`, `finished_at=:now_z` | transport failure, integrity block, producer refusal |
+| `pending` | `expired` | `attempt_id=:id AND state='pending' AND expires_at <= :now_z` | `finished_at=:now_z` | TTL sweep / next producer touch |
+| `reserved` | `expired` | `attempt_id=:id AND state='reserved' AND expires_at <= :now_z` | `finished_at=:now_z` | TTL sweep; see ambiguous transport |
+| `completed` | `consumed` | `attempt_id=:id AND state='completed' AND consumed_by_artifact IS NULL` | `consumed_by_artifact` — same txn as grant mint (§7a-ii) | execution consumption |
+
+**Structural constraints (schema, not prose):**
+
+```sql
+UNIQUE (consultation_id, retry_index)
+CHECK (retry_index BETWEEN 0 AND 2)          -- three-row ceiling
+CHECK (outcome IS NULL OR outcome != 'not_asked')
+CREATE UNIQUE INDEX s7_consult_one_in_flight
+  ON s7_consult_attempts_v1 (consultation_id)
+  WHERE state IN ('pending', 'reserved');    -- single-in-flight
+```
+
+Single-in-flight makes the first-blocking lock STRUCTURAL, not
+advisory: at most one nonterminal attempt exists per consultation, so
+when a blocking outcome completes there is no other reserved attempt
+that could later complete and wash it. The issuing transaction still
+performs the blocking-set check (below) so a terminal-blocked
+consultation cannot even open a new attempt; the index guarantees what
+the check alone could not — that nothing was already in flight.
 
 No other transition exists. `consumed` is terminal; `failed` and
 `expired` are terminal; a terminal row is never updated again (the CAS
@@ -236,22 +263,25 @@ discards it UNREAD — an answer that might exist is not evidence, and
 reading it would create an un-refusable temptation to use it. The
 discard is logged content-free (attempt id + byte count only).
 
-**Consultation-level first-blocking lock:** before issuing any
-attempt, the producer checks (same issuing transaction) for ANY
-existing row of this consultation with outcome in
+**Consultation-level first-blocking lock:** two layers. Structural:
+the single-in-flight unique index above guarantees no second attempt
+is in flight when a blocking outcome completes. Transactional: before
+INSERTing any attempt, the producer — in the same issuing transaction
+— refuses if any existing row of this consultation carries outcome in
 `{objection_present, withdrawal_detected, marker_missing_or_malformed,
-prompt_integrity_block, terminal_uncertainty}`. If one exists the
-consultation is TERMINAL: no new attempt is inserted and the producer
-returns that first blocking outcome (first-blocking-result-wins,
-canon D15, now wash-proof under R8-W: later attempts cannot exist, so
-they cannot launder a blocking result into `absent`).
+prompt_integrity_block, terminal_uncertainty}`, returning that first
+blocking outcome (first-blocking-result-wins, canon D15). Wash-proof
+under R8-W: a later attempt cannot exist (transactional layer) and
+cannot have been concurrently in flight (structural layer).
 
 **Durable disjointness (R8-W):** `not_asked` = no attempt row exists
-for the consultation — an ABSENCE, never a writable token (no store
-field may ever carry it). `marker_missing_or_malformed` = a completed
-attempt row whose parsed marker failed — always a PRESENT row. One is
-the absence of the row the other is; collision is structurally
-impossible.
+for the consultation — an ABSENCE, never a writable token, enforced by
+schema (`CHECK (outcome IS NULL OR outcome != 'not_asked')`) so no
+code path can ever persist it. `marker_missing_or_malformed` = a
+completed attempt row whose parsed marker failed — always a PRESENT
+row. One is the absence of the row the other is; collision is
+structurally impossible, and the CHECK makes the token side
+structurally impossible too.
 
 ### 4. Identity snapshot assembler
 
@@ -401,10 +431,11 @@ attempt-outcome vocabulary verbatim; the separate D8 result-name list
 is retired in favor of "terminal attempt outcome + gate causes".
 
 **D9 (stores):** ADD to the pinned state file's table set:
-`s7_consult_attempts_v1`, `s7_consult_snapshots_v1`,
-`s7_consult_results_v1` (INSERT-only; same anchored-transaction
-discipline). The pinned path and prefix-separation mechanism are
-unchanged.
+`s7_consult_attempts_v1` (governed by §3's mutability law: immutable
+sealed columns + CAS-only state columns), and `s7_consult_snapshots_v1`
++ `s7_consult_results_v1` (strictly INSERT-only). Same
+anchored-transaction discipline throughout. The pinned path and
+prefix-separation mechanism are unchanged.
 
 **D13 (reducer):** Stage 1's signature loses `grounding_evidence` and
 `raw_maez_response_text` (reader retired, RULING R);
@@ -456,13 +487,34 @@ not from a model reading Maez.
 > | `model_outage` | kept, terminal |
 > | `producer_not_run` | kept (gate-derived when no producer ran) |
 >
-> `attempt_outcomes` in the bundle schema remains one entry per attempt
-> in canonical order; the terminal outcome is the last entry.
-> `S7VoiceAttemptRecord` keeps its fields with two changes:
-> `semantic_reader_attempt_hash` is non-producible-null for new rows
-> (RULING R), and the record gains `attested_result_sha256: str`.
-> `attempt_manifest_hash` remains the canonical hash of the ordered
-> record list.
+> `attempt_outcomes` in the bundle schema is one entry per attempt in
+> canonical order; the terminal outcome is the last entry.
+> `S7VoiceAttemptRecord` is the per-attempt carrier, complete:
+>
+> ```text
+> S7VoiceAttemptRecord(
+>     attempt_index: int,
+>     consultation_id: str,
+>     nonce_use_id: str,
+>     prompt_template_hash: str,
+>     rendered_prompt_hash: str | None,
+>     context_manifest_hash: str,
+>     runtime_identity_hash: str | None,
+>     raw_response_hash: str | None,
+>     semantic_reader_attempt_hash: None,   -- non-producible (RULING R);
+>                                           -- historical rows may be non-null
+>     attested_result_sha256: str | None,   -- NEW; null only for
+>                                           -- producer-blocked / no-response arms
+>     outcome: str,
+>     reason_code: str | None,
+>     started_at: str,
+>     finished_at: str | None,
+> )
+> ```
+>
+> `attempt_manifest_hash` is the canonical hash of the ordered record
+> list. Retry manifests without this carrier do not count as L8
+> evidence.
 >
 > Rules:
 >
