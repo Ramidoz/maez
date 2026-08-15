@@ -944,7 +944,7 @@ and canon's specified version (canon L1664-1675) carries no row hash —
 so there is nothing to amend and no seal for the fields to sit inside.
 Canon L1664-1675 is KEPT-VERBATIM. The durable carrier that lets
 consumption prove owner-read without re-reading the challenge plane is
-the sealed per-artifact evidence table designed in cluster 2b §4,
+the sealed per-artifact evidence table designed in cluster 2b §5,
 written inside the mint transaction and re-derived inside the
 consuming transaction — the R11 evidence shape applied to RULING O.
 
@@ -969,23 +969,41 @@ classes); the rendered text gains an exact line for the response hash.
 > the consumption-time clock (§7's enumerated clock-sensitive
 > predicates; A13 does NOT re-run at this seat — no verifier is present
 > and no challenge is read — it is replaced by B2), performs joins B1
-> and B2 — `artifact.consult_attempt_id == attempt.attempt_id` and the
+> and B1 — `artifact.consult_attempt_id == attempt.attempt_id` and the
 > `completed → consumed` CAS from the design's §3 transition table —
-> and only then delegates to inherited S7.1 consume.
+> and only then delegates to inherited S7.1 consume. **B2 is not
+> performed by the wrapper.** It runs inside inherited
+> `consume_for_execution_on_connection`, after the artifact CAS and
+> before any caller callback or commit, unconditionally for
+> highest-risk work classes — because a check the wrapper performs is a
+> check a caller can bypass by not using the wrapper, and canon's
+> wrapper does not exist in code (cluster 2b §7).
 >
 > The attempt CAS and the grant consume do NOT commit or roll back
 > together, and an earlier revision of this paragraph said they did.
 > They act on two different SQLite files: the consultation staging
 > family in canon D9's state file, the artifact plane in the S7.1
-> ceremony database (cluster 2b §1 V9). One-use does not depend on
-> that transaction, because it is guarded once per plane: on the mint
-> side an attempt binds to at most one artifact (`state='completed'
-> AND consumed_by_artifact IS NULL`, plus `UNIQUE (consult_attempt_id)`
-> on the owner-read evidence row), and on the consume side the
-> artifact's own CAS admits at most one grant. A cross-plane failure
-> leaves a spent attempt and an unconsumed artifact — the safe
-> direction — and the retry consumes exactly once. Full statement in
-> cluster 2b §7.
+> ceremony database (cluster 2b §1 V9). One-use does not depend on that
+> transaction, because **both guards live at consumption**, one per
+> plane: the `completed → consumed` CAS admits one consumption per
+> attempt, and the artifact's own CAS admits one grant per artifact. An
+> earlier revision claimed a mint-side attempt binding; there is none —
+> Gate A is read-only and this table places `completed → consumed` at
+> execution consumption, so the staging plane alone permits a second
+> artifact from one completed attempt (harmless: the first to consume
+> takes the attempt CAS). For RULING-O classes the second mint is
+> additionally refused by `UNIQUE (consult_attempt_id)` on the
+> owner-read evidence row, while store integrity holds.
+>
+> A cross-plane failure leaves a spent attempt and an unconsumed
+> artifact. That is the safe direction, but it is NOT retryable under
+> B1 as written above — every retry refuses `attempt_replayed`.
+> Cluster 2b therefore hands this cluster one amendment for its own
+> gate: B1 is satisfied by the CAS succeeding in this transaction **or**
+> by the idempotent observation `state='consumed' AND
+> consumed_by_artifact = :this_artifact_id`, with the row seal, expiry
+> and every other join still required, and any other
+> `consumed_by_artifact` still refusing. Full statement in cluster 2b §7.
 >
 > KEPT-VERBATIM, each at its anchor and unedited by this amendment:
 > the live-possession check and raw-token non-persistence (canon

@@ -1,10 +1,12 @@
-# Cluster 2b — owner-read authority. Design pass 4.
+# Cluster 2b — owner-read authority. Design pass 5.
 
-2026-08-14. Three gate rounds, converging: pass 1 failed with 13
-findings (3 CRITICAL), pass 2 with 9 (0 CRITICAL), pass 3 with 7
-(1 CRITICAL). All 29 were independently re-verified against the tree
-before each rewrite; all 29 stood. Sections are rewritten whole, never
-patched.
+2026-08-14. Four gate rounds: pass 1 failed with 13 findings
+(3 CRITICAL), pass 2 with 9 (0 CRITICAL), pass 3 with 7 (1 CRITICAL),
+pass 4 with 8 (1 CRITICAL, 2 LOW). All 37 were independently
+re-verified against the tree before each rewrite; all 37 stood.
+Sections are rewritten whole, never patched. The severity mix is what
+is converging: the mechanism now survives its gates, and the findings
+have moved to scope, carrier plumbing, and internal consistency.
 
 **Method, adopted after pass 2's finding 9 and re-tested by pass 3's
 finding 6.** Pass 2 corrected its citations from the gate's numbers
@@ -177,7 +179,8 @@ RETURNING` over the v2 artifact table, `grant = _mint_s7_execution_grant`
 **`after_consume_before_commit` is optional** — declared
 `after_consume_before_commit: Callable` with default `None` (`:2979`),
 run only when supplied (`:3097`), forwarded unchanged by the public
-facade (`:3431`), and the live decision-pipeline caller supplies its
+facade (the `after_consume_before_commit=after_consume_before_commit`
+forwarding assignment, `:3446`), and the live decision-pipeline caller supplies its
 own card-transition callback
 (`after_consume_before_commit=transition`, `core/decision/decision_pipeline.py:1448`). Canon D21's
 `consume_artifact_for_execution` wrapper **does not exist in code**.
@@ -235,15 +238,29 @@ Maez's answer that the owner read.
 | L7 | Minting records the association durably and immutably | §5 — sealed evidence row in the mint transaction | R11 shape, live-proven |
 | L8 | Consumption re-proves it with no verifier present | §7 — mandatory revalidation inside the consume implementation | single SQL updater, no caller opt-out |
 
-The ceiling, stated exactly. L1, L6, L7, L8 sit inside RULING 1's
-trusted boundary; nothing claims proof against compromised daemon code.
-L3 and L4 are the exception — they hold cryptographically and survive
-arbitrary row rewrites, which is the whole point of §4. L5 does **not**:
-spend-once is mutable store state and holds only within store integrity
-(§4b), the same boundary R11's evidence row and the artifact CAS
-already rest on. And nothing here claims the owner's *eyes* moved —
-what is proven is that a founder tap occurred in a ceremony whose
-signed challenge commits to those exact bytes.
+The ceiling, stated exactly, in three tiers rather than two.
+
+* **L1, L6, L7, L8 sit inside RULING 1's trusted boundary.** Nothing
+  claims proof against compromised daemon code.
+* **L3 and L4 hold cryptographically against rewrites of the challenge
+  row, the D12 columns, and the evidence row** — the planes §4 was
+  built for. They do **not** hold against a rewrite of the founder
+  credential registry: `public_key` is a mutable column
+  (`CREATE TABLE IF NOT EXISTS s7_founder_webauthn_credentials`,
+  `s7_webauthn_bootstrap.py:68`) and `def _credential_record_hash`
+  (`:1574`) is an unkeyed sha256 a row writer can recompute. Substitute
+  the key and any signature verifies, with no founder tap at all. Pass
+  4 said Construction 4 "does not depend on store integrity at all";
+  that was false, and the precise claim is: **given an
+  integrity-preserved credential registry, no rewrite of the challenge,
+  D12, or evidence rows can retarget an authentic founder signature
+  onto different bytes.**
+* **L5 holds only within store integrity, and not even symmetrically
+  with its neighbours** — see §4b.
+
+And nothing here claims the owner's *eyes* moved: what is proven is
+that a founder tap occurred in a ceremony whose signed challenge
+commits to those exact bytes.
 
 ---
 
@@ -408,21 +425,33 @@ append-shaped evidence plane rather than succeeding silently.
 The honest split, and it must be stated this way everywhere:
 
 * **"A founder tap covered these exact bytes" is held
-  cryptographically.** Construction 4 does not depend on store
-  integrity at all: it depends on a signature. Arbitrary row rewrites
-  cannot move a tap from one set of bytes to another.
+  cryptographically against the challenge, D12 and evidence planes.**
+  Construction 4 rests on a signature there, not on row integrity. It
+  does rest on the founder credential registry being intact (§2's
+  ceiling); that registry is a different plane with a different
+  remedy, and conflating the two is what pass 4 did.
 * **"One tap yields at most one authority" is held only within store
-  integrity.** Spend-once is inherently mutable state. This is not a
-  weakness 2b introduces — it is the boundary every durable guard in
-  S7 already rests on: R11's evidence row, the artifact's `consumed_at`
-  CAS, and the voice bundle-use reservation all assume no arbitrary row
-  deletion, and all fail the same way if that assumption fails.
+  integrity, and its failure mode is worse than its neighbours'.**
+  Spend-once is inherently mutable state. Every durable guard in S7
+  assumes store integrity, but they do not fail alike, and claiming
+  parity was too convenient: deleting R11's evidence row or an artifact
+  row makes consumption **fail closed** (`def
+  revalidate_r11_exemption_for_consumption` requires exactly one row,
+  `s7_guarded_execution.py:307`; the consume CAS matches nothing if the
+  artifact row is gone, `def consume_for_execution_on_connection`,
+  `operator_user_boundary.py:2966`). Deleting 2b's owner-read evidence
+  row **fails open in one specific way**: paired with a
+  challenge-lifecycle rollback it reopens minting, because the deleted
+  row was the thing that would have collided. That asymmetry is stated
+  here rather than smoothed over — it is the honest cost of putting the
+  spend record in a deletable row.
 
 So 2b does not depend on §11's separated lifecycle work for anything it
-claims; pass 3 depended on an overclaim, which is deleted here. A
-general repair — signing or attesting the lifecycle plane, or making
-the evidence plane append-only — would raise the second bullet to the
-first's level, and is named in §11 as work this cluster does not do.
+still claims. What §11 would buy is raising the second bullet toward
+the first: an append-only or attested evidence plane turns "deleting
+the record reopens the mint" into "deleting the record is visible and
+fails closed." That is the highest-value follow-on this cluster
+surfaced, and it is named, not smuggled in.
 
 ---
 
@@ -486,16 +515,39 @@ compared before every insert and every use — the R11 device (`def
 _r11_exemption_evidence_contract`, `:94`). A rebuilt or altered table
 refuses.
 
-**The one commitment helper.** `challenge_commitment_sha256` is not a
-free-floating column: it is exactly the `commitment_preimage` value of
-§4, produced by a single named helper
-`owner_read_commitment(*, rendered, precondition_hash) -> str`. That
-one helper is called at four seats and nowhere else — challenge
-creation (§4), A13.6's recomputation, the evidence insert below, and
-B2's re-derivation. Four call sites, one definition, so a divergence
-between what was signed, what was checked, and what was sealed is not
-expressible. Pass 3 declared the column and never defined its producer;
-a sealed value with an unnamed source seals nothing.
+**The one commitment helper, and the projection that lets it run
+everywhere.** `challenge_commitment_sha256` is exactly the
+`commitment_preimage` value of §4. Pass 4 routed it through a helper
+taking `rendered`, but the mint and consume seats never receive a
+`RenderedRequestStatement` — so at those two seats the helper could not
+have run, and the column would have been *persisted from the carrier*
+rather than recomputed. A sealed value nobody recomputes seals nothing.
+
+So the helper takes scalars, not an object:
+
+```text
+owner_read_commitment(*, commitment_inputs: S7OwnerReadCommitmentInputs) -> str
+
+@dataclass(frozen=True)
+S7OwnerReadCommitmentInputs(    -- the eight §4 preimage members, verbatim
+    action_params_hash: str
+    authority_context_hash: str
+    derived_aggregation_group: str
+    maez_response_sha256: str
+    nonce: str
+    precondition_hash: str
+    rendered_text_hash: str
+    request_envelope_hash: str
+)
+```
+
+At challenge creation and at A13.6 the projection is built from the
+rendered statement; from there it travels inside
+`S7OwnerReadMintInputs` (below) so the **evidence insert and B2 both
+recompute the digest from the projection and compare**, rather than
+trusting a digest handed to them. Four call sites, one definition, one
+input shape — so a divergence between what was signed, what was
+checked, and what was sealed is not expressible.
 
 **Write seat and the carrier that reaches it.** Inside `def
 put_artifact_with_bundle_reservation`'s anchored transaction (`:3501`),
@@ -515,7 +567,7 @@ S7OwnerReadMintInputs(          -- module-private token constructor,
     rendered_text_hash: str
     challenge_id: str
     challenge_b64_sha256: str
-    challenge_commitment_sha256: str
+    commitment_inputs: S7OwnerReadCommitmentInputs
     credential_ref: str
     user_presence: bool         -- True; A13.2 refused otherwise
     user_verification: bool     -- True; A13.2 refused otherwise
@@ -523,12 +575,25 @@ S7OwnerReadMintInputs(          -- module-private token constructor,
 )
 ```
 
-It accompanies the validation result rather than being embedded in it,
-so v3.2's "result shape unchanged" disposition stands. It is threaded
-`authorize_finish` → `mint_authorization_artifact(...,
-owner_read_inputs=...)` → `put_artifact_with_bundle_reservation(...,
-owner_read_inputs=...)`, and every one of those signatures gains the
-parameter as **required for RULING-O work classes**. Mint refuses
+`challenge_commitment_sha256` is not carried as a digest — it is
+recomputed from `commitment_inputs` at every seat that stores or checks
+it.
+
+**The return channel** (pass 4 finding 2). Pass 4 said the carrier
+"accompanies" the validation result and named no channel; a carrier
+only its constructor can mint is useless without one. **D16 returns
+`(S7VoiceSourceBundleValidationResult, S7OwnerReadMintInputs | None)`**
+— a tuple, so v3.2's "result shape unchanged" disposition stands for
+the first member while the second becomes reachable. The second member
+is non-None exactly when A13 ran and passed; `authorize_finish`
+requires it for RULING-O classes and refuses `owner_read_required`
+otherwise.
+
+From there it is threaded `authorize_finish` →
+`mint_authorization_artifact(..., owner_read_inputs=...)` →
+`put_artifact_with_bundle_reservation(..., owner_read_inputs=...)`, and
+every one of those signatures gains the parameter as **required for
+RULING-O work classes**. Mint refuses
 `owner_read_required` when the work class is RULING-O and the carrier
 is absent, not token-verified, or fails to match the artifact being
 minted; and refuses when the carrier is present for any other class.
@@ -662,11 +727,21 @@ Cluster 1's frozen transition table places `completed → consumed` at
 **execution consumption** (v3.2 line 216), and v3.2's write discipline
 makes Gate A read-only with Gate B owning the only attempt write (v3.2
 lines 517-522). So immediately after an artifact is minted the attempt
-is still `completed` with `consumed_by_artifact IS NULL`, and **two
-artifacts can be minted from one completed attempt.** That is cluster
-1's design, not a defect, and it is safe for the reason below — but the
-sentence pass 3 wrote ("once bound, no second artifact can be minted")
-described a binding that does not happen at that seat.
+is still `completed` with `consumed_by_artifact IS NULL`, and **the
+staging plane alone permits a second artifact from one completed
+attempt.** That is cluster 1's design, not a defect. The sentence pass
+3 wrote — "once bound, no second artifact can be minted" — described a
+binding that does not happen at that seat.
+
+For RULING-O classes specifically, the second mint is nonetheless
+refused, but by §5's `UNIQUE (consult_attempt_id)` on the evidence row
+inserted in the same mint transaction — the artifact plane, not the
+staging plane, and only while store integrity holds (§4b). Pass 4 said
+flatly that "two artifacts can be minted from one completed attempt"
+and left that in tension with §5's constraint and with §12's own
+witness requiring the second mint to fail. Both statements are true of
+different scopes and are now scoped: unrestricted in the staging plane,
+refused for RULING-O by the evidence row.
 
 **One-use is guarded at consumption, twice, and each guard is
 single-database:**
