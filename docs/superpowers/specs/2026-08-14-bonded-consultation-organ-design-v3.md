@@ -540,7 +540,10 @@ is folded here at once.
 
 Two distinct authority edges. **Gate A** validates before an
 authorization artifact is minted (canon D16's seat) and runs INSIDE
-`authorize_finish`, after the verifier has returned. **Gate B**
+`authorize_finish`. For non-RULING-O classes it runs after the
+inherited verifier has returned; for RULING-O classes the verification
+happens inside the owner-read function Gate A calls, so there is no
+"after the verifier" to run after (cluster 2b §5). **Gate B**
 re-validates inside execution consumption (canon D21's seat) and is
 the only place an attempt becomes `consumed`.
 
@@ -574,12 +577,16 @@ transaction, and no other. Refusal persistence is the caller's act
 
 **A13 — mechanism owned by cluster 2b §5 (one canonical function
 returning `VerifiedOwnerRead`); the paragraph below states
-the requirement, 2b states how it is held.** A13 invokes cluster 2b
-§5's canonical function inline after verification, against the exact
-challenge row the ceremony fetched and handed to the verifier — so no
-caller-supplied challenge id and no separate carrier reaches it. A13
-requires: the verifier returned ok, user-present and user-verified;
-that row unconsumed, uninvalidated and unexpired at `:now_z`; and its
+the requirement, 2b states how it is held.** For RULING-O classes
+`authorize_finish` BRANCHES BEFORE the inherited verifier call and
+hands cluster 2b §5's canonical function only the request's challenge
+id and authentication response; that function loads the row, reproduces
+the committed challenge bytes, and performs the verification itself, so
+no verifier result and no separately fetched row ever exist to be
+recombined. Non-RULING-O classes keep the inherited verifier path
+unchanged. A13 requires: the verification returned ok, user-present and
+user-verified; the row unconsumed, uninvalidated and unexpired at
+`:now_z`; and its
 `maez_response_sha256` equal to BOTH the hash recomputed over the
 delimited display region AND the staged
 `result.assistant_text_sha256` loaded only through
@@ -843,13 +850,19 @@ canon — one source of truth, permanently.
 >     ceremony_challenge_store: S7CeremonyChallengeStore,   -- A13 reads the
 >                                                           -- ceremony's own
 >                                                           -- challenge row
->     owner_read_context: S7OwnerReadContext | None,        -- the verifier result,
->                                                           -- the fetched challenge
->                                                           -- row, and the
->                                                           -- prospective artifact,
->                                                           -- passed together to
->                                                           -- cluster 2b §5's
->                                                           -- canonical function.
+>     owner_read_request: S7OwnerReadRequest | None,        -- the request's
+>                                                           -- challenge id and
+>                                                           -- authentication
+>                                                           -- response ONLY. No
+>                                                           -- verifier result and
+>                                                           -- no pre-fetched
+>                                                           -- challenge row: the
+>                                                           -- canonical function
+>                                                           -- (cluster 2b §5)
+>                                                           -- loads the row and
+>                                                           -- verifies against it
+>                                                           -- itself, so the two
+>                                                           -- cannot be separated.
 >                                                           -- None for non-RULING-O
 >                                                           -- classes
 >     conn: sqlite3.Connection,

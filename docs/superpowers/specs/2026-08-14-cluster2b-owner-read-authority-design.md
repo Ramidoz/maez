@@ -1,4 +1,4 @@
-# Cluster 2b — owner-read authority. Design pass 8.
+# Cluster 2b — owner-read authority. Design pass 9.
 
 2026-08-14. Passes 1-5 were gated four times (13 → 9 → 7 → 8 findings;
 all 37 verified, all 37 upheld). The mechanism survived. The document
@@ -227,17 +227,6 @@ every layer could repeat one calculation. That is four places for a
 future edit to satisfy the shape and lose the meaning. Reduced to one
 of each.
 
-**One reordering first.** Today the artifact is constructed at
-`artifact_id = f"s7authz_` (`s7_webauthn_ceremony.py:867`), *after* the
-challenge is consumed at `:861`. Every input it needs — the rendered
-statement's fields, the credential the ceremony resolved, the
-challenge's `expires_at` — is available before construction;
-`artifact_id` is a fresh uuid4 the construction mints for itself
-(`artifact_id = f"s7authz_`, `s7_webauthn_ceremony.py:867`) and can be
-minted at any point. So the prospective artifact is **constructed
-earlier**, before the canonical function runs. Construction is not minting; nothing is stored by it.
-This costs one moved statement and buys the binding below.
-
 **One function that OWNS the verification.** For RULING-O classes the
 ceremony does not verify separately and then hand the result somewhere;
 the canonical function performs the verification itself, against the
@@ -254,31 +243,55 @@ artifact B. Owning the verification closes it without bringing the
 carrier back: the lookup and the signature check are one act, so there
 is nothing to mismatch.
 
-Given the request's challenge id, the authentication response, and the
-prospective artifact, the function:
+Given the request's challenge id and authentication response, the
+rendered statement and `precondition_hash`, the function does the
+following **in this order**:
 
-* loads the challenge row **by that id and no other key**, requiring an
-  unconsumed, uninvalidated, unexpired `authorize_guarded_request`
-  matching this ceremony's session and channel bindings;
-* **verifies the authenticator assertion against THAT row's
-  `challenge_b64`** and requires ok, user-present, user-verified;
-* loads the staged consultation result **only through
-  `attempt.result_row_ref`, with the result row's own hash recomputed**
-  — parent Gate A's A6b rule, the sole lawful selection path.
-  `consultation_id`, `consult_attempt_id` and `assistant_text_sha256`
-  all derive from that one attempt/result pair and from no parallel
-  argument. Pass 6 said only "reloads the staged consultation result",
-  which named no key and would have let a caller's ids ride into the
-  receipt;
-* checks the display region rehashes to `rendered.maez_response_sha256`
-  and that this equals the staged `assistant_text_sha256`;
-* checks that row's `challenge_b64` reproduces from the §3 commitment;
-* checks the verified credential is the one the prospective artifact
-  carries.
+1. loads the challenge row **by that id and no other key**, requiring
+   an unconsumed, uninvalidated, unexpired `authorize_guarded_request`
+   matching this ceremony's session and channel bindings;
+2. **reproduces the row's `challenge_b64` from the §3 commitment** over
+   the presented rendered statement and `precondition_hash`. This
+   precedes verification, matching §3 and the existing order where
+   `if not _challenge_matches_rendered_d12`
+   (`s7_webauthn_ceremony.py:558`) precedes `verified = verifier_method(`
+   (`:814`) — pass 8 had verification first, contradicting its own §3;
+3. **verifies the authenticator assertion against those same bytes**,
+   requiring ok, user-present, user-verified;
+4. rechecks the credential is enabled and may authorize, and advances
+   its sign count — the ceremony's existing steps at
+   `if not store.credential_can_authorize` (`:849`) and
+   `sign_count = store.advance_sign_count` (`:854`), which move inside
+   the function because they consume verification output;
+5. loads the staged consultation result **only through
+   `attempt.result_row_ref`, with the result row's own hash recomputed**
+   — parent Gate A's A6b rule, the sole lawful selection path.
+   `consultation_id`, `consult_attempt_id` and `assistant_text_sha256`
+   all derive from that one attempt/result pair and from no parallel
+   argument;
+6. checks the display region rehashes to `rendered.maez_response_sha256`
+   and that this equals the staged `assistant_text_sha256`;
+7. **constructs the artifact itself**, from the rendered statement, the
+   verified `credential_ref`, the verified `user_presence` and
+   `user_verification`, and the row's `expires_at`;
+8. computes the artifact binding digest below.
 
 It returns **`VerifiedOwnerRead`** — one opaque object, module-private
-constructor — or it refuses. One carrier out, no verifier result
-crossing a boundary, and no separable pair for a caller to recombine.
+constructor — carrying the constructed artifact, the binding digest,
+and the receipt's proof fields; or it refuses. One carrier out, no
+verifier result crossing a boundary, no separable pair for a caller to
+recombine.
+
+**Why the function constructs the artifact** (pass 8 finding 3). Pass 8
+had the artifact built *before* the function so the proof could bind to
+it — but the artifact's `credential_ref`, `user_presence` and
+`user_verification` are verification *outputs*
+(`credential_ref = str(verified`, `:843`), so a pre-verification
+artifact could only have guessed them. Building it inside, after
+verification, removes the contradiction and the reordering pass 7
+introduced: `authorize_finish` for RULING-O calls this function, then
+consumes the challenge, then mints from the carrier. Non-RULING-O
+classes keep the existing path unchanged, verifier call and all.
 
 **The proof is bound to one artifact.** `VerifiedOwnerRead` carries
 `authorized_artifact_sha256`, produced by one named constructor that
@@ -299,13 +312,26 @@ owner_read_artifact_binding(*, artifact, proof) = canonical_hash({
   "ceremony_kind", "schema_version",
   -- proof identity:
   "challenge_id", "challenge_b64_sha256", "maez_response_sha256",
-  "consult_attempt_id",
+  "consultation_id", "consult_attempt_id",
 })
 ```
 
+**Serialization, stated exactly.** This is a named map hashed by the
+repo's existing `def canonical_hash` (`core/governance/successor_governance.py:316`),
+which serializes with `sort_keys=True` — so the ordering that matters
+is the serializer's, not the listing above, and the listing is a
+completeness statement rather than an ordering one. Pass 8 said "in
+this order", which would have been false against that function.
+`consultation_id` is included rather than left derivable: it is
+persisted as receipt proof identity, and a sealed field that the seal
+does not cover is the defect class this whole cluster is about.
+
 **`consumed_at` and `consumed_by_request_id` are excluded, explicitly.**
-They are the artifact's mutable half (`class S7AuthorizationArtifact`,
-`operator_user_boundary.py:2163`), and consumption sets `consumed_at`
+`consumed_at` is the mutable field on `class S7AuthorizationArtifact`
+(`operator_user_boundary.py:2163`); `consumed_by_request_id` is not on
+that dataclass at all but is a v2-table column written by the
+consumption UPDATE (`def consume_for_execution_on_connection`, `:2966`).
+Both are excluded. Consumption sets `consumed_at`
 inside the very transaction that re-derives this digest
 (`connection.execute("BEGIN IMMEDIATE")`, `:3026`) — so including them
 would guarantee a mismatch at the one seat that most needs the check.
