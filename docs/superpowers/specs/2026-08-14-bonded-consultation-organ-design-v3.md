@@ -480,7 +480,10 @@ rounds failed on ONE property — *owner-read cannot be forged* — and
 round 4 failed because I twice asserted properties of code structures
 that do not exist. Both are now verified against the tree:
 
-- `S7VerifiedAssertion` with a trustworthy `challenge_id` **does not
+- [HISTORICAL, pass-1 shape. DISPOSITION: the canonical owner-read
+  function now OWNS the verification against the row it loaded, so no
+  such carrier is built or needed — cluster 2b §5.]
+  `S7VerifiedAssertion` with a trustworthy `challenge_id` **does not
   exist**. The production verifier returns a plain dict with `ok`,
   `credential_ref`, `sign_count`, `user_presence`, `user_verification`
   and library fields — and **no challenge_id at all**
@@ -511,13 +514,18 @@ and `_fingerprint` is unkeyed. Current shape: cluster 2b §3-§6.)
   anchored dispositions. Rests only on structures verified to exist.
   A13/B2 remain named as REQUIRED but their mechanism is 2b's.
 - **Cluster 2b — owner-read authority (its own design pass).** Must
-  begin from code verification, not prose: what the verifier can be
-  made to return and who may construct it; whether the artifact
-  binding exists to be amended or must be created; how the response
-  hash enters the challenge fingerprint (the R11 pattern at
-  `s7_webauthn_bootstrap.py:1001-1084` is the shape, verified) and is
-  re-derived at finish before verification
-  (`s7_webauthn_ceremony.py:565-592`). Until 2b freezes, RULING-O
+  begin from code verification, not prose. [The three questions this
+  bullet originally posed are HISTORICAL; their answers, reached over
+  seven passes and six gate rounds, are in cluster 2b §3-§6.
+  DISPOSITIONS: (1) the verifier is not made to return anything — the
+  canonical owner-read function OWNS the verification against the row
+  it loaded, so there is no carrier to construct; (2) the artifact
+  binding neither exists nor is created — canon's class is
+  KEPT-VERBATIM and a separate per-artifact receipt carries the proof;
+  (3) the response hash does NOT enter the challenge fingerprint —
+  fingerprint membership was abandoned, since `challenge_hash` is never
+  recomputed and `_fingerprint` is unkeyed, and the hash enters the
+  SIGNED CHALLENGE BYTES instead.] Until 2b freezes, RULING-O
   classes CANNOT be migrated — soul-write and pipeline classes (which
   need no owner-read) are unaffected, so the campaign is not blocked,
   only the two gravest classes are.

@@ -1,4 +1,4 @@
-# Cluster 2b — owner-read authority. Design pass 7 (REDUCED, artifact-bound).
+# Cluster 2b — owner-read authority. Design pass 8.
 
 2026-08-14. Passes 1-5 were gated four times (13 → 9 → 7 → 8 findings;
 all 37 verified, all 37 upheld). The mechanism survived. The document
@@ -230,43 +230,90 @@ of each.
 **One reordering first.** Today the artifact is constructed at
 `artifact_id = f"s7authz_` (`s7_webauthn_ceremony.py:867`), *after* the
 challenge is consumed at `:861`. Every input it needs — the rendered
-statement's fields, the verified `credential_ref` from `:843`, the
-challenge's `expires_at` — is already in hand by `:855`. So the
-prospective artifact is **constructed earlier**, before the canonical
-function runs. Construction is not minting; nothing is stored by it.
+statement's fields, the credential the ceremony resolved, the
+challenge's `expires_at` — is available before construction;
+`artifact_id` is a fresh uuid4 the construction mints for itself
+(`artifact_id = f"s7authz_`, `s7_webauthn_ceremony.py:867`) and can be
+minted at any point. So the prospective artifact is **constructed
+earlier**, before the canonical function runs. Construction is not minting; nothing is stored by it.
 This costs one moved statement and buys the binding below.
 
-**One function.** After verification and before the challenge is
-consumed, the canonical function takes the prospective artifact and:
+**One function that OWNS the verification.** For RULING-O classes the
+ceremony does not verify separately and then hand the result somewhere;
+the canonical function performs the verification itself, against the
+row it loaded, and never lets the two be separated.
 
-* reloads the challenge row **by the challenge id the verifier
-  verified against, and by no other key**, requiring an unconsumed,
-  uninvalidated, unexpired `authorize_guarded_request` matching this
-  ceremony's session and channel bindings;
-* reloads the staged consultation result **only through
+This is the fix for a circularity pass 7 introduced. Pass 7 deleted the
+verifier carrier (correctly — it proved little) but then said the
+function reloads the row "by the challenge id the verifier verified
+against". **The verifier's return value contains no challenge identity**
+(`def verify_authentication_response`, `s7_webauthn_verifier.py:106`),
+so that phrase named something that does not exist, and a supported
+caller could pair a genuine success from challenge A with row and
+artifact B. Owning the verification closes it without bringing the
+carrier back: the lookup and the signature check are one act, so there
+is nothing to mismatch.
+
+Given the request's challenge id, the authentication response, and the
+prospective artifact, the function:
+
+* loads the challenge row **by that id and no other key**, requiring an
+  unconsumed, uninvalidated, unexpired `authorize_guarded_request`
+  matching this ceremony's session and channel bindings;
+* **verifies the authenticator assertion against THAT row's
+  `challenge_b64`** and requires ok, user-present, user-verified;
+* loads the staged consultation result **only through
   `attempt.result_row_ref`, with the result row's own hash recomputed**
-  — parent Gate A's A6b rule, which is the sole lawful selection path.
+  — parent Gate A's A6b rule, the sole lawful selection path.
   `consultation_id`, `consult_attempt_id` and `assistant_text_sha256`
   all derive from that one attempt/result pair and from no parallel
   argument. Pass 6 said only "reloads the staged consultation result",
   which named no key and would have let a caller's ids ride into the
   receipt;
-* checks the verifier returned ok, user-present, user-verified;
 * checks the display region rehashes to `rendered.maez_response_sha256`
   and that this equals the staged `assistant_text_sha256`;
-* checks the row's `challenge_b64` reproduces from the §3 commitment;
-* checks the credential is the one the ceremony verified and the
-  prospective artifact carries.
+* checks that row's `challenge_b64` reproduces from the §3 commitment;
+* checks the verified credential is the one the prospective artifact
+  carries.
 
 It returns **`VerifiedOwnerRead`** — one opaque object, module-private
-constructor — or it refuses. There is no second carrier and no raw
-verifier object crossing a boundary.
+constructor — or it refuses. One carrier out, no verifier result
+crossing a boundary, and no separable pair for a caller to recombine.
 
 **The proof is bound to one artifact.** `VerifiedOwnerRead` carries
-`authorized_artifact_sha256`: a canonical digest over the prospective
-artifact's complete identity together with the proof identity
-(challenge id, signed-nonce digest, response hash, attempt id). Mint
-**recomputes that digest from the artifact it is actually about to
+`authorized_artifact_sha256`, produced by one named constructor that
+validation, mint and consumption all call — never by three hand-written
+recomputations. Its pre-image is exhaustive, ordered, and versioned,
+because "the artifact's complete identity" is not a domain:
+
+```text
+owner_read_artifact_binding(*, artifact, proof) = canonical_hash({
+  "domain": "s7.owner_read.artifact_binding.v1",   -- versioned tag
+  -- artifact, IMMUTABLE FIELDS ONLY, in this order:
+  "artifact_id", "request_id", "request_envelope_hash",
+  "rendered_text_hash", "action", "action_params_hash",
+  "precondition_hash", "authority_context_hash",
+  "derived_work_class", "derived_aggregation_group", "nonce",
+  "credential_ref", "auth_method", "grant_source",
+  "user_presence", "user_verification", "created_at", "expires_at",
+  "ceremony_kind", "schema_version",
+  -- proof identity:
+  "challenge_id", "challenge_b64_sha256", "maez_response_sha256",
+  "consult_attempt_id",
+})
+```
+
+**`consumed_at` and `consumed_by_request_id` are excluded, explicitly.**
+They are the artifact's mutable half (`class S7AuthorizationArtifact`,
+`operator_user_boundary.py:2163`), and consumption sets `consumed_at`
+inside the very transaction that re-derives this digest
+(`connection.execute("BEGIN IMMEDIATE")`, `:3026`) — so including them
+would guarantee a mismatch at the one seat that most needs the check.
+Pass 7 said "complete identity" and specified no list, ordering, tag,
+or serialization, which left each of the three call sites free to bind
+a different subset.
+
+Mint **recomputes this digest from the artifact it is actually about to
 store** and refuses on mismatch, before the receipt is written.
 
 Without this, a supported caller could hand a genuine, unused proof to
