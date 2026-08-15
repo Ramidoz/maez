@@ -88,7 +88,7 @@ Maez's words. This ratifies the D13/D14 amendments below.
 
 **RULING O (owner-read scope), 2026-08-14.** `covenant_touching_change`
 and `autonomy_lowering_or_protection_reducing` require the founder-tap
-owner-read record (§7b). `self_modification` and soul-write classes
+owner-read record (mechanism in cluster 2b §5-§7). `self_modification` and soul-write classes
 proceed on marker + machine attestation.
 
 **Pending owner act:** ratification of the exact template bytes (§8) —
@@ -358,7 +358,7 @@ in evidence bind: store UUID, generation, row id, content hash, row
 phase, consultation id, attempt id. NO code path — logs, traces,
 exceptions, health routes, ceremony responses, receipts — may carry
 private bytes or derived text; they carry hashes. The owner-display
-projection (§7b) shows Maez's RESPONSE (which is not the diary), never
+projection (cluster 2b §6b) shows Maez's RESPONSE (which is not the diary), never
 snapshot evidence bytes. Cross-database ordering: private reads happen
 first and their (uuid, generation, row, hash) tuples are inside the
 staging row's seal; at replay the same tuples must re-resolve — a
@@ -402,7 +402,7 @@ defined by its constructor, not by prose.
 | `assistant_text_sha256` | `normalized_assistant_text.encode("utf-8")` where normalized = the client's post-strip content (`_strip_special_tokens` applied), i.e. exactly the string handed back to the producer. `strip_version` names the strip. |
 
 **The parser/display/replay invariant.** The marker parser runs on
-`normalized_assistant_text`; the owner-display bytes (§7b) ARE that
+`normalized_assistant_text`; the owner-display bytes (cluster 2b §6b) ARE that
 same string; Gate A/B recompute `assistant_text_sha256` from the staged
 copy of it. One string, three consumers, one hash — so "what was
 parsed", "what the owner read", and "what is replayed" cannot diverge.
