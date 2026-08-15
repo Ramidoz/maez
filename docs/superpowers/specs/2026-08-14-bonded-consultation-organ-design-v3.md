@@ -593,24 +593,31 @@ restores the error:
 1. §7b claimed the binding force comes from membership in the
    challenge fingerprint preimage ("A copied column is not a binding;
    a fingerprint member is"). FALSE against this tree: `challenge_hash`
-   is computed at creation and **never recomputed or compared
-   anywhere**. R11's binding is enforced by the ordinary column
-   comparison at `s7_webauthn_ceremony.py:582-592`, before verification.
-   The column IS the binding here; fingerprint membership is a
-   write-only defence. (2b §0 C2; 2b §10 names the recompute as
-   separate hardening.)
+   is computed at creation and never recomputed or compared. But the
+   first correction — "the column comparison IS the binding" — was
+   ALSO wrong, because a column comparison is only as strong as the
+   row it reads, and nothing signs the row. The answer is 2b §4: for
+   RULING-O classes the challenge bytes themselves become the
+   commitment, so the founder key signs the association. (2b §0 C2,
+   §4; 2b §11 keeps the fingerprint recompute as separate work that
+   does NOT close this.)
 2. §7b amended `S7AuthorizationArtifactBinding`'s "existing canonical
    row-hash domain". FALSE twice: the class is absent from
    `core/governance/`, and canon's specified version (canon L1664-1675)
    has no row hash. 2b instead applies the live, sealed, cutover-proven
-   R11 evidence-table shape at the same seat. (2b §0 C1, §4.)
+   R11 evidence-table shape at the same seat. (2b §0 C1, §5.)
 3. §7b's third amendment — `RenderedRequestStatement` gaining
    `maez_response_display_text` and `maez_response_sha256`, and the
    byte-exact delimited display region — SURVIVES, and is restated
-   with its enforcement seat in 2b §5b: the equality is enforced in
-   `__post_init__`, so the object cannot exist with displayed bytes
-   and declared hash in disagreement, which is stronger than any gate
-   check.
+   with its enforcement seat in 2b §6b. The equality is enforced in
+   `__post_init__`, so an inconsistent object cannot be CONSTRUCTED
+   normally. That is not the same as cannot exist:
+   `RenderedRequestStatement` is an ordinary frozen dataclass, and
+   `object.__setattr__`, crafted deserialization, or other same-process
+   mutation are not excluded. Every authority gate recomputes the
+   region and its hash regardless. (An earlier revision of this bullet
+   claimed the object "cannot exist" and called that stronger than a
+   gate check; corrected here rather than deleted.)
 
 ### 8. Template (owner ratification pending)
 
@@ -911,8 +918,8 @@ canon — one source of truth, permanently.
 >   here);
 > - NEW: for RULING-O classes, `rendered.maez_response_sha256` equals
 >   both the hash recomputed over the delimited display bytes and
->   `result.assistant_text_sha256` (§7b); null == null for all other
->   classes;
+>   `result.assistant_text_sha256` (mechanism in cluster 2b §6c, joins
+>   A13.9 and A13.10); null == null for all other classes;
 > - AMENDED (canon L2936-2954, the explicit hash-routing block).
 >   Replacement bytes: the block stands as written EXCEPT the line
 >   `semantic_reader_attempt_hash -> canonical_hash(
@@ -921,7 +928,11 @@ canon — one source of truth, permanently.
 >   `attempt.row_seal_hash -> canonical_hash(twelve immutable columns)`,
 >   `result.object_sha256 -> canonical_hash(AttestedConsultationResult
 >   minus object_sha256)`, and
->   `binding.maez_response_sha256 -> sha256(delimited display region)`;
+>   `owner_read_evidence.maez_response_sha256 -> sha256(delimited
+>   display region)`. The third line named `binding.maez_response_sha256`
+>   in an earlier revision; `S7AuthorizationArtifactBinding` does not
+>   exist in code and is KEPT-VERBATIM in canon, so the routing target
+>   is cluster 2b §5's sealed owner-read evidence row;
 > - KEPT-VERBATIM (canon L2955-2958, the closing paragraph in full including its final sentence: the same
 >   validator serves tests and finish-time recheck; tests may fake Maez
 >   transport at the producer port but may not bypass this validator
@@ -958,11 +969,23 @@ classes); the rendered text gains an exact line for the response hash.
 > the consumption-time clock (§7's enumerated clock-sensitive
 > predicates; A13 does NOT re-run at this seat — no verifier is present
 > and no challenge is read — it is replaced by B2), performs joins B1
-> and B2 — `artifact.consult_attempt_id ==
-> attempt.attempt_id` and the `completed → consumed` CAS from the
-> design's §3 transition table succeeding IN THIS TRANSACTION — and
-> only then delegates to inherited S7.1 consume. The attempt CAS and
-> the grant consume commit or roll back together.
+> and B2 — `artifact.consult_attempt_id == attempt.attempt_id` and the
+> `completed → consumed` CAS from the design's §3 transition table —
+> and only then delegates to inherited S7.1 consume.
+>
+> The attempt CAS and the grant consume do NOT commit or roll back
+> together, and an earlier revision of this paragraph said they did.
+> They act on two different SQLite files: the consultation staging
+> family in canon D9's state file, the artifact plane in the S7.1
+> ceremony database (cluster 2b §1 V9). One-use does not depend on
+> that transaction, because it is guarded once per plane: on the mint
+> side an attempt binds to at most one artifact (`state='completed'
+> AND consumed_by_artifact IS NULL`, plus `UNIQUE (consult_attempt_id)`
+> on the owner-read evidence row), and on the consume side the
+> artifact's own CAS admits at most one grant. A cross-plane failure
+> leaves a spent attempt and an unconsumed artifact — the safe
+> direction — and the retry consumes exactly once. Full statement in
+> cluster 2b §7.
 >
 > KEPT-VERBATIM, each at its anchor and unedited by this amendment:
 > the live-possession check and raw-token non-persistence (canon
