@@ -496,10 +496,15 @@ that do not exist. Both are now verified against the tree:
   inside.
 
 **What this means.** Owner-read is not three bullets in a join table;
-it is a SUBSYSTEM with three new constructions — a verifier-result
-carrier with provenance, a sealed durable binding, and a challenge
-fingerprint member. Specifying it as joins is why four rounds died on
-the same property. Cluster 2 therefore SPLITS:
+it is a subsystem in its own right, and specifying it as joins is why
+four rounds died on the same property. Cluster 2 therefore SPLITS.
+(The three constructions this paragraph originally named — a
+verifier-result carrier, a sealed durable binding, and a challenge
+fingerprint member — were the pass-1 shape. Two did not survive:
+the separate verifier carrier was collapsed into one canonical
+function, and the fingerprint member was replaced by a challenge whose
+BYTES are the commitment, since `challenge_hash` is never recomputed
+and `_fingerprint` is unkeyed. Current shape: cluster 2b §3-§6.)
 
 - **Cluster 2a — gate replay (this section below).** Gate A/B join
   logic, ordering, write discipline, clock, vocabulary, and the D16/D21
@@ -561,20 +566,19 @@ transaction, and no other. Refusal persistence is the caller's act
 
 **A13 — mechanism owned by cluster 2b §5 (one canonical function
 returning `VerifiedOwnerRead`); the paragraph below states
-the requirement, 2b states how it is held.** The validator takes
-`verified_assertion: S7VerifiedAssertion` — the verifier's own return
-value, in scope because D16 runs after verification — carrying `ok`,
-`credential_ref`, `user_presence`, `user_verification`, and
-`challenge_id`. **The challenge row is fetched by
-`verified_assertion.challenge_id` and by no other key; no caller-
-supplied challenge id exists anywhere in the signature.** A13
-requires: `ok is True`, `user_verification is True`,
-`user_presence is True`, that row unexpired at `:now_z`, and its
+the requirement, 2b states how it is held.** A13 invokes cluster 2b
+§5's canonical function inline after verification, against the exact
+challenge row the ceremony fetched and handed to the verifier — so no
+caller-supplied challenge id and no separate carrier reaches it. A13
+requires: the verifier returned ok, user-present and user-verified;
+that row unconsumed, uninvalidated and unexpired at `:now_z`; and its
 `maez_response_sha256` equal to BOTH the hash recomputed over the
 delimited display region AND the staged
-`result.assistant_text_sha256`. A different ceremony's row cannot be
-reached: the only key is the one the authenticator just signed
-against.
+`result.assistant_text_sha256` loaded only through
+`attempt.result_row_ref`. Only `VerifiedOwnerRead` leaves that
+function, bound to the prospective artifact.
+**`S7VerifiedAssertion` — a separate verifier-result carrier — was
+proposed in 2b pass 1 and DELETED in pass 6; do not reintroduce it.**
 
 **Gate B joins** (consumption-time clock throughout):
 
@@ -616,18 +620,18 @@ restores the error:
    ALSO wrong, because a column comparison is only as strong as the
    row it reads, and nothing signs the row. The answer is 2b §4: for
    RULING-O classes the challenge bytes themselves become the
-   commitment, so the founder key signs the association. (2b §0 C2,
-   §4; 2b §11 keeps the fingerprint recompute as separate work that
-   does NOT close this.)
+   commitment, so the founder key signs the association. (2b §1 and
+   §3. The fingerprint recompute was dropped entirely: it cannot close
+   this, because `_fingerprint` is an unkeyed sha256.)
 2. §7b amended `S7AuthorizationArtifactBinding`'s "existing canonical
    row-hash domain". FALSE twice: the class is absent from
    `core/governance/`, and canon's specified version (canon L1664-1675)
    has no row hash. 2b instead applies the live, sealed, cutover-proven
-   R11 evidence-table shape at the same seat. (2b §0 C1, §5.)
+   R11 evidence-table shape at the same seat. (2b §5.)
 3. §7b's third amendment — `RenderedRequestStatement` gaining
    `maez_response_display_text` and `maez_response_sha256`, and the
    byte-exact delimited display region — SURVIVES, and is restated
-   with its enforcement seat in 2b §6b. The equality is enforced in
+   with its enforcement seat in 2b §4. The equality is enforced in
    `__post_init__`, so an inconsistent object cannot be CONSTRUCTED
    normally. That is not the same as cannot exist:
    `RenderedRequestStatement` is an ordinary frozen dataclass, and
@@ -829,17 +833,20 @@ canon — one source of truth, permanently.
 >     surface_manifest_store: S7SurfaceManifestStore,
 >     private_thought_reader: S7PrivateRefReader,
 >     ceremony_challenge_store: S7CeremonyChallengeStore,   -- A13 reads the
->                                                           -- row keyed BY the
->                                                           -- verified assertion
->     verified_assertion: S7VerifiedAssertion | None,       -- the verifier's own
->                                                           -- return value; its
->                                                           -- challenge_id is the
->                                                           -- ONLY lookup key.
+>                                                           -- ceremony's own
+>                                                           -- challenge row
+>     owner_read_context: S7OwnerReadContext | None,        -- the verifier result,
+>                                                           -- the fetched challenge
+>                                                           -- row, and the
+>                                                           -- prospective artifact,
+>                                                           -- passed together to
+>                                                           -- cluster 2b §5's
+>                                                           -- canonical function.
 >                                                           -- None for non-RULING-O
 >                                                           -- classes
 >     conn: sqlite3.Connection,
 >     now: str,
-> ) -> S7VoiceSourceBundleValidationResult
+> ) -> tuple[S7VoiceSourceBundleValidationResult, VerifiedOwnerRead | None]
 > ```
 >
 > Result shape (canon L2792-2802) and the closed fifteen-token
@@ -995,13 +1002,13 @@ classes); the rendered text gains an exact line for the response hash.
 > before any caller callback or commit, unconditionally for
 > highest-risk work classes — because a check the wrapper performs is a
 > check a caller can bypass by not using the wrapper, and canon's
-> wrapper does not exist in code (cluster 2b §7).
+> wrapper does not exist in code (cluster 2b §6).
 >
 > The attempt CAS and the grant consume do NOT commit or roll back
 > together, and an earlier revision of this paragraph said they did.
 > They act on two different SQLite files: the consultation staging
 > family in canon D9's state file, the artifact plane in the S7.1
-> ceremony database (cluster 2b §7). One-use does not depend on that
+> ceremony database (cluster 2b §6). One-use does not depend on that
 > transaction, because **both guards live at consumption**, one per
 > plane: the `completed → consumed` CAS admits one consumption per
 > attempt, and the artifact's own CAS admits one grant per artifact. An
@@ -1021,7 +1028,7 @@ classes); the rendered text gains an exact line for the response hash.
 > by the idempotent observation `state='consumed' AND
 > consumed_by_artifact = :this_artifact_id`, with the row seal, expiry
 > and every other join still required, and any other
-> `consumed_by_artifact` still refusing. Full statement in cluster 2b §7.
+> `consumed_by_artifact` still refusing. Full statement in cluster 2b §6.
 >
 > KEPT-VERBATIM, each at its anchor and unedited by this amendment:
 > the live-possession check and raw-token non-persistence (canon

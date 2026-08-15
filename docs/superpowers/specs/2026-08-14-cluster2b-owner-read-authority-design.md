@@ -1,4 +1,4 @@
-# Cluster 2b — owner-read authority. Design pass 6 (REDUCED).
+# Cluster 2b — owner-read authority. Design pass 7 (REDUCED, artifact-bound).
 
 2026-08-14. Passes 1-5 were gated four times (13 → 9 → 7 → 8 findings;
 all 37 verified, all 37 upheld). The mechanism survived. The document
@@ -19,9 +19,11 @@ to guard against something else was self-defeating.
 Pass 6 is the reduction. Nothing true was dropped; several things that
 sounded true were.
 
-**One owner act is required before this can freeze — §1.** Declaring
-what this organ does and does not defend against is a covenant-level
-ruling, not a builder's decision, and it belongs beside the other six.
+**The one owner act this pass required is DONE.** Declaring what this
+organ does and does not defend against was a covenant-level ruling, not
+a builder's decision; the owner ruled it on 2026-08-15 and it is now
+RULING B, recorded beside the other six in the parent design. §1 is a
+fixed input from here, not a proposal.
 
 ---
 
@@ -114,7 +116,7 @@ Five equalities, one page, no trust in a name like "sealed",
 |---|---|
 | produced = displayed | the rendered statement's own `__post_init__` region check (§4), plus recomputation at the gate |
 | displayed = signed | **Construction 4** (§3): the challenge bytes ARE a commitment to the display hash |
-| signed = minted | the receipt is written in the same transaction as the artifact, from the validator's own output (§5) |
+| signed = minted | the proof is bound to THIS artifact's identity, and mint recomputes that binding from the artifact it is actually storing before writing the receipt (§5) |
 | minted = executed | the sole SQL updater re-checks the receipt before any grant commits (§6) |
 
 The founder's signature and the display-region hash carry the content
@@ -225,27 +227,56 @@ every layer could repeat one calculation. That is four places for a
 future edit to satisfy the shape and lose the meaning. Reduced to one
 of each.
 
-**One function.** After verification and before the challenge is
-consumed (`if not store.consume_challenge`,
-`s7_webauthn_ceremony.py:861`) — the only lawful seat, since the
-artifact does not exist until `:867` — a single canonical function
-reloads the challenge row **by the challenge id the verifier verified
-against, and by no other key**, reloads the staged consultation result,
-and checks the §2 chain end to end:
+**One reordering first.** Today the artifact is constructed at
+`artifact_id = f"s7authz_` (`s7_webauthn_ceremony.py:867`), *after* the
+challenge is consumed at `:861`. Every input it needs — the rendered
+statement's fields, the verified `credential_ref` from `:843`, the
+challenge's `expires_at` — is already in hand by `:855`. So the
+prospective artifact is **constructed earlier**, before the canonical
+function runs. Construction is not minting; nothing is stored by it.
+This costs one moved statement and buys the binding below.
 
-* the verifier returned ok, user-present, user-verified;
-* the row is an unconsumed, uninvalidated, unexpired
-  `authorize_guarded_request` matching this ceremony's session and
-  channel bindings;
-* the display region rehashes to `rendered.maez_response_sha256`;
-* that equals the staged `assistant_text_sha256`;
-* the row's `challenge_b64` reproduces from the §3 commitment;
-* the credential is the one the ceremony verified and will stamp on the
-  artifact.
+**One function.** After verification and before the challenge is
+consumed, the canonical function takes the prospective artifact and:
+
+* reloads the challenge row **by the challenge id the verifier
+  verified against, and by no other key**, requiring an unconsumed,
+  uninvalidated, unexpired `authorize_guarded_request` matching this
+  ceremony's session and channel bindings;
+* reloads the staged consultation result **only through
+  `attempt.result_row_ref`, with the result row's own hash recomputed**
+  — parent Gate A's A6b rule, which is the sole lawful selection path.
+  `consultation_id`, `consult_attempt_id` and `assistant_text_sha256`
+  all derive from that one attempt/result pair and from no parallel
+  argument. Pass 6 said only "reloads the staged consultation result",
+  which named no key and would have let a caller's ids ride into the
+  receipt;
+* checks the verifier returned ok, user-present, user-verified;
+* checks the display region rehashes to `rendered.maez_response_sha256`
+  and that this equals the staged `assistant_text_sha256`;
+* checks the row's `challenge_b64` reproduces from the §3 commitment;
+* checks the credential is the one the ceremony verified and the
+  prospective artifact carries.
 
 It returns **`VerifiedOwnerRead`** — one opaque object, module-private
-constructor, or it refuses. There is no second carrier and no raw
+constructor — or it refuses. There is no second carrier and no raw
 verifier object crossing a boundary.
+
+**The proof is bound to one artifact.** `VerifiedOwnerRead` carries
+`authorized_artifact_sha256`: a canonical digest over the prospective
+artifact's complete identity together with the proof identity
+(challenge id, signed-nonce digest, response hash, attempt id). Mint
+**recomputes that digest from the artifact it is actually about to
+store** and refuses on mismatch, before the receipt is written.
+
+Without this, a supported caller could hand a genuine, unused proof to
+a different artifact — mismatched data through a supported interface,
+squarely inside RULING B, and the receipt would then seal a
+correspondence that never existed. Pass 6 lost this when it collapsed
+two carriers into one and relied on "written in the same transaction",
+which proves simultaneity, not correspondence. Every receipt column
+below comes from the validated carrier or from the recomputed artifact
+— never from a parallel caller argument.
 
 The private constructor is an accidental-misuse guard and is described
 as nothing more; §1 places direct invocation outside the proof. The
@@ -287,15 +318,19 @@ CREATE TABLE s7_consult_owner_read_receipts_v1 (
     user_presence INTEGER NOT NULL CHECK (user_presence = 1),
     user_verification INTEGER NOT NULL CHECK (user_verification = 1),
     recorded_at TEXT NOT NULL,
+    authorized_artifact_sha256 TEXT NOT NULL,
     row_binding_sha256 TEXT NOT NULL UNIQUE,
     UNIQUE (challenge_id),
     UNIQUE (consult_attempt_id)
 ) STRICT;
 ```
 
-`row_binding_sha256` covers the artifact's identity fields plus every
-column declared above it, in declaration order — the seal is declared
-last so "everything above" is total. `recorded_at` must equal
+`authorized_artifact_sha256` is the digest `VerifiedOwnerRead` carried
+and mint recomputed from the artifact it stored; persisting it lets
+consumption re-derive the same correspondence without a verifier
+present. `row_binding_sha256` covers the artifact's identity fields
+plus every column declared above it, in declaration order — the seal is
+declared last so "everything above" is total. `recorded_at` must equal
 `artifact.created_at`, following R11's own rule (`def
 revalidate_r11_exemption_for_consumption`, `:307`).
 
@@ -328,9 +363,10 @@ updater of the v2 artifact table — itself requires the receipt whenever
 `def _highest_risk_ceremony_required` (`:2270`) is True: inside its
 `BEGIN IMMEDIATE` (`:3026`), after the artifact CAS, before any caller
 callback. Exactly one receipt row, `row_binding_sha256` recomputed,
-`recorded_at == artifact.created_at`, and its artifact, attempt,
-response hash and work class joined to the grant. Absent, ambiguous, or
-mismatched refuses and rolls back. The seat needs a staging reader to
+`authorized_artifact_sha256` re-derived from the artifact row being
+consumed, `recorded_at == artifact.created_at`, and its artifact,
+attempt, response hash and work class joined to the grant. Absent,
+ambiguous, or mismatched refuses and rolls back. The seat needs a staging reader to
 do this and refuses `owner_read_staging_unavailable` without one.
 
 **Stated residual, per §1 condition 2:** consumption trusts a
@@ -413,7 +449,8 @@ every gate round including when corrected from the gate's own numbers.
   rendered-text line list) — AMENDED for the display region.
 * **Canon L2769** (`validate_s7_voice_source_bundle(`) — AMENDED by
   cluster 2a; 2b contributes the `VerifiedOwnerRead` requirement.
-* **A new ruling** if the owner ratifies §1.
+* **RULING B** is recorded in the parent design's ruling list; canon
+  gains it when this cluster's amendments are applied.
 
 ---
 
