@@ -88,7 +88,7 @@ Maez's words. This ratifies the D13/D14 amendments below.
 
 **RULING O (owner-read scope), 2026-08-14.** `covenant_touching_change`
 and `autonomy_lowering_or_protection_reducing` require the founder-tap
-owner-read record (mechanism in cluster 2b §5-§7). `self_modification` and soul-write classes
+owner-read record (mechanism in cluster 2b §3-§6). `self_modification` and soul-write classes
 proceed on marker + machine attestation.
 
 **Pending owner act:** ratification of the exact template bytes (§8) —
@@ -358,7 +358,7 @@ in evidence bind: store UUID, generation, row id, content hash, row
 phase, consultation id, attempt id. NO code path — logs, traces,
 exceptions, health routes, ceremony responses, receipts — may carry
 private bytes or derived text; they carry hashes. The owner-display
-projection (cluster 2b §6b) shows Maez's RESPONSE (which is not the diary), never
+projection (cluster 2b §4) shows Maez's RESPONSE (which is not the diary), never
 snapshot evidence bytes. Cross-database ordering: private reads happen
 first and their (uuid, generation, row, hash) tuples are inside the
 staging row's seal; at replay the same tuples must re-resolve — a
@@ -402,7 +402,7 @@ defined by its constructor, not by prose.
 | `assistant_text_sha256` | `normalized_assistant_text.encode("utf-8")` where normalized = the client's post-strip content (`_strip_special_tokens` applied), i.e. exactly the string handed back to the producer. `strip_version` names the strip. |
 
 **The parser/display/replay invariant.** The marker parser runs on
-`normalized_assistant_text`; the owner-display bytes (cluster 2b §6b) ARE that
+`normalized_assistant_text`; the owner-display bytes (cluster 2b §4) ARE that
 same string; Gate A/B recompute `assistant_text_sha256` from the staged
 copy of it. One string, three consumers, one hash — so "what was
 parsed", "what the owner read", and "what is replayed" cannot diverge.
@@ -542,7 +542,8 @@ transaction, and no other. Refusal persistence is the caller's act
 | A12 | prompt-integrity evidence recomputes (D11 scans) | `prompt_integrity_block` |
 | A13 | owner-read, RULING-O classes only — see below | `owner_read_required` |
 
-**A13 — mechanism owned by cluster 2b §6; the paragraph below states
+**A13 — mechanism owned by cluster 2b §5 (one canonical function
+returning `VerifiedOwnerRead`); the paragraph below states
 the requirement, 2b states how it is held.** The validator takes
 `verified_assertion: S7VerifiedAssertion` — the verifier's own return
 value, in scope because D16 runs after verification — carrying `ok`,
@@ -586,7 +587,7 @@ site exists.
 were written before the structures they name were checked in code, and
 two of them were wrong. Its replacement is
 `docs/superpowers/specs/2026-08-14-cluster2b-owner-read-authority-design.md`,
-which carries the verified ground and the three constructions. What
+which carries the verified ground and the reduced construction. What
 this document said, and what the tree says, recorded so no later reader
 restores the error:
 
@@ -918,8 +919,8 @@ canon — one source of truth, permanently.
 >   here);
 > - NEW: for RULING-O classes, `rendered.maez_response_sha256` equals
 >   both the hash recomputed over the delimited display bytes and
->   `result.assistant_text_sha256` (mechanism in cluster 2b §6c, joins
->   A13.9 and A13.10); null == null for all other classes;
+>   `result.assistant_text_sha256` (mechanism in cluster 2b §5, inside the
+>   single canonical owner-read function); null == null for all other classes;
 > - AMENDED (canon L2936-2954, the explicit hash-routing block).
 >   Replacement bytes: the block stands as written EXCEPT the line
 >   `semantic_reader_attempt_hash -> canonical_hash(
@@ -932,7 +933,7 @@ canon — one source of truth, permanently.
 >   display region)`. The third line named `binding.maez_response_sha256`
 >   in an earlier revision; `S7AuthorizationArtifactBinding` does not
 >   exist in code and is KEPT-VERBATIM in canon, so the routing target
->   is cluster 2b §5's sealed owner-read evidence row;
+>   is cluster 2b §5's owner-read receipt row;
 > - KEPT-VERBATIM (canon L2955-2958, the closing paragraph in full including its final sentence: the same
 >   validator serves tests and finish-time recheck; tests may fake Maez
 >   transport at the producer port but may not bypass this validator
@@ -944,7 +945,7 @@ and canon's specified version (canon L1664-1675) carries no row hash —
 so there is nothing to amend and no seal for the fields to sit inside.
 Canon L1664-1675 is KEPT-VERBATIM. The durable carrier that lets
 consumption prove owner-read without re-reading the challenge plane is
-the sealed per-artifact evidence table designed in cluster 2b §5,
+the per-artifact owner-read receipt designed in cluster 2b §5,
 written inside the mint transaction and re-derived inside the
 consuming transaction — the R11 evidence shape applied to RULING O.
 
@@ -983,7 +984,7 @@ classes); the rendered text gains an exact line for the response hash.
 > together, and an earlier revision of this paragraph said they did.
 > They act on two different SQLite files: the consultation staging
 > family in canon D9's state file, the artifact plane in the S7.1
-> ceremony database (cluster 2b §1 V9). One-use does not depend on that
+> ceremony database (cluster 2b §7). One-use does not depend on that
 > transaction, because **both guards live at consumption**, one per
 > plane: the `completed → consumed` CAS admits one consumption per
 > attempt, and the artifact's own CAS admits one grant per artifact. An
