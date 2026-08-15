@@ -34,12 +34,17 @@ all other staging INSERT-only). **Cluster 1 (attempt schema + D15
 reconciliation) is FROZEN — gate PASSED at facbaee after five rounds
 (15→9→3→2→1→0 findings), with live SQLite witnesses on both lanes for
 the retry ceiling, the timestamp checks, and the not_asked exclusion.
-Cluster 2 SPLIT (§7): 2a (gate replay) is WRITTEN and awaits re-gate;
-2b (owner-read authority) has its own design pass at
-`docs/superpowers/specs/2026-08-14-cluster2b-owner-read-authority-design.md`,
-which supersedes §7b and withdraws the artifact-binding amendment.
-Cluster 3 (attested-result byte constructors) is WRITTEN and awaits
-its gate.**
+Cluster 2 SPLIT (§7): 2a (gate replay) is WRITTEN and awaits re-gate.
+2b (owner-read authority) is **CONTRACT FROZEN 2026-08-15** at
+`docs/superpowers/specs/2026-08-14-cluster2b-owner-read-authority-design.md`
+after nine passes and seven gate rounds (13→9→7→8→4→3→4, all verified,
+all upheld) — the contract frozen, the wiring deliberately left to
+implementation and its tests, and the gate's next reading is CODE. It
+supersedes §7b, withdraws the artifact-binding amendment, and adds
+RULING B above. Its blocker is not its own design: `CovenantCeremonyEvidence`
+has no honest producer, so RULING-O classes stay DISABLED and no
+witness is possible until that producer is built. Cluster 3
+(attested-result byte constructors) is WRITTEN and awaits its gate.**
 
 ---
 

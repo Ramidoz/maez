@@ -27,6 +27,63 @@ fixed input from here, not a proposal.
 
 ---
 
+## STATUS, 2026-08-15: CONTRACT FROZEN · WIRING OPEN · IMPLEMENTATION ABSENT · RULING-O DISABLED
+
+Seven gate rounds: 13 → 9 → 7 → 8 → 4 → 3 → 4 findings, every one
+verified, every one upheld. It did not converge to zero, and the owner
+and both lanes agreed to stop rather than keep going, because **the
+kind of finding changed and the count stopped meaning what it meant at
+the start.**
+
+Rounds 1-4 found real holes: a signature that covered a random number
+instead of the text, a check any consumer could decline, a proof
+separable from the artifact it authorized. Rounds 5-7 found almost
+entirely *propagation* — a structural fix landing in one section while
+three other sections still described the arrangement it replaced. The
+core has not been successfully attacked in four rounds: Construction 4
+(§3), the display region (§4), and RULING B (§1) all survived every
+round they were exposed to.
+
+That pattern has a cause. Cluster 1 froze at zero because it is a
+schema and a state machine, and prose can pin those completely. This
+cluster is a control-flow change across three call sites, and prose
+cannot pin *which function hands which value to which other function*
+without every edit rippling. Code and tests settle that in an
+afternoon; another five document rounds would not.
+
+So the freeze is **split**, and the split is the point:
+
+**FROZEN — do not reopen without a new gate round:**
+
+* RULING B, the trust boundary, and its three named consequences (§1).
+* The five equalities the organ exists to hold (§2).
+* Construction 4: the challenge bytes ARE the commitment (§3).
+* The byte-exact display region and its `__post_init__` enforcement (§4).
+* The ownership decision: one canonical function owns row lookup,
+  commitment reproduction, and verification as a single act (§5).
+* The receipt's shape, its atomicity with the artifact, and mandatory
+  revalidation in the sole SQL updater (§5, §6).
+* The scoping: RULING-O classes only; every other path unchanged.
+
+**OPEN — to be settled by implementation and its tests, not by further
+prose rounds:** exact signatures, parameter threading, the precise
+convergence contract back into `authorize_finish`, serialization
+details, and the ordering of internal steps beyond the two the frozen
+sections fix (commitment before verification; receipt insert atomic
+with the artifact).
+
+**The gate's next reading is CODE, not this document.** Findings against
+the frozen list above are blocking; findings against the open list are
+implementation review, which is where they belong.
+
+Still true and unchanged: nothing is implemented, and both RULING-O
+classes remain unauthorizable — not by this design's choice but because
+`CovenantCeremonyEvidence` has no honest producer (§7, §10 D1). That
+producer is the next real work, and no witness of this organ is
+possible before it exists.
+
+---
+
 ## §1 The trust boundary — RATIFIED BY THE OWNER, 2026-08-15
 
 Rounds 3 and 4 turned on an actor with raw write and delete access to
@@ -533,9 +590,10 @@ Neither lane would accept "witness owed" as a terminal state — that is
 merged-is-activated in a new costume. Nor would either implement
 against a moving contract. So:
 
-1. **Owner ratifies or amends §1.** Nothing freezes before this.
-2. Freeze this reduced contract as **DESIGN FROZEN — IMPLEMENTATION
-   ABSENT — RULING-O DISABLED**.
+1. ~~**Owner ratifies or amends §1.**~~ DONE 2026-08-15 — RULING B.
+2. ~~Freeze the contract.~~ DONE 2026-08-15 — see the STATUS block
+   above, which freezes the contract and leaves the wiring open on
+   purpose.
 3. **Build the honest `CovenantCeremonyEvidence` producer and witness
    it independently.** It is a real, separate gap, and it should land
    before shared challenge behaviour changes.
