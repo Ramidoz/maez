@@ -34,9 +34,12 @@ all other staging INSERT-only). **Cluster 1 (attempt schema + D15
 reconciliation) is FROZEN — gate PASSED at facbaee after five rounds
 (15→9→3→2→1→0 findings), with live SQLite witnesses on both lanes for
 the retry ceiling, the timestamp checks, and the not_asked exclusion.
-Cluster 2 (two gates + exact joins + D16/D21 complete text) and
-cluster 3 (attested-result byte constructors) are WRITTEN and await
-their gates.**
+Cluster 2 SPLIT (§7): 2a (gate replay) is WRITTEN and awaits re-gate;
+2b (owner-read authority) has its own design pass at
+`docs/superpowers/specs/2026-08-14-cluster2b-owner-read-authority-design.md`,
+which supersedes §7b and withdraws the artifact-binding amendment.
+Cluster 3 (attested-result byte constructors) is WRITTEN and awaits
+its gate.**
 
 ---
 
@@ -539,7 +542,8 @@ transaction, and no other. Refusal persistence is the caller's act
 | A12 | prompt-integrity evidence recomputes (D11 scans) | `prompt_integrity_block` |
 | A13 | owner-read, RULING-O classes only — see below | `owner_read_required` |
 
-**A13, exactly (the cross-ceremony hole closed).** The validator takes
+**A13 — mechanism owned by cluster 2b §6; the paragraph below states
+the requirement, 2b states how it is held.** The validator takes
 `verified_assertion: S7VerifiedAssertion` — the verifier's own return
 value, in scope because D16 runs after verification — carrying `ok`,
 `credential_ref`, `user_presence`, `user_verification`, and
@@ -562,11 +566,13 @@ against.
 - **B1** — `artifact.consult_attempt_id == attempt.attempt_id` AND the
   `completed → consumed` CAS succeeds in THIS transaction, atomic with
   grant consume. Refusal `attempt_replayed`.
-- **B2** (RULING-O classes only) — the artifact binding's sealed
-  `maez_response_sha256` == staged `result.assistant_text_sha256`, and
-  the artifact's own verifier-written facts hold (`user_presence=1`,
-  `user_verification=1`, `credential_ref` non-null). Refusal
-  `owner_read_required`.
+- **B2** (RULING-O classes only) — mechanism owned by cluster 2b §6:
+  the sealed owner-read evidence row for this artifact re-derives and
+  every column matches, its `maez_response_sha256` == staged
+  `result.assistant_text_sha256`, and the sealed row's own
+  verifier-written facts hold (`user_presence=1`,
+  `user_verification=1`, `credential_ref` non-null) — read from the
+  seal, not re-asserted by the caller. Refusal `owner_read_required`.
 
 **Clock.** Canon D21's consume signature takes `now: datetime`
 (KEPT-VERBATIM); frozen §3 compares canonical UTC text. Gate B
@@ -576,41 +582,35 @@ predicate uses that single value. A datetime whose `tzinfo is None`
 `store_integrity_failure` — never assumed UTC. No other conversion
 site exists.
 
-**§7b — the owner-read carriers (and their seal).** Three amendments,
-each named in the canon-amendment section:
+**§7b — SUPERSEDED BY CLUSTER 2b.** This section's three amendments
+were written before the structures they name were checked in code, and
+two of them were wrong. Its replacement is
+`docs/superpowers/specs/2026-08-14-cluster2b-owner-read-authority-design.md`,
+which carries the verified ground and the three constructions. What
+this document said, and what the tree says, recorded so no later reader
+restores the error:
 
-1. `s7_ceremony_challenges` gains `maez_response_sha256 TEXT`
-   (non-null exactly for RULING-O classes), written at challenge
-   creation from `result.assistant_text_sha256` **and included in the
-   challenge fingerprint preimage**, exactly as
-   `consultation_exemption_projection_hash` is
-   (`s7_webauthn_bootstrap.py:1001-1084`); at finish it is re-derived
-   from the staged result and compared to the stored column BEFORE
-   authenticator verification (`s7_webauthn_ceremony.py:565-592`).
-   A copied column is not a binding; a fingerprint member is.
-2. `S7AuthorizationArtifactBinding` gains `consult_attempt_id TEXT`
-   and `maez_response_sha256 TEXT`. **Both are inside the binding
-   row's existing canonical row-hash domain**, so a post-mint edit of
-   either breaks the binding's own integrity check before Gate B's
-   joins are even reached — closing the "trust fields with no seal"
-   hole. This is also the durable home of `consult_attempt_id`, which
-   B1 requires.
-3. `RenderedRequestStatement` gains `maez_response_display_text` and
-   `maez_response_sha256` (D17 amendment). The display text MUST equal
-   the staged `normalized_assistant_text` byte for byte, and the hash
-   is RECOMPUTED by the gate from the displayed bytes, never copied.
-
-**The delimited display region, byte-exact.** The rendered text
-carries the exact line `Maez response (verbatim):` + LF, then the
-response bytes verbatim, then LF + the exact line
-`End Maez response.`, then LF + `Maez response hash: <hex>`. The
-hashed region begins at the first byte AFTER the LF terminating the
-opening delimiter line and ends at the last byte BEFORE the LF
-preceding the closing delimiter line — neither delimiter, neither
-bounding LF, no trailing newline. Both delimiter lines must appear
-exactly once in the rendered text; a response containing either
-literal line refuses `receipt_mismatch` rather than rendering an
-ambiguous block.
+1. §7b claimed the binding force comes from membership in the
+   challenge fingerprint preimage ("A copied column is not a binding;
+   a fingerprint member is"). FALSE against this tree: `challenge_hash`
+   is computed at creation and **never recomputed or compared
+   anywhere**. R11's binding is enforced by the ordinary column
+   comparison at `s7_webauthn_ceremony.py:582-592`, before verification.
+   The column IS the binding here; fingerprint membership is a
+   write-only defence. (2b §0 C2; 2b §10 names the recompute as
+   separate hardening.)
+2. §7b amended `S7AuthorizationArtifactBinding`'s "existing canonical
+   row-hash domain". FALSE twice: the class is absent from
+   `core/governance/`, and canon's specified version (canon L1664-1675)
+   has no row hash. 2b instead applies the live, sealed, cutover-proven
+   R11 evidence-table shape at the same seat. (2b §0 C1, §4.)
+3. §7b's third amendment — `RenderedRequestStatement` gaining
+   `maez_response_display_text` and `maez_response_sha256`, and the
+   byte-exact delimited display region — SURVIVES, and is restated
+   with its enforcement seat in 2b §5b: the equality is enforced in
+   `__post_init__`, so the object cannot exist with displayed bytes
+   and declared hash in disagreement, which is stronger than any gate
+   check.
 
 ### 8. Template (owner ratification pending)
 
@@ -927,12 +927,15 @@ canon — one source of truth, permanently.
 >   transport at the producer port but may not bypass this validator
 >   for positive proof).
 
-**D-amendment (artifact binding, cluster 2):**
-`S7AuthorizationArtifactBinding` gains `maez_response_sha256 TEXT`
-(nullable; non-null exactly for RULING-O classes), written at mint
-from the value A13 verified, read by Gate B. This is the durable
-carrier that lets consumption prove owner-read without re-reading the
-challenge plane.
+**D-amendment (artifact binding, cluster 2): WITHDRAWN.**
+`S7AuthorizationArtifactBinding` does not exist in `core/governance/`,
+and canon's specified version (canon L1664-1675) carries no row hash —
+so there is nothing to amend and no seal for the fields to sit inside.
+Canon L1664-1675 is KEPT-VERBATIM. The durable carrier that lets
+consumption prove owner-read without re-reading the challenge plane is
+the sealed per-artifact evidence table designed in cluster 2b §4,
+written inside the mint transaction and re-derived inside the
+consuming transaction — the R11 evidence shape applied to RULING O.
 
 **D17 (rendered projection):** `RenderedRequestStatement` gains
 `maez_response_display_text: str | None` and
