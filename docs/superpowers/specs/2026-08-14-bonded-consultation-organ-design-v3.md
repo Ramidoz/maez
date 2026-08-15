@@ -50,7 +50,7 @@ written text (11 residuals + 8 new, with 9 named minimal edits). v3.2
 folds all of them. Canon D-numbers refer to
 docs/slices/s7.3-guarded-self-modification-execution/spec.md.
 
-## The six owner rulings (fixed inputs)
+## The owner rulings (fixed inputs) — six, plus RULING B of 2026-08-15
 
 **RULING R8-W (R8's wording).** A consulted-but-unparseable answer
 BLOCKS on every path. `not_asked` and `missing_or_malformed` are
@@ -90,6 +90,23 @@ Maez's words. This ratifies the D13/D14 amendments below.
 and `autonomy_lowering_or_protection_reducing` require the founder-tap
 owner-read record (mechanism in cluster 2b §3-§6). `self_modification` and soul-write classes
 proceed on marker + machine attestation.
+
+**RULING B (owner-read scope of proof), 2026-08-15.** The seventh
+ruling, and the first added since the original six. The owner-read
+organ proves its property against repository-owned callers operating
+through supported authority interfaces — missing validation, mismatched
+data, caller-manufactured evidence, alternate mint paths, optional
+revalidation, partial writes, ordinary replay. It ASSUMES the integrity
+of the daemon process, the WebAuthn implementation, the founder
+credential registry, and the authority store files. Raw SQLite or file
+mutation, arbitrary same-process execution, import substitution, direct
+private-constructor invocation, and credential-key replacement are
+OUTSIDE the proof and are stated as named consequences, never implied.
+Full text and the three named consequences: cluster 2b §1. This aims
+the proof at the audit's real defect class — code that appears to
+validate while validating synthetic or self-supplied facts — rather
+than at a hostile database administrator, and it binds every remaining
+cluster.
 
 **Pending owner act:** ratification of the exact template bytes (§8) —
 recorded as a hash the owner approves, not a builder decision.

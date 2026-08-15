@@ -25,7 +25,7 @@ ruling, not a builder's decision, and it belongs beside the other six.
 
 ---
 
-## §1 The trust boundary — PROPOSED, owner ratification pending
+## §1 The trust boundary — RATIFIED BY THE OWNER, 2026-08-15
 
 Rounds 3 and 4 turned on an actor with raw write and delete access to
 the ceremony SQLite file: resetting `consumed_at`, deleting the
@@ -41,7 +41,7 @@ lost" is a feeling, not a line.
 
 The defensible line is stated by interface, not by adversary:
 
-> **Proposed RULING (owner-read scope of proof).** The owner-read organ
+> **RULING B (owner-read scope of proof), 2026-08-15.** The owner-read organ
 > proves its property against repository-owned callers operating
 > through supported authority interfaces: missing validation,
 > mismatched challenge/result/statement data, caller-manufactured
@@ -83,7 +83,14 @@ every sentence in this document:
 Tests for all three are written and kept — as **boundary witnesses**
 that document where the proof ends, never as open defects (§9).
 
-Until the owner ratifies or amends this, cluster 2b is not frozen.
+**Ratification, 2026-08-15.** The owner ruled the first line: protect
+against repository-owned code paths going wrong, and assume the store
+files are not hand-edited. The owner declined to schedule the
+deletion-resistant evidence plane as an immediate follow-on; it stays
+in §10 as named work with no date, and the consequence in §1's list
+stands open and stated rather than quietly carried. RULING B now sits
+beside the six rulings in the parent design and is a fixed input to
+every remaining cluster — it is not re-litigated by a later pass.
 
 ---
 
