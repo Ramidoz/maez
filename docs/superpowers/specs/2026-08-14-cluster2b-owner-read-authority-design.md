@@ -1,12 +1,22 @@
-# Cluster 2b — owner-read authority. Design pass 1.
+# Cluster 2b — owner-read authority. Design pass 2.
 
-2026-08-14. Written after reading code, before writing any assertion
-about it. Every structural claim below carries a file:line I opened in
-this session. Where the cluster 2b handoff or design v3.2 §7b asserted
-something the tree does not support, the correction is stated in §0
-rather than quietly repaired — the four dead gate rounds were all
-unverified assertions, and an unverified *correction* would be the
-fifth.
+2026-08-14. Pass 1 was gated and FAILED with 13 findings (3 CRITICAL,
+5 HIGH, 5 MEDIUM). All 13 were independently re-verified against the
+tree before this rewrite; all 13 stand. The document is rewritten
+whole, not patched — three patch rounds in cluster 2 produced three new
+inter-passage contradictions, and this pass changes load-bearing
+structure.
+
+**One finding is answered by rejecting the gate's own remedy.** Gate
+finding 1 proved that the owner-read property is *conditional on an
+untampered challenge row*, and prescribed hardening H1 (recompute
+`challenge_hash` at finish). H1 is insufficient: `_fingerprint` is an
+unkeyed sha256 (`s7_webauthn_bootstrap.py:1523-1524`), so an actor able
+to rewrite the row can rewrite the fingerprint with it. Pass 2 answers
+the finding at its root instead — **Construction 4**, a challenge whose
+bytes ARE the commitment, so the founder key signs the association
+rather than a random number that a database row merely sits beside.
+That is what "the tap must be over those bytes" actually requires.
 
 Companion documents: design v3.2
 (`docs/superpowers/specs/2026-08-14-bonded-consultation-organ-design-v3.md`),
@@ -15,78 +25,80 @@ canon (`docs/slices/s7.3-guarded-self-modification-execution/spec.md`).
 
 ---
 
-## §0 Three corrections to the inherited ground truth
+## §0 Corrections to the inherited ground truth
 
-**C1 — "there is no seal for new fields to sit inside" is FALSE.**
-The handoff correctly found that `S7AuthorizationArtifactBinding` is
-not a class in `core/governance/` (re-verified: repo-wide grep returns
-only canon and review documents, never Python). It then inferred that
-no sealed durable binding exists at that seat. It does. Two, both live:
+**C1 — "there is no seal for new fields to sit inside" is FALSE, and
+the precedent is exactly one table, not two.** The handoff correctly
+found that `S7AuthorizationArtifactBinding` is not a class in
+`core/governance/` (re-verified: repo-wide grep returns only canon and
+review documents, never Python). It then inferred that no sealed
+durable binding exists at that seat. One does:
 
-* `s7_consultation_exemption_evidence_v1` — a per-artifact side table
-  (DDL `s7_guarded_execution.py:73-91`) carrying
-  `artifact_binding_sha256 TEXT NOT NULL UNIQUE` (`:88`), computed at
-  insert as `canonical_hash(_r11_artifact_projection(artifact, ...))`
-  (`:275-279`; projection at `:212-240`), guarded by a DDL-contract
-  fingerprint compared before every insert and every use
-  (`_r11_exemption_evidence_contract` `:94-119`,
-  `_expected_r11_exemption_evidence_contract` `:121-127`), and
-  **re-derived and compared column-by-column inside the consuming
-  transaction on a descriptor-verified held connection**
-  (`revalidate_r11_exemption_for_consumption`, `:307-455`).
-* `s7_voice_bundle_uses` (`:2796-2807`) whose `bundle_use_hash` is
-  recomputed in `S7VoiceBundleUse.__post_init__` and raises on drift
-  (`:2760-2766`, domain at `:524-536`) — so a tampered row cannot be
-  loaded into an object at all.
+`s7_consultation_exemption_evidence_v1` — a per-artifact side table
+(DDL `s7_guarded_execution.py:73-91`) carrying `artifact_binding_sha256
+TEXT NOT NULL UNIQUE` (`:88`), computed at insert as
+`canonical_hash(_r11_artifact_projection(artifact, ...))` (`:275-279`;
+projection at `:212-240`), guarded by a DDL-contract fingerprint
+compared before every insert and every use
+(`_r11_exemption_evidence_contract` `:94-119`,
+`_expected_r11_exemption_evidence_contract` `:121-127`), and
+**re-derived and compared column-by-column inside the consuming
+transaction on a descriptor-verified held connection**
+(`revalidate_r11_exemption_for_consumption`, `:307-455`).
 
-Construction 2 is therefore not an invention. It is the R11 evidence
-shape applied to a second ruling, at the same seat, in the same
-transaction.
+Pass 1 also cited `s7_voice_bundle_uses` as a second sealed precedent.
+**That was overstated** (gate finding 9): `_voice_bundle_use_hash`
+covers only `request_id`, `source_ref_hash`, `consultation_id`,
+`used_at` (`:524-536`) and excludes `artifact_id`,
+`reservation_token_hash`, `reservation_state`, `reserved_at`,
+`consumed_at` (schema `:2796-2807`). It protects four immutable
+provenance fields; it is not a seal over per-artifact reservation
+state. The R11 precedent stands on its own.
 
 **C2 — "A copied column is not a binding; a fingerprint member is" is
-FALSE against this tree.** Design v3.2 §7b(1) rests the owner-read
-binding on membership in the challenge fingerprint preimage. The
-fingerprint (`challenge_hash`) is **write-only**: it is computed at
-challenge creation (`s7_webauthn_bootstrap.py:942`, `:1034` — the
-authorize variant folds `consultation_exemption_projection_hash` into
-`d12_parts` at `:1022-1033`), stored (`:963-972`, `:1056-1069`), and
-SELECTed back (`:1127`, `:1163`, `:1197`) — and **never recomputed or
-compared anywhere**. Repo-wide grep for `challenge_hash` outside the
-dormant v1 stack in `operator_user_boundary.py` returns only those
-sites plus one test asserting two challenges differ
-(`tests/test_s7_1_ceremony_service.py:1936`).
+FALSE against this tree, and the correction pass 1 drew from it was
+also wrong.** The census is right: `challenge_hash` is computed at
+creation (`s7_webauthn_bootstrap.py:942`, `:1034`; the authorize
+variant folds `consultation_exemption_projection_hash` into `d12_parts`
+at `:1022-1033`), stored (`:963-972`, `:1056-1069`), SELECTed back
+(`:1127`, `:1163`, `:1197`), and **never recomputed or compared
+anywhere** — repo-wide grep returns only those sites plus one test
+asserting two challenges differ
+(`tests/test_s7_1_ceremony_service.py:1936`). What enforces R11's
+binding at finish is the ordinary column comparison
+(`s7_webauthn_ceremony.py:582-592`) preceded by the nine-column D12
+comparison (`:558-563`, defined `:1478-1499`), both before the verifier
+runs (`:814`).
 
-What actually enforces R11's binding at finish is the ordinary column
-comparison: `challenge["consultation_exemption_projection_hash"] !=
-presented_exemption_projection_hash` → refuse
-(`s7_webauthn_ceremony.py:582-592`), preceded by the nine-column D12
-comparison in `_challenge_matches_rendered_d12` (`:558-563`, defined
-`:1478-1499`). Both run **before** the verifier is called (`:814`) —
-that part of §7b(1) is true and is the load-bearing part.
+Pass 1 concluded "the column comparison IS the binding." **A column
+comparison is only as strong as the row it reads.** The authenticator
+signs `challenge_b64` alone (`s7_webauthn_verifier.py:126-134`), which
+is independent random bytes (`s7_webauthn_bootstrap.py:1018-1019`), and
+the D12 columns are ordinary mutable columns in an ordinary table
+(`:102-127`). The code says so itself, honestly, in its own docstring:
+*"The browser signs `challenge_b64`. The server's durable challenge row
+binds those random bytes to D12's rendered-statement fields"*
+(`s7_webauthn_ceremony.py:1511-1515`). The row is the binding, and
+nothing covers the row. §4 (Construction 4) replaces that condition
+with a signed one.
 
-So the correct sentence is inverted: *in this codebase the column
-comparison IS the binding, and fingerprint membership is a
-write-only defence that becomes load-bearing only if a recompute is
-added.* §10 names that recompute as separately-witnessed hardening H1;
-2b does not depend on it.
-
-**C3 — the response bytes are already transitively bound to the tap,
-and that changes what 2b must build.** `RenderedRequestStatement`
-self-validates `rendered_text_hash == rendered_text_hash(rendered_text)`
-in `__post_init__` (`operator_user_boundary.py:4861-4862`, function at
+**C3 — the response bytes are transitively bound to the tap ONLY
+through an untampered row.** `RenderedRequestStatement` self-validates
+`rendered_text_hash == rendered_text_hash(rendered_text)` in
+`__post_init__` (`operator_user_boundary.py:4861-4862`, function at
 `:4920-4921`), and `rendered_text_hash` is one of the nine D12 columns
-compared at finish (`s7_webauthn_ceremony.py:1487`). So any bytes
-inside the rendered text are already committed to by the challenge row
-the authenticator signs against. The new `maez_response_sha256` carrier
-does not create that binding — it makes it **machine-checkable without
-parsing prose**, and joins it to the staging plane. Claiming otherwise
-would be the same overstatement that killed rounds 3 and 4.
+compared at finish (`s7_webauthn_ceremony.py:1487`). Pass 1 called this
+"already committed to by the challenge row the authenticator signs
+against" — true of the row, false of the signature. Under Construction
+4 the commitment moves into the signed bytes and the sentence becomes
+true without qualification for RULING-O classes.
 
 ---
 
 ## §1 Verified ground truth
 
-Each line was read in this session at the cited location.
+Each line re-opened for this pass; citations corrected where the gate
+found them off.
 
 **V1. The verifier returns a plain dict with no challenge id.**
 `S7ProductionWebAuthnVerifier.verify_authentication_response`
@@ -94,24 +106,33 @@ Each line was read in this session at the cited location.
 `{ok, credential_ref, sign_count, user_presence, user_verification,
 library_name, library_version}` (`:143-151`). Confirms the handoff.
 
-**V2. But the verifier IS handed the challenge row, and the library
-binds the signature to that row's nonce.** The method takes
-`challenge: dict[str, Any]` and passes
+**V2. The verifier is handed the challenge row, and the library binds
+the signature to that row's nonce.** The method takes `challenge:
+dict[str, Any]` and passes
 `expected_challenge=_b64url_decode(str(challenge["challenge_b64"]))`
-into the library (`:126-134`). A successful return therefore already
-means *the authenticator signed the nonce that was in the dict it was
-given* — a cryptographic fact the current return value simply throws
-away. This is new relative to the handoff and it is what makes
-construction 1 cheap and honest rather than ceremonial.
+into the library (`:126-134`). A successful return already means *the
+authenticator signed the nonce in the dict it was given* — a fact the
+current return value discards.
+
+**V2b. The production verifier class is injectable.** It is a frozen
+dataclass whose fields are `import_module: ImportModule =
+importlib.import_module` and `package_name: str = "webauthn"`
+(`s7_webauthn_verifier.py:25-30`), and tests construct the **exact
+class** with a fake module whose authentication method returns success
+(`tests/test_s7_1_verifier_adapter.py:253-274`). Exact-type checking
+therefore excludes subclasses and duck types but **not** a
+fake-library instance of the real class (gate finding 4). §3 pins the
+loader accordingly.
 
 **V3. `authorize_finish`'s exact order** (`s7_webauthn_ceremony.py:514-900`):
 
 1. verifier dependency check (`:533-535`)
 2. `challenge_id`, `credential_ref`, `authentication_response` parsed
    from caller-supplied request JSON (`:536-545`) — confirms the handoff
-3. challenge row fetched by `(challenge_id, session_binding,
-   internal_channel_binding, consumed_at IS NULL, invalidated_at IS
-   NULL, expires_at > now)` (`:546-556`; SQL at
+3. challenge row fetched by `(challenge_id, challenge_kind=
+   'authorize_guarded_request', session_binding_hash,
+   internal_channel_binding_hash, consumed_at IS NULL, invalidated_at
+   IS NULL, expires_at > now)` (`:546-556`; SQL at
    `s7_webauthn_bootstrap.py:1115-1147`)
 4. `_challenge_matches_rendered_d12` — nine columns (`:558-563`)
 5. R11 projection hash re-derived and compared (`:565-592`)
@@ -119,22 +140,30 @@ construction 1 cheap and honest rather than ceremonial.
    closed-set checked (`:595-780`)
 7. `authorization_voice_seat_recheck`, aggregation recheck (`:780-796`)
 8. **verifier called** (`:808-820`)
-9. ok / user_presence / user_verification / credential_ref equality
-   checks (`:822-846`)
-10. sign count advanced (`:854-859`), challenge consumed (`:861-866`)
-11. artifact minted via `mint_authorization_artifact` (`:868-900`;
+9. ok / user_presence / user_verification checks (`:822-842`);
+   `credential_ref = str(verified["credential_ref"])` and equality with
+   the caller's claim (`:844-849`); `credential_can_authorize` (`:850-855`)
+10. sign count advanced (`:856-860`), **challenge consumed** (`:861-866`)
+11. artifact constructed from the *verified* credential_ref (`:868-890`)
+    and minted via `mint_authorization_artifact` (`:891-900`;
     `s7_guarded_execution.py:3541-3608`)
 
-Consequence worth recording: **challenge-id substitution already fails
-closed.** Present row A's id with an assertion signed over row B's
-nonce and step 8 fails, because `expected_challenge` comes from row A.
-The "cross-ceremony hole" A13 was written to close is narrower than
-v3.2 states — *within `authorize_finish`*, `challenge` and `verified`
-share one lexical frame and cannot disagree. The hole is real only
-when a `verified_assertion` crosses a function boundary into a
-validator that fetches its own challenge row — which is exactly the
-D16 signature v3.2 proposes. Construction 1 exists to make that
-crossing safe, not to fix `authorize_finish`.
+Two consequences, both load-bearing below:
+
+*Challenge-id substitution already fails closed.* Present row A's id
+with an assertion signed over row B's nonce and step 8 fails, because
+`expected_challenge` comes from row A. The cross-ceremony hole A13 was
+written to close is real only when a `verified_assertion` crosses a
+function boundary into a validator that fetches its own challenge row —
+which is exactly the D16 signature v3.2 proposes.
+
+*A13 has exactly one lawful seat.* The challenge is consumed at step 10
+and the artifact does not exist until step 11. So A13 must run **after
+step 9 and before step 10**: after verification (it needs the
+assertion), before consumption (so it can require an unconsumed row),
+and before the artifact exists (so it cannot compare against artifact
+fields). Gate finding 5 caught pass 1 comparing against an artifact
+that does not yet exist; §6 fixes the comparison target.
 
 **V4. RULING-O's two classes are voice-seat classes**, so they route
 through the guarded mint: `VOICE_SEAT_WORK_CLASSES` =
@@ -145,16 +174,20 @@ autonomy_lowering_or_protection_reducing}`
 **V5. RULING-O's two classes are exactly the code's existing
 highest-risk set.** `_highest_risk_ceremony_required` returns True for
 `{covenant_touching_change, autonomy_lowering_or_protection_reducing}`
-and nothing else (`operator_user_boundary.py:2270-2275`). Owner-read
-lands beside an identically-shaped covenant gate at the same seat, not
-in new territory.
+and nothing else (`operator_user_boundary.py:2270-2275`). This
+predicate is already consulted inside the consume implementation
+(`:3002-3008` via `covenant_ceremony_satisfies_request`), which is why
+§6 can make B2 mandatory rather than caller-supplied.
 
-**V6. Those two classes are structurally unauthorizable today.**
-`covenant_ceremony_satisfies_request` refuses unless a
-`CovenantCeremonyEvidence` instance is presented (`:2278-2301`), and
-repo-wide grep finds **no non-test producer** of that class. This
-confirms the full-body audit §2. It is 2b's principal witness
-dependency (§9).
+**V6. No legitimate producer of `CovenantCeremonyEvidence` exists.**
+Repo-wide grep finds no non-test construction. Pass 1 called the two
+classes "structurally unauthorizable"; **that was overstated** (gate
+finding 11): the class is an ordinary frozen dataclass
+(`operator_user_boundary.py:2227-2237`) accepted directly from the
+caller at consume (`:2978`, `:3002-3008`). The honest claim: the code
+path can accept a caller-constructed value, but no honest producer
+exists, so **a truthful unmocked RULING-O witness is blocked** until
+one is built. That is 2b's principal witness dependency (§10).
 
 **V7. The voice-seat mint seat is one anchored transaction.**
 `S7GuardedStateStore.put_artifact_with_bundle_reservation`
@@ -166,39 +199,57 @@ inserting evidence in that same transaction
 (`mint_authorization_artifact:3568-3603`).
 
 **V8. The Gate-B seat is `consume_for_execution_on_connection`**
-(`operator_user_boundary.py:2966-3110`): descriptor-verified held RW
-connection (`:2983`), refuses a connection already in a transaction
-(`:2984-2985`), `BEGIN IMMEDIATE` (`:3025`), held-store activation
-re-verified inside the transaction (`:3026-3028`), one CAS `UPDATE …
-RETURNING` over the v2 artifact table with a twenty-predicate WHERE
-(`:3029-3072`), grant minted (`:3080-3094`), then
-`after_consume_before_commit(grant)` (`:3095-3099`), then commit.
-**Canon D21's `consume_artifact_for_execution` wrapper does not exist
-in code** — repo-wide grep finds the name only in canon. The live
-precedent for a ruling-scoped revalidation at this seat is the
-cutover's callback (`scripts/cuda_cutover.py:3369-3387`), the only
-production caller of `revalidate_r11_exemption_for_consumption`.
+(`operator_user_boundary.py:2966-3110`), with citations corrected per
+gate finding 12:
 
-**V9. The repo's own answer to "a plain dataclass anyone can construct
-proves nothing"** is a module-private token sentinel:
-`if _validator_token is not _VALIDATOR_TOKEN: raise
-ValueError("s7_validation_result_forged")` with
-`_token_verified` set inside the guarded constructor
-(`s7_guarded_execution.py:913-927`, sentinel at `:504`), checked at the
-mint seam (`:3428-3446`) and at the ceremony
-(`s7_webauthn_ceremony.py:718`) —
-carrying its own honest caveat in comment form: *"This token is an
-ordinary-caller guard, not a same-process security boundary"*
-(`:3424-3427`). Construction 1 copies this idiom **and its caveat**.
+* held-connection verification `:2982`;
+* refusal of a connection already in a transaction `:2983-2984`;
+* `BEGIN IMMEDIATE` `:3026`; held-store activation re-verified inside
+  the transaction `:3027-3029`;
+* one CAS `UPDATE … RETURNING` over the v2 artifact table `:3030-3072`;
+* grant minted `:3082-3096`;
+* **`after_consume_before_commit` is optional** — it defaults to `None`
+  (`:2979`) and runs only when supplied (`:3097-3100`); the public
+  store method forwards whatever the caller passes (`:3418-3447`), and
+  the live decision-pipeline caller supplies its own card-transition
+  callback (`core/decision/decision_pipeline.py:1578-1589`).
 
-**V10. Canon's `S7AuthorizationArtifactBinding` has no row hash.**
-Canon defines it with ten fields, none a digest of itself
-(canon L1664-1675); its store API is `…BindingStore.get(artifact_id,
-*, conn)` (canon L1898); and canon L1867-1872 states S7.3 persists
-`challenge_expires_at` on it and "binds it into artifact-binding
-replay". So v3.2's phrase "its existing canonical row-hash domain" was
-wrong twice over: the class is unbuilt, and the specified class has no
-such domain.
+Canon D21's `consume_artifact_for_execution` wrapper **does not exist
+in code** — repo-wide grep finds the name only in canon. The only
+production caller of `revalidate_r11_exemption_for_consumption` is the
+cutover's own callback (`scripts/cuda_cutover.py:3369-3387`) — which is
+precisely why pass 1's "attach B2 to the callback" was wrong (gate
+finding 2): a seat a caller can decline is not a gate.
+
+**V9. Two databases, not one.** The S7.1 ceremony store — challenges,
+credentials, authorization artifacts, voice bundle uses — is
+`memory/s7_1_webauthn/ceremony.sqlite3`
+(`s7_webauthn_bootstrap.py:38`, `:256`). The consultation staging
+family is pinned by design v3.2 §2 (canon D9) to
+`memory/s7_3_guarded_self_modification/state.sqlite3`, which no code
+creates yet. Pass 1 claimed the attempt CAS, the grant consume, and the
+owner-read revalidation are "one transaction by construction"; **they
+cannot be** (gate finding 3). §7 replaces that claim with an ordering
+law.
+
+**V10. The repo's own answer to "a plain dataclass anyone can construct
+proves nothing"** is a module-private token sentinel: `_VALIDATOR_TOKEN
+= object()` (`s7_guarded_execution.py:504`), `if _validator_token is
+not _VALIDATOR_TOKEN: raise ValueError("s7_validation_result_forged")`
+(`:913-916`), `_token_verified` set inside the guarded constructor
+(`:926`), checked at the mint seam (`:3428-3446`) and at the ceremony
+(`s7_webauthn_ceremony.py:718`) — carrying its own honest caveat: *"This
+token is an ordinary-caller guard, not a same-process security
+boundary"* (`:3424-3427`). Construction 1 copies the idiom and the
+caveat.
+
+**V11. Canon's `S7AuthorizationArtifactBinding` has no row hash.**
+Canon defines it with ten fields, none a digest of itself (canon
+L1664-1675); its store API is `…BindingStore.get(artifact_id, *, conn)`
+(canon L1898); canon L1867-1872 states S7.3 persists
+`challenge_expires_at` on it. v3.2's "existing canonical row-hash
+domain" was wrong twice: the class is unbuilt, and the specified class
+has no such domain.
 
 ---
 
@@ -209,33 +260,34 @@ For `covenant_touching_change` and
 consumed unless a founder-key assertion covered the exact bytes of
 Maez's answer that the owner read.
 
-Decomposed into links that code can hold, each with the strongest
-honest statement available:
-
 | # | Link | Held by | Strength |
 |---|---|---|---|
 | L1 | The staged bytes are the bytes Maez produced | `AttestedConsultationResult.assistant_text_sha256` over `normalized_assistant_text` (cluster 3) | in-process attestation, RULING 1 boundary |
-| L2 | The displayed bytes ARE the staged bytes | delimited display region inside `rendered_text`, hash recomputed in `__post_init__` | true-by-construction: the object cannot exist otherwise |
-| L3 | The rendered bytes are what the challenge commits to | `rendered_text_hash` is a D12 challenge column compared at finish (V3 step 4, C3) | already live and cutover-proven |
-| L4 | The authenticator signed *that* challenge | library verifies against `challenge["challenge_b64"]` (V2) | cryptographic |
-| L5 | The gate can check L2-L4 without parsing prose | `maez_response_sha256` as a challenge column + a carrier field | new, this cluster |
-| L6 | Consumption re-proves L1-L5 without a verifier present | sealed owner-read evidence row, re-derived inside the consuming transaction | R11 shape, live-proven |
+| L2 | The displayed bytes hash to the declared value | region hash enforced in `RenderedRequestStatement.__post_init__` AND recomputed by both gates | normal construction cannot violate it; gates recompute anyway |
+| L3 | The signed nonce commits to the rendered text hash and the response hash | Construction 4: `challenge_b64` IS the commitment | **cryptographic** — this is the link pass 1 lacked |
+| L4 | The authenticator signed that nonce | library verifies against `challenge["challenge_b64"]` (V2) | cryptographic |
+| L5 | The assertion the gate reads is the verifier's own, for that row | Construction 1: token carrier + nonce digest checked against the store | ordinary-caller guard + store check |
+| L6 | Minting records the association durably and immutably | Construction 2: sealed per-artifact evidence row in the mint transaction | R11 shape, live-proven |
+| L7 | Consumption re-proves L1-L6 with no verifier present | mandatory revalidation inside the consume implementation | §7 |
 
-The honest ceiling: L1 and L5's daemon-side joins are inside RULING 1's
-trusted boundary. Nothing here claims cryptographic proof against
-compromised daemon code, and no sentence in the build may say
-otherwise. What it does claim — and can hold — is that **no path
-mints or consumes RULING-O authority without a founder tap in a
-ceremony whose row commits to those exact response bytes**, and that
-any post-mint edit of the durable carriers fails an integrity check
-before any join runs.
+The honest ceiling, unchanged: L1, L5, L6 and L7 sit inside RULING 1's
+trusted boundary; nothing here claims proof against compromised daemon
+code. What changes in pass 2 is L3. With it, a database-level rewrite
+of the challenge row can no longer move the owner's tap from one set of
+bytes to another, because moving it requires a signature the attacker
+cannot produce. Without it — pass 1's design — it could, and the sealed
+evidence row would faithfully record the substituted association.
+
+Still not claimed, and must never be written as if it were: that the
+owner's *eyes* moved over the bytes. What is proven is that the tap
+occurred in a ceremony whose signed challenge commits to them.
 
 ---
 
 ## §3 Construction 1 — `S7VerifiedAssertion`
 
-**Seat:** `core/governance/s7_webauthn_verifier.py` (the only module
-that may mint it).
+**Seat:** `core/governance/s7_webauthn_verifier.py` — the only module
+that may mint it.
 
 ```text
 @dataclass(frozen=True)
@@ -245,78 +297,147 @@ S7VerifiedAssertion(
     challenge_id: str             -- id of the row the verifier was handed
     challenge_b64_sha256: str     -- sha256 of the nonce actually verified
                                   -- against, i.e. of challenge["challenge_b64"]
-    credential_ref: str
+    credential_ref: str           -- as returned by the library
     sign_count: int
     user_presence: bool
     user_verification: bool
     library_name: str
     library_version: str | None
+    loader_is_production: bool    -- True only when this verifier's
+                                  -- import_module IS importlib.import_module
+                                  -- and package_name IS "webauthn"
 )
 ```
 
 **Constructor discipline.** Module-private `_ASSERTION_TOKEN` sentinel;
 `__init__` raises `s7_verified_assertion_forged` unless the caller
-passes it; only `S7ProductionWebAuthnVerifier`'s success path holds it.
-Identical idiom and identical honesty caveat as V9 — the token is an
+passes it. Same idiom and same honest caveat as V10 — an
 ordinary-caller guard, not a same-process security boundary.
 
 **Why `challenge_b64_sha256` is the load-bearing field, not the token.**
-The token answers *who constructed this*. The nonce hash answers a
+The token answers *who constructed this*. The nonce digest answers a
 question the store can check: A13 re-fetches the challenge row **by
 `assertion.challenge_id` and by no other key**, then requires
 `sha256(row["challenge_b64"]) == assertion.challenge_b64_sha256`. A
 forged carrier now needs a nonce digest matching a live, unconsumed,
-unexpired row — and if it had that row it would still need the
-authenticator's signature, which the library checked (V2). This
-converts "trust the carrier" into "check the carrier against the
-store", which is the difference between the two failed rounds and this
-one.
+unexpired authorization row — and holding that row still leaves the
+signature to produce, which the library checked. This converts "trust
+the carrier" into "check the carrier against the store."
 
-**Compatibility — no second door.** The existing dict-returning
+**`loader_is_production` — gate finding 4's fix.** Exact-type checking
+alone is insufficient: the production class publicly accepts an
+arbitrary `import_module` and `package_name` (V2b), and the repo's own
+tests construct it with a success-returning fake. The carrier therefore
+records whether the verification ran through the real loader, and the
+RULING-O branch requires `loader_is_production is True` **in addition
+to** `type(self.verifier) is S7ProductionWebAuthnVerifier`. A
+fake-library instance can still be constructed and still verify — it
+simply cannot mint RULING-O authority, and its refusal names why
+(`owner_read_verifier_not_production`).
+
+**Compatibility — no second door.** The dict-returning
 `verify_authentication_response` has exactly one production caller
 (`s7_webauthn_ceremony.py:808`) and ten definitions across six test
-modules (`test_s7_1_ceremony_service.py` ×3,
-`test_s7_1_daemon_internal_channel.py` ×2,
-`test_s7_1_verifier_adapter.py` ×2 — those two stub the library, not
-the verifier — plus `test_s7_1_dream_execution.py`,
-`test_s7_dialog_soulwrite_liveproof.py`, `test_decision_pipeline_s7.py`
-×1 each). Changing its return type would break the cutover-proven path
+modules. Changing its return type would break the cutover-proven path
 and every double, so:
 
 * add `verify_authorization_assertion(...) -> S7VerifiedAssertion | dict`
-  on the production verifier, performing the verification **once** and
-  returning the carrier on success / the existing error dict on failure;
+  performing the verification **once**, returning the carrier on
+  success and the existing error dict on failure;
 * re-express `verify_authentication_response` as a thin projection of
-  that single implementation (`assertion.as_legacy_dict()`), so there
-  is one verification path and one set of facts, with the legacy shape
-  derived rather than duplicated;
+  that single implementation, so one verification path produces both
+  shapes and the legacy dict is derived, never duplicated;
 * the ceremony calls the assertion method **only** on the RULING-O
-  branch, keeping the non-RULING-O path byte-identical to what the
-  cutover proved.
+  branch, leaving every other path byte-identical to what the cutover
+  proved.
 
-**Fail-closed against test doubles.** For RULING-O classes the ceremony
-requires `type(self.verifier) is S7ProductionWebAuthnVerifier` — the
-closed-set exact-type idiom already used for stores at
-`s7_webauthn_ceremony.py:670-676`. A duck-typed double therefore cannot
-authorize a covenant-grade change. Consequence, stated rather than
-discovered later: RULING-O tests need either the real library or a
-labelled dataflow-only path that cannot reach mint; an environment
-without the library returns the existing 503 (`:533-535`), which is
-correct fail-closed behaviour.
+Consequence stated rather than discovered later: a positive RULING-O
+test needs the real library, or a labelled dataflow-only path that
+cannot reach mint. An environment without the library returns the
+existing 503 (`:533-535`) — correct fail-closed behaviour.
 
 ---
 
-## §4 Construction 2 — the sealed durable binding
+## §4 Construction 4 — the response-committing challenge
 
-**Not** a new `S7AuthorizationArtifactBinding` class. Canon's binding
-is unbuilt and hashless (V10); building it now would mean authoring an
-entire unbuilt canon object to hold two fields. Instead 2b applies the
-shape that is live, sealed, and cutover-proven (C1): a ruling-scoped
-per-artifact evidence table.
+Presented before Constructions 2 and 3 because both now depend on it.
+**RULING-O classes only**; every other class keeps today's byte-exact
+behaviour, so the cutover path is untouched.
 
-**Table:** `s7_consult_owner_read_evidence_v1`, in the same database as
-the authorization artifacts (the one-database check at
-`s7_guarded_execution.py:3519-3520` already enforces this).
+**Today.** `challenge_b64 = base64.urlsafe_b64encode(
+secrets.token_bytes(32))` (`s7_webauthn_bootstrap.py:1019`) —
+independent random bytes. The D12 fields sit beside them in mutable
+columns (`:102-127`). The signature covers the random bytes only.
+
+**Change.** For RULING-O classes, the challenge bytes become the
+commitment:
+
+```text
+salt              = secrets.token_bytes(32)          -- fresh per ceremony
+commitment_preimage = canonical_hash({
+    "action_params_hash":       rendered.action_params_hash,
+    "authority_context_hash":   rendered.authority_context_hash,
+    "derived_aggregation_group": rendered.derived_aggregation_group,
+    "maez_response_sha256":     rendered.maez_response_sha256,
+    "nonce":                    rendered.nonce,
+    "precondition_hash":        precondition_hash,
+    "rendered_text_hash":       rendered.rendered_text_hash,
+    "request_envelope_hash":    rendered.request_envelope_hash,
+})
+challenge_bytes   = sha256(salt || bytes.fromhex(commitment_preimage))
+challenge_b64     = b64url(challenge_bytes).rstrip("=")
+```
+
+`challenge_salt_b64` is stored as a new column on
+`s7_ceremony_challenges`. **The salt is not a secret** and its
+plaintext storage is not a weakness: the security comes from the
+authenticator's signature over `challenge_bytes`, not from the
+attacker's ignorance of the salt. The salt exists only so two
+ceremonies over identical content produce different, unpredictable
+nonces — the anti-replay property WebAuthn requires. Entropy is
+unchanged at 32 bytes.
+
+**Finish-time check (RULING-O only), before verification.** Recompute
+`commitment_preimage` from the **presented** rendered statement and the
+staged result hash, recompute `sha256(salt || …)` from the row's
+`challenge_salt_b64`, and require equality with the row's
+`challenge_b64`. Refusal `owner_read_challenge_mismatch`. It joins
+`_challenge_matches_rendered_d12`'s seat (`s7_webauthn_ceremony.py:558-563`),
+which already runs before the verifier (`:814`).
+
+**Why this closes gate finding 1.** Three attacker moves, all dead:
+
+| Move | Outcome |
+|---|---|
+| Rewrite the D12 / response columns, leave `challenge_b64` | recomputation from the edited columns ≠ the stored nonce → refuse before verification |
+| Rewrite `challenge_b64` to match the edited columns | the authenticator signed the *original* nonce → library verification fails (V2) |
+| Rewrite both consistently AND obtain a signature over the new nonce | that is a second founder tap over the new bytes — which is the property, satisfied |
+
+Rewriting `challenge_hash` alongside is irrelevant, which is why
+hardening H1 could not have closed this: `_fingerprint` is an unkeyed
+sha256 (`s7_webauthn_bootstrap.py:1523-1524`), forgeable by anyone who
+can write the row it protects. H1 remains worth doing for the classes
+Construction 4 does not cover, and stays in §11 as separate work.
+
+**Residual limits, stated.** The signed bytes commit to *hashes* of the
+rendered text and the response, not to the bytes themselves; the
+hash↔bytes link is L2, held by `__post_init__` plus gate recomputation.
+And a commitment proves what the ceremony was *about*, never that the
+owner read it.
+
+---
+
+## §5 Construction 2 — the sealed durable binding
+
+**Not** a new `S7AuthorizationArtifactBinding`. Canon's binding is
+unbuilt and hashless (V11); building it to hold two fields would author
+an entire unbuilt canon object. 2b applies the shape that is live,
+sealed, and cutover-proven (C1): a ruling-scoped per-artifact evidence
+table.
+
+**Table:** `s7_consult_owner_read_evidence_v1`, in the artifact
+database (`ceremony.sqlite3`), which the guarded store's one-database
+check already enforces (`s7_guarded_execution.py:3519-3520`).
 
 ```sql
 CREATE TABLE s7_consult_owner_read_evidence_v1 (
@@ -334,82 +455,92 @@ CREATE TABLE s7_consult_owner_read_evidence_v1 (
     rendered_text_hash TEXT NOT NULL,
     challenge_id TEXT NOT NULL,
     challenge_b64_sha256 TEXT NOT NULL,
+    challenge_commitment_sha256 TEXT NOT NULL,
     credential_ref TEXT NOT NULL,
     user_presence INTEGER NOT NULL CHECK (user_presence = 1),
     user_verification INTEGER NOT NULL CHECK (user_verification = 1),
-    owner_read_binding_sha256 TEXT NOT NULL UNIQUE,
-    recorded_at TEXT NOT NULL
+    recorded_at TEXT NOT NULL,
+    owner_read_binding_sha256 TEXT NOT NULL UNIQUE
 ) STRICT;
 ```
 
-The CHECK constants are not decoration: they are the R11 table's own
-device (`s7_guarded_execution.py:73-91`) for making a row that means
-something else structurally unwritable. `user_presence`/
-`user_verification` are pinned to 1 by CHECK because RULING-O admits no
-other value — an unverified tap cannot even be recorded as owner-read.
+The CHECK constants are the R11 table's own device (`:73-91`) for
+making a row that means something else structurally unwritable.
+`user_presence`/`user_verification` are pinned to 1 because RULING O
+admits no other value — an unverified tap cannot be recorded as
+owner-read at all.
 
-**Seal.** `owner_read_binding_sha256 = canonical_hash(projection)`
-where the projection mirrors `_r11_artifact_projection`
-(`s7_guarded_execution.py:212-240`): the artifact's own identity fields
-plus every column above except the seal itself. Same rule as cluster
-1's row seal — a hash cannot cover itself — and the domain is defined
-in exactly one place, this paragraph.
+**Seal domain, defined here and nowhere else** (gate finding 7).
+`owner_read_binding_sha256 = canonical_hash(projection)` where the
+projection is the artifact's own identity fields — mirroring
+`_r11_artifact_projection` (`:212-240`) — plus **every column declared
+above it in the DDL, in declaration order**: `artifact_id`,
+`evidence_kind`, `ruling_id`, `schema_version`, `derived_work_class`,
+`consultation_id`, `consult_attempt_id`, `maez_response_sha256`,
+`rendered_text_hash`, `challenge_id`, `challenge_b64_sha256`,
+`challenge_commitment_sha256`, `credential_ref`, `user_presence`,
+`user_verification`, `recorded_at`. The seal is declared last precisely
+so "every column above it" is total — pass 1 put `recorded_at` after
+the seal and left it uncovered. Additionally, and following R11's own
+rule (`:425-440`), `recorded_at` MUST equal `artifact.created_at`, and
+revalidation requires that equality; a hash cannot cover itself, so
+`owner_read_binding_sha256` is the sole exclusion.
 
-**Contract fingerprint.** A `_owner_read_evidence_contract(connection)`
+**Contract fingerprint.** `_owner_read_evidence_contract(connection)`
 built from `sqlite_master.sql` + `PRAGMA table_info` + `PRAGMA
-index_list`, compared against `_expected_owner_read_evidence_contract()`
-before every insert and before every use — the R11 device at `:94-127`.
-A rebuilt or altered table refuses rather than silently accepting rows.
+index_list`, compared against
+`_expected_owner_read_evidence_contract()` before every insert and
+every use — the R11 device at `:94-127`. A rebuilt or altered table
+refuses rather than accepting rows.
 
 **Write seat.** Inside `put_artifact_with_bundle_reservation`'s
 `anchored_transaction()` (V7), for RULING-O classes only, atomic with
 the reservation and the artifact. Mint **refuses** for a RULING-O class
 when the owner-read inputs are absent or fail their joins — the
-fail-closed half of the property, and the mirror of R11's
-`exemption_admits_for_artifact` refusal at `:3588-3597`.
+fail-closed half of the property, mirroring R11's
+`exemption_admits_for_artifact` refusal (`:3588-3597`).
 
-**Mutual exclusion.** An artifact carrying an R11 exemption must not
-carry owner-read evidence and vice versa, checked both directions at
-insert — copying R11's own collision check against
-`s7_voice_bundle_uses` (`:255-266` at insert, `:441-449` at
-consumption). Two evidence shapes
-that both claim to authorize one artifact is the state the R11 comments
+**Mutual exclusion, both seats** (gate finding 8). An artifact carrying
+R11 exemption evidence must not carry owner-read evidence and vice
+versa, checked **at insert AND at consumption**, in both directions —
+R11 checks its collision at both (`:255-266` insert, `:441-449`
+consumption) and pass 1 specified only the insert. Concretely: the
+owner-read insert refuses if an R11 row exists for the artifact; the
+R11 insert gains the symmetric check; and both revalidators refuse the
+presence of the other evidence row inside the consuming transaction.
+Dual authority evidence for one artifact is the state R11's comments
 were written to forbid.
 
 **Read seat.** `revalidate_owner_read_for_consumption(*, connection,
-grant, ...)` structurally identical to
+grant, ...)`, structurally identical to
 `revalidate_r11_exemption_for_consumption` (`:307-455`): requires a
 descriptor-verified held connection, requires `connection.in_transaction
 is True`, requires the freshly minted `S7ExecutionGrant` by exact type,
 re-checks the table contract, requires exactly one row, re-derives the
-seal, and compares **every column** — then compares the artifact row's
-own fields against the grant's, refusing
-`owner_read_evidence_not_bound_to_grant` on any drift.
+seal, compares **every column**, requires `recorded_at ==
+artifact.created_at`, compares the artifact row's fields against the
+grant's, and refuses the presence of R11 evidence. Any drift refuses
+`owner_read_evidence_not_bound_to_grant`.
 
 ---
 
-## §5 Construction 3 — the challenge member and the display region
+## §6 Construction 3 — the challenge column, the display region, and A13
 
-**§5a — the challenge column.** `s7_ceremony_challenges` gains
-`maez_response_sha256 TEXT` (nullable; non-null exactly for RULING-O
-classes), written in `create_authorization_challenge`
-(`s7_webauthn_bootstrap.py:991-1093`) from the rendered statement's own
-field, exactly where `consultation_exemption_projection_hash` is
-written today.
+**§6a — the challenge columns.** `s7_ceremony_challenges` gains
+`maez_response_sha256 TEXT` and `challenge_salt_b64 TEXT` (both
+nullable; both non-null exactly for RULING-O classes), written in
+`create_authorization_challenge` (`s7_webauthn_bootstrap.py:991-1093`)
+where `consultation_exemption_projection_hash` is written today.
+`maez_response_sha256` joins the D12 comparison
+(`s7_webauthn_ceremony.py:1478-1499`) so it is checked before the
+verifier runs, and it is a member of the Construction-4 commitment, so
+the signature covers it. It also joins `d12_parts`
+(`s7_webauthn_bootstrap.py:1022-1033`) for completeness — declared in
+code comment as write-only defence, not enforcement, until H1 (§11).
 
-Enforcement is the mechanism that actually works in this tree (C2):
-the column joins the nine-column D12 comparison in
-`_challenge_matches_rendered_d12` (`s7_webauthn_ceremony.py:1478-1499`),
-so at finish it is compared against the presented rendered statement
-**before** the verifier runs. It is *additionally* folded into
-`d12_parts` (`s7_webauthn_bootstrap.py:1023-1046`) so that the
-fingerprint stays complete — declared as defence-in-depth that becomes
-load-bearing only under hardening H1 (§10), and labelled that way in
-the code comment so no future reader mistakes it for enforcement.
-
-**§5b — the display region, byte-exact.** Carried by
-`RenderedRequestStatement` as `maez_response_display_text: str | None`
-and `maez_response_sha256: str | None`, non-null exactly for RULING-O
+**§6b — the display region, byte-exact.** `RenderedRequestStatement`
+carries `maez_response_display_text: str | None` and
+`maez_response_sha256: str | None`, non-null exactly for RULING-O
 classes. The rendered text carries:
 
 ```text
@@ -419,212 +550,280 @@ End Maez response.
 Maez response hash: <hex>
 ```
 
-The hashed region begins at the first byte **after** the LF that
-terminates `Maez response (verbatim):` and ends at the last byte
-**before** the LF that precedes `End Maez response.` — neither
-delimiter line, neither bounding LF, no trailing newline.
+The hashed region begins at the first byte **after** the LF terminating
+`Maez response (verbatim):` and ends at the last byte **before** the LF
+preceding `End Maez response.` — neither delimiter, neither bounding
+LF, no trailing newline; hashed as UTF-8 per design v3.2 §6.
 
-**Enforced in `__post_init__`, not by a gate.** The existing metadata
-discipline (`operator_user_boundary.py:4828-4861`) requires each
-metadata line to match its field with `matches != [expected_line]` —
-a uniqueness check, not a substring check. The response block joins
-that discipline: both delimiter lines must appear **exactly once**;
-`maez_response_sha256` must equal the hash recomputed over the region;
-`maez_response_display_text` must equal those same bytes. A response
+Enforced in `__post_init__` alongside the existing metadata discipline
+(`operator_user_boundary.py:4828-4861`), which requires each metadata
+line to match its field with `matches != [expected_line]` — a
+uniqueness check, not a substring check. Both delimiter lines must
+appear exactly once; `maez_response_sha256` must equal the region hash;
+`maez_response_display_text` must equal those bytes. A response
 containing either literal delimiter line refuses construction with
-`receipt_mismatch` rather than rendering an ambiguous block. The object
-therefore cannot exist in a state where the displayed bytes and the
-declared hash disagree — L2 of §2 is true-by-construction, which is
-strictly stronger than any gate check.
+`receipt_mismatch`.
 
----
+**Honest scope of that enforcement** (gate finding 10):
+`RenderedRequestStatement` is an ordinary frozen dataclass
+(`operator_user_boundary.py:4790-4791`). `__post_init__` makes it
+impossible to *construct* an inconsistent object normally; it does not
+prevent `object.__setattr__`, crafted deserialization, or other
+same-process mutation. Pass 1's "the object cannot exist in that state"
+overstated it. Every authority gate therefore recomputes the region and
+its hash regardless — which is why A13.7 and B2 exist and are not
+redundant.
 
-## §6 A13 and B2, exactly
-
-**A13 (Gate A, mint-time, RULING-O classes only).** The validator takes
-`verified_assertion: S7VerifiedAssertion | None` — the verifier's own
-return value, in scope because D16 runs after verification. **No
+**§6c — A13, exactly.** Seat: after step 9 and before step 10 of V3 —
+after verification, before challenge consumption, before the artifact
+exists. `verified_assertion: S7VerifiedAssertion | None`; **no
 caller-supplied challenge id appears anywhere in the signature.**
-Ordered:
 
 | # | Check | Refusal |
 |---|---|---|
 | A13.1 | `type(verified_assertion) is S7VerifiedAssertion` and its token was verified | `owner_read_required` |
-| A13.2 | `ok is True`, `user_presence is True`, `user_verification is True` | `owner_read_required` |
-| A13.3 | challenge row fetched **by `verified_assertion.challenge_id` and by no other key**; row exists, not invalidated, `expires_at > :now_z` | `owner_read_required` |
-| A13.4 | `sha256(row.challenge_b64) == verified_assertion.challenge_b64_sha256` | `owner_read_required` |
-| A13.5 | `row.rendered_text_hash == rendered.rendered_text_hash` | `stale_binding` |
-| A13.6 | `row.maez_response_sha256 == rendered.maez_response_sha256` | `receipt_mismatch` |
-| A13.7 | `rendered.maez_response_sha256 ==` hash recomputed over the delimited display region of `rendered.rendered_text` | `receipt_mismatch` |
-| A13.8 | that value `== result.assistant_text_sha256` from the A6b staged result row | `receipt_mismatch` |
-| A13.9 | `verified_assertion.credential_ref` equals the artifact's credential_ref | `owner_read_required` |
+| A13.2 | `ok`, `user_presence`, `user_verification` all True | `owner_read_required` |
+| A13.3 | `loader_is_production is True` and `type(verifier) is S7ProductionWebAuthnVerifier` | `owner_read_verifier_not_production` |
+| A13.4 | challenge row fetched **by `verified_assertion.challenge_id` and no other key**, with the complete accepted state: `challenge_kind='authorize_guarded_request'`, `consumed_at IS NULL`, `invalidated_at IS NULL`, `expires_at > :now_z`, and `session_binding_hash` / `internal_channel_binding_hash` equal to this ceremony's | `owner_read_required` |
+| A13.5 | `sha256(row.challenge_b64) == verified_assertion.challenge_b64_sha256` | `owner_read_required` |
+| A13.6 | `row.challenge_b64` equals the Construction-4 recomputation from the presented rendered statement and the staged result (§4) | `owner_read_challenge_mismatch` |
+| A13.7 | `row.rendered_text_hash == rendered.rendered_text_hash` | `stale_binding` |
+| A13.8 | `row.maez_response_sha256 == rendered.maez_response_sha256` | `receipt_mismatch` |
+| A13.9 | `rendered.maez_response_sha256 ==` hash recomputed over the delimited display region of `rendered.rendered_text` | `receipt_mismatch` |
+| A13.10 | that value `== result.assistant_text_sha256` from the A6b staged result row | `receipt_mismatch` |
+| A13.11 | `verified_assertion.credential_ref` equals the credential the ceremony verified and will stamp onto the artifact (`s7_webauthn_ceremony.py:844-849`), and `credential_can_authorize` holds for it (`:850-855`) | `owner_read_required` |
 
-A13.7 is belt over a suspenders that `__post_init__` already fastened
-(§5b) — kept because the gate must not depend on the object having been
-constructed in this process.
+A13.11 replaces pass 1's comparison against an artifact that does not
+yet exist (gate finding 5). The artifact's `credential_ref` is already
+sourced from the verified result (V3 step 11), so binding to the
+verified value binds the artifact by construction; the sealed row (§5)
+records it for B2.
+
+A13.9 is belt over the suspenders `__post_init__` fastened — kept
+because the gate must not assume the object was constructed in this
+process (§6b).
 
 For non-RULING-O classes `verified_assertion` is `None` and A13 is
-skipped; a `None` assertion **with** a RULING-O work class refuses
+skipped; `None` **with** a RULING-O work class refuses
 `owner_read_required`.
-
-**B2 (Gate B, consumption-time, RULING-O classes only).** A13 does not
-re-run: no verifier is present at execution and no challenge is read.
-B2 is `revalidate_owner_read_for_consumption` (§4) invoked in the
-`after_consume_before_commit` position of
-`consume_for_execution_on_connection` (V8) — inside the transaction,
-after the CAS, before commit, raising to roll back. It re-proves,
-without a verifier:
-
-* the evidence row exists, its contract matches, its seal re-derives;
-* every column matches its re-derived value;
-* `consult_attempt_id` equals the attempt the artifact was minted
-  against (B1's join), and the attempt's `completed → consumed` CAS
-  succeeds in this same transaction;
-* `maez_response_sha256` equals the staged
-  `result.assistant_text_sha256`;
-* `user_presence = 1`, `user_verification = 1`, `credential_ref`
-  non-null — read from the sealed row, not re-asserted by the caller.
-
-The attempt CAS, the grant consume, and the owner-read revalidation
-commit or roll back together, because they are one transaction by
-construction (V8), not by convention.
 
 ---
 
-## §7 Refusal vocabulary
+## §7 Gate B — mandatory, and honest about two databases
 
-No new tokens. `owner_read_required`, `receipt_mismatch`,
-`stale_binding`, and `store_integrity_failure` already exist in v3.2's
-layer table. Two dispositions to state once:
+**B2 is not a callback** (gate finding 2). `after_consume_before_commit`
+defaults to `None`, runs only if supplied, and the live
+decision-pipeline caller supplies its own (V8). A check a consumer can
+decline is not a gate. Therefore:
+
+**`consume_for_execution_on_connection` itself runs owner-read
+revalidation, unconditionally, when
+`_highest_risk_ceremony_required(derived_work_class)` is True** —
+inside the `BEGIN IMMEDIATE` transaction (`:3026`), after the CAS
+(`:3030-3072`), before and independently of any caller callback
+(`:3097-3100`), raising to roll back. The predicate is already
+consulted at this seat for `covenant_ceremony_satisfies_request`
+(V5, `:3002-3008`), so the ruling scope is read from the same source of
+truth rather than a second one. The caller's callback keeps its
+existing meaning and cannot substitute for, suppress, or precede B2.
+
+**What B2 re-proves, with no verifier present:** the evidence row
+exists, its contract matches, its seal re-derives, every column matches
+its re-derived value, `recorded_at == artifact.created_at`, no R11
+evidence exists for the artifact, `maez_response_sha256` equals the
+staged `result.assistant_text_sha256`, and `user_presence = 1`,
+`user_verification = 1`, `credential_ref` non-null — read from the seal,
+never re-asserted by the caller.
+
+**The attempt CAS spans a second database** (gate finding 3). Attempts
+live in the S7.3 state file; artifacts, challenges and the evidence row
+live in `ceremony.sqlite3` (V9). No descriptor-anchored `ATTACH`
+protocol exists, and inventing one would put a second database inside
+the held-descriptor discipline that
+`_require_verified_held_connection` / `_verify_held_store_activation`
+were built to guarantee. Pass 1's atomicity claim is withdrawn and
+replaced with an **ordering law**:
+
+> The attempt's `completed → consumed` CAS commits FIRST, in the S7.3
+> store's own anchored transaction, writing `consumed_by_artifact =
+> artifact_id`. Only after that commit may the S7.1 consume transaction
+> open. If the consume then fails or rolls back, the attempt is already
+> burned and the consultation can never be consumed again; a new
+> consultation is required.
+
+The law is chosen for its failure direction. Burning an attempt whose
+grant never commits costs a consultation — safe. The reverse order
+would allow a committed grant beside a still-consumable attempt, which
+is exactly the replay the property forbids. Two-phase honesty, not
+atomicity: the design says which state is reachable after a crash
+(`attempt consumed, no grant`) and asserts it is harmless, rather than
+claiming a transaction that does not exist.
+
+If a future slice co-locates the staging family with the artifact plane
+— which canon D9's pin currently forbids — the ordering law can be
+replaced by real atomicity. That is not 2b's call to make.
+
+---
+
+## §8 Refusal vocabulary
+
+Two new causes, both at the `gate_a` layer, both RULING-O only:
+
+* `owner_read_verifier_not_production` — the verification did not run
+  through the real loader (A13.3);
+* `owner_read_challenge_mismatch` — the signed nonce does not commit to
+  the presented bytes (A13.6, §4).
+
+Otherwise no new tokens. `owner_read_required`, `receipt_mismatch`,
+`stale_binding`, `store_integrity_failure` already exist in v3.2's
+layer table. Two dispositions stated once:
 
 * a failed table-contract check or seal re-derivation is
   `store_integrity_failure` at layer `gate_a` or `gate_b` — the same
   cause at two layers, which v3.2's layer carrier already handles;
 * a missing or malformed `verified_assertion` is `owner_read_required`,
-  never `store_integrity_failure` — the distinction is *no owner read
-  happened* versus *the record of one is damaged*, and conflating them
-  would let a damaged record read as an absent ceremony.
+  never `store_integrity_failure` — *no owner read happened* versus
+  *the record of one is damaged*, and conflating them would let a
+  damaged record read as an absent ceremony.
 
 ---
 
-## §8 Canon amendments (anchored, per the amendment method)
+## §9 Canon amendments (anchored)
 
 Anchors derived mechanically from
-`docs/slices/s7.3-guarded-self-modification-execution/spec.md` in this
-session; each cites line + opening clause.
+`docs/slices/s7.3-guarded-self-modification-execution/spec.md`; the
+gate verified every one of pass 1's against the file and all matched.
 
-* **Canon L1664-1675** (`S7AuthorizationArtifactBinding(` … through its
-  closing paren) — **KEPT-VERBATIM**. 2b does not amend the unbuilt
-  binding class. Rationale recorded so a later reader does not
-  "restore" v3.2's amendment: the class does not exist in code (V10),
-  and adding fields to an unbuilt object would create a second
-  authoritative home for owner-read evidence beside the one 2b builds.
-  **This supersedes design v3.2's "D-amendment (artifact binding,
-  cluster 2)" at v3 lines 930-935 and §7b item 2 at v3 lines 591-597**,
-  both of which amend a class that is not there.
+* **Canon L1664-1675** (`S7AuthorizationArtifactBinding(` … closing
+  paren) — **KEPT-VERBATIM**. 2b does not amend the unbuilt binding
+  class: it does not exist in code (V11), and adding fields to an
+  unbuilt object would create a second authoritative home for
+  owner-read evidence beside the one 2b builds. This supersedes design
+  v3.2 §7b item 2; v3.2's separate "D-amendment (artifact binding)" was
+  already WITHDRAWN in the same commit as pass 1 and is consistent with
+  this disposition.
 * **Canon L1867-1872** ("S7.3 does not own the WebAuthn challenge
-  store…") — **AMENDED**. Replacement bytes append one sentence: "For
-  RULING-O work classes S7.3 additionally persists
+  store…") — **AMENDED**, replacement bytes append: "For RULING-O work
+  classes S7.3 additionally persists
   `s7_consult_owner_read_evidence_v1`, keyed by `artifact_id`, written
   in the mint transaction and re-derived in the consuming transaction;
-  it records the challenge id and nonce digest the founder assertion
-  verified against, and S7.3 still does not reload the original
-  WebAuthn challenge record outside that recorded evidence."
+  it records the challenge id, the nonce digest, and the commitment the
+  founder assertion signed over. S7.3 still does not reload the
+  original WebAuthn challenge record outside that recorded evidence."
 * **Canon L2970-2986** (`RenderedRequestStatement(` … closing paren) —
   **AMENDED**: two fields added, `maez_response_display_text: str | None`
   and `maez_response_sha256: str | None`, non-null exactly for RULING-O
   classes.
 * **Canon L2989-2994** ("The rendered text includes exact lines for…"
   through "`__post_init__` rejects any mismatch.") — **AMENDED**:
-  replacement bytes add the delimited response block of §5b to the
-  line list, and extend the `__post_init__` rejection rule to the
+  replacement bytes add §6b's delimited response block to the line
+  list and extend the `__post_init__` rejection rule to the
   exactly-once delimiter requirement and the region-hash equality.
 * **Canon L2769** (`validate_s7_voice_source_bundle(`, the D16
-  signature) — **AMENDED** by cluster 2a's anchored disposition;
-  2b contributes exactly one signature change to that same anchor:
-  `verified_assertion: S7VerifiedAssertion | None` replaces v3.2's
-  formulation, and `ceremony_challenge_store` is retained solely as
-  A13.3's lookup, keyed by the assertion.
-* **D21 consumption** — 2b adds no new anchor. B2 attaches at the seat
-  cluster 2a already amends; the anchored disposition there gains one
-  clause naming `revalidate_owner_read_for_consumption` in the
-  `after_consume_before_commit` position.
+  signature) — **AMENDED** by cluster 2a's anchored disposition; 2b
+  contributes exactly one change to that anchor: `verified_assertion:
+  S7VerifiedAssertion | None`, with `ceremony_challenge_store` retained
+  solely as A13.4's lookup, keyed by the assertion.
+* **D21 consumption** — 2b adds no new anchor. §7's mandatory
+  revalidation attaches at the seat cluster 2a already amends; that
+  disposition gains one clause naming
+  `revalidate_owner_read_for_consumption` as an unconditional step for
+  highest-risk classes, explicitly not a caller callback.
 
 Anchors for D16's per-bullet dispositions belong to cluster 2a and are
-not restated here — restating them is the duplication defect cluster
-1's last gate named.
+not restated — restating them is the duplication defect cluster 1's
+last gate named.
 
 ---
 
-## §9 Dependencies, and what 2b cannot witness yet
+## §10 Dependencies
 
-**D1 — the covenant ceremony producer does not exist (V6).** Both
-RULING-O classes already refuse at consume for want of
-`CovenantCeremonyEvidence`, which has no non-test producer. Owner-read
-can be built, unit-tested, and dataflow-tested, but **a live unmocked
-RULING-O witness is impossible until that producer exists.** This is
-not a defect introduced by 2b; it is the pre-existing fail-closed state
-the full-body audit recorded. It must be stated in the build's own
-receipt rather than discovered when the witness is attempted.
+**D1 — no honest `CovenantCeremonyEvidence` producer exists (V6).**
+Both RULING-O classes require it at consume, and no non-test producer
+exists. A **truthful, unmocked RULING-O witness is blocked** until one
+is built. The code path is not structurally incapable of accepting a
+caller-constructed value — that distinction is the correction from
+pass 1 — but a witness assembled from a caller-constructed evidence
+object is a mock wearing a witness's clothes, and this build's receipt
+must say so rather than count it.
 
-**D2 — cluster 3 (attested-result byte constructors) supplies
-`assistant_text_sha256`** (A13.8, B2). 2b's design does not depend on
-cluster 3's *text*, only on that field's existence, which is already
-frozen in v3.2 §6.
+**D2 — cluster 3 supplies `assistant_text_sha256`** (A13.10, B2). 2b
+depends on that field's existence, already frozen in v3.2 §6, not on
+cluster 3's text.
 
 **D3 — cluster 2a supplies A1-A12 and the D16/D21 anchored
-dispositions.** 2b writes no join outside A13/B1/B2.
+dispositions.** 2b writes no join outside A13, B1's partner, and B2.
 
 ---
 
-## §10 Named hardening H1 — make the fingerprint load-bearing (separate)
+## §11 Separated work: H1, and the classes Construction 4 does not cover
 
-`challenge_hash` is computed and never checked (C2). Recomputing it at
-finish and comparing before verification would convert every D12
-column, including the two projection hashes, from
-individually-compared to collectively-sealed. This is a small change at
-a seam the CUDA cutover depends on, so it is **named, not bundled**:
-its own commit, its own live witness, its own gate. 2b's correctness
-does not rest on it, and no sentence in 2b's build may claim the
-fingerprint enforces anything until H1 lands.
+Construction 4 covers RULING-O classes only. For every other
+class — including `self_modification` and `capability_acquisition` —
+the D12 binding remains row-integrity-dependent exactly as it is today,
+and `challenge_hash` remains write-only.
 
-Rows live five minutes (`_add_minutes(now, 5)`,
-`s7_webauthn_ceremony.py:474`), so no in-flight legacy rows constrain
-the change — the only real risk is the seam itself.
+**H1 (recompute `challenge_hash` at finish)** is therefore still worth
+doing for those classes, and is still NOT sufficient for RULING-O:
+`_fingerprint` is an unkeyed sha256
+(`s7_webauthn_bootstrap.py:1523-1524`), so an actor who can rewrite the
+row can rewrite the fingerprint. H1 raises the cost of a partial edit;
+it does not create a signed binding. It stays separate work with its
+own commit, witness and gate — and it must never be described as
+closing the gap Construction 4 closes.
+
+Whether the other voice-seat classes should also get commitment-carrying
+challenges is a real question this cluster deliberately does not answer.
+It is a scope decision with a live-ceremony blast radius, and it belongs
+to the owner and to its own cluster.
 
 ---
 
-## §11 Test and witness plan
+## §12 Test and witness plan
 
 * **Construction 1**: token refusal (`s7_verified_assertion_forged`);
   legacy dict projection equals today's dict field-for-field, pinned
-  against the current shape; nonce-digest mismatch refuses; RULING-O
-  branch refuses a duck-typed verifier by exact type.
-* **Construction 2**: contract-fingerprint drift refuses (add a column,
-  rebuild without STRICT); post-mint UPDATE of any sealed column fails
-  re-derivation before any join runs; mutual exclusion with R11
-  evidence refuses both directions; mint refuses a RULING-O class with
-  absent owner-read inputs; the CHECK constants reject
-  `user_verification = 0`.
+  against the current shape; nonce-digest mismatch refuses;
+  `loader_is_production` False for a fake-module instance of the real
+  class (the exact construction at
+  `tests/test_s7_1_verifier_adapter.py:253-274`) and the RULING-O
+  branch refuses it.
+* **Construction 4**: edit a D12 column after begin → finish refuses
+  before verification; edit `challenge_b64` → library verification
+  fails; edit both consistently → refuses for want of a signature;
+  identical content in two ceremonies yields different nonces (salt);
+  non-RULING-O challenge bytes are byte-identical to today's
+  behaviour.
+* **Construction 2**: contract-fingerprint drift refuses (add a column;
+  rebuild without STRICT); post-mint UPDATE of any sealed column,
+  **including `recorded_at`**, fails re-derivation before any join
+  runs; `recorded_at != artifact.created_at` refuses; mutual exclusion
+  with R11 refuses in both directions at BOTH insert and consumption;
+  mint refuses a RULING-O class with absent owner-read inputs; the
+  CHECK constants reject `user_verification = 0`.
 * **Construction 3**: a response containing either literal delimiter
-  line refuses construction; region hash is byte-exact at both
-  boundaries (LF handling proved by fixtures, not by prose); D12
-  comparison refuses a mismatched column at finish before verification.
-* **Gate B**: revalidation raising inside the callback rolls back the
-  CAS — asserted by reading the artifact row after the failure, not by
-  trusting the exception.
+  line refuses construction; region hash byte-exact at both boundaries,
+  proved by fixtures not prose; D12 comparison refuses a mismatched
+  column at finish before verification.
+* **Gate B**: a consumer supplying its own callback, or none, still
+  runs owner-read revalidation for a RULING-O class; revalidation
+  raising rolls back the CAS — asserted by re-reading the artifact row
+  after the failure, not by trusting the exception; the ordering law's
+  crash window leaves `attempt consumed, no grant` and a second
+  consumption attempt refuses.
 * **Live witness**: blocked by D1. The build's receipt says so
   explicitly rather than substituting a mocked pass for a witness.
 
 Tests run with `.venv/bin/pytest`. No test in this cluster may reach
-`PreparedCutover.begin()`; none needs to, since 2b touches the mint and
-consume seats, not the cutover driver.
+`PreparedCutover.begin()`; none needs to — 2b touches the challenge,
+mint and consume seats, not the cutover driver.
 
 ---
 
-## §12 Out of scope
+## §13 Out of scope
 
-The owner-display projection surface and the material route (v3.2 §5b);
-cluster 2a's joins; cluster 3's byte constructors; hardening H1; the
-covenant ceremony producer (named as dependency D1, not built here);
-any change to what Maez answers.
+The owner-display projection surface and material route (v3.2 §5b);
+cluster 2a's joins; cluster 3's byte constructors; H1 and
+commitment-carrying challenges for non-RULING-O classes (§11); the
+covenant ceremony producer (dependency D1, not built here); any change
+to what Maez answers.
