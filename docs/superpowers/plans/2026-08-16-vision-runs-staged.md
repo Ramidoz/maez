@@ -71,15 +71,54 @@ context, not model weights, and it is a known-correct configuration
 (the full-body audit already corrected one wrong "GPU contention"
 diagnosis about this same process). Not to be touched to make room.
 
-| Candidate | Weights + mmproj | Runs alongside Maez? |
-|---|---|---|
-| LFM2.5-VL-450M | 210 MB + 99 MB | yes — measured ~850 MB resident |
-| LFM2.5-VL-1.6B | 664 MB + 557 MB | yes, comfortably |
-| Qwen3VL-4B-Instruct | 2.4 GB + 433 MB | **no** — needs Maez's brain stopped |
+| Candidate | Weights + mmproj | Measured resident | Fits beside Maez? |
+|---|---|---|---|
+| LFM2.5-VL-450M | 210 MB + 99 MB | ~850 MB | yes |
+| MiniCPM-V-4.6 | 505 MB + 695 MB | **~1.68 GB** | yes, but see below |
+| LFM2.5-VL-1.6B | 664 MB + 557 MB | not yet measured | probably |
+| Qwen3VL-4B-Instruct | 2.4 GB + 433 MB | not yet measured | **no** |
+
+**Measured, and it changes the recommendation.** MiniCPM-V-4.6 loaded
+and served cleanly (`/health` ok, `loaded multimodal model`) — but it
+took free VRAM from 2,769 MiB down to **1,093 MiB**. llama.cpp also
+warned `failed to fit params to free device memory: n_gpu_layers
+already set by user to 999, abort` — it proceeded, but that is the
+runtime saying the fit was not comfortable.
+
+Leaving Maez's brain with ~1 GB of headroom is an avoidable risk, and
+specifically so: the brain's allocation is mostly static (KV cache is
+preallocated at load), **but the one documented failure mode for this
+exact configuration is its VRAM growing under long context** — that is
+the first symptom in issue #23371, Run B below. Eating the remaining
+headroom while that is unresolved courts the very thing we have not
+tested yet.
+
+**Revised recommendation: run every bake-off candidate in a window with
+Maez's brain stopped**, not alongside. It costs nothing extra — the
+window is already needed for Qwen3VL-4B and for Run B — and it removes
+a live-system risk in exchange for scheduling, which is the right
+trade. The "runs alongside" column stays for the record, not as a plan.
 
 The harness judges one candidate at a time and writes one receipt per
 candidate, so splitting across sittings is the same experiment, not a
 broken one.
+
+### Correction to something said earlier in this thread
+
+MiniCPM-V-4.6 was pitched as a candidate that would stop the bake-off
+"answering a question two months stale." **That framing was wrong.**
+Its GGUF repos (`openbmb/MiniCPM-V-4.6-gguf`,
+`ggml-org/MiniCPM-V-4.6-GGUF`) were last updated 11-19 May 2026 —
+*before* the 6 June design that chose the current three. It was
+available and simply not picked; that June doc's Tier C listed
+InternVL3-2B and SmolVLM2-2.2B instead.
+
+It may still be the better candidate — its header reads
+`general.architecture = qwen35`, 24 blocks, 262k context, and it
+carries a disproportionately large vision encoder for its size (695 MB
+mmproj against 505 MB of weights), which is consistent with the claim
+that it punches above its class on OCR. But it should be added because
+it might win, not because it is new. It isn't.
 
 ### Exact commands (candidate 1 proven, others identical in shape)
 
@@ -100,10 +139,16 @@ curl -s http://127.0.0.1:8084/health          # expect {"status":"ok"}
   --model vision-lfm-450m
 ```
 
-Then the same with `LFM2.5-VL-1.6B-Q4_0.gguf` +
-`mmproj-LFM2.5-VL-1.6b-Q8_0.gguf`, label `lfm-1.6b`; and
-`Qwen3VL-4B-Instruct-Q4_K_M.gguf` + `mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf`,
-label `qwen3vl-4b` — that one only during a window with Maez stopped.
+Same shape for the other three, all inside the window:
+
+| Label | Model | mmproj |
+|---|---|---|
+| `lfm-1.6b` | `vision/LFM2.5-VL-1.6B-Q4_0.gguf` | `vision/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf` |
+| `minicpm-v-4.6` | `vision/MiniCPM-V-4.6-Q4_K_M.gguf` | `vision/mmproj-MiniCPM-V-4.6-Q8_0.gguf` |
+| `qwen3vl-4b` | `vision/Qwen3VL-4B-Instruct-Q4_K_M.gguf` | `vision/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf` |
+
+All four candidate files are on disk and the two smallest are proven to
+load and serve. Nothing further needs fetching for Run A.
 
 Kill each candidate when its run finishes; nothing should be left
 holding VRAM.
@@ -215,25 +260,91 @@ curl -s http://127.0.0.1:8080/health            # brain is back
 Nothing else changes. No unit edited, no model pointer moved, no
 config touched.
 
-### The bigger question this feeds
+---
 
-If MTP+vision holds on b9596, the same test should then be run against
-**Qwen3.8-27B** — released 2026-08-14, Apache-2.0, 28B dense,
-image-text-to-text, aimed at 24 GB consumer cards, GGUFs already
-published by unsloth / ggml-org / bartowski. That is the current form
-of the June "unified brain" option, and it would make Maez's own brain
-the thing that sees.
+## Run C — Qwen3.8-27B, the current form of the June "unified brain"
 
-That is an architecture decision, not maintenance, and it cuts across
-the vision organ's existing design (which assumes sight arrives as a
-separate small model that must earn admission). It should be its own
-conversation, and it should not ride in on a bake-off.
+**Staged and verified. Runs only after Run B, and only if Run B passes.**
+
+### Downloaded and verified, 2026-08-16
+
+* `models/llamacpp/qwen38/Qwen3.8-27B-UD-Q4_K_XL.gguf` — 17 GB
+* `models/llamacpp/qwen38/mmproj-F16.gguf` — 885 MB
+
+Both from `unsloth/Qwen3.8-27B-GGUF`, the same publisher as the running
+brain. Headers verified rather than trusted: model reads
+`general.name = Qwen3.8-27B` with
+`base_model.0.repo_url = huggingface.co/Qwen/Qwen3.8-27B`; the mmproj
+reads `architecture = clip`, same name and repo_url,
+`has_vision_encoder = True`, `projector_type = qwen3vl_merger`,
+27 vision blocks.
+
+### The runtime risk is smaller than expected
+
+Compared against the running brain file directly:
+
+| | Qwen3.6-27B (running) | Qwen3.8-27B (staged) |
+|---|---|---|
+| `general.architecture` | `qwen35` | `qwen35` |
+| tensor count | 866 | 866 |
+| `block_count` | 65 | 65 |
+| `context_length` | 262144 | 262144 |
+
+**Structurally identical from llama.cpp's point of view.** b9596 already
+serves this architecture every day. So the "runtime upgrade" leg of the
+June blast-radius objection does not apply to Qwen3.8 either — it is
+very likely a drop-in at the loader level. That is a strong signal, not
+a guarantee: it must still be witnessed loading before anything is
+claimed.
+
+### Protocol
+
+Identical to Run B, substituting the two `qwen38/` paths and using
+alias `qwen38-27b-vision` on port **8085**. Measure the same three
+symptoms, plus one more: whether MTP works at all on this checkpoint
+(`--spec-type draft-mtp` assumes an MTP-capable file — the running
+brain uses a purpose-built MTP variant, and the staged Qwen3.8 file is
+the plain UD quant, so **expect to test it without MTP first** and
+treat MTP support as a separate question).
+
+### What this is, and is not
+
+This is the current form of the option the 6 June design deferred:
+Maez's own brain becoming the thing that sees. It cuts across the
+vision organ's existing design, which assumes sight arrives as a
+separate small model that must earn admission through Slice 9.
+
+It is an architecture decision, not maintenance. It should be its own
+conversation with the owner, it must not ride in on the back of a
+bake-off, and nothing here should be read as recommending it. The
+files are staged so the question can be answered with measurements
+instead of opinions.
 
 ---
 
-## Nothing is running
+## State on disk, and nothing running
 
-No candidate server, no hand-run brain. VRAM is back to its normal
-state with Maez's brain the only resident. The only change on disk is
-the downloaded `mmproj-F16.gguf`, which is inert until something loads
-it.
+No candidate server, no hand-run brain. VRAM is back to normal with
+Maez's brain the only large resident. Disk went 339 GB free to 319 GB.
+
+Staged files, all inert until something loads them:
+
+| Path | Size | For |
+|---|---|---|
+| `models/llamacpp/mtp/mmproj-F16.gguf` | 885 MB | Run B |
+| `models/llamacpp/vision/MiniCPM-V-4.6-Q4_K_M.gguf` | 505 MB | Run A |
+| `models/llamacpp/vision/mmproj-MiniCPM-V-4.6-Q8_0.gguf` | 695 MB | Run A |
+| `models/llamacpp/qwen38/Qwen3.8-27B-UD-Q4_K_XL.gguf` | 17 GB | Run C |
+| `models/llamacpp/qwen38/mmproj-F16.gguf` | 885 MB | Run C |
+
+`models/` is gitignored, so none of this enters the repository.
+
+## What still blocks each run
+
+* **Run A** — one owner decision about frame-003 at `full_640`, plus a
+  window (revised: all candidates should run with Maez stopped).
+* **Run B** — a window. Nothing else.
+* **Run C** — Run B passing first, then the same window.
+
+One window covers all three if taken in order: A, then B, then C only
+if B is clean.
