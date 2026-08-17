@@ -2072,8 +2072,8 @@ def _declared_blank_case(test: unittest.TestCase, declared=("full_640",)):
             "label_id": "cmd-1",
             "region_id": "titlebar",
             "region_aliases": ["titlebar", "window title"],
-            "kind": "command",
-            "text": "htop",
+            "kind": "filename",
+            "text": "deploy.sh",
             "visible_in": ["full_1280", "active_native"],
         }
     ]
@@ -2134,10 +2134,45 @@ class DeclaredUnreadableTransformTests(unittest.TestCase):
         from core.vision_contract.frozen_frame import find_invented_specificity_in_text
 
         case = _declared_blank_case(self)
+        # deploy.sh IS owner truth -- but only at full_1280 and richer. Claiming
+        # it at the declared-blank 640 must still be invented, or truth would
+        # leak downward into a transform where nothing is legible.
         findings = find_invented_specificity_in_text(
-            case, "full_640", "I can see run.sh in the terminal."
+            case, "full_640", "The terminal shows deploy.sh."
         )
         self.assertTrue(findings, "higher-resolution truth must not excuse a 640 claim")
+        self.assertEqual([f.value for f in findings], ["deploy.sh"])
+
+    def test_the_same_claim_is_NOT_invented_where_the_owner_labelled_it(self):
+        """Control for the test above: at full_1280 deploy.sh is real truth."""
+        from core.vision_contract.frozen_frame import find_invented_specificity_in_text
+
+        case = _declared_blank_case(self)
+        self.assertEqual(
+            find_invented_specificity_in_text(case, "full_1280", "The terminal shows deploy.sh."),
+            (),
+        )
+
+    def test_declaring_a_RICHER_transform_blank_is_rejected(self):
+        """Legibility cannot decrease as resolution rises (gate finding 2)."""
+        with self.assertRaises(HarnessRefusal) as caught:
+            _declared_blank_case(self, declared=("active_native",))
+        self.assertEqual(caught.exception.reason, "label_schema_invalid")
+
+    def test_a_directly_constructed_contradiction_is_refused_at_the_gate(self):
+        """The invariant is not loader-only (gate finding 1)."""
+        ScoringRefusal, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        forged = replace(
+            case,
+            labels=tuple(
+                replace(label, visible_in=("full_640", "full_1280", "active_native"))
+                for label in case.labels
+            ),
+        )
+        with self.assertRaises(ScoringRefusal) as caught:
+            score_transform(forged, "full_640", parse_and_validate("NO_TEXT_VISIBLE"))
+        self.assertEqual(caught.exception.reason, "blank_declaration_contradicted")
 
     def test_monotonicity_tolerates_a_declared_blank_transform(self):
         _, aggregate_coverage, check_evidence_monotonicity, score_transform = _scoring_imports()

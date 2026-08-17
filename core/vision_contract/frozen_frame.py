@@ -64,6 +64,7 @@ ScoringReason = Literal[
     "transform_set_incomplete",
     "candidate_verdict_rejected",
     "labels_empty_for_transform",
+    "blank_declaration_contradicted",
     "unknown_region",
 ]
 EvidenceReason = Literal["evidence_contradiction", "evidence_regression"]
@@ -430,10 +431,14 @@ def load_frame_case(bench_root: Path, frame_id: str) -> FrameCase:
     for name in declared_blank:
         if name not in TRANSFORM_ORDER:
             raise HarnessRefusal("label_schema_invalid")
-        # Declaring a transform blank while labelling it is a contradiction,
-        # and would let the declaration suppress real ground truth.
-        if any(name in label.visible_in for label in labels):
-            raise HarnessRefusal("label_schema_invalid")
+    # Same ordering invariant as `_validate_blank_declaration`, surfaced as a
+    # schema refusal at load time so a bad corpus never reaches a gate.
+    _order = {n: i for i, n in enumerate(TRANSFORM_ORDER)}
+    for name in declared_blank:
+        for label in labels:
+            for visible in label.visible_in:
+                if _order.get(visible, len(_order)) <= _order[name]:
+                    raise HarnessRefusal("label_schema_invalid")
 
     return FrameCase(
         frame_id=frame_id,
@@ -530,6 +535,33 @@ def _coverage(
     )
 
 
+def _validate_blank_declaration(case: FrameCase) -> None:
+    """Enforce the declaration's invariant at the GATE, not only at load.
+
+    `FrameCase` is a public dataclass and direct construction is an
+    established pattern in this repo, so a loader-only check can be walked
+    around by any caller that builds or `replace()`s a case. Both consuming
+    gates re-check.
+
+    The rule is ordering-based, because legibility cannot DECREASE as a
+    transform gets richer: for any transform declared blank, no label may be
+    visible at that transform or at any poorer one. That rejects both
+    "declared blank while labelled" and "declared blank at 1280 while
+    labelled at 640" -- the second of which would let a declaration hide a
+    real lower-to-higher evidence regression from monotonicity.
+    """
+    if not case.no_readable_labels_at:
+        return
+    order = {name: index for index, name in enumerate(TRANSFORM_ORDER)}
+    for declared in case.no_readable_labels_at:
+        if declared not in order:
+            raise ScoringRefusal("invalid_transform")
+        for label in case.labels:
+            for visible in label.visible_in:
+                if order.get(visible, len(order)) <= order[declared]:
+                    raise ScoringRefusal("blank_declaration_contradicted")
+
+
 def _labels_for_audit(
     case: FrameCase, transform_name: str
 ) -> tuple[HumanLabel, ...]:
@@ -541,6 +573,7 @@ def _labels_for_audit(
     """
     if transform_name not in TRANSFORM_ORDER:
         raise ScoringRefusal("invalid_transform")
+    _validate_blank_declaration(case)
     if transform_name in case.no_readable_labels_at:
         return ()
     labels, _ = _applicable_aliases(case, transform_name)
@@ -569,6 +602,7 @@ def score_transform(
     case: FrameCase, transform_name: str, verdict: Verdict
 ) -> TransformScore:
     """Score one schema-valid verdict against owner-authored labels only."""
+    _validate_blank_declaration(case)
     if transform_name in case.no_readable_labels_at:
         # The owner has declared nothing is legible here. There is no ground
         # truth to score against, so coverage is VACUOUS (0/0) -- not a pass,
@@ -667,6 +701,7 @@ def check_evidence_monotonicity(
         if supplied_names < required_names:
             raise ScoringRefusal("transform_set_incomplete")
         raise ScoringRefusal("invalid_transform")
+    _validate_blank_declaration(case)
     ordered_names = TRANSFORM_ORDER
     scores = {
         name: score_transform(case, name, verdicts[name]) for name in ordered_names
