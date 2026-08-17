@@ -2245,3 +2245,89 @@ class DeclaredUnreadableTransformTests(unittest.TestCase):
             case, "full_1280", parse_and_validate("REGION: titlebar\nTEXT: deploy.sh")
         )
         self.assertEqual(score.declared_blank_transcribed_count, 0)
+
+
+class DeclaredBlankBenchWiringTests(unittest.TestCase):
+    """The bench must ACT on the counters, not merely record them (2026-08-17).
+
+    Gate finding: the first three tests for this feature asserted only the
+    dataclass counter, so deleting both bench additions would have left them
+    green. These drive `_evaluate_frames` with a fake invoker so the
+    hard-fail reason and the receipt projection are pinned to behaviour.
+    """
+
+    def _prepared(self):
+        from scripts.vision_frozen_bench import PreparedFrame
+        from core.vision_contract.frozen_frame import derive_transforms
+
+        case = _declared_blank_case(self)
+        return case, (PreparedFrame(case=case, transforms=derive_transforms(case)),)
+
+    class _FakeInvoker:
+        """Returns a scripted raw string per transform, in TRANSFORM_ORDER."""
+
+        def __init__(self, by_transform):
+            self._by = by_transform
+            self._order = list(TRANSFORM_ORDER)
+            self._i = 0
+            self.last_raw = None
+
+        def invoke(self, image_png):
+            name = self._order[self._i % len(self._order)]
+            self._i += 1
+            self.last_raw = self._by[name]
+            return parse_and_validate(self.last_raw)
+
+    def _run(self, by_transform):
+        from scripts.vision_frozen_bench import _evaluate_frames
+
+        _, prepared = self._prepared()
+        receipts, _invented, reasons = _evaluate_frames(
+            prepared, self._FakeInvoker(by_transform), {}
+        )
+        return receipts, reasons
+
+    def test_transcribing_at_declared_blank_raises_the_bench_hard_fail(self):
+        receipts, reasons = self._run(
+            {
+                "full_640": "REGION: titlebar\nTEXT: Settings",
+                "full_1280": "REGION: titlebar\nTEXT: deploy.sh",
+                "active_native": "REGION: titlebar\nTEXT: deploy.sh",
+            }
+        )
+        self.assertIn("transcribed_at_declared_blank", reasons)
+        blank = next(
+            row
+            for row in receipts[0]["coverage_by_transform"]
+            if row["transform"] == "full_640"
+        )
+        self.assertEqual(blank["declared_blank_transcribed_count"], 1)
+
+    def test_region_smuggling_at_declared_blank_raises_its_own_reason(self):
+        """`REGION: Settings / TEXT: [UNREADABLE]` reads text in the label."""
+        receipts, reasons = self._run(
+            {
+                "full_640": "REGION: Settings\nTEXT: [UNREADABLE]",
+                "full_1280": "REGION: titlebar\nTEXT: deploy.sh",
+                "active_native": "REGION: titlebar\nTEXT: deploy.sh",
+            }
+        )
+        self.assertIn("unknown_region_at_declared_blank", reasons)
+        self.assertNotIn("transcribed_at_declared_blank", reasons)
+        blank = next(
+            row
+            for row in receipts[0]["coverage_by_transform"]
+            if row["transform"] == "full_640"
+        )
+        self.assertEqual(blank["declared_blank_unknown_region_count"], 1)
+
+    def test_honest_abstention_at_declared_blank_raises_neither_reason(self):
+        _receipts, reasons = self._run(
+            {
+                "full_640": "REGION: titlebar\nTEXT: [UNREADABLE]",
+                "full_1280": "REGION: titlebar\nTEXT: deploy.sh",
+                "active_native": "REGION: titlebar\nTEXT: deploy.sh",
+            }
+        )
+        self.assertNotIn("transcribed_at_declared_blank", reasons)
+        self.assertNotIn("unknown_region_at_declared_blank", reasons)

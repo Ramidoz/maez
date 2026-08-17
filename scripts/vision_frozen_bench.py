@@ -725,6 +725,10 @@ def _evaluate_frames(
         )
         if claimed_blank:
             frame_reasons.append("transcribed_at_declared_blank")
+        if sum(
+            score.declared_blank_unknown_region_count for score in scores.values()
+        ):
+            frame_reasons.append("unknown_region_at_declared_blank")
         if frame_invented:
             frame_reasons.append("invented_specificity")
         all_invented.extend(frame_invented)
@@ -762,6 +766,11 @@ def _evaluate_frames(
                         "transform": name,
                         "declared_blank_transcribed_count": (
                             scores[name].declared_blank_transcribed_count
+                            if name in scores
+                            else None
+                        ),
+                        "declared_blank_unknown_region_count": (
+                            scores[name].declared_blank_unknown_region_count
                             if name in scores
                             else None
                         ),

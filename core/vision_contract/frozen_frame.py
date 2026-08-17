@@ -151,6 +151,13 @@ class TransformScore:
     # measurable without knowing any content. Always 0 where the owner
     # supplied truth, because the counter is meaningless there.
     declared_blank_transcribed_count: int = 0
+    # Fields naming a REGION the frame has no label for, at a declared-blank
+    # transform. Read text can hide in a region label -- `REGION: Settings /
+    # TEXT: [UNREADABLE]` parses ok with an ABSTAINED field, so the counter
+    # above sees nothing while "Settings" was still read off the screen.
+    # Regions are a property of the FRAME; legibility is a property of the
+    # transform, so the frame's whole alias set is the right yardstick here.
+    declared_blank_unknown_region_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -624,17 +631,30 @@ def score_transform(
         # read at a resolution the owner confirmed illegible -- partial
         # counts too, because it still claims a legible portion exists.
         claimed = 0
+        smuggled = 0
         if verdict.verdict == "ok":
             claimed = sum(
                 1
                 for field in verdict.fields
                 if field.provenance in {"transcribed", "partial"}
             )
+            # The frame's regions are known even where their text is not
+            # legible, so an unrecognised region label at a declared-blank
+            # transform is itself a claim about what is on screen.
+            known = {
+                alias.casefold()
+                for label in case.labels
+                for alias in (*label.aliases, label.region_id)
+            }
+            smuggled = sum(
+                1 for field in verdict.fields if field.region.casefold() not in known
+            )
         return TransformScore(
             transform_name=transform_name,
             coverage=_coverage(correct=0, abstained=0, denominator=0),
             full_value_hashes=(),
             declared_blank_transcribed_count=claimed,
+            declared_blank_unknown_region_count=smuggled,
         )
     labels, aliases = _applicable_aliases(case, transform_name)
     if verdict.verdict == "rejected":
