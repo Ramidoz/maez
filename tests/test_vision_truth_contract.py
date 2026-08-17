@@ -687,3 +687,94 @@ class ProductionCallerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromptParserAgreementTests(unittest.TestCase):
+    """The prompt must not teach a shape its own parser refuses (2026-08-17).
+
+    The first bake-off failed every candidate largely on format, and the
+    cause was the prompt showing `REGION: [label]` while _REGION_LABEL_RE
+    forbids brackets in a region. Existing prompt tests could not catch that:
+    they assert loose substrings, and the request test compares the payload
+    against the same constant it was built from, so any prompt regression
+    stays green. These pin behaviour instead.
+    """
+
+    def test_every_line_of_the_prompts_worked_example_parses(self):
+        """Whatever shape the prompt DEMONSTRATES must be admissible."""
+        example: list[str] = []
+        for line in TRANSCRIBE_PROMPT.splitlines():
+            stripped = line.strip()
+            if stripped.upper().startswith(("REGION:", "TEXT:")):
+                example.append(stripped)
+        self.assertGreaterEqual(
+            len(example), 2, "the prompt must show a worked REGION/TEXT example"
+        )
+        verdict = parse_and_validate("\n".join(example))
+        self.assertEqual(
+            verdict.verdict,
+            "ok",
+            f"the prompt's own example is rejected as {verdict.reason}",
+        )
+
+    def test_prompt_shows_no_bracketed_region_placeholder(self):
+        """A model copying a bracketed label is refused invalid_region."""
+        for line in TRANSCRIBE_PROMPT.splitlines():
+            stripped = line.strip()
+            if stripped.upper().startswith("REGION:"):
+                label = stripped.split(":", 1)[1].strip()
+                self.assertNotIn("[", label, f"bracketed region placeholder: {stripped!r}")
+                self.assertEqual(
+                    parse_and_validate(f"REGION: {label}\nTEXT: x").verdict,
+                    "ok",
+                    f"prompt shows an inadmissible region label: {label!r}",
+                )
+
+    def test_prompt_forbids_the_three_observed_decorations(self):
+        low = TRANSCRIBE_PROMPT.lower()
+        self.assertIn("code fence", low)
+        self.assertIn("preamble", low)
+        self.assertTrue("bold" in low or "italic" in low or "markdown" in low)
+
+    def test_prompt_keeps_the_nothing_visible_exception_consistent(self):
+        """A 'must begin with REGION' rule must not contradict NO_TEXT_VISIBLE."""
+        low = TRANSCRIBE_PROMPT.lower()
+        self.assertIn("NO_TEXT_VISIBLE", TRANSCRIBE_PROMPT)
+        if "must begin with region" in low or "must be the r of region" in low:
+            self.assertIn(
+                "exception",
+                low,
+                "a begin-with-REGION rule must name the NO_TEXT_VISIBLE exception",
+            )
+        self.assertEqual(parse_and_validate("NO_TEXT_VISIBLE").verdict, "empty")
+
+    def test_prompt_never_forbids_brackets_the_parser_accepts_in_TEXT(self):
+        """Brackets visibly on screen must stay verbatim, not be censored.
+
+        Measured: `TEXT: Settings [menu]` parses ok, so a rule banning all
+        brackets would instruct a model to ALTER real screen text.
+        """
+        self.assertEqual(
+            parse_and_validate("REGION: editor\nTEXT: Settings [menu]").verdict, "ok"
+        )
+        low = TRANSCRIBE_PROMPT.lower()
+        for overreach in (
+            "only bracketed token allowed anywhere",
+            "no brackets anywhere",
+        ):
+            self.assertNotIn(overreach, low)
+
+    def test_prompt_keeps_verbatim_fidelity_in_words(self):
+        self.assertIn("verbatim", TRANSCRIBE_PROMPT.lower())
+
+    def test_request_budget_is_pinned_not_self_referential(self):
+        """Pin the literal budget so a silent change fails here.
+
+        Recorded reason: 500 is currently NARROWER than the parser it feeds
+        (MAX_FIELDS=32 pairs), and the live caller runs on the ~60s daemon
+        cycle against a 45s HTTP timeout while discarding finish_reason --
+        so this number must never move without that being noticed.
+        """
+        req = build_transcribe_request(image_b64="AAAA", model="m")
+        self.assertEqual(req["max_tokens"], 500)
+        self.assertEqual(req["temperature"], 0)

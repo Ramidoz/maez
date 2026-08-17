@@ -56,18 +56,36 @@ SpecificityKind = Literal["filename", "shell_command", "shell_prompt"]
 # VLM narrative authority — Sol review 2026-07-09).
 TRANSCRIBE_PROMPT = """Transcribe ONLY text that is visibly present in this image.
 
-Respond as one or more blocks, each in this exact format:
-REGION: [short location label, e.g. titlebar, terminal, editor, dock]
-TEXT: [the exact visible text, quoted verbatim — or [UNREADABLE] if that
-region's text cannot be read at this resolution]
+Output format. Respond with one or more two-line blocks, exactly like this
+worked example and nothing else:
 
-Rules:
+REGION: titlebar
+TEXT: Settings
+REGION: terminal
+TEXT: build finished
+
+Format rules - output that breaks any of these is discarded unread:
+- Your reply must begin with REGION. The one exception is the
+  nothing-visible reply below, which stands alone as a bare word.
+- No code fences, no ``` markers, no markdown bold or italics.
+- No preamble, heading, explanation, apology, or closing remark.
+- A REGION label is plain words only: letters, digits, spaces, hyphens,
+  underscores. No brackets, quotes, colons or other punctuation.
+- Every REGION line must be followed by its TEXT line, and a TEXT line
+  must never be empty.
+
+Honesty rules - these are the point of the task:
+- On a TEXT line, give the exact visible text, quoted verbatim, including
+  any punctuation or brackets that are genuinely on screen.
 - Transcribe or abstain. Never infer or guess a filename, command,
   application name, error message, or any text you cannot actually read.
 - If a region is partially legible, transcribe the legible part and mark
   the rest [UNREADABLE].
-- If no text is visible at all, respond with exactly: NO_TEXT_VISIBLE
-- Do not describe, interpret, or narrate. Text only."""
+- If a region plainly contains text but you cannot read any of it at this
+  resolution, write TEXT: [UNREADABLE]
+- If the image contains no visible text anywhere, your entire reply must be
+  exactly: NO_TEXT_VISIBLE
+- Do not describe, interpret, or narrate. Transcribed text only."""
 
 _ABSTAIN = "[UNREADABLE]"
 _REGION_RE = re.compile(r"^REGION:\s*(?P<region>.+)$", re.IGNORECASE)

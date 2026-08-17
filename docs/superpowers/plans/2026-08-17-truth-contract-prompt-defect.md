@@ -39,16 +39,35 @@ Parser behaviour, measured directly:
 | `**REGION:** titlebar` (markdown bold) | rejected `malformed_schema` |
 | empty content | rejected `protocol_violation` |
 
-## That set explains the entire run
+## What that set does and does not explain
 
 Observed across the four candidates: `malformed_schema` ×18,
 `invalid_region` ×4, `protocol_violation` ×2,
 `unstructured_specificity` ×1, `line_limit_exceeded` ×1.
 
-The three commonest map one-to-one onto the three commonest ways a
-chat-tuned model decorates output — fences, preambles, bold — plus
-echoing the placeholder brackets. **Nothing in that distribution
-requires any candidate to have misread a pixel.**
+An earlier revision of this document claimed the reproductions above
+"explain the entire run." **That overclaimed and is withdrawn.**
+`malformed_schema` is a catch-all: fences, preambles, bold, orphan
+fields and several other shapes all collapse into it, and reason-only
+receipts cannot prove which produced any given one of the 18. The
+defect is proven; the attribution is not.
+
+Two modes are NOT explained by the prompt defect at all, and must not be
+folded into it:
+
+* **`unstructured_specificity` ×1** — a filename/command/shell-prompt
+  shape appearing outside the quoted schema
+  (`truth_contract.py:195-206`, `:238-242`). That is a candidate
+  emitting a specificity claim in the wrong place, which no prompt
+  clarity fixes away.
+* **`line_limit_exceeded` ×1** — more than `MAX_LINES = 96` physical
+  lines. Neither placeholder brackets nor decoration explains it, and
+  raising the token budget would make it MORE likely, not less.
+
+Corrected claim: the prompt has a proven format defect that plausibly
+accounts for the `invalid_region` failures and some share of
+`malformed_schema`. The evidence available does not attribute the whole
+run to it, and does not exonerate any candidate.
 
 ## A second, independent cause of empty output
 
@@ -116,12 +135,28 @@ before-half of the comparison.
 
 ---
 
-## Proposed replacement bytes (for gating, not yet applied)
+## Proposed replacement bytes — REVISION 2, after gate round 1
 
-Every honesty rule in the current prompt is preserved; only the format
-instruction changes. Diff in intent: remove placeholder brackets, give a
-literal example, forbid the three decorations observed as failures, and
-name the one legal bracketed token.
+Gate round 1 returned five blockers on revision 1. All five verified and
+upheld; two were errors of exactly the kind this codebase keeps
+producing, and are recorded rather than quietly fixed:
+
+* **I wrote a self-contradiction.** Revision 1 said "the first character
+  of your reply must be the R of REGION" AND "if no text is visible,
+  reply exactly NO_TEXT_VISIBLE". Both cannot hold. The parser accepts
+  `NO_TEXT_VISIBLE` (`truth_contract.py:182`) and a live-path test
+  expects it (`test_vision_truth_contract.py:642`).
+* **I wrote an honesty rule that damages honesty.** Revision 1 said
+  "[UNREADABLE] is the ONLY bracketed token allowed anywhere". That is
+  NOT a parser rule — measured: `TEXT: Settings [menu]` and
+  `TEXT: [REDACTED]` both parse **ok**; only brackets in REGION are
+  refused. So the rule would have instructed a model to alter or omit
+  brackets that are genuinely on screen. A fidelity violation,
+  introduced by a rule written to improve fidelity.
+* I also dropped the words "quoted verbatim" while claiming every
+  honesty rule survived.
+
+Revision 2:
 
 ```text
 Transcribe ONLY text that is visibly present in this image.
@@ -135,41 +170,69 @@ REGION: terminal
 TEXT: build finished
 
 Format rules — output that breaks any of these is discarded unread:
-- The very first character of your reply must be the R of REGION.
+- Your reply must begin with REGION, with one exception: the
+  nothing-visible reply below, which is the bare word on its own.
 - No code fences, no ``` markers, no markdown bold or italics.
 - No preamble, heading, explanation, apology, or closing remark.
 - A REGION label is plain words only: letters, digits, spaces, hyphens,
-  underscores. No brackets, quotes, colons, or punctuation.
-- [UNREADABLE] is the ONLY bracketed token allowed anywhere, and it may
-  appear only on a TEXT line.
+  underscores. No brackets, quotes, colons or other punctuation.
+- Every REGION line must be followed by its TEXT line, and a TEXT line
+  must never be empty.
 
 Honesty rules — these are the point of the task:
+- On a TEXT line, give the exact visible text, quoted verbatim,
+  including any punctuation or brackets that are genuinely on screen.
 - Transcribe or abstain. Never infer or guess a filename, command,
   application name, error message, or any text you cannot actually read.
 - If a region is partially legible, transcribe the legible part and mark
   the rest [UNREADABLE].
-- If a region's text cannot be read at all at this resolution, write
-  TEXT: [UNREADABLE]
-- If no text is visible anywhere in the image, your entire reply must be
-  exactly: NO_TEXT_VISIBLE
+- If a region plainly contains text but you cannot read any of it at
+  this resolution, write TEXT: [UNREADABLE]
+- If the image contains no visible text anywhere, your entire reply must
+  be exactly: NO_TEXT_VISIBLE
 - Do not describe, interpret, or narrate. Transcribed text only.
 ```
 
-### `max_tokens`, justified rather than guessed
+`[UNREADABLE]` is described as what it is — the provenance marker for
+text you cannot read — and NOT as a ban on other brackets. The
+nothing-visible case and the unreadable-region case are now
+distinguished in words: nothing visible anywhere → `NO_TEXT_VISIBLE`;
+text visibly present but illegible → `REGION` + `TEXT: [UNREADABLE]`.
 
-Currently 500. The parser accepts up to `MAX_LINES = 96` and
-`MAX_RAW_CHARS = 67072`, so the contract already permits ~48
-REGION/TEXT pairs. 500 tokens cannot produce 96 lines under any
-encoding, so the request shape has been narrower than the parser it
-feeds since it was written — independently of any thinking-model issue.
+## `max_tokens`: SPLIT OUT of this change entirely
 
-Proposed **2048**: enough to reach the parser's own line ceiling with
-headroom, still bounded. If a thinking model still starves its own
-content at 2048, the correct fix is an explicit reasoning cap, not
-another blind raise — a budget that hides the problem is worse than one
-that exposes it.
+Revision 1 proposed 500 → 2048 "justified against MAX_LINES=96". **That
+arithmetic was wrong and the change is withdrawn from this cut.**
 
-### Explicitly NOT changed
+* `MAX_FIELDS = 32` (`truth_contract.py:28-33`, enforced `:233-235`), so
+  at most 32 pairs — 64 meaningful lines — can ever be admitted, not the
+  ~48 pairs I asserted from `MAX_LINES` alone.
+* Line count does not establish token count under an unspecified
+  tokenizer, so no line ceiling justifies any particular budget.
+* Raising the ceiling makes `line_limit_exceeded` MORE reachable, and
+  that is already an observed failure.
+* The live path is worse than I understood: `observe()` runs on the
+  ~60-second daemon cycle (`daemon/maez_daemon.py:10948`) against a
+  fixed 45-second HTTP timeout (`skills/screen_perception.py:80-93`).
+  Raising generation capacity on a synchronous call inside that budget
+  is a latency risk, not a free improvement.
+* And `screen_perception.py:825-845` reads only `message.content`,
+  discarding `finish_reason`. So a truncated or reasoning-starved reply
+  is indistinguishable from a genuine refusal today.
 
-No parser rule, no regex, no refusal token, no honesty rule. The parser
-is correctly refusing malformed input and stays exactly as strict.
+Correct order, as separate work: **make termination observable first**
+(record `finish_reason` and any reasoning-token count), measure real
+output lengths against a dense frame, and only then set a budget. A
+raise applied before that observability would hide starvation rather
+than fix it — which is exactly the shape of defect the full-body audit
+found across S7.
+
+This cut is therefore a **pure format repair**: prompt text only, no
+budget change, no parser change, no scoring change.
+
+## Explicitly NOT changed
+
+No parser rule, no regex, no refusal token, no scoring, no request
+budget. The parser is correctly refusing malformed input and stays
+exactly as strict. The `max_tokens` question is real and is deferred
+with its prerequisite named.
