@@ -2059,3 +2059,102 @@ class ContainmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _declared_blank_case(test: unittest.TestCase, declared=("full_640",)):
+    """A case whose labels are visible only at higher transforms, with the
+    owner EXPLICITLY declaring that nothing is readable at `declared`."""
+    temp = tempfile.TemporaryDirectory(prefix="maez-frozen-blank-")
+    test.addCleanup(temp.cleanup)
+    fixture = _PrivateBenchFixture(Path(temp.name))
+    fixture.label["labels"] = [
+        {
+            "label_id": "cmd-1",
+            "region_id": "titlebar",
+            "region_aliases": ["titlebar", "window title"],
+            "kind": "command",
+            "text": "htop",
+            "visible_in": ["full_1280", "active_native"],
+        }
+    ]
+    fixture.label["no_readable_labels_at"] = list(declared)
+    fixture.write()
+    return load_frame_case(fixture.root, fixture.frame_id)
+
+
+class DeclaredUnreadableTransformTests(unittest.TestCase):
+    """Owner may declare a transform legitimately unreadable (2026-08-17).
+
+    Frame-003 of the live corpus has no label legible at full_640 (a 0.281x
+    downscale of a terminal). The harness refused the WHOLE run for it. A
+    resolution where nothing is legible is a real measurement, not a corpus
+    defect -- but it must be AUTHORED, never inferred, or a forgotten label
+    silently becomes a pass.
+    """
+
+    def test_declared_blank_transform_scores_vacuously_instead_of_refusing(self):
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        score = score_transform(case, "full_640", parse_and_validate("NO_TEXT_VISIBLE"))
+        self.assertEqual(score.transform_name, "full_640")
+        self.assertEqual(score.coverage.correct_text_denominator, 0)
+        self.assertEqual(score.coverage.correct_text_numerator, 0)
+        self.assertEqual(score.coverage.abstention_denominator, 0)
+        self.assertEqual(score.coverage.abstention_numerator, 0)
+
+    def test_undeclared_empty_labels_still_refuse(self):
+        """The author-forgot case must stay caught."""
+        ScoringRefusal, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self, declared=())
+        with self.assertRaises(ScoringRefusal) as caught:
+            score_transform(case, "full_640", parse_and_validate("NO_TEXT_VISIBLE"))
+        self.assertEqual(caught.exception.reason, "labels_empty_for_transform")
+
+    def test_declaring_a_transform_that_has_labels_is_a_contradiction(self):
+        """The declaration must not be usable to suppress real ground truth."""
+        with self.assertRaises(HarnessRefusal) as caught:
+            _declared_blank_case(self, declared=("full_1280",))
+        self.assertEqual(caught.exception.reason, "label_schema_invalid")
+
+    def test_invented_text_at_a_declared_blank_transform_is_still_caught(self):
+        """A blank transform is the strongest hallucination trap, not a free pass."""
+        from core.vision_contract.frozen_frame import find_invented_specificity_in_text
+
+        case = _declared_blank_case(self)
+        findings = find_invented_specificity_in_text(
+            case, "full_640", "The terminal shows main.py open in the editor."
+        )
+        self.assertTrue(findings, "claiming unreadable content must still be flagged")
+        self.assertEqual(findings[0].kind, "filename")
+        self.assertEqual(findings[0].value, "main.py")
+        self.assertEqual(findings[0].transform_name, "full_640")
+
+    def test_a_claim_matching_higher_transform_truth_is_still_invented_when_blank(self):
+        """Truth legible at 1280 is NOT licence to claim it at 640."""
+        from core.vision_contract.frozen_frame import find_invented_specificity_in_text
+
+        case = _declared_blank_case(self)
+        findings = find_invented_specificity_in_text(
+            case, "full_640", "I can see run.sh in the terminal."
+        )
+        self.assertTrue(findings, "higher-resolution truth must not excuse a 640 claim")
+
+    def test_monotonicity_tolerates_a_declared_blank_transform(self):
+        _, aggregate_coverage, check_evidence_monotonicity, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        verdicts = {name: parse_and_validate("NO_TEXT_VISIBLE") for name in TRANSFORM_ORDER}
+        findings = check_evidence_monotonicity(case, verdicts)
+        self.assertEqual(findings, ())
+        agg = aggregate_coverage(tuple(score_transform(case, n, verdicts[n]) for n in TRANSFORM_ORDER))
+        # the blank transform contributes 0/0 and does not inflate any denominator
+        self.assertEqual(agg.correct_text_denominator, 2)
+
+    def test_hallucinated_fields_at_a_blank_transform_do_not_crash_monotonicity(self):
+        _, _, check_evidence_monotonicity, _ = _scoring_imports()
+        case = _declared_blank_case(self)
+        verdicts = {
+            "full_640": parse_and_validate("REGION: titlebar\nTEXT: main.py"),
+            "full_1280": parse_and_validate("NO_TEXT_VISIBLE"),
+            "active_native": parse_and_validate("NO_TEXT_VISIBLE"),
+        }
+        check_evidence_monotonicity(case, verdicts)

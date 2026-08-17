@@ -115,6 +115,10 @@ class FrameCase:
     label_sha256: str
     crop: CropBox
     labels: tuple[HumanLabel, ...]
+    # Transforms the OWNER has declared legibly blank. Authored, never
+    # inferred: an empty label set that is not declared here stays a
+    # refusal, so a forgotten label cannot become a silent pass.
+    no_readable_labels_at: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -368,7 +372,10 @@ def load_frame_case(bench_root: Path, frame_id: str) -> FrameCase:
         "active_window_crop",
         "labels",
     }
-    if not isinstance(label_data, dict) or not set(label_data).issubset(expected_keys):
+    optional_keys = {"no_readable_labels_at"}
+    if not isinstance(label_data, dict) or not set(label_data).issubset(
+        expected_keys | optional_keys
+    ):
         raise HarnessRefusal("label_schema_invalid")
     if (
         label_data.get("schema_version") != LABEL_SCHEMA_VERSION
@@ -383,7 +390,7 @@ def load_frame_case(bench_root: Path, frame_id: str) -> FrameCase:
         raise HarnessRefusal("third_party_review_missing")
     if "active_window_crop" not in label_data:
         raise HarnessRefusal("active_crop_missing")
-    if set(label_data) != expected_keys:
+    if set(label_data) - optional_keys != expected_keys:
         raise HarnessRefusal("label_schema_invalid")
 
     source_path = _private_artifact(root, "frames", f"{frame_id}.png")
@@ -413,6 +420,21 @@ def load_frame_case(bench_root: Path, frame_id: str) -> FrameCase:
 
     crop = _load_crop(label_data.get("active_window_crop"), image_size=image_size)
     labels = _load_human_labels(label_data.get("labels"))
+    declared_blank = label_data.get("no_readable_labels_at", [])
+    if not isinstance(declared_blank, list) or not all(
+        isinstance(name, str) for name in declared_blank
+    ):
+        raise HarnessRefusal("label_schema_invalid")
+    if len(set(declared_blank)) != len(declared_blank):
+        raise HarnessRefusal("label_schema_invalid")
+    for name in declared_blank:
+        if name not in TRANSFORM_ORDER:
+            raise HarnessRefusal("label_schema_invalid")
+        # Declaring a transform blank while labelling it is a contradiction,
+        # and would let the declaration suppress real ground truth.
+        if any(name in label.visible_in for label in labels):
+            raise HarnessRefusal("label_schema_invalid")
+
     return FrameCase(
         frame_id=frame_id,
         source_bytes=source_bytes,
@@ -420,6 +442,7 @@ def load_frame_case(bench_root: Path, frame_id: str) -> FrameCase:
         label_sha256=_sha256(label_bytes),
         crop=crop,
         labels=labels,
+        no_readable_labels_at=tuple(declared_blank),
     )
 
 
@@ -507,6 +530,23 @@ def _coverage(
     )
 
 
+def _labels_for_audit(
+    case: FrameCase, transform_name: str
+) -> tuple[HumanLabel, ...]:
+    """Applicable labels for auditing, tolerating a declared-blank transform.
+
+    A transform the owner declared legibly blank has NO human truth, so the
+    audit set is empty and every specificity claim the candidate makes is
+    invented by definition. That is the strictest reading, not a lenient one.
+    """
+    if transform_name not in TRANSFORM_ORDER:
+        raise ScoringRefusal("invalid_transform")
+    if transform_name in case.no_readable_labels_at:
+        return ()
+    labels, _ = _applicable_aliases(case, transform_name)
+    return labels
+
+
 def _applicable_aliases(
     case: FrameCase, transform_name: str
 ) -> tuple[tuple[HumanLabel, ...], dict[str, str]]:
@@ -529,6 +569,22 @@ def score_transform(
     case: FrameCase, transform_name: str, verdict: Verdict
 ) -> TransformScore:
     """Score one schema-valid verdict against owner-authored labels only."""
+    if transform_name in case.no_readable_labels_at:
+        # The owner has declared nothing is legible here. There is no ground
+        # truth to score against, so coverage is VACUOUS (0/0) -- not a pass,
+        # not a failure, and it contributes nothing to either aggregate
+        # numerator or denominator. Invented-specificity detection is
+        # unaffected and runs independently: a transform declared blank is
+        # the strongest hallucination trap in the corpus, not a free pass.
+        if transform_name not in TRANSFORM_ORDER:
+            raise ScoringRefusal("invalid_transform")
+        if verdict.verdict == "rejected":
+            raise ScoringRefusal("candidate_verdict_rejected")
+        return TransformScore(
+            transform_name=transform_name,
+            coverage=_coverage(correct=0, abstained=0, denominator=0),
+            full_value_hashes=(),
+        )
     labels, aliases = _applicable_aliases(case, transform_name)
     if verdict.verdict == "rejected":
         raise ScoringRefusal("candidate_verdict_rejected")
@@ -618,6 +674,15 @@ def check_evidence_monotonicity(
     partials: dict[str, dict[str, tuple[str, ...]]] = {}
     full_texts: dict[str, dict[str, tuple[str, ...]]] = {}
     for name in ordered_names:
+        if name in case.no_readable_labels_at:
+            # Declared legibly blank: there is no owner region set to map
+            # candidate fields into, so this transform contributes no
+            # evidence in either direction. You cannot lose evidence you
+            # never legitimately had, and anything the candidate claims here
+            # is handled by invented-specificity, not by monotonicity.
+            partials[name] = {}
+            full_texts[name] = {}
+            continue
         _, aliases = _applicable_aliases(case, name)
         partial_by_region: dict[str, list[str]] = {}
         full_by_region: dict[str, list[str]] = {}
@@ -766,7 +831,7 @@ def find_invented_specificity(
     case: FrameCase, transform_name: str, verdict: Verdict
 ) -> tuple[InventedSpecificity, ...]:
     """Find every high-specificity candidate string absent from owner truth."""
-    _applicable_aliases(case, transform_name)
+    _labels_for_audit(case, transform_name)
     if verdict.verdict != "ok":
         return ()
     return find_invented_specificity_in_text(
@@ -780,7 +845,7 @@ def find_invented_specificity_in_text(
     case: FrameCase, transform_name: str, *texts: str
 ) -> tuple[InventedSpecificity, ...]:
     """Audit untrusted text with the shared detector, without reparsing it."""
-    labels, _ = _applicable_aliases(case, transform_name)
+    labels = _labels_for_audit(case, transform_name)
     human_claims = {
         (claim.kind, claim.value)
         for label in labels
