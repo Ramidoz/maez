@@ -717,6 +717,14 @@ def _evaluate_frames(
             evidence = check_evidence_monotonicity(case, verdicts)
             aggregate = aggregate_coverage(tuple(scores[name] for name in TRANSFORM_ORDER))
             frame_reasons.extend(finding.reason for finding in evidence)
+        # A claim to have READ text at a transform the owner declared
+        # illegible. Counted per transform, surfaced as its own hard-fail
+        # reason so it can never be confused with an ordinary miss.
+        claimed_blank = sum(
+            score.declared_blank_transcribed_count for score in scores.values()
+        )
+        if claimed_blank:
+            frame_reasons.append("transcribed_at_declared_blank")
         if frame_invented:
             frame_reasons.append("invented_specificity")
         all_invented.extend(frame_invented)
@@ -752,6 +760,11 @@ def _evaluate_frames(
                 "coverage_by_transform": [
                     {
                         "transform": name,
+                        "declared_blank_transcribed_count": (
+                            scores[name].declared_blank_transcribed_count
+                            if name in scores
+                            else None
+                        ),
                         "coverage": _coverage_receipt(scores[name].coverage)
                         if name in scores
                         else None,

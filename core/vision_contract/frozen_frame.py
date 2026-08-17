@@ -146,6 +146,11 @@ class TransformScore:
     transform_name: str
     coverage: Coverage
     full_value_hashes: tuple[tuple[str, tuple[str, ...]], ...]
+    # Fields claiming to have READ text at a transform the owner declared
+    # illegible. Any value above zero is a claim to have read the unreadable,
+    # measurable without knowing any content. Always 0 where the owner
+    # supplied truth, because the counter is meaningless there.
+    declared_blank_transcribed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -614,10 +619,22 @@ def score_transform(
             raise ScoringRefusal("invalid_transform")
         if verdict.verdict == "rejected":
             raise ScoringRefusal("candidate_verdict_rejected")
+        # An [UNREADABLE]-only field here is correct behaviour and costs
+        # nothing. A transcribed or PARTIAL field asserts that some text was
+        # read at a resolution the owner confirmed illegible -- partial
+        # counts too, because it still claims a legible portion exists.
+        claimed = 0
+        if verdict.verdict == "ok":
+            claimed = sum(
+                1
+                for field in verdict.fields
+                if field.provenance in {"transcribed", "partial"}
+            )
         return TransformScore(
             transform_name=transform_name,
             coverage=_coverage(correct=0, abstained=0, denominator=0),
             full_value_hashes=(),
+            declared_blank_transcribed_count=claimed,
         )
     labels, aliases = _applicable_aliases(case, transform_name)
     if verdict.verdict == "rejected":

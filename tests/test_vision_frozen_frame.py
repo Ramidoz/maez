@@ -2193,3 +2193,55 @@ class DeclaredUnreadableTransformTests(unittest.TestCase):
             "active_native": parse_and_validate("NO_TEXT_VISIBLE"),
         }
         check_evidence_monotonicity(case, verdicts)
+
+    def test_transcribing_at_a_declared_blank_transform_is_counted(self):
+        """Claiming to READ what the owner declared illegible (2026-08-17).
+
+        The re-run after the prompt fix showed both LFM candidates returning
+        ok with fields at frame-003/full_640 -- the transform the owner
+        personally confirmed unreadable -- and the receipt could not say
+        whether those fields were honest [UNREADABLE] or fabrication. This
+        closes that: a transcribed or partial field at a declared-blank
+        transform is a claim to have read the unreadable, detectable from a
+        provenance count with no knowledge of content.
+        """
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+
+        honest = score_transform(
+            case, "full_640", parse_and_validate("REGION: titlebar\nTEXT: [UNREADABLE]")
+        )
+        self.assertEqual(honest.declared_blank_transcribed_count, 0)
+
+        fabricated = score_transform(
+            case, "full_640", parse_and_validate("REGION: titlebar\nTEXT: Settings")
+        )
+        self.assertEqual(fabricated.declared_blank_transcribed_count, 1)
+
+        partial = score_transform(
+            case,
+            "full_640",
+            parse_and_validate("REGION: titlebar\nTEXT: Set [UNREADABLE]"),
+        )
+        self.assertEqual(
+            partial.declared_blank_transcribed_count,
+            1,
+            "a partial claim still asserts some text was read",
+        )
+
+    def test_abstaining_at_a_declared_blank_transform_costs_nothing(self):
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        for raw in ("NO_TEXT_VISIBLE", "REGION: titlebar\nTEXT: [UNREADABLE]"):
+            score = score_transform(case, "full_640", parse_and_validate(raw))
+            self.assertEqual(score.declared_blank_transcribed_count, 0)
+            self.assertEqual(score.coverage.correct_text_denominator, 0)
+
+    def test_a_labelled_transform_reports_no_declared_blank_count(self):
+        """The counter is meaningless where the owner DID supply truth."""
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        score = score_transform(
+            case, "full_1280", parse_and_validate("REGION: titlebar\nTEXT: deploy.sh")
+        )
+        self.assertEqual(score.declared_blank_transcribed_count, 0)
