@@ -1,8 +1,9 @@
-# Two staged runs — vision bake-off, and MTP+vision
+# Three staged runs — vision bake-off, MTP+vision, and Qwen3.8
 
-2026-08-16. **STAGED, NOT RUN.** Both are prepared to the point where
-the only thing missing is a decision or a window from the owner.
-Everything mechanical is done and verified.
+2026-08-16. **STAGED, NOT RUN.** All three are prepared to the point
+where the only thing missing is a decision or a window from the owner.
+Every file is downloaded and header-verified; every command is written
+out; two candidates are proven to load and serve.
 
 ---
 
@@ -152,15 +153,6 @@ load and serve. Nothing further needs fetching for Run A.
 
 Kill each candidate when its run finishes; nothing should be left
 holding VRAM.
-
-### Open question, not yet answered
-
-A newer candidate exists that fits the gap: **MiniCPM-V 4.6** (~1.3B,
-reported to compete with 7B-class models on OCR and document
-understanding — *unverified at source*). The three current candidates
-were chosen in June. Adding a fourth costs one download and one run,
-and would stop the bake-off from answering a question two months stale.
-Owner's call.
 
 ---
 
