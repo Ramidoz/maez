@@ -113,3 +113,63 @@ I did not change the prompt. Three reasons:
 The four existing receipts stay. They are the honest record of what this
 contract does to compliant-but-decorated output, and they are the
 before-half of the comparison.
+
+---
+
+## Proposed replacement bytes (for gating, not yet applied)
+
+Every honesty rule in the current prompt is preserved; only the format
+instruction changes. Diff in intent: remove placeholder brackets, give a
+literal example, forbid the three decorations observed as failures, and
+name the one legal bracketed token.
+
+```text
+Transcribe ONLY text that is visibly present in this image.
+
+Output format. Respond with one or more two-line blocks, exactly like
+this worked example and nothing else:
+
+REGION: titlebar
+TEXT: Settings
+REGION: terminal
+TEXT: build finished
+
+Format rules — output that breaks any of these is discarded unread:
+- The very first character of your reply must be the R of REGION.
+- No code fences, no ``` markers, no markdown bold or italics.
+- No preamble, heading, explanation, apology, or closing remark.
+- A REGION label is plain words only: letters, digits, spaces, hyphens,
+  underscores. No brackets, quotes, colons, or punctuation.
+- [UNREADABLE] is the ONLY bracketed token allowed anywhere, and it may
+  appear only on a TEXT line.
+
+Honesty rules — these are the point of the task:
+- Transcribe or abstain. Never infer or guess a filename, command,
+  application name, error message, or any text you cannot actually read.
+- If a region is partially legible, transcribe the legible part and mark
+  the rest [UNREADABLE].
+- If a region's text cannot be read at all at this resolution, write
+  TEXT: [UNREADABLE]
+- If no text is visible anywhere in the image, your entire reply must be
+  exactly: NO_TEXT_VISIBLE
+- Do not describe, interpret, or narrate. Transcribed text only.
+```
+
+### `max_tokens`, justified rather than guessed
+
+Currently 500. The parser accepts up to `MAX_LINES = 96` and
+`MAX_RAW_CHARS = 67072`, so the contract already permits ~48
+REGION/TEXT pairs. 500 tokens cannot produce 96 lines under any
+encoding, so the request shape has been narrower than the parser it
+feeds since it was written — independently of any thinking-model issue.
+
+Proposed **2048**: enough to reach the parser's own line ceiling with
+headroom, still bounded. If a thinking model still starves its own
+content at 2048, the correct fix is an explicit reasoning cap, not
+another blind raise — a budget that hides the problem is worse than one
+that exposes it.
+
+### Explicitly NOT changed
+
+No parser rule, no regex, no refusal token, no honesty rule. The parser
+is correctly refusing malformed input and stays exactly as strict.
