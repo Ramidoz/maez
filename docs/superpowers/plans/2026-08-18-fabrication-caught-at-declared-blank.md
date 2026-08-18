@@ -101,3 +101,81 @@ post-prompt-fix (`1609*`). Three rounds, three different harness or
 prompt states, and none of them comparable as a ranking — which is
 itself the record of how much moved underneath this bake-off before it
 ever measured a model.
+
+---
+
+## CORRECTION, same day, after cross-lane review
+
+The second lane refused the causal story above and was right. I verified
+both of its corrections against the receipts myself.
+
+**1. LFM-450M never abstained at the declared-illegible cell.** Its
+verdict at frame-003/`full_640` across the three runs:
+
+| run | verdict | fields |
+|---|---|---|
+| before the prompt fix | **rejected** (`malformed_schema`) | 0 |
+| after the prompt fix | ok | 1 |
+| with counters live | ok | 1 |
+
+Its three abstentions were at frame-002/640 and frame-003 at 1280 and
+native — never at the cell in question. So "it stopped abstaining there
+and began fabricating" is false. What actually changed is that its
+output at that cell went from **malformed to well-formed**. Whether it
+was already making a claim there is *unknowable*: unparseable output
+cannot be inspected for claims.
+
+**2. LFM-1.6B was already returning a field at that cell before my
+change** — `ok`, 1 field, before the prompt fix; 2 fields after. So my
+rule did not cause it to start.
+
+**Therefore the claim "my prompt change converted honest abstention into
+fabrication" is WITHDRAWN as unsupported.** What survives is narrower
+and still worth having: under the current configuration both LFM
+candidates make transcription claims where the owner declared nothing
+readable, and at least one of them was doing so before I touched
+anything. The counter did not catch a defect I introduced. It made
+visible something that was probably there all along — which is a better
+result for the instrument and a worse one for my account of it.
+
+**3. `unknown_region_at_declared_blank` over-accuses.** A REGION value is
+an open-vocabulary *location* descriptor, and the prompt invites words
+like `titlebar` and `terminal`. A label outside the owner's alias set is
+**unsupported**, which is worth flagging — but it does not establish
+that the model read hidden text. I described it as a "region-label
+claim" alongside the transcription counter, which reads as a second
+fabrication finding. It is not. It is a weaker signal and must be
+reported as an unsupported descriptor, not as invention.
+
+**4. The commit `08bcd88` changed a bundle**, not one sentence — worked
+example, format prohibitions, region syntax, and the abstention rule
+together. Even where behaviour did change, no single sentence is
+isolated by this evidence.
+
+### What would actually settle it
+
+Two prompts identical byte-for-byte except the disputed sentence; prompt
+hash, request parameters, model artifact, backend build and seed all
+pinned in the receipt (which today records only a model alias);
+repetitions in randomised order; content-free counters only. None of
+that exists yet, so the sentence-level causal question is **UNVERIFIED**
+and should be left that way rather than argued.
+
+### The structural gap the review named
+
+The contract has no way to say *"text is present here and I cannot read
+any of it"* without also producing a REGION label the model may be
+unable to ground. A global token — the review suggested something like
+`TEXT_PRESENT_UNREADABLE` — would let a model state the epistemic fact
+without being forced into a second claim to do it. That is instrument
+repair, not coaching, and it is distinct from rewording to rescue a
+candidate.
+
+### Disposition
+
+Preserve these receipts as valid hard failures **for exactly this
+configuration**. Do not reword to rescue anyone. Do not treat the
+pre-change prompt as a control — its bracket contradiction contaminates
+it. The scoped claim that stands is: *both LFM candidates fabricated on
+this corpus under this contract.* Not that they are dishonest models,
+and not that I made them so.
