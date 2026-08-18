@@ -2349,7 +2349,7 @@ class DeclaredBlankBenchWiringTests(unittest.TestCase):
         echo = score_transform(
             case, "full_640", parse_and_validate(f"REGION: {region}\nTEXT: {text}")
         )
-        self.assertEqual(echo.declared_blank_example_echo_count, 1)
+        self.assertEqual(echo.example_echo_count, 1)
         self.assertEqual(echo.declared_blank_transcribed_count, 0,
                          "an echo must not be counted as a transcription claim")
 
@@ -2365,5 +2365,78 @@ class DeclaredBlankBenchWiringTests(unittest.TestCase):
                 f"REGION: {region}\nTEXT: {text}\nREGION: statusbar\nTEXT: deploy done"
             ),
         )
-        self.assertEqual(s.declared_blank_example_echo_count, 1)
+        self.assertEqual(s.example_echo_count, 1)
         self.assertEqual(s.declared_blank_transcribed_count, 1)
+
+    def test_echo_wiring_reaches_reasons_and_receipt(self):
+        """Gate round: mutation showed the echo bench wiring was unpinned."""
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        r0, t0 = prompt_example_fields()[0]
+        receipts, reasons = self._run(
+            {
+                "full_640": f"REGION: {r0}\nTEXT: {t0}",
+                "full_1280": "REGION: titlebar\nTEXT: deploy.sh",
+                "active_native": "REGION: titlebar\nTEXT: deploy.sh",
+            }
+        )
+        self.assertIn("example_echo_at_declared_blank", reasons)
+        self.assertIn("example_echo_present", reasons)
+        self.assertNotIn("transcribed_at_declared_blank", reasons)
+        blank = next(
+            row for row in receipts[0]["coverage_by_transform"]
+            if row["transform"] == "full_640"
+        )
+        self.assertEqual(blank["example_echo_count"], 1)
+        self.assertEqual(blank["declared_blank_unknown_region_count"], 0)
+
+    def test_echo_at_a_LABELLED_transform_is_flagged_too(self):
+        """Lane parity: a parrot at a readable transform must not score as a
+        silent 0/n miss."""
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        r0, t0 = prompt_example_fields()[0]
+        receipts, reasons = self._run(
+            {
+                "full_640": "REGION: titlebar\nTEXT: [UNREADABLE]",
+                "full_1280": f"REGION: {r0}\nTEXT: {t0}",
+                "active_native": "REGION: titlebar\nTEXT: deploy.sh",
+            }
+        )
+        self.assertIn("example_echo_present", reasons)
+        self.assertNotIn("example_echo_at_declared_blank", reasons)
+        row = next(
+            r for r in receipts[0]["coverage_by_transform"]
+            if r["transform"] == "full_1280"
+        )
+        self.assertEqual(row["example_echo_count"], 1)
+
+    def test_planted_text_under_an_invented_region_is_still_a_region_claim(self):
+        """Gate probe: REGION: FAKE SECRET AREA / TEXT: <example> hid the
+        region claim entirely. The pair rule closes it."""
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        _, _, _, score_transform = _scoring_imports()
+        _, t0 = prompt_example_fields()[0]
+        case = _declared_blank_case(self)
+        s = score_transform(
+            case, "full_640",
+            parse_and_validate(f"REGION: FAKE SECRET AREA\nTEXT: {t0}"),
+        )
+        self.assertEqual(s.example_echo_count, 1)
+        self.assertEqual(s.declared_blank_transcribed_count, 0)
+        self.assertEqual(s.declared_blank_unknown_region_count, 1,
+                         "the invented region must still be counted")
+
+    def test_merged_example_values_are_still_an_echo(self):
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        _, _, _, score_transform = _scoring_imports()
+        (_, t0), (_, t1) = prompt_example_fields()[:2]
+        case = _declared_blank_case(self)
+        s = score_transform(
+            case, "full_640",
+            parse_and_validate(f"REGION: titlebar\nTEXT: {t0} {t1}"),
+        )
+        self.assertEqual(s.example_echo_count, 1)
+        self.assertEqual(s.declared_blank_transcribed_count, 0)

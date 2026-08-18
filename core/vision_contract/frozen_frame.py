@@ -166,13 +166,14 @@ class TransformScore:
     # Do not present it beside the transcription count as a second
     # fabrication finding.
     declared_blank_unknown_region_count: int = 0
-    # Fields that COPY the prompt's own worked example. An echo is evidence
-    # the model parrots the instrument, never evidence it read the unreadable
-    # -- Lane P's first run showed the smallest candidate echoing the example
-    # on 123 of 128 cards, and rounds 2-3 of the private bake-off convicted
-    # models of "inventing" bytes the prompt itself had planted. Echo fields
-    # are excluded from BOTH counters above.
-    declared_blank_example_echo_count: int = 0
+    # Fields whose TEXT is composed entirely of the prompt's own example
+    # bytes -- counted at EVERY transform, not only declared-blank ones, so a
+    # parrot at a labelled transform is flagged rather than silently scoring
+    # zero coverage. Echoed TEXT is excluded from the transcription counter;
+    # the REGION half is excluded from the unknown-region counter ONLY when
+    # the whole (region, text) pair is a planted example pair -- a fabricated
+    # region carrying planted text is still a region claim.
+    example_echo_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -649,7 +650,10 @@ def score_transform(
         smuggled = 0
         echoed = 0
         if verdict.verdict == "ok":
-            from core.vision_contract.truth_contract import is_example_echo
+            from core.vision_contract.truth_contract import (
+                is_example_echo,
+                is_example_pair,
+            )
 
             echo_fields = [f for f in verdict.fields if is_example_echo(f.text)]
             real_fields = [f for f in verdict.fields if not is_example_echo(f.text)]
@@ -661,15 +665,20 @@ def score_transform(
             )
             # The frame's regions are known even where their text is not
             # legible, so an unrecognised region label at a declared-blank
-            # transform is itself a claim about what is on screen. Echo
-            # fields are excluded: an echoed region is part of the echo.
+            # transform is itself a claim about what is on screen. A field is
+            # excused from the region check only when its WHOLE (region,
+            # text) pair is planted -- planted text under an invented region
+            # is still an invented region.
             known = {
                 alias.casefold()
                 for label in case.labels
                 for alias in (*label.aliases, label.region_id)
             }
             smuggled = sum(
-                1 for field in real_fields if field.region.casefold() not in known
+                1
+                for field in verdict.fields
+                if field.region.casefold() not in known
+                and not is_example_pair(field.region, field.text)
             )
         return TransformScore(
             transform_name=transform_name,
@@ -677,15 +686,25 @@ def score_transform(
             full_value_hashes=(),
             declared_blank_transcribed_count=claimed,
             declared_blank_unknown_region_count=smuggled,
-            declared_blank_example_echo_count=echoed,
+            example_echo_count=echoed,
         )
     labels, aliases = _applicable_aliases(case, transform_name)
     if verdict.verdict == "rejected":
         raise ScoringRefusal("candidate_verdict_rejected")
 
+    from core.vision_contract.truth_contract import is_example_echo
+
     fields_by_region: dict[str, list[Field]] = {}
+    echo_count = 0
     if verdict.verdict == "ok":
         for field in verdict.fields:
+            if is_example_echo(field.text):
+                # A planted-example field never participates in coverage and
+                # never triggers unknown_region here: at a labelled transform
+                # the echo IS the finding, and refusing on its made-up region
+                # would re-conflate parroting with region invention.
+                echo_count += 1
+                continue
             region_id = aliases.get(field.region.casefold())
             if region_id is None:
                 raise ScoringRefusal("unknown_region")
@@ -729,6 +748,7 @@ def score_transform(
             denominator=len(labels),
         ),
         full_value_hashes=full_value_hashes,
+        example_echo_count=echo_count,
     )
 
 
@@ -781,7 +801,11 @@ def check_evidence_monotonicity(
         _, aliases = _applicable_aliases(case, name)
         partial_by_region: dict[str, list[str]] = {}
         full_by_region: dict[str, list[str]] = {}
+        from core.vision_contract.truth_contract import is_example_echo
+
         for field in verdicts[name].fields:
+            if is_example_echo(field.text):
+                continue  # planted bytes carry no evidence in either direction
             region_id = aliases[field.region.casefold()]
             if field.provenance == "partial":
                 partial_by_region.setdefault(region_id, []).append(field.text)

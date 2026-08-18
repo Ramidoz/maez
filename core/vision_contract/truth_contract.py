@@ -58,7 +58,8 @@ TRANSCRIBE_PROMPT = """Transcribe ONLY text that is visibly present in this imag
 
 Output format. Respond with one or more two-line blocks. The example below
 shows the SHAPE only -- its words are placeholders. Never copy them; every
-TEXT line you write must come from the image itself:
+TEXT line you write must be read from the image itself, or be the
+[UNREADABLE] marker:
 
 REGION: example area one
 TEXT: example text one
@@ -100,6 +101,8 @@ def prompt_example_fields() -> tuple[tuple[str, str], ...]:
     region: str | None = None
     for line in TRANSCRIBE_PROMPT.splitlines():
         line = line.strip()
+        if line.startswith("Format rules"):
+            break  # examples live above the rules; never harvest rule prose
         if line.upper().startswith("REGION:"):
             region = line.split(":", 1)[1].strip()
         elif line.upper().startswith("TEXT:") and region is not None:
@@ -109,9 +112,39 @@ def prompt_example_fields() -> tuple[tuple[str, str], ...]:
 
 
 def is_example_echo(text: str) -> bool:
-    """True when a TEXT value is a copy of the prompt's example content."""
-    stripped = text.strip().lower()
-    return any(stripped == t.lower() for _, t in prompt_example_fields())
+    """True when a TEXT value is composed entirely of planted example bytes.
+
+    Accepts a single example value or any pure concatenation of complete
+    example values (a parrot that merges the example's two TEXT lines is
+    still a parrot). A value with any NON-example residue is not an echo --
+    the residue is a real claim and must be scored as one.
+
+    Residual, accepted and documented: an exact collision between genuine
+    screen text and an example value is observationally ambiguous and will
+    be classed as echo. Example values are self-labelling ("example text
+    one") precisely to make that collision implausible; this is
+    echo-compatible contamination detection, not causal proof of copying.
+    """
+    stripped = " ".join(text.strip().lower().split())
+    if not stripped:
+        return False
+    values = [" ".join(t.lower().split()) for _, t in prompt_example_fields()]
+    if stripped in values:
+        return True
+    remainder = stripped
+    for v in sorted(values, key=len, reverse=True):
+        remainder = remainder.replace(v, " ")
+    return remainder.strip() == ""
+
+
+def is_example_pair(region: str, text: str) -> bool:
+    """True when (region, text) matches a prompt example pair exactly."""
+    r = " ".join(region.strip().lower().split())
+    t = " ".join(text.strip().lower().split())
+    return any(
+        r == " ".join(er.lower().split()) and t == " ".join(et.lower().split())
+        for er, et in prompt_example_fields()
+    )
 
 
 _ABSTAIN = "[UNREADABLE]"

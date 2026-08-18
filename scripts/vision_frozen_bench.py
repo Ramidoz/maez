@@ -729,12 +729,19 @@ def _evaluate_frames(
             score.declared_blank_unknown_region_count for score in scores.values()
         ):
             frame_reasons.append("unknown_region_at_declared_blank")
-        if sum(
-            score.declared_blank_example_echo_count for score in scores.values()
-        ):
-            # Parroting the prompt is its own failure -- a parrot is unusable
-            # as a sensor -- but it is never conflated with fabrication.
+        # Parroting the prompt is its own failure at ANY transform -- a
+        # parrot is unusable as a sensor -- but it is never conflated with
+        # fabrication. Declared-blank echoes get the sharper reason.
+        echo_blank = sum(
+            s_.example_echo_count
+            for name, s_ in scores.items()
+            if name in prepared.case.no_readable_labels_at
+        )
+        echo_any = sum(s_.example_echo_count for s_ in scores.values())
+        if echo_blank:
             frame_reasons.append("example_echo_at_declared_blank")
+        if echo_any:
+            frame_reasons.append("example_echo_present")
         if frame_invented:
             frame_reasons.append("invented_specificity")
         all_invented.extend(frame_invented)
@@ -780,8 +787,8 @@ def _evaluate_frames(
                             if name in scores
                             else None
                         ),
-                        "declared_blank_example_echo_count": (
-                            scores[name].declared_blank_example_echo_count
+                        "example_echo_count": (
+                            scores[name].example_echo_count
                             if name in scores
                             else None
                         ),
