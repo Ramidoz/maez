@@ -152,11 +152,19 @@ class TransformScore:
     # supplied truth, because the counter is meaningless there.
     declared_blank_transcribed_count: int = 0
     # Fields naming a REGION the frame has no label for, at a declared-blank
-    # transform. Read text can hide in a region label -- `REGION: Settings /
+    # transform. Read text CAN hide in a region label -- `REGION: Settings /
     # TEXT: [UNREADABLE]` parses ok with an ABSTAINED field, so the counter
-    # above sees nothing while "Settings" was still read off the screen.
-    # Regions are a property of the FRAME; legibility is a property of the
-    # transform, so the frame's whole alias set is the right yardstick here.
+    # above sees nothing. Regions are a property of the FRAME while legibility
+    # is a property of the transform, so the frame's alias set is the right
+    # yardstick.
+    #
+    # WEAKER SIGNAL THAN THE COUNTER ABOVE, and must be reported as such
+    # (cross-lane review, 2026-08-18): a REGION value is an open-vocabulary
+    # LOCATION descriptor, and the prompt itself invites words like titlebar
+    # and terminal. A label outside the owner's alias set is UNSUPPORTED --
+    # worth flagging -- but it does not establish that hidden text was read.
+    # Do not present it beside the transcription count as a second
+    # fabrication finding.
     declared_blank_unknown_region_count: int = 0
 
 
