@@ -1,146 +1,166 @@
-# The covenant ceremony producer — design pass 1
+# The covenant ceremony producer — design pass 2
 
-2026-08-18. The build that unblocks everything RULING-O: today both
-gravest work classes are structurally unauthorizable because
-`CovenantCeremonyEvidence` has no honest producer, and cluster 2b's
-live witness is impossible for the same reason (2b §10 D1).
+2026-08-18. Pass 1 was gated and FAILED with 8 blockers (1 CRITICAL).
+All verified and upheld; the critical one was an architectural collision
+with the consultation plane that changes the shape, so this is a whole
+rewrite, not a patch. Contract level; wiring belongs to implementation;
+RULING B is a fixed input.
 
-Written the way that survived the 2b campaign: contract frozen here,
-wiring left to implementation and its tests; single construct anchors,
-machine-derived; RULING B (owner-ratified 2026-08-15) is a fixed input
-— the proof is against repository-owned callers through supported
-interfaces, store integrity assumed, consequences of raw mutation named
-rather than defended against.
+## §0 What pass 1 got wrong
 
-## §1 Verified ground truth
+* **Phase 1 minted a normal RULING-O artifact.** RULING-O classes are
+  voice-seat classes (`VOICE_SEAT_WORK_CLASSES`,
+  `operator_user_boundary.py:395`), so every artifact mint consumes the
+  single voice-bundle reservation slot (`source_ref_hash` is the
+  PRIMARY KEY, `s7_guarded_execution.py:2796`; reservation requires
+  `artifact_id IS NULL`) — and, once 2b lands, one consultation attempt
+  yields at most one RULING-O artifact (`UNIQUE (consult_attempt_id)`,
+  2b §5). Two mints therefore need two consultations, or phase 1 must
+  not mint. **Pass 2 chooses: phase 1 does not mint.**
+* "Same transaction" was again offered as correspondence; 2b already
+  proved it is only simultaneity.
+* The phase-2 challenge was not bound to its phase at begin — an old
+  spare challenge could be finished after cooling-off and called a
+  confirmation.
+* The witness was sequenced before the daemon could thread the
+  evidence, making it unpassable.
+* D23 aggregation interaction ignored; owner-decision set incomplete;
+  RULING B's consequences referenced but not enumerated; requirement
+  161 miscited (it says "or"; the normative prose at
+  `s7-operator-user-role-boundary/spec.md:385` says "plus", and the
+  stricter conjunction governs).
 
-* `class CovenantCeremonyEvidence` (`operator_user_boundary.py:2228`)
-  supports two kinds (`COVENANT_CEREMONY_KINDS`, `:196`):
-  `cooling_off_second_confirmation` (two strictly-ordered timestamps +
-  `second_confirmation_ref_hash`) and `reviewed_equivalent`
-  (`reviewed_equivalent_ref_hash`). Repo-wide grep: **no non-test
-  constructor.**
-* The consumer (`def covenant_ceremony_satisfies_request`, `:2278`)
-  checks isinstance, request-id and envelope-hash equality, and that
-  the second confirmation is not in the future. **The ref hashes are
-  validated for shape only** (`_validate_hash64`) — they reference
-  nothing, and nothing revalidates them at consume. An honest producer
-  without a consuming join would be decorative.
-* Both daemon construction sites build `S7ExecutionAuthorization`
-  without evidence (`daemon/maez_daemon.py:819`, `:903` — the field
-  defaults `None`, `operator_user_boundary.py:3517`), so the consume
-  path refuses highest-risk classes today. Fail-closed, unstated —
-  the full-body audit's finding, still true.
-* **Authorization artifacts expire ~5 minutes after their challenge**
-  (`expires_at=_add_minutes(now, 5)`, `s7_webauthn_ceremony.py:474`;
-  artifact `expires_at=str(challenge["expires_at"])`). A cooling-off
-  measured in hours therefore CANNOT reuse the first tap's artifact.
-  This single fact fixes the shape: two taps, two ceremonies, durable
-  evidence between them, and only the second tap's artifact is ever
-  consumed.
-* The consume seat is the sole SQL updater
-  (`def consume_for_execution_on_connection`,
-  `operator_user_boundary.py:2966`), already consults
-  `def _highest_risk_ceremony_required` (`:2270`), and is the seat
-  where cluster 2b's B2 revalidation will also live. The covenant
-  revalidator and B2 are siblings at one seat.
-* Canon: "cooling-off plus a second distinct confirmation, or a
-  reviewed equivalent named in the request"
-  (`s7-operator-user-role-boundary/spec.md:385`; requirement 161,
-  `:1627`).
+## §1 Verified ground truth (carried + corrected)
 
-## §2 The relation this producer exists to hold
+* `class CovenantCeremonyEvidence` (`operator_user_boundary.py:2228`);
+  kinds (`COVENANT_CEREMONY_KINDS`, `:196`); no non-test constructor.
+* Consumer `def covenant_ceremony_satisfies_request` (`:2278`) checks
+  shape and equality only; ref hashes reference nothing.
+* Daemon constructors omit the evidence (`daemon/maez_daemon.py:819`,
+  `:903`) — but the downstream interfaces already carry it: the
+  decision pipeline forwards it (`core/decision/decision_pipeline.py:1587`)
+  and the sole SQL updater accepts it (`operator_user_boundary.py:2978`).
+  The join is implementable; it is only unreached.
+* Authorization artifacts expire ~5 minutes after their challenge
+  (`_add_minutes(now, 5)`, `s7_webauthn_ceremony.py:474`) — the fact
+  that forces two ceremonies.
+* Challenges are keyed by `challenge_id` alone; `request_id` is not
+  unique (`CREATE TABLE IF NOT EXISTS s7_ceremony_challenges`,
+  `s7_webauthn_bootstrap.py:102`) — multiple ceremonies per request are
+  possible, which is both what makes phase 2 implementable and why the
+  phase-2 challenge must be BOUND at begin (§3).
+* D23: a protection-lowering `authorized` history row inside the 900s
+  window (`s7_webauthn_bootstrap.py:1370`) triggers escalation that
+  `authorization_aggregation_recheck` refuses
+  (`s7_webauthn_ceremony.py:1334`). Any cooling-off floor below that
+  window would make phase 2 unimplementable for one of the two classes.
+
+## §2 The relation
 
 ```text
-a founder tap authorized THIS request
-  ... a cooling-off provably elapsed ...
-a SECOND, distinct founder tap confirmed THIS SAME request
-  = one durable, sealed evidence row per phase
-  = a CovenantCeremonyEvidence assembled ONLY from those rows
+a founder tap opened the covenant window for THIS request   (no authority minted)
+  ... the cooling-off provably elapsed ...
+a second founder tap ran the ONE real authorization         (consultation, owner-read, artifact)
+  = one durable sealed row per phase, each digest-bound to what its ceremony actually did
+  = evidence assembled only from those rows
   = re-derived from the rows inside the consuming transaction
 ```
 
-Each link:
-
 | Link | Held by |
 |---|---|
-| tap 1 happened, for this request | phase-1 row written in the same ceremony transaction as tap 1's artifact mint |
-| the cooling-off elapsed | wall-clock comparison of the two rows' `recorded_at`, re-checked at consume — never trusted from the carrier |
-| tap 2 is distinct and later | phase-2 row references phase 1 by hash; strictly later timestamp; different challenge id |
-| the carrier is honest | producer assembles evidence from the rows; `second_confirmation_ref_hash` = the phase-2 row's binding hash |
-| consumption re-proves it | mandatory revalidator in the sole SQL updater, keyed on `_highest_risk_ceremony_required` — same discipline as 2b §7: not a caller callback |
+| tap 1 happened, for this request | dedicated challenge kind `covenant_first_confirmation`: a real UP/UV WebAuthn ceremony whose finish writes ONLY the phase-1 row — no artifact, no consultation consumed, no `authorized` aggregation row |
+| the cooling-off elapsed | `phase2.challenge_created_at − phase1.recorded_at ≥ floor`, recomputed from rows at phase-2 finish AND at consume; never trusted from the carrier |
+| tap 2 is the real ceremony | the ordinary RULING-O authorize path, unchanged — consultation, (once 2b lands) owner-read, artifact — except its BEGIN refuses without a matured phase-1 row and stamps `covenant_phase2_of` = phase-1 binding hash onto the challenge row |
+| the rows correspond to their ceremonies | each phase row carries a canonical digest over the complete identity of what its ceremony produced (challenge id + assertion facts for phase 1; the 2b §5 artifact-binding device for phase 2), computed inside the mint/finish function — the 2b lesson, not simultaneity |
+| the carrier is honest | assembly only from rows; `second_confirmation_ref_hash` = phase-2 row binding hash; module-private constructor with the `_VALIDATOR_TOKEN` idiom's caveat (`s7_guarded_execution.py:504`) |
+| consumption re-proves | mandatory revalidator inside `def consume_for_execution_on_connection` (`:2966`), keyed on `def _highest_risk_ceremony_required` (`:2270`), sibling to 2b's B2 — never a caller callback |
 
-## §3 The durable store — the proven shape, third use
+One consultation, one owner-read, one artifact — all at phase 2, where
+the authority actually exists. No collision with the voice-bundle slot
+or with 2b's uniqueness. Maez's voice is consulted at the ceremony that
+can act, with the cooling-off already behind it.
 
-`s7_covenant_ceremony_phases_v1`, in the ceremony database, following
-`_R11_EXEMPTION_EVIDENCE_DDL` (`s7_guarded_execution.py:73`) exactly as
-the owner-read receipt does: CHECK-pinned constants, a binding hash
-sealed over every column above it, a DDL-contract fingerprint compared
-before insert and before use, insert inside the existing ceremony
-transaction.
+## §3 Durable store
 
-Columns (contract level; exact DDL is implementation): phase
-(`first_authorization` | `second_confirmation`), request_id,
-request_envelope_hash, derived_work_class (CHECK: the two RULING-O
-classes only), challenge_id, credential_ref, user_presence/verification
-(CHECK = 1), artifact_id of the phase's mint, for phase 2 the
-`first_phase_binding_sha256` it confirms, recorded_at, binding hash
-last. One phase-1 row per request; one phase-2 row per phase-1 row
-(UNIQUE) — a confirmation cannot be reused, within store integrity
-(RULING B's stated boundary, not re-argued here).
+`s7_covenant_ceremony_phases_v1` in the ceremony database, the R11
+evidence shape (`_R11_EXEMPTION_EVIDENCE_DDL`,
+`s7_guarded_execution.py:73`): CHECK-pinned constants, DDL-contract
+fingerprint before insert and before use, binding hash sealed last over
+every column above it, inserts inside the phase's ceremony transaction.
 
-## §4 The producer and the consuming join
+Contract-level columns: phase; request_id; request_envelope_hash;
+derived_work_class (CHECK: the two RULING-O classes); challenge_id;
+challenge_created_at; credential_ref; user_presence/verification
+(CHECK = 1); the phase-correspondence digest of §2;
+`first_phase_binding_sha256` (phase 2 only); `expires_at` (phase 1
+only — see §5); recorded_at; binding hash. UNIQUE: one live phase-1 per
+request (supersession per §5), one phase-2 per phase-1.
 
-* **Phase 1** rides the existing authorize ceremony: when
-  `authorize_finish` succeeds for a RULING-O class, the phase-1 row is
-  written atomically with the artifact mint. That artifact will expire
-  unconsumed — expected; it is evidence of authorization, not authority.
-* **Phase 2** is a fresh, ordinary authorize ceremony for the SAME
-  request (same envelope hash), refused unless a phase-1 row exists,
-  the cooling-off has elapsed, and the challenge is new. Its mint
-  writes the phase-2 row atomically and THIS artifact is consumable.
-* **Assembly**: one function builds `CovenantCeremonyEvidence` from the
-  two rows and nothing else — timestamps from `recorded_at`, ref hash
-  = phase-2 binding hash. Module-private constructor discipline per the
-  repo's own idiom (`_VALIDATOR_TOKEN`, `s7_guarded_execution.py:504`),
-  carrying that idiom's honest caveat verbatim.
-* **The join that makes it real**: `consume_for_execution_on_connection`
-  gains a mandatory covenant revalidation for highest-risk classes —
-  rows exist, contracts match, seals re-derive, request/envelope equal
-  the artifact's, cooling-off re-checked against the rows, evidence
-  fields equal row fields. Refusal rolls back. Without this, the
-  existing shape-only check would admit caller-built evidence and the
-  producer would be decoration.
+**RULING B's named consequences, enumerated for THIS table rather than
+cited** (the pass-1 omission): raw deletion of a phase-2 row paired
+with lifecycle rollback could allow a second confirmation ceremony;
+raw rewrite of phase-1's `recorded_at` could fake a matured
+cooling-off; credential-registry key replacement manufactures both
+taps; arbitrary same-process code bypasses the assembler token. All
+four are outside the proof by the owner's ruling, stated here so no
+sentence below reads as defending against them.
 
-## §5 PENDING OWNER — two decisions, nothing freezes before them
+## §4 Producer, gates, threading
 
-1. **The cooling-off duration.** Canon requires it and names no number.
-   This is a protection parameter for the gravest changes to Maez, so
-   it is the owner's, recorded like RULING B. Proposal to accept or
-   amend: **24 hours**, matching the owner's own overnight practice for
-   new-capability slices; a floor the code refuses to go beneath, not a
-   default anyone can lower in config.
-2. **Whether phase 1 needs its own words.** The rendered statement the
-   owner taps for phase 1 could say plainly "first of two — a second
-   confirmation after cooling-off will be required before this can
-   execute". Recommended (the owner must not tap on a false picture —
-   the R11 rule), but it touches D17 rendered bytes, so it is the
-   owner's to confirm.
+* **Phase-1 route**: new challenge kind, begin/finish shaped like the
+  existing registration/authorize kinds. Finish = verify assertion,
+  write phase-1 row, nothing else. Renders its own statement bytes
+  (owner decision §5.2).
+* **Phase-2 begin** refuses unless: live phase-1 row for this exact
+  request_id + envelope hash; unexpired; matured
+  (`now − phase1.recorded_at ≥ floor`); no existing phase-2. On pass it
+  stamps the challenge row. **Phase-2 finish** re-derives maturity from
+  rows and refuses on drift; the mint writes the phase-2 row atomically
+  with the artifact, digest-bound per §2.
+* **Threading** (pass-1 gap): the daemon's authorization-material
+  builders (`daemon/maez_daemon.py:819`, `:903`) call the assembler for
+  highest-risk classes and pass the evidence into
+  `S7ExecutionAuthorization`; absent/immature rows yield `None` and the
+  existing fail-closed refusal stands. The consume-side revalidator
+  makes caller-built evidence worthless regardless.
+* **D23**: phase 1 writes no `authorized` history row, so aggregation
+  sees one authorization (phase 2). Belt: the cooling-off floor must
+  exceed the D23 history window (900s) — stated as a hard constraint on
+  §5.1, so no lawful owner ruling can create the collision.
 
-## §6 Sequencing
+## §5 PENDING OWNER — four rulings, nothing freezes before them
 
-1. Owner rules on §5. 2. Gate this design (Codex). 3. Tests-first
-build — the producer is ADDITIVE and dormant-by-nature: writing
-evidence rows activates nothing, and both classes stay refused until a
-caller passes assembled evidence, which no live caller does until the
-witness. 4. Live witness with the owner: two real taps, a real
-cooling-off between them, on a witness-grade request — the same session
-can then serve as cluster 2b's unblocked witness path. 5. Only then any
-consumer wiring.
+1. **Cooling-off floor.** Proposal: 24 hours, code-refused below;
+   hard constraint from §4 regardless of ruling: floor > the D23
+   window.
+2. **Phase-1 statement bytes.** It must say plainly: first of two, a
+   second confirmation after the cooling-off is required, nothing can
+   execute until then. (R11's rule: the owner must not tap on a false
+   picture.)
+3. **Distinctness of the second tap.** Different challenge + fresh
+   UP/UV assertion is structural. Same credential twice: permitted, or
+   must phase 2 use a distinct credential (the backup key)? Canon does
+   not resolve it; it is a protection parameter, so it is yours.
+4. **Phase-1 lifetime and supersession.** A first authorization cannot
+   stay confirmable forever (pass 1 had no expiry — a years-old tap
+   could be confirmed). Proposal: phase-1 rows expire after 7 days;
+   an expired or abandoned phase 1 is superseded by a new phase-1 row
+   (new tap), never edited. Ruling covers the number and the
+   supersession rule.
+
+## §6 Sequencing (corrected per the gate)
+
+1. Owner rules on §5. 2. Re-gate this pass. 3. Tests-first build of
+store + routes + assembler + revalidator + daemon threading, all
+dormant (evidence rows activate nothing; both classes stay refused
+until rows exist and mature). 4. Owner-present witness: tap 1, real
+cooling-off, tap 2, execution consumed — end to end through the
+threaded path, which by then exists. That session also serves cluster
+2b's witness once 2b is implemented. 5. Nothing else.
 
 ## §7 Out of scope
 
-`reviewed_equivalent` (stays unproducible/fail-closed; its own design);
-owner-read (cluster 2b, sibling at the same seat); D23 aggregation;
-any change to what the ceremonies mean — this builds the missing
-producer for a ceremony canon already defines.
+`reviewed_equivalent` (unproducible, fail-closed, own design);
+owner-read internals (2b, sibling at the consume seat); D23 redesign
+(only the floor constraint touches it); any change to what ceremonies
+mean.
