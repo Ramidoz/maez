@@ -36,6 +36,7 @@ from pathlib import Path
 from core.vision_contract.truth_contract import (
     TRANSCRIBE_PROMPT,
     build_transcribe_request,
+    is_example_echo,
     parse_and_validate,
 )
 
@@ -81,19 +82,28 @@ def score_card(card: dict, verdict, raw: str) -> dict:
            "verdict": verdict.verdict, "reason": verdict.reason,
            "abstained": False, "correct": False, "near_miss": False,
            "wrong_text": False, "invented_on_textless": False,
-           "transcribed_chars": 0}
+           "example_echo": False, "transcribed_chars": 0}
     if verdict.verdict == "empty":
         out["abstained"] = True
         return out
     if verdict.verdict != "ok":
         return out
     fields = verdict.fields or ()
+    # Echo fields copy the prompt's own worked example: their own category,
+    # excluded from transcription so a parrot is never scored as a fabricator
+    # OR as a reader.
+    echo_fields = [f for f in fields if is_example_echo(f.text)]
+    out["example_echo"] = bool(echo_fields)
+    fields = tuple(f for f in fields if not is_example_echo(f.text))
     transcribed = " ".join(
         f.text for f in fields if f.provenance in ("transcribed", "partial")
     ).strip()
     out["transcribed_chars"] = len(transcribed)
     if not transcribed:
-        out["abstained"] = True  # all fields abstained
+        # No real transcription. Pure echo is NOT abstention -- the model
+        # said something, it just said the prompt back.
+        if not echo_fields:
+            out["abstained"] = True
         return out
     if card["category"] in ("blank", "noise"):
         out["invented_on_textless"] = True

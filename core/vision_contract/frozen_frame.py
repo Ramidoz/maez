@@ -166,6 +166,13 @@ class TransformScore:
     # Do not present it beside the transcription count as a second
     # fabrication finding.
     declared_blank_unknown_region_count: int = 0
+    # Fields that COPY the prompt's own worked example. An echo is evidence
+    # the model parrots the instrument, never evidence it read the unreadable
+    # -- Lane P's first run showed the smallest candidate echoing the example
+    # on 123 of 128 cards, and rounds 2-3 of the private bake-off convicted
+    # models of "inventing" bytes the prompt itself had planted. Echo fields
+    # are excluded from BOTH counters above.
+    declared_blank_example_echo_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -640,22 +647,29 @@ def score_transform(
         # counts too, because it still claims a legible portion exists.
         claimed = 0
         smuggled = 0
+        echoed = 0
         if verdict.verdict == "ok":
+            from core.vision_contract.truth_contract import is_example_echo
+
+            echo_fields = [f for f in verdict.fields if is_example_echo(f.text)]
+            real_fields = [f for f in verdict.fields if not is_example_echo(f.text)]
+            echoed = len(echo_fields)
             claimed = sum(
                 1
-                for field in verdict.fields
+                for field in real_fields
                 if field.provenance in {"transcribed", "partial"}
             )
             # The frame's regions are known even where their text is not
             # legible, so an unrecognised region label at a declared-blank
-            # transform is itself a claim about what is on screen.
+            # transform is itself a claim about what is on screen. Echo
+            # fields are excluded: an echoed region is part of the echo.
             known = {
                 alias.casefold()
                 for label in case.labels
                 for alias in (*label.aliases, label.region_id)
             }
             smuggled = sum(
-                1 for field in verdict.fields if field.region.casefold() not in known
+                1 for field in real_fields if field.region.casefold() not in known
             )
         return TransformScore(
             transform_name=transform_name,
@@ -663,6 +677,7 @@ def score_transform(
             full_value_hashes=(),
             declared_blank_transcribed_count=claimed,
             declared_blank_unknown_region_count=smuggled,
+            declared_blank_example_echo_count=echoed,
         )
     labels, aliases = _applicable_aliases(case, transform_name)
     if verdict.verdict == "rejected":

@@ -56,13 +56,14 @@ SpecificityKind = Literal["filename", "shell_command", "shell_prompt"]
 # VLM narrative authority — Sol review 2026-07-09).
 TRANSCRIBE_PROMPT = """Transcribe ONLY text that is visibly present in this image.
 
-Output format. Respond with one or more two-line blocks, exactly like this
-worked example and nothing else:
+Output format. Respond with one or more two-line blocks. The example below
+shows the SHAPE only -- its words are placeholders. Never copy them; every
+TEXT line you write must come from the image itself:
 
-REGION: titlebar
-TEXT: Settings
-REGION: terminal
-TEXT: build finished
+REGION: example area one
+TEXT: example text one
+REGION: example area two
+TEXT: example text two
 
 Format rules - output that breaks any of these is discarded unread:
 - Your reply must begin with REGION. The one exception is the
@@ -86,6 +87,32 @@ Honesty rules - these are the point of the task:
 - If the image contains no visible text anywhere, your entire reply must be
   exactly: NO_TEXT_VISIBLE
 - Do not describe, interpret, or narrate. Transcribed text only."""
+
+def prompt_example_fields() -> tuple[tuple[str, str], ...]:
+    """The prompt's worked-example (region, text) pairs, extracted mechanically.
+
+    Scoring uses this to flag EXAMPLE ECHOES -- output that copies the
+    prompt's example instead of reading the image -- as their own category.
+    Extracted from the live prompt rather than hardcoded, so a prompt
+    revision can never leave a stale echo list behind.
+    """
+    pairs: list[tuple[str, str]] = []
+    region: str | None = None
+    for line in TRANSCRIBE_PROMPT.splitlines():
+        line = line.strip()
+        if line.upper().startswith("REGION:"):
+            region = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("TEXT:") and region is not None:
+            pairs.append((region, line.split(":", 1)[1].strip()))
+            region = None
+    return tuple(pairs)
+
+
+def is_example_echo(text: str) -> bool:
+    """True when a TEXT value is a copy of the prompt's example content."""
+    stripped = text.strip().lower()
+    return any(stripped == t.lower() for _, t in prompt_example_fields())
+
 
 _ABSTAIN = "[UNREADABLE]"
 _REGION_RE = re.compile(r"^REGION:\s*(?P<region>.+)$", re.IGNORECASE)

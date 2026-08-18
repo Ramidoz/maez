@@ -778,3 +778,53 @@ class PromptParserAgreementTests(unittest.TestCase):
         req = build_transcribe_request(image_b64="AAAA", model="m")
         self.assertEqual(req["max_tokens"], 500)
         self.assertEqual(req["temperature"], 0)
+
+
+class ExampleEchoDefenseTests(unittest.TestCase):
+    """The worked example must be self-labelling and machine-extractable.
+
+    Lane P's first run showed lfm-450m answering 123 of 128 cards with the
+    prompt's own worked example, and the private corpus was contaminated the
+    same way. Any literal example can be parroted; the defence is (a) example
+    content that cannot be mistaken for real screen text, and (b) a mechanical
+    extractor so scoring can flag echoes as their own category forever.
+    """
+
+    def test_example_fields_are_extractable(self):
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        fields = prompt_example_fields()
+        self.assertGreaterEqual(len(fields), 2, "prompt must keep a multi-block example")
+        for region, text in fields:
+            self.assertTrue(region and text)
+
+    def test_every_example_field_is_self_labelling(self):
+        """Both halves of every example must announce themselves as examples."""
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        for region, text in prompt_example_fields():
+            self.assertIn("example", region.lower(), f"region not self-labelling: {region!r}")
+            self.assertIn("example", text.lower(), f"text not self-labelling: {text!r}")
+
+    def test_example_fields_still_parse_as_valid_output(self):
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        raw = "\n".join(
+            f"REGION: {r}\nTEXT: {t}" for r, t in prompt_example_fields()
+        )
+        self.assertEqual(parse_and_validate(raw).verdict, "ok")
+
+    def test_prompt_warns_against_copying_the_example(self):
+        low = TRANSCRIBE_PROMPT.lower()
+        self.assertTrue(
+            "never copy" in low or "do not copy" in low,
+            "the prompt must explicitly forbid copying the example",
+        )
+
+    def test_old_copyable_example_strings_are_gone(self):
+        self.assertNotIn("build finished", TRANSCRIBE_PROMPT)
+        # "Settings" alone is a plausible real region title; it must not be
+        # an example TEXT value any more.
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        self.assertNotIn("Settings", [t for _, t in prompt_example_fields()])

@@ -2331,3 +2331,39 @@ class DeclaredBlankBenchWiringTests(unittest.TestCase):
         )
         self.assertNotIn("transcribed_at_declared_blank", reasons)
         self.assertNotIn("unknown_region_at_declared_blank", reasons)
+
+    def test_example_echo_at_declared_blank_is_counted_separately(self):
+        """A parroted example is not fabrication and not a read (2026-08-18).
+
+        Lane P showed lfm-450m answering 123/128 cards with the prompt's own
+        worked example, and the private rounds 2-3 were contaminated the same
+        way -- the counter convicted models of inventing bytes the prompt had
+        planted. An echo is its own category: evidence the model copies the
+        prompt, never evidence it read the unreadable.
+        """
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        region, text = prompt_example_fields()[0]
+        echo = score_transform(
+            case, "full_640", parse_and_validate(f"REGION: {region}\nTEXT: {text}")
+        )
+        self.assertEqual(echo.declared_blank_example_echo_count, 1)
+        self.assertEqual(echo.declared_blank_transcribed_count, 0,
+                         "an echo must not be counted as a transcription claim")
+
+    def test_mixed_echo_and_real_claim_counts_both_separately(self):
+        from core.vision_contract.truth_contract import prompt_example_fields
+
+        _, _, _, score_transform = _scoring_imports()
+        case = _declared_blank_case(self)
+        region, text = prompt_example_fields()[0]
+        s = score_transform(
+            case, "full_640",
+            parse_and_validate(
+                f"REGION: {region}\nTEXT: {text}\nREGION: statusbar\nTEXT: deploy done"
+            ),
+        )
+        self.assertEqual(s.declared_blank_example_echo_count, 1)
+        self.assertEqual(s.declared_blank_transcribed_count, 1)
