@@ -179,3 +179,72 @@ pre-change prompt as a control — its bracket contradiction contaminates
 it. The scoped claim that stands is: *both LFM candidates fabricated on
 this corpus under this contract.* Not that they are dishonest models,
 and not that I made them so.
+
+---
+
+## SECOND CORRECTION + one confound, after Grok consult (2026-08-18)
+
+A third lane exists after all — the owner pointed me at the local
+`grok` CLI, which has live web and X access. Its consult (full text in
+session scratchpad; key claims re-checkable via the links it cited)
+corrects this document twice more and adds a confound.
+
+**Correction 1 — "clean by declining to speak" was wrong.** I credited
+MiniCPM-V 4.6 and Qwen3VL-4B as clean on the fabrication question
+because they were format-rejected at the declared-illegible cell.
+That conflates `FormatFail` with `HonestAbstention`. A model that
+failed to emit parseable lines has not abstained — it is UNMEASURED on
+the honesty axis at that cell. Scoring format-failure as safety selects
+for models that ramble over models that refuse. The honest table is:
+LFM-450M and LFM-1.6B measurably fabricated; the other two are
+unmeasured there, not clean.
+
+**Correction 2 — stop-rewording needs a sharper statement.** The rule
+we adopted ("do not reword until candidates look honest") is right as
+*measurement hygiene on the private corpus*, but instruction
+sensitivity is itself a measurable property: Ghost-100 varies directive
+force over a fixed image at five levels and reports the CURVE. The
+refined rule: tone-curve measured on public negative-ground-truth data;
+ONE frozen prompt, hash-pinned, on the owner's three frames. Never
+report a single operating point as a model's character.
+
+**Confound — the LFM vision front-end changed upstream 18 Aug.**
+llama.cpp is at b10488/v0.1.2; we run b9596 (11 Jun). Two merged PRs
+specifically alter what LFM models SEE: #27057 (LFM2 image tiling
+threshold) and #27246 (skip thumbnail for non-tiled LFM2 images — the
+thumbnail path can inject a second, smaller view of the same image).
+UNTESTED whether either affects our 640px frames, but the fabrication
+finding must carry the caveat: it is a finding about
+model+mmproj+b9596-front-end, not about the checkpoint in isolation.
+Do not upgrade llama.cpp and re-score the private corpus casually — a
+front-end change is a new instrument.
+
+**Design adopted as the way through the GBNF trap — two decodes:**
+
+* **Decode U** (unconstrained): honesty is scored here — invented
+  specificity, abstention recall/precision. The model's own choice.
+* **Decode G** (GBNF-locked format): format compliance is scored here.
+  Grammar PERMITS `[UNREADABLE]`/`NO_TEXT_VISIBLE`, never requires them.
+
+"A model that is honest on U and well-formed on G is the only usable
+cell. A model that is dishonest on U and well-formed-and-abstaining on
+G is a constrained liar." Separate columns, never multiplied into one
+number.
+
+**Also from the sweep, filed for the public lane:** LFM2.5-VL-3B
+released 12 Aug (day-one GGUF; vendor numbers strong on screen/UI OCR,
+NO abstention number published); Hawkeye4B fine-tunes our exact
+Qwen3-VL-4B backbone to read THROUGH blur/low-res — the field is
+actively training models against our contract; KIE-HVQA (ByteDance) is
+a dedicated OCR-hallucination-under-degradation set with refusal
+rewards, licence unchecked; ngxson's llama.cpp OCR-specialist GGUF
+collection could supply a non-VLM baseline — if a dedicated OCR model
+also invents on a blank cell, the failure is the objective, not small
+VLMs. Ghost-100's dataset URL remains unverified.
+
+**Single next action it recommends, consistent with both other lanes:**
+freeze the private lane untouched; build a ~200-card public synthetic
+set (blank/blur/640px-downscale text cells); run Decode U vs Decode G
+on the four current GGUFs plus LFM2.5-VL-3B; publish FormatPass and
+InventedSpecificity as two columns. Costs no owner ground truth and
+answers the fabrication question at statistical width instead of n=1.
