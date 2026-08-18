@@ -1,0 +1,5 @@
+root ::= "NO_TEXT_VISIBLE" | blocks
+blocks ::= block ("\n" block)*
+block ::= "REGION: " label "\nTEXT: " text
+label ::= [A-Za-z0-9] [A-Za-z0-9 _-]*
+text ::= [^\n]+
