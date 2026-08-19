@@ -806,3 +806,55 @@ class MintFollowupAndWiringTests(unittest.TestCase):
         src = inspect.getsource(oub.consume_for_execution_on_connection)
         self.assertIn("revalidate_covenant_ceremony_for_consumption", src)
         self.assertIn("_highest_risk_ceremony_required", src)
+
+
+class DaemonThreadingTests(unittest.TestCase):
+    def test_helper_returns_none_for_non_covenant_and_unprovisioned(self):
+        from types import SimpleNamespace
+
+        from daemon.maez_daemon import _covenant_evidence_for_authorization
+
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-daemon-")
+        self.addCleanup(tmp.cleanup)
+        store = SimpleNamespace(db_path=Path(tmp.name) / "ceremony.sqlite3")
+        self.assertIsNone(_covenant_evidence_for_authorization(
+            store, _covenant_rendered(work_class="self_modification"), NOW
+        ))
+        # covenant class, unprovisioned store: None, never a raise
+        self.assertIsNone(_covenant_evidence_for_authorization(
+            store, _covenant_rendered(), NOW
+        ))
+
+    def test_helper_assembles_from_a_complete_ceremony(self):
+        from types import SimpleNamespace
+
+        from daemon.maez_daemon import _covenant_evidence_for_authorization
+
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-daemon-")
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "ceremony.sqlite3"
+        ps = CovenantPhaseStore(db)
+        b1 = ps.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
+        ps.insert_phase2(
+            **_phase1_kwargs(request_id="req-cov-1", challenge_id="chal-2",
+                             challenge_created_at="2026-08-19T10:01:00Z",
+                             recorded_at="2026-08-19T10:02:00Z"),
+            first_phase_binding_sha256=b1, artifact_id="art-1",
+        )
+        ev = _covenant_evidence_for_authorization(
+            SimpleNamespace(db_path=db), _covenant_rendered(), "2026-08-19T11:00:00Z"
+        )
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev.ceremony_kind, "cooling_off_second_confirmation")
+
+    def test_both_construction_sites_thread_the_evidence(self):
+        import inspect
+
+        import daemon.maez_daemon as dm
+
+        src = inspect.getsource(dm)
+        self.assertEqual(
+            src.count("covenant_ceremony_evidence=_covenant_evidence_for_authorization("),
+            2,
+            "both S7ExecutionAuthorization sites must thread the evidence",
+        )

@@ -496,6 +496,34 @@ def _s7_guarded_execution_consumer_live(pipe, card_store, dream) -> bool:
     )
 
 
+def _covenant_evidence_for_authorization(store, rendered, now):
+    """Assemble covenant ceremony evidence for RULING-O classes, from rows.
+
+    Read-only: no creation authority on the live request path. Returns None
+    for non-covenant classes, for unprovisioned stores, and for incomplete
+    ceremonies -- in every case the consume seat's fail-closed refusals
+    stand. Never raises into the route.
+    """
+    from core.governance.s7_covenant_ceremony import (
+        COVENANT_WORK_CLASSES,
+        CovenantCeremonyRefusal,
+        CovenantPhaseStore,
+        assemble_covenant_ceremony_evidence,
+    )
+
+    if getattr(rendered, "derived_work_class", None) not in COVENANT_WORK_CLASSES:
+        return None
+    try:
+        phase_store = CovenantPhaseStore(store.db_path, create=False)
+        return assemble_covenant_ceremony_evidence(
+            phase_store,
+            request_id=str(rendered.request_id),
+            now=now,
+        )
+    except CovenantCeremonyRefusal:
+        return None
+
+
 def _s7_authorization_route_material(
     daemon,
     req,
@@ -828,6 +856,9 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
                 "rendered_statement"
             ].derived_aggregation_group,
             now=now,
+            covenant_ceremony_evidence=_covenant_evidence_for_authorization(
+                store, material.kwargs["rendered_statement"], now
+            ),
         )
     )
 
@@ -910,6 +941,9 @@ def _s7_guarded_card_execution_authorization(
         derived_work_class=rendered.derived_work_class,
         derived_aggregation_group=rendered.derived_aggregation_group,
         now=now,
+        covenant_ceremony_evidence=_covenant_evidence_for_authorization(
+            store, rendered, now
+        ),
     )
     return _s7_route_material(
         s7_execution_authorization=authorization,
