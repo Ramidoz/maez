@@ -358,6 +358,11 @@ class CovenantPhaseStore:
         )
         if phase1 is None or phase1["binding_sha256"] != first_phase_binding_sha256:
             raise CovenantCeremonyRefusal("covenant_phase1_not_current")
+        if (
+            phase1["request_envelope_hash"] != kw["request_envelope_hash"]
+            or phase1["derived_work_class"] != kw["derived_work_class"]
+        ):
+            raise CovenantCeremonyRefusal("covenant_phase1_mismatch")
         elapsed = (
             _parse_z(kw["challenge_created_at"])
             - _parse_z(phase1["recorded_at"])
@@ -451,10 +456,20 @@ def revalidate_covenant_ceremony_for_consumption(
         or phase2["artifact_id"] != artifact_id
     ):
         raise CovenantCeremonyRefusal("covenant_evidence_not_bound_to_rows")
-    # ACTIVATION INTERLOCK (design §4; mutation-tested).
+    # ACTIVATION INTERLOCK (design §4; mutation-tested). Gate round on the
+    # build: table EXISTENCE is not the arm -- installing 2b's schema would
+    # have lifted it globally before any receipt existed. The arm is a
+    # MATCHING receipt row for this artifact; 2b's own revalidator will
+    # verify the row's content when it lands.
     receipt_table = connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' "
         "AND name='s7_consult_owner_read_receipts_v1'"
     ).fetchone()
     if receipt_table is None:
+        raise CovenantCeremonyRefusal("owner_read_receipt_required")
+    receipt_row = connection.execute(
+        "SELECT 1 FROM s7_consult_owner_read_receipts_v1 WHERE artifact_id = ?",
+        (artifact_id,),
+    ).fetchone()
+    if receipt_row is None:
         raise CovenantCeremonyRefusal("owner_read_receipt_required")

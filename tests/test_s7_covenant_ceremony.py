@@ -858,3 +858,83 @@ class DaemonThreadingTests(unittest.TestCase):
             2,
             "both S7ExecutionAuthorization sites must thread the evidence",
         )
+
+
+class BuildGateRepairRound1Tests(unittest.TestCase):
+    """Gate-on-code round 1: findings 1, 2, 3."""
+
+    def test_interlock_requires_a_matching_receipt_row_not_a_table(self):
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-ilock-")
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "c.sqlite3"
+        store = CovenantPhaseStore(db)
+        b1 = store.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
+        store.insert_phase2(
+            **_phase1_kwargs(request_id="req-cov-1", challenge_id="chal-2",
+                             challenge_created_at="2026-08-19T10:01:00Z",
+                             recorded_at="2026-08-19T10:02:00Z"),
+            first_phase_binding_sha256=b1, artifact_id="art-1",
+        )
+        ev = assemble_covenant_ceremony_evidence(
+            store, request_id="req-cov-1", now="2026-08-19T11:00:00Z"
+        )
+        import sqlite3 as _sq
+
+        with _sq.connect(db) as conn:
+            conn.execute(
+                "CREATE TABLE s7_consult_owner_read_receipts_v1 (artifact_id TEXT PRIMARY KEY)"
+            )
+        # EMPTY table: still refused (the 2b-schema-install hazard)
+        with _sq.connect(db) as conn:
+            with self.assertRaises(CovenantCeremonyRefusal) as c:
+                revalidate_covenant_ceremony_for_consumption(
+                    connection=conn, store=store, evidence=ev,
+                    request_id="req-cov-1", request_envelope_hash=H,
+                    derived_work_class="covenant_touching_change",
+                    artifact_id="art-1", now="2026-08-19T11:00:00Z",
+                )
+            self.assertEqual(c.exception.reason, "owner_read_receipt_required")
+        # matching row: the interlock arm opens (content checks are 2b's)
+        with _sq.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO s7_consult_owner_read_receipts_v1 VALUES ('art-1')"
+            )
+        with _sq.connect(db) as conn:
+            revalidate_covenant_ceremony_for_consumption(
+                connection=conn, store=store, evidence=ev,
+                request_id="req-cov-1", request_envelope_hash=H,
+                derived_work_class="covenant_touching_change",
+                artifact_id="art-1", now="2026-08-19T11:00:00Z",
+            )
+
+    def test_finish_readers_project_created_at(self):
+        store = _ceremony_store(self)
+        rendered = _rendered_stub()
+        chal = store.create_authorization_challenge(
+            rendered_statement=rendered, precondition_hash=H,
+            session_binding="s", internal_channel_binding="c",
+            now="2026-08-18T10:00:00Z", expires_at="2026-08-18T10:05:00Z",
+            uv_required=True,
+        )
+        row = store.authorization_challenge_for_finish(
+            challenge_id=chal["challenge_id"], session_binding="s",
+            internal_channel_binding="c", now="2026-08-18T10:01:00Z",
+        )
+        self.assertEqual(row["created_at"], "2026-08-18T10:00:00Z",
+                         "the after-mint helper reads created_at; the real "
+                         "reader must supply it")
+
+    def test_phase2_refuses_envelope_or_class_drift(self):
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-drift-")
+        self.addCleanup(tmp.cleanup)
+        store = CovenantPhaseStore(Path(tmp.name) / "c.sqlite3")
+        b1 = store.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
+        with self.assertRaises(CovenantCeremonyRefusal) as c:
+            store.insert_phase2(
+                **_phase1_kwargs(request_id="req-cov-1", challenge_id="chal-2",
+                                 request_envelope_hash="9" * 64,
+                                 challenge_created_at="2026-08-19T10:01:00Z",
+                                 recorded_at="2026-08-19T10:02:00Z"),
+                first_phase_binding_sha256=b1, artifact_id="art-1",
+            )
+        self.assertEqual(c.exception.reason, "covenant_phase1_mismatch")

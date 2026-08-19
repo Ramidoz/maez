@@ -1249,7 +1249,7 @@ class S7WebAuthnBootstrapStore:
                        maez_voice_consultation_hash,
                        consultation_exemption_projection_hash,
                        derived_aggregation_group,
-                       nonce, uv_required, covenant_phase2_of
+                       nonce, uv_required, covenant_phase2_of, created_at
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND challenge_kind = 'authorize_guarded_request'
@@ -1285,7 +1285,7 @@ class S7WebAuthnBootstrapStore:
                        maez_voice_consultation_hash,
                        consultation_exemption_projection_hash,
                        derived_aggregation_group,
-                       nonce, uv_required, covenant_phase2_of
+                       nonce, uv_required, covenant_phase2_of, created_at
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND challenge_kind = 'authorize_guarded_request'

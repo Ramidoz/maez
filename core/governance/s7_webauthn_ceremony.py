@@ -671,6 +671,19 @@ class S7LocalWebAuthnCeremonyService:
                     body={"ok": False, "error": "s7_covenant_phase1_required"},
                     status_code=409,
                 )
+            if (
+                phase1["request_envelope_hash"]
+                != str(rendered_statement.request_envelope_hash)
+                or phase1["derived_work_class"]
+                != str(rendered_statement.derived_work_class)
+            ):
+                # Same request id is not the frozen presentation: the exact
+                # envelope and class the owner tapped must be what phase 2
+                # continues (gate round on the build).
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase1_mismatch"},
+                    status_code=409,
+                )
             if covenant_seconds_between(phase1["recorded_at"], now) < COOLING_OFF_FLOOR_SECONDS:
                 return S7CeremonyServiceResult(
                     body={"ok": False, "error": "s7_covenant_cooling_off_immature"},
