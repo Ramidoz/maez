@@ -128,29 +128,29 @@ sentence below reads as defending against them.
   exceed the D23 history window (900s) — stated as a hard constraint on
   §5.1, so no lawful owner ruling can create the collision.
 
-## §5 PENDING OWNER — four rulings, nothing freezes before them
+## §5 RULING C (covenant ceremony parameters) — RATIFIED BY THE OWNER, 2026-08-18
 
-1. **Cooling-off floor.** Proposal: 24 hours, code-refused below;
-   hard constraint from §4 regardless of ruling: floor > the D23
-   window.
-2. **Phase-1 statement bytes.** It must say plainly: first of two, a
-   second confirmation after the cooling-off is required, nothing can
-   execute until then. (R11's rule: the owner must not tap on a false
-   picture.)
-3. **Distinctness of the second tap.** Different challenge + fresh
-   UP/UV assertion is structural. Same credential twice: permitted, or
-   must phase 2 use a distinct credential (the backup key)? Canon does
-   not resolve it; it is a protection parameter, so it is yours.
-4. **Phase-1 lifetime and supersession.** A first authorization cannot
-   stay confirmable forever (pass 1 had no expiry — a years-old tap
-   could be confirmed). Proposal: phase-1 rows expire after 7 days;
-   an expired or abandoned phase 1 is superseded by a new phase-1 row
-   (new tap), never edited. Ruling covers the number and the
-   supersession rule.
+The owner ruled all four on 2026-08-18. Fixed inputs from here, recorded
+as **RULING C** beside RULING B in the parent ruling registry:
+
+1. **Cooling-off floor: 24 hours**, coded as a floor the software
+   refuses to go beneath — not a config default. (Structural constraint
+   satisfied: 24h > the 900s D23 window.)
+2. **Phase-1 statement says it plainly**: first of two — a second
+   confirmation after the cooling-off is required — nothing can execute
+   until then. The owner never taps on a false picture.
+3. **Same credential permitted for the confirming tap.** A fresh
+   challenge and fresh UP/UV assertion remain structural; the
+   cooling-off is the principal defence. (A distinct-credential
+   requirement was offered and declined: it would make covenant changes
+   impossible whenever the backup key is unretrievable.)
+4. **Phase-1 lifetime: 7 days.** A lapsed or abandoned first tap is
+   SUPERSEDED by a fresh phase-1 row — records are never edited, only
+   superseded.
 
 ## §6 Sequencing (corrected per the gate)
 
-1. Owner rules on §5. 2. Re-gate this pass. 3. Tests-first build of
+1. ~~Owner rules on §5~~ DONE 2026-08-18 (RULING C). 2. Re-gate this pass. 3. Tests-first build of
 store + routes + assembler + revalidator + daemon threading, all
 dormant (evidence rows activate nothing; both classes stay refused
 until rows exist and mature). 4. Owner-present witness: tap 1, real

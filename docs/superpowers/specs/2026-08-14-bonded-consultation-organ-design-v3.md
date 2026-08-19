@@ -113,6 +113,16 @@ validate while validating synthetic or self-supplied facts — rather
 than at a hostile database administrator, and it binds every remaining
 cluster.
 
+**RULING C (covenant ceremony parameters), 2026-08-18.** For the
+two-phase covenant ceremony (first tap opens the window; confirming tap
+is the one real authorization): cooling-off floor 24 hours, code-refused
+below; the phase-1 rendered statement states plainly that it is first of
+two and nothing can execute before the confirmation; the confirming tap
+may use the same credential (fresh challenge + fresh UP/UV assertion
+remain structural); an unconfirmed phase 1 lapses after 7 days and is
+superseded by a fresh tap, never edited. Full mechanism:
+docs/superpowers/specs/2026-08-18-covenant-ceremony-producer-design.md.
+
 **Pending owner act:** ratification of the exact template bytes (§8) —
 recorded as a hash the owner approves, not a builder decision.
 
