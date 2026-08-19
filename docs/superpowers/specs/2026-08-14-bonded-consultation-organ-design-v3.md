@@ -55,7 +55,7 @@ written text (11 residuals + 8 new, with 9 named minimal edits). v3.2
 folds all of them. Canon D-numbers refer to
 docs/slices/s7.3-guarded-self-modification-execution/spec.md.
 
-## The owner rulings (fixed inputs) — six, plus RULING B of 2026-08-15
+## The owner rulings (fixed inputs) — six, plus RULING B (2026-08-15) and RULING C (2026-08-18)
 
 **RULING R8-W (R8's wording).** A consulted-but-unparseable answer
 BLOCKS on every path. `not_asked` and `missing_or_malformed` are
