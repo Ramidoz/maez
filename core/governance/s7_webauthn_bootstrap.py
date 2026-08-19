@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     maez_voice_consultation_hash TEXT,
     derived_aggregation_group TEXT NOT NULL DEFAULT '',
     nonce TEXT NOT NULL DEFAULT '',
-    consultation_exemption_projection_hash TEXT
+    consultation_exemption_projection_hash TEXT,
+    covenant_phase2_of TEXT
 );
 
 CREATE TABLE IF NOT EXISTS s7_refusal_history (
@@ -328,6 +329,7 @@ class S7WebAuthnBootstrapStore:
             "maez_voice_consultation_hash": "TEXT",
             "derived_aggregation_group": "TEXT NOT NULL DEFAULT ''",
             "nonce": "TEXT NOT NULL DEFAULT ''",
+            "covenant_phase2_of": "TEXT",
         }
         for column, ddl in challenge_desired.items():
             if column not in challenge_existing:
@@ -999,10 +1001,16 @@ class S7WebAuthnBootstrapStore:
         expires_at: str,
         uv_required: bool,
         consultation_exemption_projection_hash: str | None = None,
+        covenant_phase2_of: str | None = None,
     ) -> dict[str, Any]:
         _parse_time(now)
         _parse_time(expires_at)
         _validate_hash64_text(precondition_hash, field="precondition_hash")
+        if covenant_phase2_of is not None:
+            # The phase-2 stamp: binds this challenge to the sealed phase-1
+            # row it confirms. Null for every non-covenant ceremony, so the
+            # column is inert on all existing paths.
+            _validate_hash64_text(covenant_phase2_of, field="covenant_phase2_of")
         if consultation_exemption_projection_hash is not None:
             _validate_hash64_text(
                 consultation_exemption_projection_hash,
@@ -1028,6 +1036,7 @@ class S7WebAuthnBootstrapStore:
             str(rendered_statement.authority_context_hash),
             str(rendered_statement.maez_voice_consultation_hash or ""),
             str(consultation_exemption_projection_hash or ""),
+            str(covenant_phase2_of or ""),
             str(rendered_statement.derived_aggregation_group),
             str(rendered_statement.nonce),
         )
@@ -1058,10 +1067,10 @@ class S7WebAuthnBootstrapStore:
                     request_envelope_hash, rendered_text_hash, action_params_hash,
                     precondition_hash, authority_context_hash, maez_voice_consultation_hash,
                     consultation_exemption_projection_hash,
-                    derived_aggregation_group, nonce
+                    derived_aggregation_group, nonce, covenant_phase2_of
                 ) VALUES (?, 'authorize_guarded_request', ?, NULL, NULL, ?, ?,
                           'localhost', 'http://localhost:11437', 'localhost:11437',
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     challenge_id,
@@ -1082,6 +1091,7 @@ class S7WebAuthnBootstrapStore:
                     consultation_exemption_projection_hash,
                     rendered_statement.derived_aggregation_group,
                     rendered_statement.nonce,
+                    covenant_phase2_of,
                 ),
             )
         return {
@@ -1110,6 +1120,113 @@ class S7WebAuthnBootstrapStore:
             "expires_at": expires_at,
         }
 
+    def create_covenant_first_challenge(
+        self,
+        *,
+        rendered_statement: Any,
+        precondition_hash: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        now: str,
+        expires_at: str,
+    ) -> dict[str, Any]:
+        """Phase 1 of the covenant ceremony: a challenge bound to the same
+        D12 statement fields as an authorize challenge, under its own kind.
+        Its finish writes ONLY a sealed phase row -- no authority."""
+        _parse_time(now)
+        _parse_time(expires_at)
+        _validate_hash64_text(precondition_hash, field="precondition_hash")
+        challenge_id = f"s7cov1_{uuid.uuid4().hex}"
+        challenge_b64 = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = _fingerprint(internal_channel_binding)
+        challenge_hash = _fingerprint(
+            "|".join((
+                challenge_id, "covenant_first_confirmation", challenge_b64,
+                "localhost", "http://localhost:11437", "localhost:11437",
+                session_binding_hash, internal_channel_binding_hash,
+                str(rendered_statement.request_id),
+                str(rendered_statement.request_envelope_hash),
+                str(rendered_statement.rendered_text_hash),
+                str(rendered_statement.action_params_hash),
+                precondition_hash,
+                str(rendered_statement.authority_context_hash),
+                str(rendered_statement.derived_aggregation_group),
+                str(rendered_statement.nonce),
+                now, expires_at,
+            ))
+        )
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_ceremony_challenges(
+                    challenge_id, challenge_kind, expires_at, consumed_at, invalidated_at,
+                    challenge_hash, challenge_b64, rp_id, origin, host, session_binding_hash,
+                    internal_channel_binding_hash, request_id, uv_required, created_at,
+                    request_envelope_hash, rendered_text_hash, action_params_hash,
+                    precondition_hash, authority_context_hash,
+                    derived_aggregation_group, nonce
+                ) VALUES (?, 'covenant_first_confirmation', ?, NULL, NULL, ?, ?,
+                          'localhost', 'http://localhost:11437', 'localhost:11437',
+                          ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    challenge_id, expires_at, challenge_hash, challenge_b64,
+                    session_binding_hash, internal_channel_binding_hash,
+                    rendered_statement.request_id, now,
+                    rendered_statement.request_envelope_hash,
+                    rendered_statement.rendered_text_hash,
+                    rendered_statement.action_params_hash,
+                    precondition_hash,
+                    rendered_statement.authority_context_hash,
+                    rendered_statement.derived_aggregation_group,
+                    rendered_statement.nonce,
+                ),
+            )
+        return {
+            "challenge_id": challenge_id,
+            "challenge_kind": "covenant_first_confirmation",
+            "challenge_hash": challenge_hash,
+            "challenge_b64": challenge_b64,
+            "expires_at": expires_at,
+        }
+
+    def covenant_first_challenge_for_finish(
+        self,
+        *,
+        challenge_id: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        now: str,
+    ) -> dict[str, Any] | None:
+        now_text = _parse_time(now).isoformat()
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = _fingerprint(internal_channel_binding)
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT challenge_id, challenge_kind, challenge_hash, rp_id, origin, host,
+                       challenge_b64, session_binding_hash, internal_channel_binding_hash,
+                       expires_at, consumed_at, invalidated_at, request_id,
+                       request_envelope_hash, rendered_text_hash, action_params_hash,
+                       precondition_hash, authority_context_hash,
+                       maez_voice_consultation_hash,
+                       consultation_exemption_projection_hash,
+                       derived_aggregation_group,
+                       nonce, uv_required, created_at
+                FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                  AND challenge_kind = 'covenant_first_confirmation'
+                  AND session_binding_hash = ?
+                  AND internal_channel_binding_hash = ?
+                  AND consumed_at IS NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_id, session_binding_hash, internal_channel_binding_hash, now_text),
+            ).fetchone()
+        return None if row is None else dict(row)
+
     def authorization_challenge_for_finish(
         self,
         *,
@@ -1132,7 +1249,7 @@ class S7WebAuthnBootstrapStore:
                        maez_voice_consultation_hash,
                        consultation_exemption_projection_hash,
                        derived_aggregation_group,
-                       nonce, uv_required
+                       nonce, uv_required, covenant_phase2_of
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND challenge_kind = 'authorize_guarded_request'
@@ -1168,7 +1285,7 @@ class S7WebAuthnBootstrapStore:
                        maez_voice_consultation_hash,
                        consultation_exemption_projection_hash,
                        derived_aggregation_group,
-                       nonce, uv_required
+                       nonce, uv_required, covenant_phase2_of
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND challenge_kind = 'authorize_guarded_request'

@@ -294,3 +294,307 @@ class AssemblerAndInterlockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _ceremony_store(test):
+    from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+    tmp = tempfile.TemporaryDirectory(prefix="maez-covenant-chal-")
+    test.addCleanup(tmp.cleanup)
+    return S7WebAuthnBootstrapStore(Path(tmp.name) / "s7_1_webauthn")
+
+
+def _rendered_stub():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        request_id="req-1",
+        request_envelope_hash=H,
+        rendered_text_hash="c" * 64,
+        action_params_hash="d" * 64,
+        authority_context_hash="e" * 64,
+        maez_voice_consultation_hash=None,
+        derived_aggregation_group="agg-1",
+        nonce="nonce-1",
+    )
+
+
+class ChallengeSchemaExtensionTests(unittest.TestCase):
+    """The covenant_phase2_of extension and its named seats (design §2).
+
+    Compat gate half 1: the column is inert when null -- every existing
+    challenge flow must be byte-identical in behaviour.
+    """
+
+    def test_column_exists_in_ddl_and_migration_map(self):
+        import inspect
+        from core.governance import s7_webauthn_bootstrap as b
+        src = inspect.getsource(b)
+        self.assertIn("covenant_phase2_of", src)
+        # both seats: CREATE TABLE and the ALTER migration map
+        create = src.index("CREATE TABLE IF NOT EXISTS s7_ceremony_challenges")
+        self.assertIn("covenant_phase2_of", src[create:create + 2000])
+        self.assertIn('"covenant_phase2_of": "TEXT"', src)
+
+    def test_authorization_challenge_defaults_null_and_reader_projects_it(self):
+        store = _ceremony_store(self)
+        rendered = _rendered_stub()
+        chal = store.create_authorization_challenge(
+            rendered_statement=rendered,
+            precondition_hash=H,
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-18T10:00:00Z", expires_at="2026-08-18T10:05:00Z",
+            uv_required=True,
+        )
+        row = store.authorization_challenge_for_finish(
+            challenge_id=chal["challenge_id"], session_binding="sess",
+            internal_channel_binding="chan", now="2026-08-18T10:01:00Z",
+        )
+        self.assertIn("covenant_phase2_of", row)
+        self.assertIsNone(row["covenant_phase2_of"])
+
+    def test_stamped_challenge_round_trips(self):
+        store = _ceremony_store(self)
+        rendered = _rendered_stub()
+        chal = store.create_authorization_challenge(
+            rendered_statement=rendered,
+            precondition_hash=H,
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-18T10:00:00Z", expires_at="2026-08-18T10:05:00Z",
+            uv_required=True,
+            covenant_phase2_of="1" * 64,
+        )
+        row = store.authorization_challenge_for_finish(
+            challenge_id=chal["challenge_id"], session_binding="sess",
+            internal_channel_binding="chan", now="2026-08-18T10:01:00Z",
+        )
+        self.assertEqual(row["covenant_phase2_of"], "1" * 64)
+
+    def test_stamp_is_a_fingerprint_member(self):
+        store = _ceremony_store(self)
+        rendered = _rendered_stub()
+        a = store.create_authorization_challenge(
+            rendered_statement=rendered, precondition_hash=H,
+            session_binding="s", internal_channel_binding="c",
+            now="2026-08-18T10:00:00Z", expires_at="2026-08-18T10:05:00Z",
+            uv_required=True,
+        )
+        b2 = store.create_authorization_challenge(
+            rendered_statement=rendered, precondition_hash=H,
+            session_binding="s", internal_channel_binding="c",
+            now="2026-08-18T10:00:00Z", expires_at="2026-08-18T10:05:00Z",
+            uv_required=True, covenant_phase2_of="1" * 64,
+        )
+        self.assertNotEqual(a["challenge_hash"], b2["challenge_hash"])
+
+
+NOW = "2026-08-18T10:00:00Z"
+
+
+class _CovenantVerifier:
+    """Advancing sign count, like a real authenticator -- a constant count
+    trips the live clone-detection in advance_sign_count (found the hard
+    way: s7_clone_suspected on the second tap)."""
+
+    package_name = "webauthn"
+
+    def __init__(self):
+        self._count = 0
+
+    def dependency_state(self):
+        return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
+
+    def verify_authentication_response(self, **_kw):
+        self._count += 1
+        return {
+            "ok": True, "credential_ref": "cred-primary", "sign_count": self._count,
+            "user_presence": True, "user_verification": True,
+        }
+
+
+def _seed_credential(store, ref="cred-primary", kind="primary"):
+    from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
+
+    store.store_credential(FounderWebAuthnCredentialRecord.build(
+        credential_ref=ref,
+        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+        role_names=("bonded_user",), public_key=f"pk-{ref}", sign_count=0,
+        rp_id="localhost", origin="http://localhost:11437", created_at=NOW,
+        backup_credential=(kind == "backup"), enabled=True, credential_kind=kind,
+        label=f"{kind} key", registration_challenge_id=f"challenge-{ref}",
+        attestation_format="packed",
+        aaguid="00112233-4455-6677-8899-aabbccddeeff",
+        authenticator_attachment="cross-platform", backup_eligible=False,
+        backed_up=False, transports=("usb",), library_name="webauthn",
+        library_version="2.7.1", sign_count_mode="advancing", uv_capable=True,
+        uv_required_for_guarded=True, distinct_device_confidence="confirmed_distinct",
+    ))
+
+
+def _covenant_rendered(work_class="covenant_touching_change"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        request_id="req-cov-1",
+        request_envelope_hash=H,
+        rendered_text_hash="c" * 64,
+        action_params_hash="d" * 64,
+        authority_context_hash="e" * 64,
+        maez_voice_consultation_hash=None,
+        derived_aggregation_group="agg-cov",
+        nonce="nonce-cov",
+        derived_work_class=work_class,
+    )
+
+
+class Phase1RouteTests(unittest.TestCase):
+    def setUp(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        self.tmp = tempfile.TemporaryDirectory(prefix="maez-cov-route-")
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.bootstrap = S7WebAuthnBootstrapStore(root / "s7_1_webauthn")
+        _seed_credential(self.bootstrap)
+        _seed_credential(self.bootstrap, ref="cred-backup", kind="backup")
+        self.phase_store = CovenantPhaseStore(root / "phases.sqlite3")
+        self.service = S7LocalWebAuthnCeremonyService(
+            verifier=_CovenantVerifier(),
+            store_factory=lambda: self.bootstrap,
+        )
+
+    def _begin(self, rendered=None, now=NOW):
+        return self.service.covenant_first_begin(
+            now=now,
+            rendered_statement=rendered or _covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+        )
+
+    def _finish(self, challenge_id, rendered=None, now="2026-08-18T10:01:00Z"):
+        return self.service.covenant_first_finish(
+            now=now,
+            rendered_statement=rendered or _covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            request_json={
+                "challenge_id": challenge_id,
+                "credential_ref": "cred-primary",
+                "authentication_response": {"clientDataJSON": "x"},
+            },
+            phase_store=self.phase_store,
+        )
+
+    def test_begin_refuses_non_covenant_work_class(self):
+        r = self._begin(rendered=_covenant_rendered(work_class="self_modification"))
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_work_class_required")
+
+    def test_happy_path_writes_phase1_and_nothing_else(self):
+        begun = self._begin()
+        self.assertEqual(begun.status_code, 200)
+        cid = begun.body["challenge_id"]
+        fin = self._finish(cid)
+        self.assertEqual(fin.status_code, 200, fin.body)
+        binding = fin.body["phase1_binding_sha256"]
+        row = self.phase_store.current_phase1(
+            request_id="req-cov-1", now="2026-08-18T11:00:00Z"
+        )
+        self.assertEqual(row["binding_sha256"], binding)
+        self.assertEqual(row["sign_count"], 1, "post-advance sign count persisted")
+        self.assertEqual(row["rendered_text_hash"], "c" * 64)
+        # no artifact anywhere
+        import sqlite3 as _sq
+        with _sq.connect(self.bootstrap.db_path) as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM s7_authorization_artifacts_v2"
+            ).fetchone()[0] if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='s7_authorization_artifacts_v2'"
+            ).fetchone() else 0
+        self.assertEqual(n, 0)
+
+    def test_finish_replay_refused(self):
+        begun = self._begin()
+        cid = begun.body["challenge_id"]
+        self.assertEqual(self._finish(cid).status_code, 200)
+        replay = self.service.covenant_first_finish(
+            now="2026-08-18T10:02:00Z",
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            request_json={"challenge_id": cid, "credential_ref": "cred-primary",
+                          "authentication_response": {"clientDataJSON": "x"}},
+            phase_store=self.phase_store,
+        )
+        self.assertEqual(replay.status_code, 410)
+
+    def test_d12_mismatch_refused(self):
+        begun = self._begin()
+        other = _covenant_rendered()
+        other.rendered_text_hash = "9" * 64
+        fin = self._finish(begun.body["challenge_id"], rendered=other)
+        self.assertEqual(fin.status_code, 409)
+
+    def test_second_tap_supersedes_live_phase1(self):
+        first = self._finish(self._begin().body["challenge_id"])
+        b1 = first.body["phase1_binding_sha256"]
+        second = self._finish(
+            self._begin(now="2026-08-18T11:58:00Z").body["challenge_id"],
+            now="2026-08-18T12:00:00Z",
+        )
+        self.assertEqual(second.status_code, 200)
+        row = self.phase_store.current_phase1(
+            request_id="req-cov-1", now="2026-08-18T13:00:00Z"
+        )
+        self.assertEqual(row["supersedes_binding_sha256"], b1,
+                         "the new tap IS the supersession act")
+
+
+class RetentionByTestTests(unittest.TestCase):
+    """Design §2: phase-1 retention is enumerated by test, not prose.
+
+    Every load-bearing check token in the authorize path must appear in
+    the covenant_first path, or be named in the frozen exclusion list.
+    """
+
+    REQUIRED = (
+        "dependency_state", "_require_mapping", "_require_text",
+        "_challenge_matches_rendered_d12", "get_credential",
+        "bonded_user", "verify_authentication_response",
+        "user_presence", "user_verification",
+        "credential_can_authorize", "advance_sign_count",
+        "consume_challenge", "credential_recovery_state",
+    )
+    FROZEN_EXCLUSIONS = (
+        "mint_authorization_artifact",          # no authority at phase 1
+        "_r11_challenge_projection_hash",        # R11 admits only cutover
+        "authorization_voice_seat_recheck",      # no consultation consumed
+        "authorization_aggregation_recheck",     # no authorized history row
+        "allow_degraded_primary_only",           # degraded flags forbidden
+    )
+
+    def _sources(self):
+        import inspect
+        from core.governance import s7_webauthn_ceremony as svc
+
+        cls = svc.S7LocalWebAuthnCeremonyService
+        auth = inspect.getsource(cls.authorize_begin) + inspect.getsource(
+            cls.authorize_finish
+        )
+        cov = inspect.getsource(cls.covenant_first_begin) + inspect.getsource(
+            cls.covenant_first_finish
+        )
+        return auth, cov
+
+    def test_every_required_check_is_retained(self):
+        auth, cov = self._sources()
+        for token in self.REQUIRED:
+            self.assertIn(token, auth, f"{token} vanished from the authorize path?")
+            self.assertIn(token, cov, f"phase-1 route dropped required check {token}")
+
+    def test_exclusions_are_present_in_authorize_and_absent_in_covenant(self):
+        auth, cov = self._sources()
+        for token in self.FROZEN_EXCLUSIONS:
+            self.assertIn(token, auth, f"exclusion {token} no longer in authorize?")
+            self.assertNotIn(token, cov, f"{token} leaked into the phase-1 route")

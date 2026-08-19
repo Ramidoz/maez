@@ -407,6 +407,205 @@ class S7LocalWebAuthnCeremonyService:
             status_code=200,
         )
 
+    def covenant_first_begin(
+        self,
+        *,
+        now: str,
+        rendered_statement: Any,
+        precondition_hash: str,
+        session_binding: str,
+        internal_channel_binding: str,
+    ) -> S7CeremonyServiceResult:
+        """Phase 1 of the covenant ceremony: opens the cooling-off window.
+
+        Retains the authorize path's begin checks minus authority. Degraded
+        recovery flags are FORBIDDEN on this route (frozen exclusion): a
+        covenant window may only open in ready posture.
+        """
+        dependency = self.verifier.dependency_state()
+        if dependency.get("ok") is not True:
+            return S7CeremonyServiceResult(body=dependency, status_code=503)
+        from core.governance.s7_covenant_ceremony import COVENANT_WORK_CLASSES
+
+        if getattr(rendered_statement, "derived_work_class", None) not in COVENANT_WORK_CLASSES:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_covenant_work_class_required"},
+                status_code=409,
+            )
+        store = self.store_factory()
+        recovery = store.credential_recovery_state()
+        if recovery.get("mode") != "ready":
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_credential_setup_incomplete",
+                      "ceremony_mode": recovery.get("mode")},
+                status_code=409,
+            )
+        challenge = store.create_covenant_first_challenge(
+            rendered_statement=rendered_statement,
+            precondition_hash=precondition_hash,
+            session_binding=session_binding,
+            internal_channel_binding=internal_channel_binding,
+            now=now,
+            expires_at=_add_minutes(now, 5),
+        )
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                "challenge_id": challenge["challenge_id"],
+                "challenge_kind": "covenant_first_confirmation",
+                "public_key_options": {
+                    "rpId": "localhost",
+                    "challenge": challenge["challenge_b64"],
+                    "timeout": 300000,
+                    "userVerification": "required",
+                    "allowCredentials": [
+                        _credential_descriptor(store, credential_ref)
+                        for credential_ref in store.allow_credentials_for_authorization()
+                    ],
+                },
+            },
+            status_code=200,
+        )
+
+    def covenant_first_finish(
+        self,
+        *,
+        now: str,
+        rendered_statement: Any,
+        precondition_hash: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        request_json: dict[str, Any] | None,
+        phase_store: Any,
+    ) -> S7CeremonyServiceResult:
+        """Verify the first tap and write ONLY the sealed phase-1 row."""
+        import hashlib as _hashlib
+
+        from core.governance.s7_covenant_ceremony import (
+            CovenantCeremonyRefusal,
+        )
+
+        dependency = self.verifier.dependency_state()
+        if dependency.get("ok") is not True:
+            return S7CeremonyServiceResult(body=dependency, status_code=503)
+        store = self.store_factory()
+        try:
+            request = _require_mapping(request_json)
+            challenge_id = _require_text(request, "challenge_id")
+            claimed_credential_ref = _require_text(request, "credential_ref")
+            authentication_response = request["authentication_response"]
+            if not isinstance(authentication_response, dict):
+                raise ValueError("authentication_response")
+        except (KeyError, ValueError) as exc:
+            return _schema_invalid(str(exc))
+        challenge = store.covenant_first_challenge_for_finish(
+            challenge_id=challenge_id,
+            session_binding=session_binding,
+            internal_channel_binding=internal_channel_binding,
+            now=now,
+        )
+        if challenge is None:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed"},
+                status_code=410,
+            )
+        if not _challenge_matches_rendered_d12(
+            challenge=challenge,
+            rendered_statement=rendered_statement,
+            precondition_hash=precondition_hash,
+        ):
+            return _d12_binding_mismatch()
+        credential = store.get_credential(claimed_credential_ref)
+        if credential is None or not credential.enabled or "bonded_user" not in credential.role_names:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_credential_disabled"},
+                status_code=409,
+            )
+        verifier_method = getattr(self.verifier, "verify_authentication_response", None)
+        if verifier_method is None:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_authentication_invalid"},
+                status_code=400,
+            )
+        verified = verifier_method(
+            authentication_response=authentication_response,
+            challenge=challenge,
+            expected_origin="http://localhost:11437",
+            expected_rp_id="localhost",
+            credential_public_key=credential.public_key,
+            current_sign_count=credential.sign_count,
+            require_user_verification=True,
+        )
+        if verified.get("ok") is not True:
+            return S7CeremonyServiceResult(body=verified, status_code=400)
+        if verified.get("user_presence") is not True or verified.get("user_verification") is not True:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_authentication_invalid",
+                      "detail": "up_uv_required"},
+                status_code=400,
+            )
+        credential_ref = str(verified["credential_ref"])
+        if credential_ref != claimed_credential_ref:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_authentication_invalid",
+                      "detail": "credential_mismatch"},
+                status_code=400,
+            )
+        if not store.credential_can_authorize(credential_ref):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_credential_disabled"},
+                status_code=409,
+            )
+        sign_count = store.advance_sign_count(
+            credential_ref,
+            new_sign_count=int(verified.get("sign_count", credential.sign_count)),
+            now=now,
+        )
+        if sign_count.get("ok") is not True:
+            return S7CeremonyServiceResult(body=sign_count, status_code=409)
+        if not store.consume_challenge(challenge_id, now=now):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed"},
+                status_code=410,
+            )
+        # The new tap IS the supersession act for any live predecessor.
+        live = phase_store.current_phase1(
+            request_id=str(rendered_statement.request_id), now=now
+        )
+        try:
+            binding = phase_store.insert_phase1(
+                request_id=str(rendered_statement.request_id),
+                request_envelope_hash=str(rendered_statement.request_envelope_hash),
+                derived_work_class=str(rendered_statement.derived_work_class),
+                challenge_id=challenge_id,
+                challenge_b64_sha256=_hashlib.sha256(
+                    str(challenge["challenge_b64"]).encode("utf-8")
+                ).hexdigest(),
+                rendered_text_hash=str(challenge["rendered_text_hash"]),
+                session_binding_hash=str(challenge["session_binding_hash"]),
+                internal_channel_binding_hash=str(challenge["internal_channel_binding_hash"]),
+                credential_ref=credential_ref,
+                sign_count=int(verified.get("sign_count", 0)),
+                challenge_created_at=str(challenge["created_at"]),
+                challenge_expires_at=str(challenge["expires_at"]),
+                recorded_at=now,
+                supersedes_binding_sha256=(
+                    live["binding_sha256"] if live is not None else None
+                ),
+            )
+        except CovenantCeremonyRefusal as exc:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": exc.reason}, status_code=409
+            )
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                "phase1_binding_sha256": binding,
+                "cooling_off_ends_at": None,  # informational rendering is D17 work
+            },
+            status_code=200,
+        )
+
     def authorize_begin(
         self,
         *,
