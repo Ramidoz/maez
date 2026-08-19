@@ -1,4 +1,4 @@
-# The covenant ceremony producer — design pass 3
+# The covenant ceremony producer — design pass 4
 
 2026-08-18. Pass 1 was gated and FAILED with 8 blockers (1 CRITICAL).
 All verified and upheld; the critical one was an architectural collision
@@ -6,13 +6,40 @@ with the consultation plane that changes the shape, so this is a whole
 rewrite, not a patch. Contract level; wiring belongs to implementation;
 RULING B is a fixed input.
 
+## STATUS, 2026-08-18: CONTRACT FROZEN · WIRING OPEN · NOTHING BUILT
+
+Three gate rounds: 8 → 5 → 13 findings. The rise in round 3 is the same
+divergence signature cluster 2b showed at the same stage: the four
+CRITICALs were genuine contract defects and are fixed below (the 2b
+dependency cycle broken, the activation interlock added, constructor
+inputs persisted, the two clocks split); the other nine were wiring —
+literal constructor keys, per-check retention lists, sixth seats —
+which prose cannot pin without every edit rippling. The owner ratified
+this exact disposition for 2b, and it is applied here by precedent:
+
+**FROZEN — reopening requires a new gate round:** RULINGs B and C; the
+two-phase no-mint shape (§2); the retention-by-test rule and its frozen
+exclusion list; the challenge-schema extension and its named seats; the
+two-digest/two-clock store contract (§3); persisted constructor inputs;
+append-only supersession; the activation interlock; the §6 order
+including the compatibility gate, the structurally non-authorizing
+witness, and the template-byte ratification before the combined
+witness.
+
+**OPEN — settled by implementation and its tests:** exact DDL and
+literal digest key lists, the retention test's mechanics, signatures,
+threading detail, refusal-token spellings.
+
+**The gate's next reading is CODE.** Findings against the frozen list
+block; findings against the open list are implementation review.
+
 ## §0 What pass 1 got wrong
 
 * **Phase 1 minted a normal RULING-O artifact.** RULING-O classes are
   voice-seat classes (`VOICE_SEAT_WORK_CLASSES`,
   `operator_user_boundary.py:395`), so every artifact mint consumes the
   single voice-bundle reservation slot (`source_ref_hash` is the
-  PRIMARY KEY, `s7_guarded_execution.py:2796`; the reservation predicate
+  PRIMARY KEY, `s7_guarded_execution.py:2797`; the reservation predicate
   requiring `artifact_id IS NULL` is at `:2960`) — and, once 2b lands, one consultation attempt
   yields at most one RULING-O artifact (`UNIQUE (consult_attempt_id)`,
   2b §5). Two mints therefore need two consultations, or phase 1 must
@@ -68,10 +95,10 @@ a second founder tap ran the ONE real authorization         (consultation, owner
 
 | Link | Held by |
 |---|---|
-| tap 1 happened, for this request, ON these statement bytes | dedicated challenge kind `covenant_first_confirmation` whose begin/finish RETAINS everything the authorize path does except authority: D12 statement-byte commitment against the rendered statement, exact request/envelope/work-class binding, session and internal-channel binding, enabled `bonded_user` credential + role checks, origin/RP verification, fresh UP+UV, sign-count advancement, challenge consumption — and whose finish writes ONLY the phase-1 row. No artifact, no consultation consumed, no `authorized` aggregation row. Pass 2 said only "a real UP/UV ceremony", which would have permitted a tap bound to nothing |
+| tap 1 happened, for this request, ON these statement bytes | dedicated challenge kind `covenant_first_confirmation` whose begin/finish RETAINS the authorize path's full check set minus authority. The retention is enumerated BY TEST against the real path, not by prose list (round 3 kept finding omissions in my lists — recovery posture, allow-list scoping, the second credential read, credential-ID equality — because a prose list of another function's checks is a copy that drifts): the build carries a test that walks authorize begin/finish's checks and asserts each is present in the covenant kind or named in a frozen exclusion list. Frozen exclusions: artifact mint, consultation/source-bundle machinery, `authorized` aggregation row, and the R11 projection comparison (R11 admits only `model_routing.cutover_cuda`, which is not a covenant class — retaining it would be dead code wearing a check's clothes) |
 | the cooling-off elapsed | `phase2.challenge_created_at − phase1.recorded_at ≥ floor`, recomputed from rows at phase-2 finish AND at consume; never trusted from the carrier |
 | tap 2 is the real ceremony, bound to phase 1 at begin | the ordinary RULING-O authorize path — consultation, (once 2b lands) owner-read, artifact — with one frozen schema extension: `s7_ceremony_challenges` gains a `covenant_phase2_of TEXT` column (null except for covenant phase-2 challenges), written at begin, a member of `d12_parts`, SELECTed by the finish reader, and compared for exact equality with the sealed phase-1 binding hash BEFORE WebAuthn verification. That exact phase-1 row — never a freshly selected "current" one — is the row used for maturity, expiry, phase-2 insertion and consumption revalidation. Pass 2 named the stamp with nowhere enforceable for it to live: the DDL (`s7_webauthn_bootstrap.py:102`), the insert column list (`:1054`), the finish reader (`:1127`) and the D12 comparison (`s7_webauthn_ceremony.py:1478`) all had to be named as the four seats the extension touches |
-| the rows correspond to their ceremonies | one named constructor per phase, exhaustive and versioned — never "complete identity" as prose, which 2b already showed leaves call sites binding different subsets. Phase 1: `canonical_hash` over `{"domain": "s7.covenant_phase1_binding.v1"}` plus, in serializer order: challenge_id, sha256 of challenge_b64, rendered_text_hash, request_id, request_envelope_hash, derived_work_class, session_binding_hash, internal_channel_binding_hash, credential_ref, user_presence, user_verification, sign_count result, challenge created_at + expires_at, recorded_at. Phase 2: the 2b §5 artifact-binding device plus `first_phase_binding_sha256`. Row insertion and the consume revalidator call the SAME constructor |
+| the rows correspond to their ceremonies | one named constructor per phase, exhaustive and versioned — never "complete identity" as prose, which 2b already showed leaves call sites binding different subsets. Phase 1: `canonical_hash` over `{"domain": "s7.covenant_phase1_binding.v1"}` plus, in serializer order: challenge_id, sha256 of challenge_b64, rendered_text_hash, request_id, request_envelope_hash, derived_work_class, session_binding_hash, internal_channel_binding_hash, credential_ref, user_presence, user_verification, sign_count result, challenge created_at + expires_at, recorded_at. Phase 2: this design's OWN versioned constructor (`s7.covenant_phase2_binding.v1`) over the complete immutable artifact identity plus `first_phase_binding_sha256` — the same SHAPE as 2b §5's device but defined here with its own domain tag, so the producer has no dependency on 2b's implementation. When 2b lands, the two constructors remain distinct instruments. Row insertion and the consume revalidator call the SAME constructor |
 | the carrier is honest | assembly only from rows; `second_confirmation_ref_hash` = phase-2 row binding hash; module-private constructor with the `_VALIDATOR_TOKEN` idiom's caveat (`s7_guarded_execution.py:504`) |
 | consumption re-proves | mandatory revalidator inside `def consume_for_execution_on_connection` (`:2966`), keyed on `def _highest_risk_ceremony_required` (`:2270`), sibling to 2b's B2 — never a caller callback |
 
@@ -92,9 +119,26 @@ Contract-level columns: phase; request_id; request_envelope_hash;
 derived_work_class (CHECK: the two RULING-O classes); challenge_id;
 challenge_created_at; credential_ref; user_presence/verification
 (CHECK = 1); the phase-correspondence digest of §2;
-`first_phase_binding_sha256` (phase 2 only); `expires_at` (phase 1
-only); `supersedes_binding_sha256` (phase 1 only, nullable — the
-predecessor this row replaces); recorded_at; binding hash.
+`first_phase_binding_sha256` (phase 2 only); **two clocks, never
+conflated** (round-3 CRITICAL): `challenge_expires_at` (the ~5-minute
+ceremony expiry, a digest member) and `phase_expires_at` = recorded_at
++ 7 days (RULING C's lifetime, the maturity/supersession clock);
+`supersedes_binding_sha256` (phase 1 only, nullable); recorded_at; the
+row seal last.
+
+**Every constructor input is persisted immutably in the row** (round-3
+CRITICAL: a digest whose inputs cannot be re-obtained cannot be
+recomputed at consume — sign counts advance, challenge rows expire).
+That includes sha256(challenge_b64), rendered_text_hash, session and
+channel binding hashes, and the exact POST-advance sign count integer.
+
+**Two digests, two names, never interchanged** (round-3 finding): the
+CORRESPONDENCE DIGEST (`s7.covenant_phase1_binding.v1` /
+`s7.covenant_phase2_binding.v1`, canonical_hash with its sorted-key
+serialization stated, over the persisted input columns) proves the row
+matches what its ceremony did; the ROW SEAL (last column, over every
+column above it) proves the row is intact. The revalidator recomputes
+both.
 
 **Supersession is append-only and structural** (pass 2's naive
 one-live-row UNIQUE could not express it — SQLite cannot make a
@@ -139,8 +183,18 @@ sentence below reads as defending against them.
   makes caller-built evidence worthless regardless.
 * **D23**: phase 1 writes no `authorized` history row, so aggregation
   sees one authorization (phase 2). Belt: the cooling-off floor must
-  exceed the D23 history window (900s) — stated as a hard constraint on
-  §5.1, so no lawful owner ruling can create the collision.
+  exceed the D23 history window (900s) — satisfied structurally by
+  RULING C's 24h.
+* **Activation interlock** (round-3 CRITICAL: "all dormant" was false —
+  once evidence rows exist and thread, today's shape-only consumer
+  would admit them for ANY supported caller, and a witness instruction
+  not to execute binds nobody). The consume revalidator lands with a
+  fail-closed third arm from day one: RULING-O consumption refuses
+  `owner_read_receipt_required` unless 2b's owner-read receipt exists
+  and revalidates. That arm refuses unconditionally until 2b is
+  implemented — making the producer witness structurally non-authorizing
+  rather than politely so — and is mutation-tested like every other
+  gate this campaign has built.
 
 ## §5 RULING C (covenant ceremony parameters) — RATIFIED BY THE OWNER, 2026-08-18
 
@@ -174,14 +228,28 @@ implementation and before shared challenge behaviour changes). Fixed:
    gates + the challenge-schema extension, assembler, consume
    revalidator, daemon threading — all dormant (evidence rows activate
    nothing; both classes stay refused until rows exist and mature).
-4. INDEPENDENT producer witness, owner present: tap 1 on a
+4. Compatibility gate BEFORE the witness: prove every non-covenant
+   challenge and result shape byte-unchanged by the schema extension
+   (the nullable column and d12_parts member are inert when null —
+   proven, not assumed; frozen 2b requires this discipline for shared
+   challenge changes, and the extension precedes 2b's Construction 4).
+5. INDEPENDENT producer witness, owner present: tap 1 on a
    witness-grade request, the real 24-hour cooling-off, tap 2, evidence
-   assembled and revalidated — with NO RULING-O execution, which is
-   impossible anyway until 2b's owner-read exists.
-5. Implement cluster 2b against its frozen contract.
-6. The full two-phase, owner-present RULING-O execution witness — the
+   assembled and revalidated — structurally non-authorizing via the §4
+   interlock, not merely unexecuted.
+6. Implement cluster 2b against its frozen contract.
+7. The owner's template-byte ratification (parent §8 — still pending,
+   and the parent sequences it before any live consumer witness).
+8. The full two-phase, owner-present RULING-O execution witness — the
    first covenant-grade authorization end to end, serving both
    contracts.
+
+**Non-authoritative readers, disposed** (round-3 finding): the
+consumed-challenge reader (`def
+consumed_authorization_challenge_for_artifact`,
+`s7_webauthn_bootstrap.py:1149`) does not project the stamp and is NOT
+a seat: phase correspondence is proven only by the sealed phase rows
+and their digests, never by that reader's projection.
 
 ## §7 Out of scope
 
