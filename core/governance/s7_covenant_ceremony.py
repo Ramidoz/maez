@@ -176,9 +176,14 @@ class CovenantPhaseStore:
     """SQLite store for covenant ceremony phase rows. Append-only:
     predecessors are superseded, never updated or deleted."""
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, create: bool = True):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not create:
+            # The daemon's single-callsite rule: no creation authority on a
+            # live request path. Reads of an unprovisioned store see no rows;
+            # writes refuse.
+            return
         with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -189,6 +194,12 @@ class CovenantPhaseStore:
                 conn.commit()
 
     # -- contract fingerprint (the R11 device) ---------------------------
+    def _table_exists(self, conn) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (_TABLE,),
+        ).fetchone() is not None
+
     def _contract(self, conn) -> tuple:
         sql_row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
@@ -228,6 +239,8 @@ class CovenantPhaseStore:
     def current_phase1(self, *, request_id: str, now: str) -> dict | None:
         now_dt = _parse_z(now)
         with closing(sqlite3.connect(self.db_path)) as conn:
+            if not self._table_exists(conn):
+                return None
             self._require_contract(conn)
             rows = self._rows(conn, request_id, "first_authorization")
         superseded = {r["supersedes_binding_sha256"] for r in rows
@@ -242,6 +255,8 @@ class CovenantPhaseStore:
 
     def phase2_for_request(self, *, request_id: str) -> dict | None:
         with closing(sqlite3.connect(self.db_path)) as conn:
+            if not self._table_exists(conn):
+                return None
             self._require_contract(conn)
             rows = self._rows(conn, request_id, "second_confirmation")
         if not rows:
@@ -252,6 +267,8 @@ class CovenantPhaseStore:
 
     def phase1_by_binding(self, *, binding_sha256: str) -> dict | None:
         with closing(sqlite3.connect(self.db_path)) as conn:
+            if not self._table_exists(conn):
+                return None
             self._require_contract(conn)
             cur = conn.execute(
                 f"SELECT {', '.join(_COLUMNS)}, row_seal_sha256 FROM {_TABLE} "
@@ -271,6 +288,8 @@ class CovenantPhaseStore:
         values = dict(values)
         values["row_seal_sha256"] = _row_seal(values)
         with closing(sqlite3.connect(self.db_path)) as conn:
+            if not self._table_exists(conn):
+                raise CovenantCeremonyRefusal("covenant_store_unprovisioned")
             self._require_contract(conn)
             try:
                 conn.execute(

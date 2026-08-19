@@ -736,3 +736,73 @@ class Phase2GateTests(unittest.TestCase):
                          phase_store=None)
         self.assertEqual(r.status_code, 409)
         self.assertEqual(r.body["error"], "s7_covenant_phase_store_required")
+
+
+class MintFollowupAndWiringTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="maez-cov-wire-")
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "phases.sqlite3"
+        self.store = CovenantPhaseStore(self.db)
+
+    def test_read_only_store_never_creates_the_table(self):
+        """The daemon's single-callsite rule: no creation authority on the
+        live request path."""
+        p = Path(self.tmp.name) / "fresh.sqlite3"
+        ro = CovenantPhaseStore(p, create=False)
+        self.assertIsNone(ro.current_phase1(request_id="r", now=NOW))
+        import sqlite3 as _sq
+        with _sq.connect(p) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='s7_covenant_ceremony_phases_v1'"
+            ).fetchone())
+        with self.assertRaises(CovenantCeremonyRefusal) as c:
+            ro.insert_phase1(**_phase1_kwargs())
+        self.assertEqual(c.exception.reason, "covenant_store_unprovisioned")
+
+    def test_phase2_after_mint_helper_writes_the_row(self):
+        from core.governance.s7_webauthn_ceremony import _covenant_phase2_after_mint
+
+        b1 = self.store.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
+        challenge = {
+            "challenge_b64": "abc123",
+            "rendered_text_hash": "c" * 64,
+            "session_binding_hash": "d" * 64,
+            "internal_channel_binding_hash": "e" * 64,
+            "created_at": "2026-08-19T10:01:00Z",
+            "expires_at": "2026-08-19T10:06:00Z",
+            "covenant_phase2_of": b1,
+        }
+        result = _covenant_phase2_after_mint(
+            phase_store=self.store,
+            rendered_statement=_covenant_rendered(),
+            challenge=challenge,
+            challenge_id="chal-p2",
+            credential_ref="cred-primary",
+            sign_count=2,
+            artifact_id="art-99",
+            now="2026-08-19T10:02:00Z",
+        )
+        self.assertIsNone(result, "success returns None (no refusal)")
+        p2 = self.store.phase2_for_request(request_id="req-cov-1")
+        self.assertEqual(p2["artifact_id"], "art-99")
+        self.assertEqual(p2["first_phase_binding_sha256"], b1)
+
+    def test_finish_source_calls_the_helper_after_mint(self):
+        import inspect
+        from core.governance import s7_webauthn_ceremony as svc
+
+        src = inspect.getsource(svc.S7LocalWebAuthnCeremonyService.authorize_finish)
+        mint_at = src.index("mint_authorization_artifact(")
+        self.assertIn("_covenant_phase2_after_mint", src[mint_at:],
+                      "phase-2 row write must follow the mint")
+
+    def test_consume_seat_wires_the_covenant_revalidator(self):
+        """Dataflow pin: the sole SQL updater calls the covenant revalidator
+        for highest-risk classes. Live proof belongs to the witness."""
+        import inspect
+        from core.governance import operator_user_boundary as oub
+
+        src = inspect.getsource(oub.consume_for_execution_on_connection)
+        self.assertIn("revalidate_covenant_ceremony_for_consumption", src)
+        self.assertIn("_highest_risk_ceremony_required", src)

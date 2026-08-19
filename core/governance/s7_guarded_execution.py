@@ -154,6 +154,17 @@ def _provision_r11_exemption_evidence_at(*, store_dir_fd: int) -> None:
             "consultation_exemption_projection_hash"
         )
         if projection_column is None:
+            if "covenant_phase2_of" in challenge_columns:
+                # Append-repair restores canonical column order only while
+                # the exemption column is the last one. Once covenant_phase2_of
+                # exists (2026-08-18 schema), a store missing the exemption
+                # column mid-table has no legitimate history, and appending
+                # would mint a schema the cutover preflight rightly refuses.
+                # Refuse loudly here instead of building a drifted store.
+                raise ValueError(
+                    "R11 repair cannot restore canonical column order once "
+                    "covenant_phase2_of exists"
+                )
             connection.execute(
                 "ALTER TABLE s7_ceremony_challenges ADD COLUMN "
                 "consultation_exemption_projection_hash TEXT"

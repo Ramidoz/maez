@@ -3006,6 +3006,38 @@ def consume_for_execution_on_connection(
         now=now,
     ):
         return None, None
+    if _highest_risk_ceremony_required(derived_work_class):
+        # Covenant revalidation is mandatory at this seat -- the sole SQL
+        # updater -- never a caller callback (design pass 4 §4). It re-derives
+        # the two-phase ceremony from the sealed rows and ends with the
+        # activation interlock, which refuses until cluster 2b's owner-read
+        # receipt exists. Read-only phase store: no creation authority here.
+        from core.governance.s7_covenant_ceremony import (
+            CovenantCeremonyRefusal,
+            CovenantPhaseStore,
+        )
+
+        db_row = connection.execute("PRAGMA database_list").fetchone()
+        if db_row is None or not db_row[2]:
+            return None, None
+        try:
+            revalidate_store = CovenantPhaseStore(db_row[2], create=False)
+            from core.governance.s7_covenant_ceremony import (
+                revalidate_covenant_ceremony_for_consumption,
+            )
+
+            revalidate_covenant_ceremony_for_consumption(
+                connection=connection,
+                store=revalidate_store,
+                evidence=covenant_ceremony_evidence,
+                request_id=rendered.request_id,
+                request_envelope_hash=rendered.request_envelope_hash,
+                derived_work_class=derived_work_class,
+                artifact_id=artifact_id,
+                now=now,
+            )
+        except CovenantCeremonyRefusal:
+            return None, None
     auth_hash = authority_context_hash(authority_context)
     if rendered.authority_context_hash != auth_hash:
         return None, None

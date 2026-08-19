@@ -819,7 +819,17 @@ def test_the_exempt_mint_still_goes_THROUGH_the_guarded_store() -> None:
 def test_r11_evidence_table_has_an_explicit_idempotent_provisioning_authority(
     tmp_path,
 ) -> None:
-    """Opening and minting stay verification-only; setup owns creation."""
+    """Opening and minting stay verification-only; setup owns creation.
+
+    2026-08-18 amendment: with covenant_phase2_of in the schema, the old
+    drop-exemption-and-repair scenario is historically impossible in ANY
+    order -- ordinary open migrates the covenant column in, after which
+    append-repair of the exemption column cannot restore canonical order
+    (see test_r11_repair_refuses_a_synthetic_middle_drop). What this test
+    still pins: ordinary opening never creates the exemption column, the
+    provisioner is idempotent on an intact store, and the intact store is
+    byte-exactly what cutover preflight expects.
+    """
     import os
     import sqlite3
 
@@ -827,22 +837,16 @@ def test_r11_evidence_table_has_an_explicit_idempotent_provisioning_authority(
     from tests.s7_store_fixture import bootstrap_with_authorization
 
     store = bootstrap_with_authorization(tmp_path / "r11-store")
-    with sqlite3.connect(store.db_path) as connection:
-        connection.execute(
-            "ALTER TABLE s7_ceremony_challenges "
-            "DROP COLUMN consultation_exemption_projection_hash"
-        )
-    # Ordinary store opening is not R11 setup authority.
+    # Ordinary store opening is not R11 setup authority: the bootstrap
+    # migration map deliberately does NOT contain the exemption column.
     from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+    import inspect as _inspect
 
-    S7WebAuthnBootstrapStore(store.root)
-    with sqlite3.connect(store.db_path) as connection:
-        assert "consultation_exemption_projection_hash" not in {
-            row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(s7_ceremony_challenges)"
-            )
-        }
+    migration_src = _inspect.getsource(
+        S7WebAuthnBootstrapStore._migrate_credential_columns
+    )
+    assert "consultation_exemption_projection_hash" not in migration_src
+
     dir_fd = os.open(
         store.db_path.parent,
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -851,15 +855,15 @@ def test_r11_evidence_table_has_an_explicit_idempotent_provisioning_authority(
         guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
         with sqlite3.connect(store.db_path) as conn:
             first = guarded._r11_exemption_evidence_contract(conn)
+        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+        with sqlite3.connect(store.db_path) as conn:
+            second = guarded._r11_exemption_evidence_contract(conn)
             challenge_columns = {
                 row[1]: tuple(row)
                 for row in conn.execute(
                     "PRAGMA table_info(s7_ceremony_challenges)"
                 )
             }
-        guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
-        with sqlite3.connect(store.db_path) as conn:
-            second = guarded._r11_exemption_evidence_contract(conn)
     finally:
         os.close(dir_fd)
 
@@ -871,14 +875,39 @@ def test_r11_evidence_table_has_an_explicit_idempotent_provisioning_authority(
         None,
         0,
     )
-    # The exact schema produced for an existing store is the exact schema
-    # canonical cutover preflight expects, not merely a table with the right
-    # names in a different order.
+    # The exact schema of an intact store is the exact schema canonical
+    # cutover preflight expects, not merely the right names in any order.
     with cuda_cutover.open_existing_authorization_store(
         db_path=store.db_path,
         expected_uid=os.getuid(),
     ):
         pass
+
+
+def test_r11_repair_refuses_a_synthetic_middle_drop(tmp_path) -> None:
+    """Once covenant_phase2_of exists, a store missing the exemption column
+    has no legitimate history; append-repair would mint non-canonical order
+    and must refuse rather than build a store preflight then rejects."""
+    import sqlite3
+
+    from core.governance import s7_guarded_execution as guarded
+    from tests.s7_store_fixture import bootstrap_with_authorization
+
+    store = bootstrap_with_authorization(tmp_path / "r11-middle-drop")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "ALTER TABLE s7_ceremony_challenges "
+            "DROP COLUMN consultation_exemption_projection_hash"
+        )
+    dir_fd = os.open(
+        store.db_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        with pytest.raises(ValueError, match="canonical column order"):
+            guarded._provision_r11_exemption_evidence_at(store_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def test_r11_artifact_rolls_back_when_its_evidence_row_cannot_persist(

@@ -1189,6 +1189,29 @@ class S7LocalWebAuthnCeremonyService:
                     status_code=409,
                 )
             raise
+        if covenant_phase1_row is not None:
+            # Phase-2 row, written right after the mint. A crash between the
+            # two leaves an incomplete ceremony that consumption refuses --
+            # the safe direction.
+            covenant_refusal = _covenant_phase2_after_mint(
+                phase_store=covenant_phase_store,
+                rendered_statement=rendered_statement,
+                challenge=challenge,
+                challenge_id=challenge_id,
+                credential_ref=credential_ref,
+                sign_count=int(verified.get("sign_count", 0)),
+                artifact_id=artifact_id,
+                now=now,
+            )
+            if covenant_refusal is not None:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": covenant_refusal,
+                          "artifact_id": artifact_id,
+                          "detail": "artifact minted but covenant phase-2 row "
+                                    "refused; ceremony incomplete, consumption "
+                                    "will refuse"},
+                    status_code=409,
+                )
         authorization_record_id = store.record_authorization_history(
             envelope=envelope,
             rendered_text_hash=rendered_statement.rendered_text_hash,
@@ -1746,6 +1769,53 @@ def _schema_invalid(detail: str) -> S7CeremonyServiceResult:
         body={"ok": False, "error": "s7_schema_invalid", "detail": detail},
         status_code=400,
     )
+
+
+def _covenant_phase2_after_mint(
+    *,
+    phase_store: Any,
+    rendered_statement: Any,
+    challenge: dict[str, Any],
+    challenge_id: str,
+    credential_ref: str,
+    sign_count: int,
+    artifact_id: str,
+    now: str,
+) -> str | None:
+    """Write the sealed phase-2 row after a covenant-class mint.
+
+    A crash between mint and this insert leaves an artifact whose ceremony
+    is incomplete -- consumption then refuses covenant_ceremony_incomplete,
+    which is the safe direction. Returns a refusal reason string, or None
+    on success.
+    """
+    import hashlib as _hashlib
+
+    from core.governance.s7_covenant_ceremony import CovenantCeremonyRefusal
+
+    try:
+        phase_store.insert_phase2(
+            request_id=str(rendered_statement.request_id),
+            request_envelope_hash=str(rendered_statement.request_envelope_hash),
+            derived_work_class=str(rendered_statement.derived_work_class),
+            challenge_id=challenge_id,
+            challenge_b64_sha256=_hashlib.sha256(
+                str(challenge["challenge_b64"]).encode("utf-8")
+            ).hexdigest(),
+            rendered_text_hash=str(challenge["rendered_text_hash"]),
+            session_binding_hash=str(challenge["session_binding_hash"]),
+            internal_channel_binding_hash=str(challenge["internal_channel_binding_hash"]),
+            credential_ref=credential_ref,
+            sign_count=int(sign_count),
+            challenge_created_at=str(challenge["created_at"]),
+            challenge_expires_at=str(challenge["expires_at"]),
+            recorded_at=now,
+            first_phase_binding_sha256=str(challenge["covenant_phase2_of"]),
+            artifact_id=artifact_id,
+        )
+    except CovenantCeremonyRefusal as exc:
+        return exc.reason
+    return None
 
 
 def _challenge_matches_rendered_d12(
