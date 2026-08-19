@@ -618,6 +618,7 @@ class S7LocalWebAuthnCeremonyService:
         allow_degraded_backup_only: bool = False,
         consultation_exemption: Any | None = None,
         durable_cutover_selection: Any | None = None,
+        covenant_phase_store: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -640,6 +641,42 @@ class S7LocalWebAuthnCeremonyService:
                 body={"ok": False, "error": error},
                 status_code=409,
             )
+        # Covenant gate (design pass 4 §4): a RULING-O authorize challenge is
+        # phase 2 of the two-tap ceremony and cannot begin without a matured
+        # phase-1 row. The stamp binds this challenge to THAT row at begin.
+        covenant_phase2_of = None
+        from core.governance.s7_covenant_ceremony import (
+            COOLING_OFF_FLOOR_SECONDS,
+            COVENANT_WORK_CLASSES,
+            CovenantCeremonyRefusal,
+            covenant_seconds_between,
+        )
+
+        if getattr(rendered_statement, "derived_work_class", None) in COVENANT_WORK_CLASSES:
+            if covenant_phase_store is None:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase_store_required"},
+                    status_code=409,
+                )
+            try:
+                phase1 = covenant_phase_store.current_phase1(
+                    request_id=str(rendered_statement.request_id), now=now
+                )
+            except CovenantCeremonyRefusal as exc:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": exc.reason}, status_code=409
+                )
+            if phase1 is None:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase1_required"},
+                    status_code=409,
+                )
+            if covenant_seconds_between(phase1["recorded_at"], now) < COOLING_OFF_FLOOR_SECONDS:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_cooling_off_immature"},
+                    status_code=409,
+                )
+            covenant_phase2_of = phase1["binding_sha256"]
         store = self.store_factory()
         recovery = store.credential_recovery_state()
         if recovery.get("mode") != "ready":
@@ -673,6 +710,7 @@ class S7LocalWebAuthnCeremonyService:
             expires_at=_add_minutes(now, 5),
             uv_required=True,
             consultation_exemption_projection_hash=exemption_projection_hash,
+            covenant_phase2_of=covenant_phase2_of,
         )
         allow_credentials = store.allow_credentials_for_authorization()
         if allow_degraded_primary_only is True:
@@ -728,6 +766,7 @@ class S7LocalWebAuthnCeremonyService:
         reservation_token: str | None = None,
         consultation_exemption: Any | None = None,
         durable_cutover_selection: Any | None = None,
+        covenant_phase_store: Any | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -760,6 +799,41 @@ class S7LocalWebAuthnCeremonyService:
             precondition_hash=precondition_hash,
         ):
             return _d12_binding_mismatch()
+        # Covenant stamp gate (design pass 4 §4): BEFORE verification, a
+        # RULING-O finish requires the stamped phase-1 row -- the EXACT row
+        # named at begin, never a freshly selected current one.
+        from core.governance.s7_covenant_ceremony import (
+            COVENANT_WORK_CLASSES as _COVENANT_CLASSES,
+        )
+
+        covenant_phase1_row = None
+        if getattr(envelope, "derived_work_class", None) in _COVENANT_CLASSES:
+            if covenant_phase_store is None:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase_store_required"},
+                    status_code=409,
+                )
+            stamp = challenge.get("covenant_phase2_of")
+            if not stamp:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase1_required"},
+                    status_code=409,
+                )
+            covenant_phase1_row = covenant_phase_store.phase1_by_binding(
+                binding_sha256=str(stamp)
+            )
+            if covenant_phase1_row is None:
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_covenant_phase1_unknown"},
+                    status_code=409,
+                )
+        elif challenge.get("covenant_phase2_of"):
+            # A stamped challenge presented for a non-covenant class is a
+            # misuse, not a mismatch to ignore.
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_covenant_stamp_misuse"},
+                status_code=409,
+            )
         try:
             presented_exemption_projection_hash = _r11_challenge_projection_hash(
                 rendered_statement=rendered_statement,

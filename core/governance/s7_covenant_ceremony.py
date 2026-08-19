@@ -105,6 +105,11 @@ def _require_hash64(value: str, field: str) -> str:
     return value
 
 
+def covenant_seconds_between(earlier: str, later: str) -> float:
+    """Elapsed seconds between two canonical Z timestamps."""
+    return (_parse_z(later) - _parse_z(earlier)).total_seconds()
+
+
 def covenant_phase1_binding(
     *,
     request_id: str,

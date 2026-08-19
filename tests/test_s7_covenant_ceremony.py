@@ -598,3 +598,141 @@ class RetentionByTestTests(unittest.TestCase):
         for token in self.FROZEN_EXCLUSIONS:
             self.assertIn(token, auth, f"exclusion {token} no longer in authorize?")
             self.assertNotIn(token, cov, f"{token} leaked into the phase-1 route")
+
+
+class Phase2GateTests(unittest.TestCase):
+    """authorize begin/finish gates for RULING-O classes (design §4)."""
+
+    def setUp(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        self.tmp = tempfile.TemporaryDirectory(prefix="maez-cov-p2-")
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.bootstrap = S7WebAuthnBootstrapStore(root / "s7_1_webauthn")
+        _seed_credential(self.bootstrap)
+        _seed_credential(self.bootstrap, ref="cred-backup", kind="backup")
+        self.phase_store = CovenantPhaseStore(root / "phases.sqlite3")
+        self.service = S7LocalWebAuthnCeremonyService(
+            verifier=_CovenantVerifier(),
+            store_factory=lambda: self.bootstrap,
+        )
+
+    def _phase1(self, recorded_at=NOW):
+        return self.phase_store.insert_phase1(
+            **{**_phase1_kwargs(request_id="req-cov-1",
+                                rendered_text_hash="c" * 64,
+                                recorded_at=recorded_at)}
+        )
+
+    def _begin(self, now, phase_store="default"):
+        return self.service.authorize_begin(
+            now=now,
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            covenant_phase_store=(
+                self.phase_store if phase_store == "default" else phase_store
+            ),
+        )
+
+    def test_covenant_class_without_phase_store_refused(self):
+        r = self._begin(now=NOW, phase_store=None)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_phase_store_required")
+
+    def test_covenant_class_without_phase1_refused(self):
+        r = self._begin(now=NOW)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_phase1_required")
+
+    def test_immature_phase1_refused_at_begin(self):
+        self._phase1(recorded_at=NOW)
+        r = self._begin(now="2026-08-19T09:00:00Z")  # 23h later
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_cooling_off_immature")
+
+    def test_matured_phase1_stamps_the_challenge(self):
+        b1 = self._phase1(recorded_at=NOW)
+        r = self._begin(now="2026-08-19T10:01:00Z")  # 24h+
+        self.assertEqual(r.status_code, 200, r.body)
+        row = self.bootstrap.authorization_challenge_for_finish(
+            challenge_id=r.body["challenge_id"],
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-19T10:02:00Z",
+        )
+        self.assertEqual(row["covenant_phase2_of"], b1)
+
+    def test_non_covenant_class_never_stamps(self):
+        r = self.service.authorize_begin(
+            now=NOW,
+            rendered_statement=_covenant_rendered(work_class="self_modification"),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+        )
+        self.assertEqual(r.status_code, 200, r.body)
+        row = self.bootstrap.authorization_challenge_for_finish(
+            challenge_id=r.body["challenge_id"],
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-18T10:01:00Z",
+        )
+        self.assertIsNone(row["covenant_phase2_of"])
+
+    def _finish(self, challenge_id, now, phase_store="default"):
+        return self.service.authorize_finish(
+            now=now,
+            envelope=_covenant_rendered(),
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            maez_voice_consultation=None,
+            session_binding="sess", internal_channel_binding="chan",
+            request_json={"challenge_id": challenge_id,
+                          "credential_ref": "cred-primary",
+                          "authentication_response": {"clientDataJSON": "x"}},
+            covenant_phase_store=(
+                self.phase_store if phase_store == "default" else phase_store
+            ),
+        )
+
+    def test_finish_refuses_unstamped_challenge_for_covenant_class(self):
+        """A covenant-class finish on a challenge with no stamp: refused
+        BEFORE verification (the stamp gate precedes everything after D12)."""
+        b1 = self._phase1(recorded_at=NOW)
+        del b1
+        # craft an UNstamped authorize challenge for the same statement
+        chal = self.bootstrap.create_authorization_challenge(
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-19T10:01:00Z", expires_at="2026-08-19T10:06:00Z",
+            uv_required=True,
+        )
+        r = self._finish(chal["challenge_id"], now="2026-08-19T10:02:00Z")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_phase1_required")
+
+    def test_finish_refuses_stamp_pointing_at_missing_phase1(self):
+        chal = self.bootstrap.create_authorization_challenge(
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-19T10:01:00Z", expires_at="2026-08-19T10:06:00Z",
+            uv_required=True, covenant_phase2_of="9" * 64,
+        )
+        r = self._finish(chal["challenge_id"], now="2026-08-19T10:02:00Z")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_phase1_unknown")
+
+    def test_finish_refuses_covenant_class_without_phase_store(self):
+        chal = self.bootstrap.create_authorization_challenge(
+            rendered_statement=_covenant_rendered(),
+            precondition_hash="f" * 64,
+            session_binding="sess", internal_channel_binding="chan",
+            now="2026-08-19T10:01:00Z", expires_at="2026-08-19T10:06:00Z",
+            uv_required=True, covenant_phase2_of="9" * 64,
+        )
+        r = self._finish(chal["challenge_id"], now="2026-08-19T10:02:00Z",
+                         phase_store=None)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.body["error"], "s7_covenant_phase_store_required")
