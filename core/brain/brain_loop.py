@@ -2487,7 +2487,7 @@ def run_brain_loop(
                 _parts.append(_content)
                 _parts.append(f"--- end exchange {_i} ---")
             if len(_parts) > 1:
-                _history_block = "\n".join(_parts) + "\n\n"
+                _history_block += "\n".join(_parts) + "\n\n"
 
         history = [
             f"{_history_block}the owner just said: {user_text!r}"

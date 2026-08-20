@@ -462,16 +462,23 @@ async def run_inbound_turn(
     action_referents: tuple = ()
     try:
         from core.brain.action_referents import assemble_action_referents
-        from core.brain.conversation_turn_seq import advance_and_get
+        from core.brain.conversation_turn_seq import (
+            advance_and_get,
+            action_lane_enabled as _al_on,
+            action_lane_shadow_enabled as _al_shadow,
+        )
 
+        if not (_al_on() or _al_shadow()):
+            raise StopIteration  # flags off: untouched path
         if event_identity:
             current_turn_seq = advance_and_get(
                 owner_surface_label, chat_id, event_identity
             )
         _pipe_for_ref = None
         try:
+            _lt = getattr(daemon, "telegram", None)
             _pipe_for_ref = (
-                legacy_tg._get_pipeline() if legacy_tg is not None else None
+                _lt._get_pipeline() if _lt is not None else None
             )
         except Exception:
             _pipe_for_ref = None

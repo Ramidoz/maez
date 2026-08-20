@@ -865,8 +865,14 @@ class MaezMessageHandler:
         action_referents: tuple = ()
         try:
             from core.brain.action_referents import assemble_action_referents
-            from core.brain.conversation_turn_seq import advance_and_get
+            from core.brain.conversation_turn_seq import (
+                advance_and_get,
+                action_lane_enabled as _al_on,
+                action_lane_shadow_enabled as _al_shadow,
+            )
 
+            if not (_al_on() or _al_shadow()):
+                raise StopIteration  # flags off: untouched path
             _upd = getattr(event, "platform_update_id", None)
             _mid = getattr(event, "message_id", None)
             _event_identity = (
@@ -1193,6 +1199,8 @@ class MaezMessageHandler:
             jarvis_transcript = ""
             jarvis_tool_calls: list[dict] = []
             jarvis_recall_items = ()
+            dispatcher_transcript = ""
+            combined_mode = False
             brain_failed = False
             try:
                 from core import brain_loop as _brain_loop
@@ -1244,6 +1252,8 @@ class MaezMessageHandler:
                 jarvis_transcript = ""
                 jarvis_tool_calls = []
                 jarvis_recall_items = ()
+                dispatcher_transcript = ""
+                combined_mode = False
                 # Codex review of b35bc94: the v2 inbound path forwards the
                 # downgrade; this flag-off rollback path swallowed it.
                 brain_failed = True
