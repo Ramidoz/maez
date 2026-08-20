@@ -1,111 +1,166 @@
-# Held-now repair — Phase 1 design (pass 1, contract level)
+# Held-now repair — Phase 1 design (pass 2, after gate round 1: REVISE)
 
-2026-08-20. First build of the being-wiring campaign (audit: 421d733).
-Owner ruling: proceed. Lane: Claude designs/builds, Codex gates.
+2026-08-20. Pass 1 (c5dbb81) drew 8 blockers from the Codex gate — all
+verified and upheld, including two defects in my own witness design
+(the 5-turn test could pass without exercising the change, and turn 1
+would not even be fetched under the 3-pair window). Pass 2 addresses
+all eight. Corrected anchors per gate notes: date-rank branch begins at
+`focused_cognition.py:1106`; the type-only global query is
+`memory_manager.py:3540`; the live history fetch is
+`maez_adapter.py:1081` (line 160 is only the constant).
 
-## The defect, restated from witnessed fact
+## The defect (unchanged, restated)
 
-Maez's working memory of the live conversation, on the path that
-actually answers, is **one exchange pair (853 chars witnessed)** and can
-be **zero**. The 3 verbatim pairs are assembled into the legacy prompt
-and discarded when focused mode wins. Verified levers:
+Maez's working memory of the live conversation, on the answering path,
+is one exchange pair and can be zero. Levers L1-L6 as in pass 1, with
+gate corrections above.
 
-- L1 `core/routing/focused_cognition.py:1207` — `anchors = anchors[:1]`
-  whenever dialogue_authoritative or date_cue.
-- L2 `:1195-1202` — without `MAEZ_LIVE_THREAD_ANCHOR` (default OFF),
-  anchors are included ONLY when the classifier says needs_dialogue /
-  fail_safe / date_cue; otherwise **zero pairs**. With the flag: 2.
-- L3 `:49-60`, `:1108-1122` — dialogue_anchor ranks below fresh/web
-  evidence; under date_cue it ranks 50 (bottom).
-- L4 `skills/surface/maez_adapter.py:160` `_CHAT_HISTORY_TURNS = 3`,
-  fetched from a GLOBAL cross-surface window (`memory_manager.py:3535`
-  filters on type only; `web_interface.py:7401` writes the same type →
-  a web turn evicts a Telegram turn).
-- L5 `daemon/maez_daemon.py:256-262` — hygiene split-store rows are
-  unparseable by `_split_exchange` → a web-grounded turn consumes 2 of
-  3 slots and contributes 0 pairs.
-- L6 fall-open is debug-level: an amnesic turn leaves no INFO trace.
+## Contract, pass 2
 
-## Contract
+**Principle: the now is HELD, not classifier-gated — with its budget
+reserved and its provenance preserved.**
 
-**One principle: the now is HELD, not classifier-gated.** If history
-exists, the working set carries it. Presence first; supremacy (rank
-changes) is explicitly out of scope in this pass.
+### C1. Flag posture (revised for B8)
+`MAEZ_HELD_NOW_SHADOW` (counterfactual receipts only) and
+`MAEZ_HELD_NOW_ENABLED` (apply). Both default OFF.
 
-### C1. Flag posture
-New pair, house pattern: `MAEZ_HELD_NOW_SHADOW` (log-only) and
-`MAEZ_HELD_NOW_ENABLED` (apply). Both default OFF; everything below
-except C5/C6 observability is inert without them. Registered in
-`core/cockpit/flags.py` with witness recipes.
+**Compatibility promise, stated precisely (B8):** with both flags off,
+reply BYTES are identical on all existing fixtures, with exactly three
+permitted differences: (i) additive metadata keys on NEW store writes
+(C4 write side), (ii) new WARNING/receipt log lines (C6/C7 shadow),
+(iii) nothing else. The C5 rejoin — which changes prompt-bearing
+content — moves UNDER `ENABLED` (was unflagged in pass 1; gate B8
+upheld). Split rows parse exactly as today when off.
 
-### C2. Anchor presence (fixes L1+L2)
-Under ENABLED: `dialogue_anchor_items(chat_history, limit_pairs=3)`
-unconditionally when history is non-empty — the needs_dialogue /
-fail_safe / date_cue gate no longer decides presence. The
-authoritative/date_cue truncation becomes `anchors[:2]` (was `[:1]`).
-Zero-pair working sets are impossible while parseable history exists.
-`MAEZ_LIVE_THREAD_ANCHOR` is subsumed: with HELD_NOW enabled it is
-ignored (log a deprecation line if set); without HELD_NOW, legacy
-behavior byte-identical.
+### C2. Anchor presence and rendered count (revised for B3)
+Under ENABLED, when history is non-empty and a working set is
+constructed: `dialogue_anchor_items(limit_pairs=3)` unconditionally;
+authoritative/date-cue truncation becomes `anchors[:2]` (was `[:1]`).
+**The contract is RENDERED pairs, not seeded pairs:** the lean renderer
+(`focused_cognition.py:734`, currently `anchors[:2]`) renders **2**
+pairs minimum under ENABLED; full-focused renders 3. C7 receipts carry
+BOTH `pairs_in_set` and `pairs_rendered` so the gap is observable.
 
-### C3. Rank: UNCHANGED (explicit non-goal)
-The witnessed failure is absence, not ordering. Evidence-precedence
-(fresh over anchor) and the date-cue demotion had reasons (coherence
-campaign: dated questions must answer from dated memory). Rank changes
-require their own evidence and their own pass.
+**Explicit carve-out (B3):** the intra-turn-echo early return
+(`focused_cognition.py:1188`) is retained — a degenerate case where the
+"history" is the current turn echoed; documented as the one exception
+to presence. "Unconditionally" in pass 1 overclaimed; withdrawn.
 
-### C4. Thread scoping (fixes L4)
-Write side (unflagged, additive, backward-compatible): `store_telegram`
-stamps `chat_id` and `origin_surface` metadata on new rows.
-Read side (under ENABLED): `get_telegram_exchanges` gains
-`origin_surface=None` kwarg; the adapter passes its surface. Rows
-lacking the stamp (all history) match any surface — no retroactive
-loss. Web turns stop evicting Telegram turns going forward.
+`MAEZ_LIVE_THREAD_ANCHOR` subsumption unchanged, PLUS (gate note): a
+full old-flag × HELD_NOW interaction test matrix
+(default/off/on × shadow/enabled × ordinary/direct), extending
+`test_live_thread_anchor.py` pins rather than replacing them.
 
-### C5. Split-store rejoin (fixes L5)
-Reader-side only; no store-format change. `_clean_exchange` /
-`_split_exchange` learn the two split shapes (owner-only row, reply-only
-row) and rejoin them via the `turn_link_id` metadata the split rows
-already carry. A rejoined pair counts as one exchange. Unflagged: it
-repairs parsing of rows that already exist; behavior without split rows
-is unchanged. Covered by parser unit tests + a mutation test proving
-the rejoin actually fires.
+### C3. Rank: UNCHANGED (explicit non-goal) — unchanged from pass 1.
+Telemetry expectation (gate note): with more anchors in the set,
+`citation_coverage` denominators grow; recall-outcome baselines will
+shift downward without any behavior regression. Recorded so the shift
+is not misread as one.
 
-### C6. Fall-open visibility (fixes L6)
-`held_now_fallopen` WARNING when the fetch raises or returns empty
-while the store has ≥1 row for that surface. Observability only,
-unflagged.
+### C4. Scoping: surface + chat, with a writer/reader matrix (B7)
+Pass 1 under-specified. The promise is renamed **surface+chat scoping**.
 
-### C7. Shadow receipt
-Under SHADOW (or ENABLED): one line per turn —
-`held_now_shadow pairs_available=N pairs_in_set=M set_chars=C
-would_change=BOOL` — content-free, greppable, the witness instrument.
+Writer matrix — every `telegram_exchange` writer stamps
+`origin_surface` and `chat_id` (additive, unflagged):
 
-## Explicit non-goals in this pass
-Rank/priority changes (C3). Raising `_CHAT_HISTORY_TURNS` (prompt-budget
-interaction; measure first). Dispatcher/action lane (Phase 2). Removing
-semantic re-retrieval (redundancy acceptable). The 12,000-char working
-set budget (one pair is ~850 chars; 3 pairs fit with headroom).
+| Writer | origin_surface | chat_id source |
+|---|---|---|
+| `daemon/maez_daemon.py:9502` (live telegram) | the turn's `source` | the turn's chat_id (in scope at `:7006`) |
+| `skills/web_interface.py:7401` (owner web /chat) | `web_owner` | fixed token `web_owner` (no native chat id) |
+| `gui.py:681` | `gui` | fixed token `gui` |
+| `daemon/maez_daemon.py:9832` (voice) | `voice` | fixed token `voice` |
+| `skills/telegram_voice.py:4235` (legacy outbound path) | `telegram_legacy` | telegram chat_id if in scope, else fixed token |
 
-## Predicted effect (falsifiable)
-With ENABLED on the live surface: continuity working sets carry ≥2
-dialogue pairs (witnessed via C7 receipts); a scripted 5-turn
-conversation whose turn-5 answer requires turn-1 verbatim content
-succeeds; zero-pair sets appear only when history is genuinely empty.
-With both flags off: byte-identical behavior, proven by existing tests.
+Reader: `get_telegram_exchanges(origin_surface=None, chat_id=None)` —
+filtering applies ONLY under ENABLED, by BOTH keys, with
+**legacy-wildcard semantics**: rows missing the stamps match any scope
+(no retroactive loss). BOTH read sites pass scope: the inbound-core
+provider (`maez_adapter.py:742`) and the inline fetch (`:1081`).
+Test-fake migration for the new kwargs is in scope (gate note).
 
-## Witness plan
-1. Land flag-dormant, full tests green, Codex gate on code.
-2. SHADOW on: collect receipts across ≥1 day of normal owner traffic;
-   confirm would_change rates and no latency regression (working-set
-   budget check).
-3. Owner flips ENABLED; live 5-turn witness on Telegram; receipts kept.
+### C5. Split-store rejoin — batch coalescer, provenance preserved (B5+B6)
+Pass 1's parser-seam design was wrong (single-string parsers cannot see
+sibling rows) and would have erased the provenance distinction that
+motivated split storage. Redesigned:
 
-## Open questions for the gate
-G1. Does any consumer assume dialogue_anchor count ≤1 (e.g. the
-`brain_loop.py:511-521` anchor/evidence slot competition)?
-G2. Does `_assemble_working_set`'s budget interact with 3 pairs on
-long-message turns (each pair capped where)?
-G3. Is `turn_link_id` reliably present on BOTH split rows, and unique?
-G4. Cross-surface: should voice/GUI surfaces also pass origin_surface
-immediately, or Telegram-first?
+- **Where:** inside `get_telegram_exchanges`, BEFORE logical-exchange
+  limiting (`memory_manager.py:3556` currently sorts then slices raw
+  rows): fetch rows WITH metadata → coalesce split pairs via
+  `turn_link_id` → THEN take the last N **logical exchanges**. A split
+  pair consumes ONE slot. Under ENABLED.
+- **Incomplete links (gate note: writes are non-atomic, link id is
+  per-invocation):** an orphan half is skipped with a WARNING
+  (`held_now_orphan_row`), never rendered half-paired.
+- **Provenance (B6):** the coalesced exchange carries
+  `trust_tier = worst(halves)` and `provenance_source` of each half in
+  its metadata. `dialogue_anchor_items` seeds gain a `trust_tier`
+  passthrough so the existing `self_web_claim` exclusion logic
+  (`focused_cognition.py:1303`) can act on anchors exactly as it acts
+  on other items — the rejoined reply renders as conversational
+  continuity, never as an unlabeled factual authority. A test pins
+  that an untrusted reply half never bypasses the exclusion.
+
+### C6. Fall-open visibility — unchanged (WARNING, unflagged; named in
+the compatibility promise).
+
+### C7. Receipts — counterfactual shadow seam (B2)
+Pass 1's "one line per turn" was unimplementable where I placed it
+(working-set assembly only runs when FOCUSED wins). Revised: a pure
+counterfactual evaluator `held_now_shadow_eval(chat_history,
+dialogue_state, ...)` → called from `handle_message` at the reply-mode
+resolution site on EVERY eligible surface turn, mode selection and
+reply untouched. Receipt:
+`held_now_shadow mode=<focused|legacy> pairs_available=N
+pairs_in_set=M pairs_rendered=R set_chars=C would_change=BOOL`.
+Under SHADOW or ENABLED.
+
+### C8 (new, B4). Anchor budget: reserved, capped, never emptied
+Long messages break pass 1's guarantee (gate measured: three 20K-char
+pairs → anchors truncated to ~3K each; a 12K owner question → every
+anchor EMPTIED, then lean drops empty anchors). Contract:
+
+- Per-message cap inside `dialogue_anchor_items`: 900 chars per
+  message, head-preserving with ` ...[truncated]` (planner convention,
+  `_MAX_EXCHANGE_CHARS=800` adjacent precedent). 3 pairs ≤ ~5.5K.
+- **Reserved anchor budget:** the working-set assembler reserves
+  `min(3600, anchor_total)` chars for dialogue anchors BEFORE other
+  classes consume budget; anchors are truncated only within their
+  reservation and are never emptied while non-empty input exists.
+- Long-turn tests for lean AND full-focused: 20K-char pairs, 12K-char
+  owner question, assert `pairs_rendered >= 2` and non-empty texts.
+
+## Witness plan (rewritten, B1)
+
+"Turn" = one owner message + one Maez reply (one exchange pair).
+Window fact: only 3 prior pairs are fetched — the pass-1 "5-turn"
+test was unfalsifiable as written and is withdrawn.
+
+1. Land flag-dormant; full suite green; existing pins untouched;
+   Codex gate on code.
+2. SHADOW on live: ≥1 day of receipts; confirm `would_change` rate,
+   `pairs_rendered` distribution, no latency regression.
+3. ENABLED witness, scripted on Telegram:
+   - Pair 1 plants a sentinel fact chosen to be (a) novel — zero
+     archive hits, verified by a pre-check query — and (b) unlikely to
+     embed near the probe phrasing, so semantic recall cannot supply it
+     (receipt must show the sentinel entered via `dialogue_anchor`
+     items, not memory tiers).
+   - Pairs 2-3 are unrelated filler.
+   - Probe (turn 4) requires the sentinel verbatim; phrased to be
+     focused-eligible; the receipt must assert `mode=focused` — a
+     legacy-path pass is a VOID witness, rerun, not a pass.
+   - **Mutation leg:** same script with ENABLED off must FAIL to
+     produce the sentinel (else the witness proved nothing). Both legs
+     recorded.
+
+## Non-goals — unchanged from pass 1 (rank changes, window size,
+dispatcher/Phase-2, semantic-recall removal), plus: no atomicity fix
+for the split write (orphan tolerance instead; a durable turn-spine is
+Phase-4+ territory per the audit's Codex repair 1).
+
+## Predicted effect (falsifiable, revised)
+ENABLED on live: continuity working sets render ≥2 pairs (receipts);
+the sentinel witness passes with `mode=focused` and fails with the
+flag off; zero-pair sets occur only with empty/echo-degenerate history;
+with both flags off, byte-identical replies on existing fixtures per
+the narrowed promise.
