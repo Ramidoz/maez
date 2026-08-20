@@ -7182,6 +7182,16 @@ def chat():
                 bl_data.get("dispatcher_transcript") or ""
             ).strip()
             _web_combined = bool(bl_data.get("combined_mode"))
+            if _web_combined and _web_dispatcher_ctx and not jarvis_transcript_web:
+                from core.brain.brain_loop import combined_instruction_block
+
+                messages_list.append({
+                    "role": "system",
+                    "content": (
+                        f"{_web_dispatcher_ctx}\n\n"
+                        f"{combined_instruction_block()}"
+                    ),
+                })
             if jarvis_transcript_web:
                 logger.info(
                     "web /chat: brain_loop ran (%d chars of transcript)",
@@ -7192,11 +7202,15 @@ def chat():
 
                     if _web_combined and _web_dispatcher_ctx:
                         # Phase 2 P2: typed combined turn on the web
-                        # bridge -- both blocks, selected by flag.
+                        # bridge -- dedicated combined authority text.
+                        from core.brain.brain_loop import (
+                            combined_instruction_block,
+                        )
+
                         _web_ctx_content = (
                             f"{_web_dispatcher_ctx}\n\n"
                             f"{jarvis_transcript_web}\n\n"
-                            f"{_instruction_block_for_transcript(jarvis_transcript_web)}"
+                            f"{combined_instruction_block()}"
                         )
                     else:
                         _web_ctx_content = (

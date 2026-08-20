@@ -1354,11 +1354,16 @@ def _summarize_shell_error(err: str) -> str:
 _DET_FACT_RE = __import__("re").compile(
     r"^(?:what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
     r".{0,40}(?:exchange rate|stock price|share price)"
-    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12})",
+    r"|what(?:'s| is) [^?]{0,40}\b(?:in|to)\s+"
+    r"(?:usd|inr|eur|gbp|jpy|dollars?|euros?|rupees?|pounds?|yen)\b"
+    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12}"
+    r"|look up the (?:price|stock price|share price) of \S+)",
     __import__("re").IGNORECASE,
 )
 _DET_FACT_EXCLUDE_RE = __import__("re").compile(
-    r"\bI feel\b|\banxious\b|\bworried\b|\bnervous\b",
+    r"\bI feel\b|\banxious\b|\bworried\b|\bnervous\b"
+    r"|\bdebate\b|\bnews\b|\bwhether\b|\bwhy\b"
+    r"|\bquestion about\b|\bmanipulat|\bcollaps",
     __import__("re").IGNORECASE,
 )
 
@@ -1879,6 +1884,30 @@ DISPATCHER_TRANSCRIPT_MARKERS = (
     "[no fresh evidence available:",
     "[dispatcher refusal:",
 )
+
+
+_COMBINED_INSTRUCTION_BLOCK = (
+    "HARD INSTRUCTION — combined recall+action turn:\n"
+    "\n"
+    "1. The DISPATCHER RECALL block above is THIS turn's substrate\n"
+    "   grounding. It is current, not history — cite it directly when\n"
+    "   it answers the owner. The JARVIS memory-is-history rule does\n"
+    "   NOT apply to it.\n"
+    "2. The JARVIS TRANSCRIPT (when present) is the AUTHORITATIVE\n"
+    "   record of what you actually did this turn. Report actions\n"
+    "   ONLY from it: pending means a card awaits approval, denied\n"
+    "   means refused, error means failed. Never claim an action it\n"
+    "   does not show.\n"
+    "3. If the transcript is empty, you took NO action this turn —\n"
+    "   answer from the recall evidence and say plainly what you did\n"
+    "   not do. Do not invent architecture stories to explain absence.\n"
+)
+
+
+def combined_instruction_block() -> str:
+    """Phase 2 P2: the typed combined-turn authority text. Selected by
+    the combined_mode flag, NEVER by transcript marker sniffing."""
+    return _COMBINED_INSTRUCTION_BLOCK
 
 
 _DISPATCHER_INSTRUCTION_BLOCK = (

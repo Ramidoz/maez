@@ -18,6 +18,13 @@ Gate-inherited contract (round 6 notes, verbatim intent):
   and disposable test roots are honored.
 - FLAGS-OFF = FILESYSTEM UNTOUCHED: with neither action-lane flag set,
   no database is created, initialized, or opened for write.
+
+Known accepted limits (code-gate round 1 NOTES):
+- event_assignments grows unbounded; retention/pruning is a named
+  follow-up (rows are tiny; revisit before year-scale operation).
+- Telegram aggregation keeps the FIRST constituent event's identity
+  for a merged turn; redelivery/regroup stability of that choice is
+  UNVERIFIED and pinned as a follow-up witness.
 """
 
 from __future__ import annotations

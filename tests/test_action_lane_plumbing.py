@@ -24,9 +24,24 @@ class KillSwitchGuardTests(unittest.TestCase):
             n for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef) and n.name == "_run_jarvis_loop"
         )
+        # AST-hardened (round-1 blocker 7): inspect the actual call
+        # keywords -- ANY return_structured kwarg (whatever its value
+        # or spelling of truthiness) and any **kwargs splat are
+        # forbidden on this rollback path.
+        calls = [
+            n for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and (
+                getattr(n.func, "attr", "") == "run_brain_loop"
+                or getattr(n.func, "id", "") == "run_brain_loop"
+            )
+        ]
+        self.assertTrue(calls, "kill-switch path must still call run_brain_loop")
+        for call in calls:
+            kw_names = [k.arg for k in call.keywords]
+            self.assertNotIn("return_structured", kw_names)
+            self.assertNotIn(None, kw_names)  # no **kwargs splat
         fn_src = ast.get_source_segment(src, fn) or ""
-        self.assertIn("run_brain_loop(", fn_src)
-        self.assertNotIn("return_structured=True", fn_src)
         self.assertNotIn("combined_mode", fn_src)
 
 

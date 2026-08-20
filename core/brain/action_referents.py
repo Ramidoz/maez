@@ -57,10 +57,20 @@ def assemble_action_referents(
     # CardReferent: OPEN + DEFERRED (both awaiting; gate P3a reversal),
     # getter scopes channel+chat, we add the explicit user_id filter.
     try:
+        _owner_ids = {str(user_id)}
+        try:
+            from core.identity import user_profile_id as _upid
+
+            _owner_ids.add(str(_upid()))
+        except Exception:
+            pass
         if card_store is not None:
             for rec in card_store.get_open_for_channel(channel, chat_id) or []:
                 rec_user = getattr(rec, "user_id", None)
-                if rec_user and str(rec_user) != str(user_id):
+                # Null/empty owner is REJECTED (gate: unowned cards are
+                # not consent targets); otherwise must match the
+                # resolved numeric id OR the owner profile id.
+                if not rec_user or str(rec_user) not in _owner_ids:
                     continue
                 out.append(CardReferent(
                     request_id=str(getattr(rec, "request_id", "")),
@@ -78,13 +88,18 @@ def assemble_action_referents(
             receipt = controller.get_search_offer(channel, chat_id)
             if receipt is not None:
                 created_seq = getattr(receipt, "created_turn_seq", None)
+                if (current_turn_seq is not None and created_seq is not None
+                        and created_seq > current_turn_seq):
+                    # Future ordinal = corrupt provenance: NO referent
+                    # (gate: negative ages are rejected, never zeroed).
+                    receipt = None
                 turns_since = (
-                    max(current_turn_seq - created_seq, 0)
-                    if (current_turn_seq is not None and created_seq is not None
-                        and current_turn_seq >= created_seq)
+                    current_turn_seq - created_seq
+                    if (receipt is not None and current_turn_seq is not None
+                        and created_seq is not None)
                     else 0
                 )
-                if receipt.is_fresh(now, turns_since):
+                if receipt is not None and receipt.is_fresh(now, turns_since):
                     out.append(CommitmentReferent(
                         offered_query=str(getattr(receipt, "offered_query", "")),
                         created_ts=float(getattr(receipt, "created_ts", 0.0)),

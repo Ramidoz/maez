@@ -274,6 +274,51 @@ async def run_inbound_turn(
     if not text:
         return None
 
+    # Phase 2: advance the conversation turn ordinal ONCE at admitted-
+    # turn entry, before every interceptor (gate build note 1) --
+    # idempotent on event identity; None when the action-lane flags
+    # are off (store untouched). Referents assemble read-only here.
+    current_turn_seq = None
+    action_referents: tuple = ()
+    try:
+        from core.brain.action_referents import assemble_action_referents
+        from core.brain.conversation_turn_seq import (
+            advance_and_get,
+            action_lane_enabled as _al_on,
+            action_lane_shadow_enabled as _al_shadow,
+        )
+
+        if not (_al_on() or _al_shadow()):
+            raise StopIteration  # flags off: untouched path
+        # Store-key convention: cards/receipts are keyed under the
+        # legacy channel name, not the surface label (gate blocker 5).
+        _ref_channel = "telegram_text" if str(
+            owner_surface_label or ""
+        ).startswith("telegram") else str(owner_surface_label or "")
+        if event_identity:
+            current_turn_seq = advance_and_get(
+                _ref_channel, chat_id, event_identity
+            )
+        _pipe_for_ref = None
+        try:
+            _lt = getattr(daemon, "telegram", None)
+            _pipe_for_ref = (
+                _lt._get_pipeline() if _lt is not None else None
+            )
+        except Exception:
+            _pipe_for_ref = None
+        action_referents = assemble_action_referents(
+            channel=_ref_channel,
+            chat_id=chat_id,
+            user_id=resolved_user_id,
+            card_store=getattr(_pipe_for_ref, "card_store", None),
+            controller=search_commitment_controller(),
+            current_turn_seq=current_turn_seq,
+        )
+    except Exception:
+        logger.debug("action referent assembly skipped", exc_info=True)
+
+
     _s4_result = guard_owner_text(
         text,
         surface=owner_surface_label,
@@ -453,45 +498,6 @@ async def run_inbound_turn(
             )
         except Exception:
             logger.debug("intake faculty shadow enqueue failed", exc_info=True)
-
-    # Phase 2: advance the conversation turn ordinal ONCE at admitted-
-    # turn entry, before every interceptor (gate build note 1) --
-    # idempotent on event identity; None when the action-lane flags
-    # are off (store untouched). Referents assemble read-only here.
-    current_turn_seq = None
-    action_referents: tuple = ()
-    try:
-        from core.brain.action_referents import assemble_action_referents
-        from core.brain.conversation_turn_seq import (
-            advance_and_get,
-            action_lane_enabled as _al_on,
-            action_lane_shadow_enabled as _al_shadow,
-        )
-
-        if not (_al_on() or _al_shadow()):
-            raise StopIteration  # flags off: untouched path
-        if event_identity:
-            current_turn_seq = advance_and_get(
-                owner_surface_label, chat_id, event_identity
-            )
-        _pipe_for_ref = None
-        try:
-            _lt = getattr(daemon, "telegram", None)
-            _pipe_for_ref = (
-                _lt._get_pipeline() if _lt is not None else None
-            )
-        except Exception:
-            _pipe_for_ref = None
-        action_referents = assemble_action_referents(
-            channel=owner_surface_label,
-            chat_id=chat_id,
-            user_id=resolved_user_id,
-            card_store=getattr(_pipe_for_ref, "card_store", None),
-            controller=search_commitment_controller(),
-            current_turn_seq=current_turn_seq,
-        )
-    except Exception:
-        logger.debug("action referent assembly skipped", exc_info=True)
 
     # Card-reply intent check — if there's an open approval card
     # and this message looks like a yes/no/defer, route through

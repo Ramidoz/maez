@@ -7903,6 +7903,17 @@ class MaezDaemon:
         # like "Proceed" lose the real action request. Keep owner text clean
         # and give the model tool-state as a system note instead.
         transcript_context = ""
+        if combined_mode and dispatcher_transcript and not (
+            transcript and transcript.strip()
+        ):
+            # Phase 2: combined turn where jarvis chose no tool -- the
+            # dispatcher recall is still this turn's substance.
+            from core.brain.brain_loop import combined_instruction_block
+
+            transcript_context = (
+                f"{dispatcher_transcript}\n\n"
+                + combined_instruction_block()
+            )
         if transcript and transcript.strip():
             try:
                 from core.brain_loop import (
@@ -7919,17 +7930,16 @@ class MaezDaemon:
                 )
 
                 if combined_mode and dispatcher_transcript:
-                    # Phase 2 P2: typed combined turn -- dispatcher
-                    # recall AND jarvis authority instructions,
-                    # selected by flag, never by marker sniffing. The
-                    # two transcripts stay separate blocks.
+                    # Phase 2 P2: typed combined turn -- selected by
+                    # flag, never by marker sniffing; dedicated
+                    # combined authority text (code-gate blocker 2).
                     from core.brain.brain_loop import (
-                        _instruction_block_for_transcript as _ibft,
+                        combined_instruction_block,
                     )
 
                     transcript_context = (
                         f"{dispatcher_transcript}\n\n{transcript}\n\n"
-                        + _ibft(transcript)
+                        + combined_instruction_block()
                     )
                 else:
                     transcript_context = f"{transcript}\n\n{instruction_block}"

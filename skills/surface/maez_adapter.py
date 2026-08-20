@@ -789,14 +789,34 @@ class MaezMessageHandler:
         if not text:
             return None
 
-        # SLICE 0 strangler seam — flag-gated delegation to the
-        # surface-agnostic inbound core. DEFAULT OFF. When ON, the entire
-        # inbound pipeline below is run from daemon.inbound_core.run_inbound_turn
-        # with every surface-coupled literal injected via the descriptor. When
-        # OFF (default), the EXISTING inline body below runs UNTOUCHED — this is
-        # the byte-identical path proven by tests/test_inbound_core_equivalence.
-        if inbound_core_v2_enabled():
-            return await run_inbound_turn(**self._build_inbound_descriptor(event))
+        # Phase 2 (inline): advance the conversation turn ordinal at
+        # ADMISSION, before every interceptor (gate blocker 4).
+        # Idempotent; flags-off = store untouched. Referent assembly
+        # happens later where the pipeline/controller resolve.
+        current_turn_seq = None
+        try:
+            from core.brain.conversation_turn_seq import (
+                advance_and_get as _seq_advance,
+                action_lane_enabled as _al_on,
+                action_lane_shadow_enabled as _al_shadow,
+            )
+
+            if _al_on() or _al_shadow():
+                _chat_for_seq = str(
+                    getattr(getattr(event, "source", None), "chat_id", "") or ""
+                )
+                _upd = getattr(event, "platform_update_id", None)
+                _mid = getattr(event, "message_id", None)
+                _eid = (
+                    f"update:{_upd}" if _upd is not None
+                    else (f"message:{_mid}" if _mid is not None else "")
+                )
+                if _eid and _chat_for_seq:
+                    current_turn_seq = _seq_advance(
+                        "telegram_text", _chat_for_seq, _eid
+                    )
+        except Exception:
+            logger.debug("inline turn-seq advance skipped", exc_info=True)
 
         _s4_result = guard_owner_text(
             text,
@@ -859,38 +879,26 @@ class MaezMessageHandler:
                 pipe = get_pipeline()
             except Exception:
                 pipe = None
-        # Phase 2 (inline path): turn ordinal + typed referents at
-        # admitted-turn entry -- identical contract to the V2 core.
-        current_turn_seq = None
+        # Phase 2 (inline): typed referents, read-only, flags-gated;
+        # channel uses the store-key convention (gate blocker 5).
         action_referents: tuple = ()
         try:
             from core.brain.action_referents import assemble_action_referents
             from core.brain.conversation_turn_seq import (
-                advance_and_get,
-                action_lane_enabled as _al_on,
-                action_lane_shadow_enabled as _al_shadow,
+                action_lane_enabled as _al_on2,
+                action_lane_shadow_enabled as _al_shadow2,
             )
 
-            if not (_al_on() or _al_shadow()):
-                raise StopIteration  # flags off: untouched path
-            _upd = getattr(event, "platform_update_id", None)
-            _mid = getattr(event, "message_id", None)
-            _event_identity = (
-                f"update:{_upd}" if _upd is not None
-                else (f"message:{_mid}" if _mid is not None else "")
-            )
-            if _event_identity:
-                current_turn_seq = advance_and_get(
-                    SURFACE_NAME, chat_id, _event_identity
+            if _al_on2() or _al_shadow2():
+                action_referents = assemble_action_referents(
+                    channel="telegram_text",
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    card_store=getattr(pipe, "card_store", None),
+                    controller=self._search_commitment_controller(),
+                    proposal_entry=self._last_shown_proposal.get(chat_id),
+                    current_turn_seq=current_turn_seq,
                 )
-            action_referents = assemble_action_referents(
-                channel=SURFACE_NAME,
-                chat_id=chat_id,
-                user_id=user_id,
-                card_store=getattr(pipe, "card_store", None),
-                controller=self._search_commitment_controller(),
-                current_turn_seq=current_turn_seq,
-            )
         except Exception:
             logger.debug(
                 "inline action referent assembly skipped", exc_info=True
