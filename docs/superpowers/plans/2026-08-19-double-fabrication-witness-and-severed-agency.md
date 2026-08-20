@@ -79,3 +79,14 @@ tools.
 - Full being-wiring audit (five-ingredient memory recipe vs live
   state) launched 2026-08-19 late evening; Claude fan-out + Codex
   independent pass.
+
+---
+
+## RULING EXECUTED 2026-08-20: annotate_and_deweight
+
+Owner ruled; executed on the live raw archive, metadata only:
+- Rows f03a0703 (fake proposal) and c78ed4e2 (fake "File created"):
+  trust_tier lived -> untrusted; fabrication_annotated=true; full
+  annotation note pointing at this witness record; annotation_at
+  stamped. Document bytes verified INTACT post-update (never-delete
+  honored). Read-back confirmed both rows.
