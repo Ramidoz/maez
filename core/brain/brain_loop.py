@@ -722,6 +722,7 @@ def _recall_source_summaries(spec, recall_blocks):
 def _run_dispatcher_pipeline(
     *,
     user_text: str,
+    action_referents: tuple = (),
     surface: str,
     bond_id: str,
     chat_id: str,
@@ -1132,7 +1133,9 @@ def _run_dispatcher_pipeline(
     _prompt_block = rendered_turn.prompt_block
     if _routing_comprehension_context_block:
         _prompt_block = f"{_prompt_block}\n\n{_routing_comprehension_context_block}"
-    _floor_intent = _action_intent_syntactic_floor(user_text)
+    _floor_intent = _action_intent_syntactic_floor(
+        user_text, referents=action_referents
+    )
     try:
         from core.brain.conversation_turn_seq import (
             action_lane_enabled as _al_on,
@@ -1385,7 +1388,13 @@ _INTENT_EXCLUDE_RE = __import__("re").compile(
 )
 
 
-def _action_intent_syntactic_floor(text: str) -> str:
+_ANAPHORA_RE = __import__("re").compile(
+    r"^(?:yes[\s,!.\u2014-]*)?(?:please\s+)?(?:go ahead|do it|proceed)\b",
+    __import__("re").IGNORECASE,
+)
+
+
+def _action_intent_syntactic_floor(text: str, referents: tuple = ()) -> str:
     """Phase 2 R6 (gate-approved): a SYNTACTIC CANDIDATE FLOOR, not a
     meaning organ. Recognizes explicit imperative shapes aimed at an
     object; exclusions for negation/contrast, questions, hypotheticals,
@@ -1399,6 +1408,11 @@ def _action_intent_syntactic_floor(text: str) -> str:
     if _INTENT_EXCLUDE_RE.search(t):
         return "none"
     if _INTENT_VERB_RE.search(t):
+        return "explicit_request"
+    # Anaphora resolves ONLY against a typed referent (gate R2): no
+    # referent -> uncertain -> conversation. History prose never
+    # confers authority.
+    if _ANAPHORA_RE.match(t) and referents:
         return "explicit_request"
     return "none"
 
@@ -2059,6 +2073,7 @@ def run_brain_loop(
     chat_history=None,
     turn=None,
     return_structured: bool = False,
+    action_referents: tuple = (),
 ) -> "str | BrainLoopResult":
     """ReAct-style tool-use loop. Returns a transcript block to inject
     into the streaming reply prompt, or an empty string if no tools were
@@ -2125,6 +2140,7 @@ def run_brain_loop(
     if dispatcher_path:
         dispatcher_result = _run_dispatcher_pipeline(
             user_text=user_text,
+            action_referents=action_referents,
             surface=surface or "",
             bond_id=user_id or "",
             chat_id=chat_id,

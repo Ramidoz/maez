@@ -73,6 +73,11 @@ class OfferReceipt:
     confirmation_mode: str    # "clear_yes_ok"
     executor: str             # "searxng"
     egress_class: str         # "sovereign_local_search"
+    # Phase 2 (gate P3b): turn ordinal at offer creation, from the
+    # conversation_turn_seq store. None when the action-lane flags are
+    # off or the counter is unavailable -- turns-based freshness is
+    # then conservative-off and time-based freshness alone governs.
+    created_turn_seq: "int | None" = None
 
     def is_fresh(self, now_ts: float, turns_since: int) -> bool:
         return (now_ts - self.created_ts) <= self.ttl_seconds and turns_since <= self.ttl_turns

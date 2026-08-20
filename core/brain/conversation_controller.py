@@ -784,6 +784,9 @@ class ConversationController:
         from core.search.search_commitment import OfferReceipt
 
         receipt = OfferReceipt(
+            created_turn_seq=__import__(
+                "core.brain.conversation_turn_seq", fromlist=["current_seq"]
+            ).current_seq(channel, chat_id),
             action_type="web_search",
             stakes="low_read",
             offered_query=query,
