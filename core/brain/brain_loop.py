@@ -1351,15 +1351,6 @@ def _summarize_shell_error(err: str) -> str:
     return ""
 
 
-_DET_FACT_RE = __import__("re").compile(
-    r"^(?:what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
-    r".{0,40}(?:exchange rate|stock price|share price)"
-    r"|what(?:'s| is) [^?]{0,40}\b(?:in|to)\s+"
-    r"(?:usd|inr|eur|gbp|jpy|dollars?|euros?|rupees?|pounds?|yen)\b"
-    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12}"
-    r"|look up the (?:price|stock price|share price) of \S+)",
-    __import__("re").IGNORECASE,
-)
 _DET_FACT_EXCLUDE_RE = __import__("re").compile(
     r"\bI feel\b|\banxious\b|\bworried\b|\bnervous\b"
     r"|\bdebate\b|\bnews\b|\bwhether\b|\bwhy\b"
@@ -1369,29 +1360,64 @@ _DET_FACT_EXCLUDE_RE = __import__("re").compile(
     r"|\bdo(?:n'?t| not) look\b",
     __import__("re").IGNORECASE,
 )
-# Deterministic facts require an amount-like or ticker-like token --
-# purely narrative currency talk must NOT bypass the dispatcher.
-_DET_FACT_TOKEN_RE = __import__("re").compile(
-    r"[0-9][0-9,.]*|[$\u20ac\u00a3\u20b9]|\bRs\.?|\b[A-Z]{2,6}\b"
+_STOPCAPS = {
+    "THE", "THIS", "THAT", "NOW", "WHAT", "WHO", "WHY", "HOW", "AND",
+    "FOR", "YOU", "NOT", "ALL", "ANY", "ONE", "TWO", "CAN", "DID",
+    "GET", "HAS", "HAD", "HER", "HIS", "ITS", "OUR", "SHE", "WAS",
+    "WERE", "WILL", "WITH", "OK", "OKAY", "ASAP", "TODAY", "PLEASE",
+    # currency CODES are not tickers -- they qualify a turn only via
+    # the amount or exchange-rate branches, never alone.
+    "USD", "INR", "EUR", "GBP", "JPY", "CAD", "AUD",
+}
+_AMOUNTISH_RE = __import__("re").compile(
+    r"[0-9][0-9,.]*|[$\u20ac\u00a3\u20b9]\s?[0-9]|\bRs\.?\s?[0-9]"
+)
+_CUR_CODE_RE = __import__("re").compile(
+    r"\b(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)\b",
+    __import__("re").IGNORECASE,
+)
+_TICKERISH_RE = __import__("re").compile(r"\b[A-Z]{2,6}\b")
+_DET_FORM_RE = __import__("re").compile(
+    r"^(?:what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
+    r"(?:.{0,40}exchange rate|.{0,40}(?:stock|share) price"
+    r"|.{0,50}\b(?:in|to)\s+"
+    r"(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)\b)"
+    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12}"
+    r"|look up the (?:price|stock price|share price) of \S+)",
+    __import__("re").IGNORECASE,
 )
 
 
+def _has_real_ticker(text: str) -> bool:
+    return any(
+        tok not in _STOPCAPS for tok in _TICKERISH_RE.findall(text)
+    )
 def _deterministic_fact_candidate(text: str) -> bool:
-    """Phase 2 P1 (gate-approved pass 6): NARROW pre-dispatch reflex
-    for the pinned deterministic live-fact question forms (currency /
-    stock). Flag-independent by design: these turns take the UNCHANGED
-    Jarvis-only path so the authoritative tools keep their exact
-    current behavior under the recall triad. Mixed emotional turns
-    (the pinned "I feel anxious about Nvidia stock" fixture) must NOT
-    match -- dispatcher context wins there."""
+    """Phase 2 P1 (gate rounds 1-3 hardened): NARROW pre-dispatch
+    reflex for pinned currency/stock live-fact forms. Requires BOTH a
+    supported question form AND real substance: an amount-like token,
+    a currency code/word, or a genuine (non-stopword) ticker. Ordinary
+    capitalized words (THE/THIS/NOW) are never tickers; personal/
+    recalled/subjective/negated turns are excluded; mixed emotional
+    turns stay with the dispatcher."""
     t = (text or "").strip()
     if not t or len(t) > 160:
         return False
     if _DET_FACT_EXCLUDE_RE.search(t):
         return False
-    if not _DET_FACT_TOKEN_RE.search(t):
+    if not _DET_FORM_RE.match(t):
         return False
-    return bool(_DET_FACT_RE.match(t))
+    if _AMOUNTISH_RE.search(t):
+        return True
+    if _has_real_ticker(t):
+        return True
+    # currency codes alone qualify ONLY for the exchange-rate form
+    # ("INR to USD exchange rate"); "What is THIS in USD?" has a code
+    # but no amount/ticker and must fail.
+    lowered = t.lower()
+    if "exchange rate" in lowered and _CUR_CODE_RE.search(t):
+        return True
+    return False
 
 
 _INTENT_VERB_RE = __import__("re").compile(

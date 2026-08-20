@@ -74,6 +74,11 @@ class FixtureTests(unittest.TestCase):
             "What is the amount we discussed in USD?",
             "What is my salary in dollars?",
             "What is 300 euros in USD? Do not look it up.",
+            "What is THE current stock price?",
+            "What is THIS in USD?",
+            "What is NOW in USD?",
+            "Convert THIS to euros",
+            "Look up the price of THE",
         ):
             self.assertFalse(det(t), t)
 
