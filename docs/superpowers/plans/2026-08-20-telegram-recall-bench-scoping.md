@@ -38,11 +38,18 @@ RE-METRIC of existing plumbing, not greenfield. Est. ~450 LOC prod +
   all six recall flags; record embedding-contract stamp; avoid
   continuity-trip phrasings.
 
-## Pre-build probe (blocking, ~20 lines)
-Measure what fraction of the 60 candidate questions
-`dialogue_continuity_state` classifies DIRECT/ANAPHORIC — that path
-collapses evidence to ONE row by design (`memory_manager.py:3012-3040`)
-and would invalidate the aggregate if >10%.
+## Pre-build probe — RUN 2026-08-20, design decision made
+Measured `dialogue_continuity_state` on 150 stratified oracle
+questions (seed 20260820): **23/150 = 15.3% trip DIRECT/ANAPHORIC**,
+concentrated in single-session-assistant (9/20) and preference (8/20);
+single-session-user 0/20, knowledge-update 1/20, temporal 3/20.
+
+Decision: the 60-question manifest is built from PRE-SCREENED
+non-tripping questions per type, PLUS a separate pinned
+`continuity_override` bucket (~6 tripped questions) scored on its own —
+the override is real production behavior and gets measured, not hidden;
+it just may not contaminate the retrieval aggregate. The >10% risk is
+resolved by construction.
 
 ## Known score-capping mechanisms to bucket separately
 `_absolute_date_recall` total bypass (own bucket); `_keep_not_echo`
