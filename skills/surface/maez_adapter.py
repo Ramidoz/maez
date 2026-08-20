@@ -749,10 +749,17 @@ class MaezMessageHandler:
             getattr(legacy_tg, "_get_pipeline", None) if legacy_tg is not None else None
         )
 
+        _upd = getattr(event, "platform_update_id", None)
+        _mid = getattr(event, "message_id", None)
+        _event_identity = (
+            f"update:{_upd}" if _upd is not None
+            else (f"message:{_mid}" if _mid is not None else "")
+        )
         return dict(
             daemon=self.daemon,
             text=event.text or "",
             raw_platform_metadata=getattr(event, "raw_message", None),
+            event_identity=_event_identity,
             chat_id=chat_id,
             resolved_user_id=resolved_user_id,
             reply_to_message_id=getattr(event, "reply_to_message_id", None),
@@ -852,6 +859,36 @@ class MaezMessageHandler:
                 pipe = get_pipeline()
             except Exception:
                 pipe = None
+        # Phase 2 (inline path): turn ordinal + typed referents at
+        # admitted-turn entry -- identical contract to the V2 core.
+        current_turn_seq = None
+        action_referents: tuple = ()
+        try:
+            from core.brain.action_referents import assemble_action_referents
+            from core.brain.conversation_turn_seq import advance_and_get
+
+            _upd = getattr(event, "platform_update_id", None)
+            _mid = getattr(event, "message_id", None)
+            _event_identity = (
+                f"update:{_upd}" if _upd is not None
+                else (f"message:{_mid}" if _mid is not None else "")
+            )
+            if _event_identity:
+                current_turn_seq = advance_and_get(
+                    SURFACE_NAME, chat_id, _event_identity
+                )
+            action_referents = assemble_action_referents(
+                channel=SURFACE_NAME,
+                chat_id=chat_id,
+                user_id=user_id,
+                card_store=getattr(pipe, "card_store", None),
+                controller=self._search_commitment_controller(),
+                current_turn_seq=current_turn_seq,
+            )
+        except Exception:
+            logger.debug(
+                "inline action referent assembly skipped", exc_info=True
+            )
         has_local_photo_context = bool(
             event.message_type == MessageType.PHOTO
             and event.channel_prompt
@@ -1186,6 +1223,7 @@ class MaezMessageHandler:
                                     chat_history=chat_history,
                                     turn=turn,
                                     return_structured=True,
+                                    action_referents=action_referents,
                                 )
                             ),
                         )

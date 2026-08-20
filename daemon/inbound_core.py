@@ -210,7 +210,8 @@ async def run_inbound_turn(
     # Surface-decoupled turn payload (the adapter resolves these from its event
     # in ``_build_inbound_descriptor`` so the core never touches a surface event):
     text: str,
-    chat_id: str,
+    event_identity: str = "",
+    chat_id: str = "",
     resolved_user_id: str,
     reply_to_message_id: "str | None",
     context_note: Any,
@@ -453,6 +454,38 @@ async def run_inbound_turn(
         except Exception:
             logger.debug("intake faculty shadow enqueue failed", exc_info=True)
 
+    # Phase 2: advance the conversation turn ordinal ONCE at admitted-
+    # turn entry, before every interceptor (gate build note 1) --
+    # idempotent on event identity; None when the action-lane flags
+    # are off (store untouched). Referents assemble read-only here.
+    current_turn_seq = None
+    action_referents: tuple = ()
+    try:
+        from core.brain.action_referents import assemble_action_referents
+        from core.brain.conversation_turn_seq import advance_and_get
+
+        if event_identity:
+            current_turn_seq = advance_and_get(
+                owner_surface_label, chat_id, event_identity
+            )
+        _pipe_for_ref = None
+        try:
+            _pipe_for_ref = (
+                legacy_tg._get_pipeline() if legacy_tg is not None else None
+            )
+        except Exception:
+            _pipe_for_ref = None
+        action_referents = assemble_action_referents(
+            channel=owner_surface_label,
+            chat_id=chat_id,
+            user_id=resolved_user_id,
+            card_store=getattr(_pipe_for_ref, "card_store", None),
+            controller=search_commitment_controller(),
+            current_turn_seq=current_turn_seq,
+        )
+    except Exception:
+        logger.debug("action referent assembly skipped", exc_info=True)
+
     # Card-reply intent check — if there's an open approval card
     # and this message looks like a yes/no/defer, route through
     # the pipeline's reply handler. The renderer inside the
@@ -658,6 +691,7 @@ async def run_inbound_turn(
                                 chat_history=chat_history,
                                 turn=turn,
                                 return_structured=True,
+                                action_referents=action_referents,
                             )
                         ),
                     )
