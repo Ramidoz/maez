@@ -372,3 +372,19 @@ an individual mutation witness, plus the 11 spec REDs and 4 fixtures.
 BUILD next: commit-by-commit, battery-gated, then Codex code gate,
 then SHADOW day, then ENABLED witness ending at the reborn covenant
 ceremony.
+
+---
+
+## P1 SCOPE NARROWED (code-gate rounds 3-5, 2026-08-21)
+
+Five gate rounds proved ticker-vs-English-word LEXICALLY UNDECIDABLE
+(GOOD/EUROS/LOL; dictionary validation fails open and is incomplete).
+Ruling: the flag-independent reflex covers ONLY the strictly-decidable
+currency grammar (STRICT code-pair exchange-rate; marked-amount
+conversion forms; full-match anchored; injection/negation exclusions;
+floor-precedence). Ticker/stock questions are OUT OF REFLEX SCOPE and
+keep today's live (triad-on) dispatcher behavior -- no regression vs
+production; the ENABLED action lane may serve them later where flags
+and S7 bound the blast radius. "What is 300 in USD?" (unmarked source)
+rejects. All 5 remaining positives + 40 accumulated negatives pinned;
+the routing RED now BITES (truthy engine + faked planner).
