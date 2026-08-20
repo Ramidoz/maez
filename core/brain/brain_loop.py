@@ -77,6 +77,13 @@ class BrainLoopResult:
     tool_calls: list[dict] = field(default_factory=list)
     recall_items: tuple[Any, ...] = ()
     consent_intent: Any = None
+    # Phase 2 combined state (gate P2): when a dispatcher-recall turn
+    # ALSO carries explicit action intent, the dispatcher transcript
+    # rides here as typed structure (never concatenated into the
+    # jarvis transcript) and combined_mode marks the result so
+    # instruction selection uses the typed flag, not marker sniffing.
+    dispatcher_transcript: str = ""
+    combined_mode: bool = False
 
 
 def _emit_search_progress(send_intermediate, external_sources, *, stage: str, count):
@@ -2137,6 +2144,8 @@ def run_brain_loop(
         elif not _should_run_jarvis_loop(user_text):
             return _empty()
 
+    _dispatcher_ctx = ""
+    _dispatcher_recall_items: tuple = ()
     if dispatcher_path:
         dispatcher_result = _run_dispatcher_pipeline(
             user_text=user_text,
@@ -2150,7 +2159,8 @@ def run_brain_loop(
                 send_intermediate if sense_enabled() or page_read_enabled() else None
             ),
         )
-        if dispatcher_result.transcript:
+        if dispatcher_result.transcript and not dispatcher_result.should_run_jarvis:
+            # Recall-only turn: byte-identical to the pre-Phase-2 path.
             if return_structured:
                 return BrainLoopResult(
                     transcript=dispatcher_result.transcript,
@@ -2160,6 +2170,11 @@ def run_brain_loop(
             return dispatcher_result.transcript
         if not dispatcher_result.should_run_jarvis:
             return _empty()
+        # THE REJOINED NERVE (gate R1/P2): explicit action intent under
+        # the ENABLED flag -- carry the dispatcher's recall as typed
+        # context and PROCEED into the unchanged Jarvis loop below.
+        _dispatcher_ctx = dispatcher_result.transcript
+        _dispatcher_recall_items = dispatcher_result.recall_items
 
     # Resolve default user_id from identity (owner.user_id in the yaml)
     # when the caller passed None. Keeps the scope-label "rohit" out of
@@ -2445,6 +2460,15 @@ def run_brain_loop(
         # find?" (one minute after a git clone) drifted to hardware
         # probing because the planner had zero signal about the clone.
         _history_block = ""
+        if _dispatcher_ctx:
+            # Phase 2 combined turn: the dispatcher's recall context is
+            # a separate labeled block so the planner grounds "that
+            # file"/"the thing we discussed" in real recall evidence.
+            _history_block += (
+                "DISPATCHER RECALL CONTEXT (substrate evidence for this "
+                "turn; ground references in it, do not restate it):\n"
+                + _dispatcher_ctx[:4000] + "\n\n"
+            )
         if chat_history:
             _parts = [
                 "RECENT CONVERSATION (most recent last, you are the \"maez\" side):"
@@ -2881,5 +2905,8 @@ def run_brain_loop(
                 _transcript_to_tool_call_dict(item) for item in transcript
             ],
             consent_intent=consent_intent,
+            recall_items=tuple(_dispatcher_recall_items or ()),
+            dispatcher_transcript=_dispatcher_ctx,
+            combined_mode=bool(_dispatcher_ctx),
         )
     return transcript_str
