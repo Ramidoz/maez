@@ -173,3 +173,79 @@ real false-positive rate before ENABLED.
 `capability_question` consumer named (gate note): it feeds the
 affordance-declaration seam's reply guidance ("say what you can do")
 -- dead metadata until that seam lands, documented as such.
+
+---
+
+# PASS 3 (after gate round 2: REVISE, 4 blockers + self-containment)
+
+## P1 (deterministic_fact): pre-dispatch branch, flag-independent
+A dedicated predicate `_deterministic_fact_candidate(text)` (currency/
+stock supported question forms) runs BEFORE the dispatcher-path
+decision and BEFORE action-candidate syntax in `run_brain_loop`. On
+match, the turn takes the UNCHANGED Jarvis-only branch exactly as a
+triad-off turn does today -- dispatcher never runs, planner bytes
+identical, TOOL-mode authority preserved. Independent of the
+action-lane flags. "Convert Rs200000..." can never classify as a body
+action because this branch precedes the syntax floor.
+
+## P2 (combined-state migration): the full plumbing, enumerated
+`BrainLoopResult` gains `dispatcher_transcript: str = ""` and
+`combined_mode: bool = False`. Migration path (all in build scope):
+inbound_core extraction (:662) forwards both; `handle_message` gains
+`dispatcher_transcript`/`combined_mode` params (absent-by-default =
+byte-identity for dispatcher-only and jarvis-only turns); instruction
+selection: `combined_mode=True` selects a NEW combined block directly
+-- `_instruction_block_for_transcript` marker-sniffing untouched for
+legacy shapes; web bridge JSON (:13018) and web synthesis
+(web_interface:7180) carry both fields the same way.
+
+## P3 (typed referents): ActionReferent union, fallback-only
+New `ActionReferent` union assembled per turn in the inbound paths and
+passed as `action_referents` into `run_brain_loop` ->
+`_run_dispatcher_pipeline`:
+- CardReferent: `pending_cards.get_open_for_channel()` (open state,
+  chat/user scoped);
+- CommitmentReferent: `OfferReceipt` via
+  `ConversationController.get_search_offer()` ("recorded commitment"
+  IS OfferReceipt -- gate question answered);
+- ProposalReferent: the adapter last-shown store entry, freshness
+  <= 600s, chat-scoped.
+Precedence: existing pre-brain_loop interceptors keep their authority;
+the resolver is FALLBACK-ONLY (gate note honored). Anaphora resolves
+against this union or not at all; held_now_history remains
+conversation text and confers no referent authority.
+
+## P4 (carrier invariant): derived property, frozen, 3 migrations
+`_DispatcherPathResult` stays `frozen=True`. `should_run_jarvis`
+becomes a DERIVED PROPERTY computed from `action_intent` and a new
+`action_lane_enabled_snapshot: bool = False` field (snapshotted at
+construction by the factory). The "constructor-compatible writable
+field" idea is withdrawn (it contradicted impossible-disagreement).
+The three test-only constructors (`test_brain_loop.py:98,:390,:430`)
+are migrated in the same commit -- enumerated, not discovered.
+`action_intent` validated at runtime in `__post_init__` against the
+closed set (Literal annotation is documentation, not enforcement --
+gate note honored).
+
+## P5 (self-contained contracts)
+RED set, verbatim:
+1. Normal construction preserves explicit intent under flag-on/off.
+2. Repair-refusal always suppresses continuation.
+3. run_brain_loop continues when transcript is non-empty AND action
+   intent is explicit.
+4. Dispatcher context and recall_items survive that continuation.
+5. Mutating either real constructor or restoring the early return
+   flips its named test.
+6. Flag-off return bytes and tool-call behavior remain unchanged.
+
+False-positive fixtures, literal:
+F1 "Don't execute it — just propose it." -> intent none
+   (negation/contrast; real owner traffic, maez.log:294087 shape).
+F2 "Nah forget about that. How you been?" -> intent none
+   (idiom/cancellation; maez.log:411582 shape).
+F3 An ordinary greeting arriving while the 3-pair history contains
+   "create", "go ahead", and "File created" -> intent none (history
+   never creates positive intent; maez.log:411596 shape).
+
+The legacy-verb doctrine seam now has its own committed ledger entry:
+docs/superpowers/plans/2026-08-20-legacy-verb-doctrine-seam.md.
