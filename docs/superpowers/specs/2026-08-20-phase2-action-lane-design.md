@@ -292,3 +292,38 @@ for both paths in the RED set.
 10. Stale OfferReceipt (time; turns) yields NO CommitmentReferent.
 11. Pre-dispatch deterministic-fact turn emits the pinned telemetry
     shape (mode/receipt/reply_path, no routing-observation row).
+
+---
+
+# PASS 5 (after gate round 4: two P3 folds; one ruling REVERSED)
+
+## P3a: DEFERRED inclusion — pass-4 ruling reversed
+DEFERRED cards ARE valid CardReferents (store semantics:
+AWAITING_STATUSES includes both at `pending_cards.py:102`; approval
+legally accepted from either at `:820`; deferral postpones
+re-presentation, never revokes consent-target authority). Referent =
+get_open_for_channel(channel, chat_id) rows (OPEN and DEFERRED) with
+the explicit user_id filter. Split semantics with the pre-brain
+interceptor thereby avoided.
+
+## P3b: stale-by-turns gets a real authority source
+`OfferReceipt` has TTL turns but no creation-turn ordinal; production
+callers hardcode turns_since=1. Contract: the receipt gains a
+`created_turn_seq` stamped from a per-conversation monotonic turn
+counter maintained by the referent assembler's caller (the inbound
+turn sequence the adapter already advances per owner turn — if no
+such counter exists yet, it is introduced as part of this build,
+chat-scoped, persisted beside the last-shown store). `turns_since =
+current_turn_seq - created_turn_seq`; the stale-by-turns RED exercises
+the REAL assembler with production-derived turn age (never a direct
+is_fresh(..., turns_since=N) call). Until the counter exists in a
+path, time-based freshness alone governs and turns-based is
+conservative-off (documented, not silently hardcoded).
+
+## Build-note corrections adopted
+Fixture text corrected verbatim: "I feel anxious about Nvidia stock
+today; check the latest price" (test_brain_loop.py:1249). Wrong-user
+RED scoped to the NEW referent assembler only (the pre-brain
+interceptor's existing chat-scoped authority unchanged; end-to-end
+wrong-user hardening is out of scope). Each RED gets an individual
+mutation witness at build time.
