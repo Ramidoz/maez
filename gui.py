@@ -686,6 +686,8 @@ class MaezApp:
                         f"the owner asked: {user_text}\nMaez replied: {reply}",
                         provenance_source="user_utterance",
                         trust_tier="lived",
+                        origin_surface="gui",
+                        chat_id="gui",
                     )
                 except Exception:
                     pass

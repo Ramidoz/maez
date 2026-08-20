@@ -9504,6 +9504,8 @@ class MaezDaemon:
                 provenance_source=_spec.provenance_source,
                 trust_tier=_spec.trust_tier,
                 turn_link_id=_spec.turn_link_id,
+                origin_surface=source,
+                chat_id=chat_id,
             )
             if _spec.is_owner_record:
                 _m1_raw_memory_id = _stored_id
@@ -9833,6 +9835,8 @@ class MaezDaemon:
             f"the owner (voice): {text}\nMaez: {full_reply}",
             provenance_source="user_utterance",
             trust_tier="lived",
+            origin_surface="voice",
+            chat_id="voice",
         )
         self._ws_broadcast({"type": "message_reply", "text": full_reply})
         return full_reply
@@ -10004,6 +10008,8 @@ class MaezDaemon:
                         f"the owner (morning_briefing): [just arrived]\nMaez: {briefing}",
                         provenance_source="introspection",
                         trust_tier="lived",
+                        origin_surface="briefing",
+                        chat_id="briefing",
                     )
                 except Exception as _store_exc:
                     logger.debug(

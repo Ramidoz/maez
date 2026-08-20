@@ -7402,6 +7402,8 @@ def chat():
                 f"the owner asked: {message}\nMaez replied: {reply}",
                 provenance_source="user_utterance",
                 trust_tier="lived",
+                origin_surface="web_owner",
+                chat_id="web_owner",
             )
         elif user_key:
             store = UserProfileStore()

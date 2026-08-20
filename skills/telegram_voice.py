@@ -1221,6 +1221,8 @@ class TelegramVoice:
                         summary,
                         provenance_source="introspection",
                         trust_tier="lived",
+                        origin_surface="telegram_legacy",
+                        chat_id="telegram_legacy",
                     )
         except Exception as e:
             logger.debug("card reply memory store failed: %s", e)
@@ -1369,6 +1371,8 @@ class TelegramVoice:
                             summary_for_memory,
                             provenance_source="introspection",
                             trust_tier="lived",
+                            origin_surface="telegram_legacy",
+                            chat_id="telegram_legacy",
                         )
                     except Exception as e:
                         logger.debug("Fix 6 terminal memory store failed: %s", e)
@@ -1503,6 +1507,8 @@ class TelegramVoice:
                                         f"Maez recovery pass {depth}: {reply_text[:500]}",
                                         provenance_source="introspection",
                                         trust_tier="lived",
+                                        origin_surface="telegram_legacy",
+                                        chat_id="telegram_legacy",
                                     )
                                 except Exception as e:
                                     logger.debug("recovery memory store failed: %s", e)
@@ -3610,6 +3616,12 @@ class TelegramVoice:
                     f"the owner asked: {user_text}\nMaez replied: {response}",
                     provenance_source="user_utterance",
                     trust_tier="lived",
+                    origin_surface="telegram_legacy",
+                    chat_id=(
+                        str(update.effective_chat.id)
+                        if getattr(update, "effective_chat", None)
+                        else "telegram_legacy"
+                    ),
                 )
                 self._thread_last_active = _time.time()
                 return response
@@ -4236,6 +4248,8 @@ class TelegramVoice:
             f"the owner asked: {user_text}\nMaez replied: {reply}",
             provenance_source="user_utterance",
             trust_tier="lived",
+            origin_surface="telegram_legacy",
+            chat_id=str(_chat_id) if _chat_id else "telegram_legacy",
         )
         try:
             from core.cognition.moment_assembly_diagnostic import (

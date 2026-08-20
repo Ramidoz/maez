@@ -1575,11 +1575,20 @@ class MemoryManager:
 
     def store_telegram(self, content: str, *,
                        provenance_source=None, trust_tier=None,
-                       egress_origin_class=None, turn_link_id=None) -> str:
+                       egress_origin_class=None, turn_link_id=None,
+                       origin_surface=None, chat_id=None) -> str:
         """Store a Telegram exchange in the raw archive.
 
         ``provenance_source`` / ``trust_tier`` are the Step 5x.A
-        provenance kwargs (see :func:`_provenance_metadata`)."""
+        provenance kwargs (see :func:`_provenance_metadata`).
+
+        ``origin_surface`` / ``chat_id`` are the held-now scope stamps
+        (2026-08-20 design C4): additive metadata identifying which
+        surface and conversation wrote the exchange, so the held-now
+        reader can scope its window instead of sharing one global
+        3-slot window across every surface. Rows without the stamps
+        (all history) match any scope — legacy-wildcard semantics live
+        on the read side."""
         provenance_extra = _provenance_metadata(
             provenance_source, trust_tier
         )
@@ -1599,6 +1608,10 @@ class MemoryManager:
         meta.update(egress_origin_extra)
         if turn_link_id:
             meta["turn_link_id"] = str(turn_link_id)
+        if origin_surface:
+            meta["origin_surface"] = str(origin_surface)
+        if chat_id:
+            meta["chat_id"] = str(chat_id)
         self._assert_embedding_writes_allowed()
         self.raw.add(
             ids=[memory_id],
@@ -3557,6 +3570,120 @@ class MemoryManager:
         if limit is not None and limit > 0:
             return memories[-limit:]
         return memories
+
+    def get_telegram_exchanges_coalesced(
+        self,
+        limit: int | None = 400,
+        *,
+        origin_surface: str | None = None,
+        chat_id: str | None = None,
+    ) -> list[dict]:
+        """Held-now reader (2026-08-20 design C5): logical exchanges.
+
+        Differs from :meth:`get_telegram_exchanges` in three gated ways
+        — and is called ONLY by the held-now read sites; every other
+        consumer keeps the original method and its exact semantics:
+
+        1. SCOPE: with ``origin_surface``/``chat_id`` given, rows
+           stamped with a DIFFERENT value are excluded. Rows missing a
+           stamp match any scope (legacy wildcard — history written
+           before the stamps existed is never lost).
+        2. COALESCE: split-store halves (hygiene rows sharing a
+           ``turn_link_id``) are rejoined into ONE logical exchange
+           before limiting, so a split pair consumes one slot, not
+           two. The rejoined content carries the owner half first and
+           the reply half after the assistant marker; its metadata
+           records ``trust_tier`` = worst of the halves and both
+           halves' ``provenance_source`` values (worst-half governs
+           downstream exclusion).
+        3. LIMIT LAST: the window is the last N LOGICAL exchanges.
+           An orphan half (link id with only one row) is skipped with
+           a WARNING — never rendered half-paired.
+        """
+        if self.raw.count() == 0:
+            return []
+        results = self.raw.get(
+            where={"type": "telegram_exchange"},
+            include=["documents", "metadatas"],
+        )
+        rows = []
+        for mem_id, doc, meta in zip(
+            results["ids"], results["documents"], results["metadatas"],
+            strict=False,
+        ):
+            meta = meta or {}
+            if origin_surface and meta.get("origin_surface") and (
+                str(meta.get("origin_surface")) != str(origin_surface)
+            ):
+                continue
+            if chat_id and meta.get("chat_id") and (
+                str(meta.get("chat_id")) != str(chat_id)
+            ):
+                continue
+            rows.append({"id": mem_id, "content": doc, "metadata": meta})
+        rows.sort(key=lambda m: m.get("metadata", {}).get("timestamp", ""))
+
+        # Coalesce split halves via turn_link_id, preserving order of
+        # first appearance. A half is recognised by its content shape:
+        # the owner half has no assistant marker; the reply half starts
+        # with the assistant marker.
+        _TIER_RANK = {"untrusted": 0, "observed": 1, "lived": 2}
+        by_link: dict[str, list[dict]] = {}
+        logical: list[dict] = []
+        for row in rows:
+            link = (row["metadata"] or {}).get("turn_link_id")
+            if not link:
+                logical.append(row)
+                continue
+            bucket = by_link.setdefault(str(link), [])
+            bucket.append(row)
+            if len(bucket) == 1:
+                # placeholder keeps window position at first appearance
+                logical.append({"_link_placeholder": str(link)})
+        resolved: list[dict] = []
+        for entry in logical:
+            link = entry.get("_link_placeholder") if isinstance(entry, dict) else None
+            if not link:
+                resolved.append(entry)
+                continue
+            halves = by_link.get(link, [])
+            owner_half = next(
+                (h for h in halves if "\nMaez:" not in (h.get("content") or "")),
+                None,
+            )
+            reply_half = next(
+                (h for h in halves if (h.get("content") or "").startswith("Maez:")),
+                None,
+            )
+            if owner_half is None or reply_half is None:
+                logger.warning(
+                    "held_now_orphan_row link=%s halves=%d — skipped",
+                    link[:12], len(halves),
+                )
+                continue
+            tiers = [
+                str((h.get("metadata") or {}).get("trust_tier") or "lived")
+                for h in (owner_half, reply_half)
+            ]
+            worst = min(tiers, key=lambda t: _TIER_RANK.get(t, 2))
+            meta = dict(owner_half.get("metadata") or {})
+            meta["trust_tier"] = worst
+            meta["provenance_source_owner"] = str(
+                (owner_half.get("metadata") or {}).get("provenance_source") or ""
+            )
+            meta["provenance_source_reply"] = str(
+                (reply_half.get("metadata") or {}).get("provenance_source") or ""
+            )
+            resolved.append({
+                "id": owner_half["id"],
+                "content": (
+                    f"{owner_half['content']}\n{reply_half['content']}"
+                ),
+                "metadata": meta,
+            })
+        if limit is not None and limit > 0:
+            return resolved[-limit:]
+        return resolved
 
     def migrate_wings(self, batch_size: int = 50) -> int:
         """Tag untagged raw memories with topic wings. Run nightly, non-blocking."""
