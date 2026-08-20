@@ -341,12 +341,13 @@ class AllocatorDomainTests(unittest.TestCase):
 
         with mock.patch.object(wc, "containment_enabled", _counted):
             ws = _ws(
-                self.ORDINARY_Q, _hx(3), _ON,
+                self.ORDINARY_Q, _hx(3, filler="x" * 800), _ON,
                 web_context="raw web line kept as-is when containment off",
-                max_working_set_chars=2200,  # forces reconciliation
+                max_working_set_chars=2200,  # genuinely over: forces reconciliation
             )
         self.assertIsNotNone(ws)
-        self.assertEqual(calls["n"], 1)  # asked once, ever
+        self.assertEqual(calls["n"], 1)  # asked once, ever -- this is
+        # the pin that bites against the two-call parent (8ffb744)
         alloc = ws.held_now_alloc
         self.assertEqual(alloc["containment_overhead_chars"], 0)
         self.assertEqual(alloc["containment_overhead_actual"], 0)
