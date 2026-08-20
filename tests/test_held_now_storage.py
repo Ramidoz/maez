@@ -113,7 +113,10 @@ class CoalescedReaderTests(unittest.TestCase):
             for i in range(4):  # 4 orphan owner-halves, newest
                 _add_raw(h.mm, f"orph{i}", f"the owner (t): lost{i}",
                          timestamp=_ts(10 + i), turn_link_id=f"OL{i}")
-            with self.assertLogs(level="WARNING") as logs:
+            # Assert on the "maez" logger directly: daemon import (in
+            # any co-running suite) sets that logger propagate=False,
+            # which makes root-level capture order-dependent.
+            with self.assertLogs("maez", level="WARNING") as logs:
                 got = h.mm.get_telegram_exchanges_coalesced(limit=3)
             self.assertEqual(len(got), 3)
             self.assertTrue(all("Maez:" in g["content"] for g in got))
