@@ -327,3 +327,28 @@ RED scoped to the NEW referent assembler only (the pre-brain
 interceptor's existing chat-scoped authority unchanged; end-to-end
 wrong-user hardening is out of scope). Each RED gets an individual
 mutation witness at build time.
+
+---
+
+# PASS 6 (after gate round 5: one substrate fold — the counter's home)
+
+## P3b closure: dedicated durable referent-sequence store
+Choice 1 frozen: a NEW small SQLite store
+`memory/conversation_turn_seq.db` (table keyed by (channel, chat_id))
+owned by the referent assembler, with ONE operation:
+`advance_and_get(channel, chat_id, event_identity) -> int` — atomic
+(BEGIN IMMEDIATE), and IDEMPOTENT on event_identity: a row keyed
+(channel, chat_id, event_identity) records the assigned seq; a retry
+with the same identity returns the same seq, never double-counts.
+`event_identity` = the surface event's platform_update_id (fallback
+message_id), threaded through the inbound descriptor (both paths) —
+the descriptor gains one optional field. Ordering under concurrent
+admission is store-serialized by the transaction; the assigned seq is
+the arrival order at the store, which is the only order the freshness
+rule needs. No existing ordinal is reused (collision sweep adopted:
+chain_position global, platform_update_id transport-local,
+defer_count card-local, staging log staging-only). OfferReceipt's
+created_turn_seq is stamped at offer creation via the same store.
+Flag-scoped: the store is written only under the action-lane flags
+(SHADOW writes it too, so the shadow day exercises idempotency);
+absent flags = store untouched.
