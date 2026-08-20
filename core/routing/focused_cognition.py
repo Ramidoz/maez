@@ -1629,7 +1629,7 @@ def assemble_working_set(
                 )
                 _contained_lines, _seg, _dig = _render_evidence_lines_contained(
                     _pre_alloc_items, render_version=render_version,
-                    nonce=_est_nonce, contain_enabled=True,
+                    nonce=_est_nonce, contain_enabled=_contain,
                 )
                 _containment_overhead = max(
                     0, len("\n".join(_contained_lines)) - len(_plain)
@@ -1667,10 +1667,14 @@ def assemble_working_set(
             _held_now_meta["reconcile_passes"] = _pass + 1
             if total_chars <= _budget_requested:
                 break
-            # Over budget: the next pass charges MEASURED overhead
-            # plus margin. Monotone: fewer/shorter items -> overhead
-            # can only shrink.
-            _containment_overhead = _actual_overhead + 64
+            # Over budget: the next pass charges MEASURED overhead,
+            # with margin only when containment is genuinely in play
+            # (round-7 blocker: contain-off must NEVER publish a
+            # phantom charge). Monotone: fewer/shorter items ->
+            # overhead can only shrink.
+            _containment_overhead = _actual_overhead + (
+                64 if (_contain and _actual_overhead > 0) else 0
+            )
         else:
             # Terminal bounded fallback: honest empty set, with the
             # reason naming the TRUE consumer (round-4 note): the

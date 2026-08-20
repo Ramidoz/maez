@@ -327,43 +327,93 @@ class AllocatorDomainTests(unittest.TestCase):
                 )
 
     def test_divergent_containment_charges_zero_when_disabled(self):
-        # Round-6 blocker: the containment question is asked ONCE --
-        # when containment is off, no stale estimation overhead may
-        # evict evidence or publish a containment reason.
+        # Round-6/7: the containment question is asked EXACTLY ONCE;
+        # with containment off, no phantom overhead may appear even
+        # under reconciliation pressure (tight budget), no containment
+        # reason may be published, and raw web renders as-is.
         from core.routing import web_containment as wc
 
-        with mock.patch.object(wc, "containment_enabled", return_value=False):
+        calls = {"n": 0}
+
+        def _counted():
+            calls["n"] += 1
+            return False
+
+        with mock.patch.object(wc, "containment_enabled", _counted):
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context="raw web line kept as-is when containment off",
+                max_working_set_chars=2200,  # forces reconciliation
+            )
+        self.assertIsNotNone(ws)
+        self.assertEqual(calls["n"], 1)  # asked once, ever
+        alloc = ws.held_now_alloc
+        self.assertEqual(alloc["containment_overhead_chars"], 0)
+        self.assertEqual(alloc["containment_overhead_actual"], 0)
+        self.assertNotEqual(alloc.get("reason"), "containment_consumed_budget")
+        if alloc["pairs_rendered"] > 0:
+            self.assertTrue(
+                any(i.source_type == "web_context" for i in ws.items)
+            )
+
+    def test_disabled_generous_budget_full_pins(self):
+        # The generous-budget shape, fully pinned together (round-7
+        # test-bite note): one call, zero overhead both fields, reason
+        # None, all three pairs, web present.
+        from core.routing import web_containment as wc
+
+        calls = {"n": 0}
+
+        def _counted():
+            calls["n"] += 1
+            return False
+
+        with mock.patch.object(wc, "containment_enabled", _counted):
             ws = _ws(
                 self.ORDINARY_Q, _hx(3), _ON,
                 web_context="raw web line kept as-is when containment off",
                 max_working_set_chars=6000,
             )
-        self.assertIsNotNone(ws)
+        self.assertEqual(calls["n"], 1)
         alloc = ws.held_now_alloc
         self.assertEqual(alloc["containment_overhead_chars"], 0)
-        self.assertNotEqual(alloc.get("reason"), "containment_consumed_budget")
+        self.assertEqual(alloc["containment_overhead_actual"], 0)
+        self.assertIsNone(alloc.get("reason"))
         self.assertEqual(alloc["pairs_rendered"], 3)
         self.assertTrue(
             any(i.source_type == "web_context" for i in ws.items)
         )
 
     def test_withheld_web_charges_zero_overhead(self):
-        # Fail-closed withholding must also charge zero: the withheld
-        # turn keeps its full anchor budget.
+        # Fail-closed withholding must also charge zero, keep the full
+        # anchor budget, exclude web everywhere -- and ask the state
+        # question exactly once.
         from core.routing import web_containment as wc
 
+        calls = {"n": 0}
+
+        def _raises():
+            calls["n"] += 1
+            raise RuntimeError("state unavailable")
+
         with mock.patch.object(
-            wc, "containment_enabled",
-            side_effect=RuntimeError("state unavailable"),
+            wc, "containment_enabled", _raises
         ), self.assertLogs("maez", level="WARNING"):
             ws = _ws(
                 self.ORDINARY_Q, _hx(3), _ON,
                 web_context="withheld web line",
                 max_working_set_chars=6000,
             )
+        self.assertEqual(calls["n"], 1)
         alloc = ws.held_now_alloc
         self.assertEqual(alloc["containment_overhead_chars"], 0)
+        self.assertEqual(alloc["containment_overhead_actual"], 0)
+        self.assertIsNone(alloc.get("reason"))
         self.assertEqual(alloc["pairs_rendered"], 3)
+        self.assertNotIn("withheld web line", ws.ordered_evidence_text)
+        self.assertFalse(
+            any(i.source_type == "web_context" for i in ws.items)
+        )
 
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
