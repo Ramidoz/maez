@@ -1,3 +1,16 @@
+# Held-now repair — Phase 1 design (pass 5, after gate round 4: REVISE, 3 blockers)
+
+Round 4 PASSED C5 (dedicated carrier; V2 signature ripple noted as
+in-scope) and C7 (whole-turn finally seam verified wrappable). Three
+blockers remain, folded below: the witness must pin the old anchor
+flag OFF; "independent fresh evidence" was not deterministically
+forceable on a live Telegram script; and C8's twin guarantees
+(fresh-never-displaced + one-pair floor) were unsatisfiable in one
+domain predicate. Pass 5: sampling witness protocol, and the anchor
+floor YIELDS to evidence precedence with its own receipt reason.
+
+---
+# (pass 4 header retained below for lineage)
 # Held-now repair — Phase 1 design (pass 4, after gate round 3: REVISE)
 
 2026-08-20. Round 3 resolved B7 (writer matrix confirmed, 10 sites)
@@ -122,13 +135,18 @@ ordering rule can guarantee a pair under a 12K question. The pass-3
 long-turn test was impossible as specified and is withdrawn. Bounded
 contract:
 
-- **Domain:** all anchor guarantees apply only when
-  `budget_after_question >= ANCHOR_FLOOR_CHARS` (1,800 — one capped
-  pair). Below that the turn is legitimately anchor-less and the
-  receipt says `reason=question_consumed_budget`. C2's rendered-pairs
-  promise is likewise domain-bounded: 3/2/2 pairs **when budget
-  admits them at their allowance**, floor of one non-empty pair while
-  the domain condition holds.
+- **Domain (round-4 corrected):** the predicate is computed INSIDE the
+  allocator, after higher-ranked occupancy: guarantees apply only when
+  `budget_after_question_and_higher_ranked_items_and_overhead >=
+  ANCHOR_FLOOR_CHARS` (1,800 — one capped pair). Ranking precedes
+  budgeting (`focused_cognition.py:1320`), so every fresh/web item's
+  cost and the rendering overhead are known at that point. Outside the
+  domain the turn is honestly anchor-less with receipt
+  `reason=question_consumed_budget` or
+  `reason=higher_rank_consumed_budget`. **The precedence ruling is
+  explicit: fresh/web evidence is NEVER displaced by anchors; the
+  anchor floor is the guarantee that yields.** C2's rendered-pairs
+  promise is bounded by the same domain.
 - Per-message cap 900 chars in `dialogue_anchor_items`. The durable
   ID is computed from the FINAL rendered bytes — recomputed after any
   working-set budget truncation — so the evidence map always matches
@@ -150,16 +168,33 @@ contract:
   `pairs_rendered >= 1` non-empty; a 12K question asserts the
   anchor-less receipt reason and no crash and no fresh displacement.
 
-## Witness plan (B1, round-3 assertions folded)
+## Witness plan (round-4 corrections folded: pinned flag + sampling)
 Both legs assert `reply_path=focused`; a legacy-path run is VOID.
-Round-3 additions, all mandatory:
 
-- The probe is an ORDINARY turn: assert `needs_dialogue=false`,
-  `fail_safe_legacy=false`, no date cue, and `turn_kind=ordinary`
-  (classification at `maez_daemon.py:8198`) — otherwise the OFF leg
-  can admit anchors through the classifier gate and the discriminator
-  blurs. Focused eligibility for the probe comes from independent
-  fresh evidence (`:8143`), not from dialogue needs.
+- **Round-4 blocker 1:** BOTH legs pin and assert
+  `MAEZ_LIVE_THREAD_ANCHOR` OFF (the old flag admits anchors on
+  ordinary turns before any classifier condition,
+  `focused_cognition.py:1194`; the old-flag-ON cells live in the
+  interaction test matrix, not the live witness).
+- **Round-4 blocker 2 — the live legs are SAMPLING, not forcing.**
+  "Independent fresh evidence" is not deterministically forceable on a
+  live Telegram script (web_context depends on routing + non-empty
+  results). Corrected protocol, two layers:
+  1. **Deterministic layer (integration test, not live):** a pytest
+     integration case constructs the turn with a synthetic
+     fresh-evidence item, forces FOCUSED, and asserts the full
+     discriminator both ways (ENABLED: tuple present; disabled:
+     absent). This is where determinism lives.
+  2. **Live layer (sampling):** each leg REPEATS its scripted probe
+     until a receipt shows `mode=focused` AND `turn_kind=ordinary`
+     AND the ordinary-turn assertions hold (needs_dialogue=false,
+     fail_safe_legacy=false, no date cue, `maez_daemon.py:8198`);
+     non-qualifying runs are VOID and re-run with fresh filler, max 5
+     attempts per leg before the witness is recorded BLOCKED (not
+     failed). Qualifying runs assert the discriminator.
+- The probe is an ORDINARY turn by the assertions above; focused
+  candidacy arises from whatever evidence the live turn genuinely
+  carries — asserted from receipts, never assumed.
 - The discriminator asserts the TUPLE (`source_type=dialogue_anchor`,
   expected durable ID) in the evidence map — never the ID alone.
   "Truncated out" language is withdrawn: under C8's correction an
@@ -175,11 +210,18 @@ Round-3 additions, all mandatory:
   all-orphan windows (WARNING-logged), or out-of-domain budgets
   (`question_consumed_budget` receipts).
 
-Implementation notes carried from round 3: seed `trust_tier` maps to
-the rendered `origin_trust` field (`focused_cognition.py:287`) while
-`origin_provenance` is carried independently for the exclusion
+Implementation notes carried from rounds 3-4: seed `trust_tier` maps
+to the rendered `origin_trust` field (`focused_cognition.py:287`)
+while `origin_provenance` is carried independently for the exclusion
 predicate (`:1303`); telegram_voice scope values name
-`update.effective_chat.id` with an explicit fallback.
+`update.effective_chat.id` with an explicit fallback; durable-ID
+recomputation is scoped to allocator-truncated DIALOGUE ANCHORS only
+(recalled items keep their IDs through truncation per the pinned
+tests at `test_focused_cognition.py:826,848`); the C5 carrier's V2
+signature ripple (`run_inbound_turn` second optional history value,
+`inbound_core.py:207`, descriptor tests) is in build scope, and
+disabled mode selects the existing raw chat_history — None is never
+passed into assembly.
 
 ## Non-goals — unchanged, plus: the two bypass helpers (C5), and any
 change to `evidence_recency_days` (the 14-day wall belongs to the
