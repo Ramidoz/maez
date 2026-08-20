@@ -1132,9 +1132,26 @@ def _run_dispatcher_pipeline(
     _prompt_block = rendered_turn.prompt_block
     if _routing_comprehension_context_block:
         _prompt_block = f"{_prompt_block}\n\n{_routing_comprehension_context_block}"
+    _floor_intent = _action_intent_syntactic_floor(user_text)
+    try:
+        from core.brain.conversation_turn_seq import (
+            action_lane_enabled as _al_on,
+            action_lane_shadow_enabled as _al_shadow,
+        )
+
+        if _al_shadow() or _al_on():
+            logger.info(
+                "action_lane_shadow intent=%s would_run_jarvis=%s "
+                "detector_floor=syntactic_v1 surface=%s",
+                _floor_intent,
+                _floor_intent == "explicit_request" and _al_on(),
+                surface,
+            )
+    except Exception:
+        pass
     return make_dispatcher_result(
         transcript=_prompt_block,
-        action_intent="none",
+        action_intent=_floor_intent,
         recall_items=getattr(rendered_turn, "recall_items", ()),
     )
 
@@ -1322,6 +1339,68 @@ def _summarize_shell_error(err: str) -> str:
         if line.strip():
             return line.strip()[:200]
     return ""
+
+
+_DET_FACT_RE = __import__("re").compile(
+    r"^(?:what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
+    r".{0,40}(?:exchange rate|stock price|share price)"
+    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12})",
+    __import__("re").IGNORECASE,
+)
+_DET_FACT_EXCLUDE_RE = __import__("re").compile(
+    r"\bI feel\b|\banxious\b|\bworried\b|\bnervous\b",
+    __import__("re").IGNORECASE,
+)
+
+
+def _deterministic_fact_candidate(text: str) -> bool:
+    """Phase 2 P1 (gate-approved pass 6): NARROW pre-dispatch reflex
+    for the pinned deterministic live-fact question forms (currency /
+    stock). Flag-independent by design: these turns take the UNCHANGED
+    Jarvis-only path so the authoritative tools keep their exact
+    current behavior under the recall triad. Mixed emotional turns
+    (the pinned "I feel anxious about Nvidia stock" fixture) must NOT
+    match -- dispatcher context wins there."""
+    t = (text or "").strip()
+    if not t or len(t) > 160:
+        return False
+    if _DET_FACT_EXCLUDE_RE.search(t):
+        return False
+    return bool(_DET_FACT_RE.match(t))
+
+
+_INTENT_VERB_RE = __import__("re").compile(
+    r"\b(?:create|write|run|install|delete|restart|save|execute|make)\b"
+    r"\s+(?:a |an |the |that |this |it\b|new )",
+    __import__("re").IGNORECASE,
+)
+_INTENT_EXCLUDE_RE = __import__("re").compile(
+    r"\b(?:don'?t|do not|never|without|instead of)\b"
+    r"|\bhow (?:do|would|can|should) i\b"
+    r"|\bwhat (?:if|would|happens)\b"
+    r"|\bforget about\b|\bnah\b"
+    r"|\?\s*$"
+    "|[\"\u201c\u2018`]",
+    __import__("re").IGNORECASE,
+)
+
+
+def _action_intent_syntactic_floor(text: str) -> str:
+    """Phase 2 R6 (gate-approved): a SYNTACTIC CANDIDATE FLOOR, not a
+    meaning organ. Recognizes explicit imperative shapes aimed at an
+    object; exclusions for negation/contrast, questions, hypotheticals,
+    explanation requests, quotation, and idiom/cancellation. Uncertain
+    -> "none" (conversation wins). History NEVER creates intent here;
+    anaphora ("go ahead") requires a typed referent (commit D) and
+    yields "none" until that assembler exists on the path."""
+    t = (text or "").strip()
+    if not t or len(t) > 400:
+        return "none"
+    if _INTENT_EXCLUDE_RE.search(t):
+        return "none"
+    if _INTENT_VERB_RE.search(t):
+        return "explicit_request"
+    return "none"
 
 
 def _should_run_jarvis_loop(text: str) -> bool:
@@ -2019,7 +2098,14 @@ def run_brain_loop(
 
     _recall_stack_config = resolve_recall_stack()
     dispatcher_path = False
-    if recovery_seed is None:
+    # Phase 2 P1: deterministic live-fact questions take the UNCHANGED
+    # Jarvis-only path BEFORE the dispatcher decision -- authoritative
+    # currency/stock tools keep their exact pre-triad behavior, and
+    # these turns can never classify as body actions.
+    _det_fact_turn = recovery_seed is None and _deterministic_fact_candidate(
+        user_text
+    )
+    if recovery_seed is None and not _det_fact_turn:
         if _dispatcher_enabled(_recall_stack_config):
             if not surface:
                 logger.warning(
