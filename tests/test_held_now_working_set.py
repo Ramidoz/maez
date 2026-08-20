@@ -220,6 +220,49 @@ class AllocatorDomainTests(unittest.TestCase):
         self.assertEqual(meta["domain"], "below_floor")
         self.assertEqual(out, [])
 
+    def test_containment_reconciliation_is_exact(self):
+        # Round-3 note: persistent coverage for estimate==actual and
+        # budget honored when containment fires normally.
+        from core.routing import web_containment as wc
+
+        if not wc.containment_enabled():
+            self.skipTest("containment disabled in this environment")
+        ws = _ws(
+            self.ORDINARY_Q, _hx(3), _ON,
+            web_context="a fresh web snippet about gardens",
+            max_working_set_chars=4000,
+        )
+        self.assertIsNotNone(ws)
+        alloc = ws.held_now_alloc
+        self.assertEqual(
+            alloc["containment_overhead_chars"],
+            alloc["containment_overhead_actual"],
+        )
+        self.assertLessEqual(ws.working_set_chars, 4000)
+
+    def test_estimator_failure_fails_bounded(self):
+        # Round-3 blocker: a transient estimation failure must charge a
+        # conservative bound, never zero, so the final prompt cannot
+        # exceed the requested budget when containment later succeeds.
+        from core.routing import web_containment as wc
+
+        with mock.patch.object(
+            wc, "containment_enabled", return_value=True
+        ), mock.patch.object(
+            wc, "new_nonce",
+            side_effect=[RuntimeError("transient"), "nonce-ok-16chars"],
+        ):
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context="a fresh web snippet about gardens",
+                max_working_set_chars=3000,
+            )
+        if ws is None:
+            self.skipTest("no set")
+        alloc = ws.held_now_alloc
+        self.assertGreaterEqual(alloc["containment_overhead_chars"], 1024)
+        self.assertLessEqual(ws.working_set_chars, 3000)
+
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
         if ws is not None:

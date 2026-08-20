@@ -1577,12 +1577,17 @@ def assemble_working_set(
     _held_now_meta: dict | None = None
     if held_now_enabled():
         _containment_overhead = 0
+        _containment_expected = False
         try:
             from core.routing import web_containment as _wc_est
 
-            if _wc_est.containment_enabled() and any(
+            _containment_expected = _wc_est.containment_enabled() and any(
                 it.source_type == "web_context" for it in items
-            ):
+            )
+        except Exception:
+            _containment_expected = False
+        if _containment_expected:
+            try:
                 # EXACT differential estimate (code-gate round 2
                 # blocker 3): render the current items contained vs
                 # plain and charge the true delta plus the standing
@@ -1600,8 +1605,15 @@ def assemble_working_set(
                 _containment_overhead = max(
                     0, len(_contained) - len(_plain)
                 ) + len(_wc_est.standing_instruction()) + 2
-        except Exception:
-            _containment_overhead = 0
+            except Exception:
+                # FAIL BOUNDED (code-gate round 3): final containment
+                # can still succeed independently, so an estimation
+                # failure must never become zero cost. Charge a
+                # conservative upper bound instead.
+                _n_web = sum(
+                    1 for it in items if it.source_type == "web_context"
+                )
+                _containment_overhead = 1024 + 256 * max(_n_web, 1)
         items, _held_now_meta = _budget_items_held_now(
             items,
             owner_question=owner_question,
