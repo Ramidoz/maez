@@ -97,7 +97,6 @@ class DispatcherWiring(unittest.TestCase):
                 "_run_dispatcher_pipeline",
                 return_value=brain_loop._DispatcherPathResult(
                     transcript="DISPATCHER TRANSCRIPT",
-                    should_run_jarvis=False,
                 ),
             ) as dispatcher,
         ):
@@ -389,7 +388,6 @@ class DispatcherWiring(unittest.TestCase):
                 "_run_dispatcher_pipeline",
                 return_value=brain_loop._DispatcherPathResult(
                     transcript="[no fresh evidence available: WEB_SEARCH:ERROR:AUTH_DENIED:FRESH_ATTEMPT_FAILED]",
-                    should_run_jarvis=False,
                 ),
             ),
             patch.object(
@@ -429,7 +427,6 @@ class DispatcherWiring(unittest.TestCase):
                 "_run_dispatcher_pipeline",
                 return_value=brain_loop._DispatcherPathResult(
                     transcript="DISPATCHER TRANSCRIPT",
-                    should_run_jarvis=False,
                     recall_items=(item,),
                 ),
             ),

@@ -126,11 +126,57 @@ def _routing_comprehension_trigger_reason(layer0_spec, spec) -> str:
         return "web_search_selected"
 
 
+_ACTION_INTENTS = (
+    "none",
+    "explicit_request",
+    "capability_question",
+    "deterministic_fact",
+)
+
+
 @dataclass(frozen=True)
 class _DispatcherPathResult:
+    """Phase 2 carrier (gate-approved pass 6): recall and action are
+    orthogonal axes. `should_run_jarvis` is a DERIVED property --
+    disagreement with `action_intent` is structurally impossible. The
+    action-lane flag is SNAPSHOTTED at construction by the factory."""
+
     transcript: str = ""
-    should_run_jarvis: bool = False
     recall_items: tuple[Any, ...] = ()
+    action_intent: str = "none"
+    action_lane_enabled_snapshot: bool = False
+
+    def __post_init__(self) -> None:
+        if self.action_intent not in _ACTION_INTENTS:
+            raise ValueError(
+                f"invalid action_intent {self.action_intent!r}; "
+                f"allowed: {_ACTION_INTENTS}"
+            )
+
+    @property
+    def should_run_jarvis(self) -> bool:
+        return (
+            self.action_intent == "explicit_request"
+            and self.action_lane_enabled_snapshot
+        )
+
+
+def make_dispatcher_result(
+    *,
+    transcript: str = "",
+    recall_items: tuple = (),
+    action_intent: str = "none",
+) -> "_DispatcherPathResult":
+    """The single production constructor (gate P4/R5): snapshots the
+    action-lane flag so derivation cannot drift within a turn."""
+    from core.brain.conversation_turn_seq import action_lane_enabled
+
+    return _DispatcherPathResult(
+        transcript=transcript,
+        recall_items=tuple(recall_items or ()),
+        action_intent=action_intent,
+        action_lane_enabled_snapshot=action_lane_enabled(),
+    )
 
 
 def _recall_citation_render_v2_enabled() -> bool:
@@ -757,7 +803,7 @@ def _run_dispatcher_pipeline(
             )
         except Exception as exc:
             logger.debug("routing observation dispatcher refusal skipped: %s", exc)
-        return _DispatcherPathResult(transcript="", should_run_jarvis=False)
+        return make_dispatcher_result(transcript="", action_intent="none")
     if layer2_result is spec:
         logger.info(
             "dispatcher_layer2_repair surface=%s bond_id=%s result=unchanged refusal_reason=",
@@ -1086,9 +1132,9 @@ def _run_dispatcher_pipeline(
     _prompt_block = rendered_turn.prompt_block
     if _routing_comprehension_context_block:
         _prompt_block = f"{_prompt_block}\n\n{_routing_comprehension_context_block}"
-    return _DispatcherPathResult(
+    return make_dispatcher_result(
         transcript=_prompt_block,
-        should_run_jarvis=False,
+        action_intent="none",
         recall_items=getattr(rendered_turn, "recall_items", ()),
     )
 
