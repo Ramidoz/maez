@@ -300,3 +300,29 @@ Gate verdict BUILD MAY PROCEED (round 6). Landed:
 38 held-now tests total; ~190-test adjacent battery green, flags-off
 byte-identical. NEXT: Codex gate on code → owner restarts services →
 SHADOW ≥1 day → ENABLED + live sampling witness per this design.
+
+---
+
+## CODE GATE — FINAL (2026-08-21): SHADOW MAY GO LIVE
+
+Eight rounds on code (after six on design). Fix commits: 7aaff34 (8
+blockers: byte-identity leak, shadow blindness, holder race, receipt
+schema, introspection contracts via decorator form, allocator rewrite,
+V2 telegram-only, reader roles/ordering), 1ea3ac9 (tier order, label,
+exact differential overhead, boundedness trapdoor), a2e1c20 (fail-
+bounded estimation), c9c7874 (ground-truth reconciliation loop — the
+structural close: measurement is the enforcement, estimation only a
+guess), 8ffb744 (containment fails CLOSED, receipts fail LOUD),
+f75e30f (containment decided exactly once), 600a708+d268203 (phantom
+margin condition; biting exactly-once pins).
+
+Round 7's final blocker was REFUTED in round 8 by instrumented witness
+(calls_consumed=1 at HEAD; the divergence witness had run against the
+parent). Telemetry ruling: projected-vs-realized overhead fields are
+honest as-is; renaming to *_projected_chars is a follow-up note.
+
+Verified at HEAD d268203: 110 gate-lane tests 108 pass + 2 flag skips;
+~49 held-now tests in repo suites; four pre-existing
+test_memory_integrity_invariant failures date to fb64925 (separate
+item). NEXT: owner sets MAEZ_HELD_NOW_SHADOW=1, restarts maez.service,
+lives a normal day; then ENABLED + the two-layer sampling witness.
