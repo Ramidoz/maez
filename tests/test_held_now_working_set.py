@@ -285,6 +285,47 @@ class AllocatorDomainTests(unittest.TestCase):
             self.skipTest("no set")
         self.assertLessEqual(ws.working_set_chars, 3400)
 
+    def test_containment_state_unknown_withholds_web_fail_closed(self):
+        # Round-5 blocker 1: containment_enabled raising with web
+        # items present must WITHHOLD the web evidence, never render
+        # it raw without an envelope.
+        from core.routing import web_containment as wc
+
+        with mock.patch.object(
+            wc, "containment_enabled",
+            side_effect=RuntimeError("state unavailable"),
+        ), self.assertLogs("maez", level="WARNING") as logs:
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context="raw web sentence that must not leak",
+                max_working_set_chars=6000,
+            )
+        self.assertIsNotNone(ws)
+        self.assertNotIn("must not leak", ws.ordered_evidence_text)
+        self.assertFalse(
+            any(i.source_type == "web_context" for i in ws.items)
+        )
+        self.assertTrue(
+            any("fail-closed" in line for line in logs.output)
+        )
+
+    def test_receipt_failure_propagates_loudly(self):
+        # Round-5 blocker 2: a contained set without its receipt must
+        # raise, never return silently.
+        from core.routing import web_containment as wc
+
+        if not wc.containment_enabled():
+            self.skipTest("containment disabled in this environment")
+        with mock.patch.object(
+            wc, "emit_receipt", side_effect=RuntimeError("receipt sink down")
+        ):
+            with self.assertRaises(RuntimeError):
+                _ws(
+                    self.ORDINARY_Q, _hx(3), _ON,
+                    web_context="a contained web snippet",
+                    max_working_set_chars=6000,
+                )
+
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
         if ws is not None:

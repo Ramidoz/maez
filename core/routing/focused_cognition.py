@@ -1614,6 +1614,28 @@ def assemble_working_set(
 
         from core.routing import web_containment as _wc  # noqa: local import by design
 
+        # Containment state decided ONCE, fail-CLOSED (code-gate round
+        # 5 blocker 1): if the state cannot be established while web
+        # evidence is present, the web items are WITHHELD rather than
+        # rendered raw without an envelope.
+        try:
+            _contain = _wc.containment_enabled()
+        except Exception:
+            _contain = None
+        if _contain is None:
+            if any(
+                it.source_type == "web_context" for it in _pre_alloc_items
+            ):
+                logger.warning(
+                    "held_now containment state unknown -- web evidence "
+                    "withheld from this working set (fail-closed)"
+                )
+                _pre_alloc_items = [
+                    it for it in _pre_alloc_items
+                    if it.source_type != "web_context"
+                ]
+            _contain = False
+
         ordered = ""
         total_chars = 0
         for _pass in range(3):
@@ -1624,10 +1646,6 @@ def assemble_working_set(
                 render_version=render_version,
                 containment_overhead=_containment_overhead,
             )
-            try:
-                _contain = _wc.containment_enabled()
-            except Exception:
-                _contain = False
             _nonce = _wc.new_nonce() if _contain else ""
             _lines, _web_segments, _web_digests = _render_evidence_lines_contained(
                 items, render_version=render_version, nonce=_nonce,
@@ -1673,15 +1691,15 @@ def assemble_working_set(
             ordered = ""
             total_chars = len(owner_question or "")
         # Receipt emission only for the FINAL render (single receipt).
-        try:
-            if items and ordered.startswith(_wc.standing_instruction()):
-                _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
-                _wc.emit_receipt(_wc.containment_receipt(
-                    ordered, nonce=_nonce, path="focused",
-                    expected_segments=_web_segments,
-                    digest=_web_digest))
-        except Exception:
-            pass
+        # NOT wrapped (code-gate round 5 blocker 2): a contained
+        # working set without its promised receipt must fail loudly,
+        # exactly as the pre-loop path did.
+        if items and _contain and _web_segments:
+            _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
+            _wc.emit_receipt(_wc.containment_receipt(
+                ordered, nonce=_nonce, path="focused",
+                expected_segments=_web_segments,
+                digest=_web_digest))
     else:
         items = _budget_items_for_prompt(
             items,
