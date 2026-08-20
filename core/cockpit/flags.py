@@ -199,6 +199,29 @@ def default_registry() -> dict[str, FlagRegistryEntry]:
             witness="Set MAEZ_RECALL_CONTEXT_FLOOR_ENABLED=1, restart maez.service, verify diary quiets and self-asks unchanged.",
         ),
         _entry(
+            "MAEZ_ACTION_LANE_SHADOW",
+            label="Action lane shadow",
+            tier="T1",
+            description=(
+                "Observe-only: action_lane_shadow receipt per dispatcher "
+                "turn (intent, would_run_jarvis). Turn-seq store may write."
+            ),
+            witness="Set MAEZ_ACTION_LANE_SHADOW=1, restart maez.service, grep action_lane_shadow across a day; false-positive rate on ordinary chat is THE number.",
+        ),
+        _entry(
+            "MAEZ_ACTION_LANE_ENABLED",
+            label="Action lane enforce",
+            tier="T2",
+            description=(
+                "The motor nerve: explicit-intent turns proceed from the "
+                "dispatcher into the Jarvis loop (combined recall+action). "
+                "No new authorization primitive; expands reachability to "
+                "existing guarded authorities. 2026-08-20 design, 6-round "
+                "gate."
+            ),
+            witness="After a SHADOW day: set MAEZ_ACTION_LANE_ENABLED=1, restart, run the Phase-2 witness: ordinary turn -> no jarvis; explicit ask -> card born; covenant ceremony resumes on that card.",
+        ),
+        _entry(
             "MAEZ_HELD_NOW_SHADOW",
             label="Held-now shadow",
             tier="T1",

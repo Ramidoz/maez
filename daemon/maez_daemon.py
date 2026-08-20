@@ -13036,6 +13036,12 @@ class MaezDaemon:
                         {
                             "transcript": _result.transcript or "",
                             "tool_calls": list(_result.tool_calls or []),
+                            "dispatcher_transcript": getattr(
+                                _result, "dispatcher_transcript", ""
+                            ) or "",
+                            "combined_mode": bool(
+                                getattr(_result, "combined_mode", False)
+                            ),
                         }
                     )
                 # Legacy string fallback (if a future change reverts the

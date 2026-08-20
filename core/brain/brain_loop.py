@@ -2856,8 +2856,24 @@ def run_brain_loop(
             )
 
     if not transcript and consent_intent is not None and return_structured:
-        return BrainLoopResult(consent_intent=consent_intent)
+        return BrainLoopResult(
+            consent_intent=consent_intent,
+            recall_items=tuple(_dispatcher_recall_items or ()),
+            dispatcher_transcript=_dispatcher_ctx,
+            combined_mode=bool(_dispatcher_ctx),
+        )
     if not transcript:
+        if _dispatcher_ctx and return_structured:
+            # Combined turn where jarvis chose no tool: the dispatcher
+            # recall still returns as the turn's substance (transcript
+            # slot, as a recall-only turn would), with combined state
+            # marked so synthesis knows the action lane was consulted.
+            return BrainLoopResult(
+                transcript="",
+                recall_items=tuple(_dispatcher_recall_items or ()),
+                dispatcher_transcript=_dispatcher_ctx,
+                combined_mode=True,
+            )
         return _empty()
 
     lines = [

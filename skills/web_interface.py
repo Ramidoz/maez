@@ -7178,6 +7178,10 @@ def chat():
             with urllib.request.urlopen(bl_req, timeout=30.0) as bl_resp:
                 bl_data = json.loads(bl_resp.read())
             jarvis_transcript_web = (bl_data.get("transcript") or "").strip()
+            _web_dispatcher_ctx = (
+                bl_data.get("dispatcher_transcript") or ""
+            ).strip()
+            _web_combined = bool(bl_data.get("combined_mode"))
             if jarvis_transcript_web:
                 logger.info(
                     "web /chat: brain_loop ran (%d chars of transcript)",
@@ -7186,13 +7190,23 @@ def chat():
                 try:
                     from core.brain_loop import _instruction_block_for_transcript
 
+                    if _web_combined and _web_dispatcher_ctx:
+                        # Phase 2 P2: typed combined turn on the web
+                        # bridge -- both blocks, selected by flag.
+                        _web_ctx_content = (
+                            f"{_web_dispatcher_ctx}\n\n"
+                            f"{jarvis_transcript_web}\n\n"
+                            f"{_instruction_block_for_transcript(jarvis_transcript_web)}"
+                        )
+                    else:
+                        _web_ctx_content = (
+                            f"{jarvis_transcript_web}\n\n"
+                            f"{_instruction_block_for_transcript(jarvis_transcript_web)}"
+                        )
                     messages_list.append(
                         {
                             "role": "system",
-                            "content": (
-                                f"{jarvis_transcript_web}\n\n"
-                                f"{_instruction_block_for_transcript(jarvis_transcript_web)}"
-                            ),
+                            "content": _web_ctx_content,
                         }
                     )
                 except Exception as _ctx_exc:
