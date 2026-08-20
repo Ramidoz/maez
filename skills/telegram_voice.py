@@ -1222,7 +1222,11 @@ class TelegramVoice:
                         provenance_source="introspection",
                         trust_tier="lived",
                         origin_surface="telegram_legacy",
-                        chat_id="telegram_legacy",
+                        chat_id=(
+                            str(update.effective_chat.id)
+                            if getattr(update, "effective_chat", None)
+                            else "telegram_legacy"
+                        ),
                     )
         except Exception as e:
             logger.debug("card reply memory store failed: %s", e)
@@ -1372,7 +1376,11 @@ class TelegramVoice:
                             provenance_source="introspection",
                             trust_tier="lived",
                             origin_surface="telegram_legacy",
-                            chat_id="telegram_legacy",
+                            chat_id=(
+                                str(update.effective_chat.id)
+                                if getattr(update, "effective_chat", None)
+                                else "telegram_legacy"
+                            ),
                         )
                     except Exception as e:
                         logger.debug("Fix 6 terminal memory store failed: %s", e)
@@ -1508,7 +1516,11 @@ class TelegramVoice:
                                         provenance_source="introspection",
                                         trust_tier="lived",
                                         origin_surface="telegram_legacy",
-                                        chat_id="telegram_legacy",
+                                        chat_id=(
+                                            str(update.effective_chat.id)
+                                            if getattr(update, "effective_chat", None)
+                                            else "telegram_legacy"
+                                        ),
                                     )
                                 except Exception as e:
                                     logger.debug("recovery memory store failed: %s", e)

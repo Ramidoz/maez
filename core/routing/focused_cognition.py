@@ -1045,10 +1045,16 @@ def dialogue_anchor_items(
             # Worst-half governs (design C5/B6): a coalesced pair whose
             # reply half was self_web_claim/untrusted carries that
             # provenance so the existing exclusion predicate applies.
-            origin_trust=meta.get("trust_tier") or None,
+            # Gated: flags-off seeds stay byte-identical (C1 promise;
+            # code-gate blocker 1 -- existing rows already carry
+            # trust_tier and the renderer would print it).
+            origin_trust=(
+                (meta.get("trust_tier") or None) if held_now_enabled() else None
+            ),
             origin_provenance=(
                 "self_web_claim"
-                if "self_web_claim" in (
+                if held_now_enabled()
+                and "self_web_claim" in (
                     str(meta.get("provenance_source_reply") or ""),
                     str(meta.get("provenance_source") or ""),
                 )
@@ -1186,103 +1192,150 @@ def _budget_items_held_now(
     owner_question: str,
     max_chars: int,
     render_version: str,
+    containment_overhead: int = 0,
 ) -> tuple[list[EvidenceItem], dict]:
     """Held-now C8 allocator: positional two-domain budgeting.
 
-    Partition is POSITIONAL against the ranked sequence (gate round 6):
-    everything before the first dialogue_anchor is protected occupancy
-    (never cut here); everything after the last anchor is cut material,
-    cut FIRST; anchors themselves live between and yield per domain.
-    An item emptied by this allocator is REMOVED from the set (and so
-    from the evidence map) — never left as an ID-bearing husk.
-    Anchor durable IDs are recomputed from final rendered text.
+    Code-gate round rewrite: every fit decision uses the REAL rendered
+    length (v1's first-item repetition is thereby charged correctly);
+    reconstruction is by object IDENTITY (duplicate texts/durable ids
+    can never resurrect a dropped anchor); cuts follow the contract
+    order memory_context -> memory_evidence -> other cut material ->
+    older anchors -> newest anchor; the below_floor reason is computed
+    against real rendering overhead; containment overhead is deducted
+    up front so the domain verdict rests on complete arithmetic.
+    An item removed here is REMOVED (set and evidence map).
     """
+    budget = max(max_chars - max(containment_overhead, 0), 0)
+
     def _render_len(candidate: list[EvidenceItem]) -> int:
         return len(
             "\n".join(_render_evidence_lines(candidate, render_version=render_version))
         ) + len(owner_question or "")
 
-    meta: dict = {"domain": "full_count", "reason": None, "pairs_rendered": 0}
+    meta: dict = {
+        "domain": "full_count",
+        "reason": None,
+        "pairs_rendered": 0,
+        "containment_overhead_chars": max(containment_overhead, 0),
+    }
     anchor_idx = [i for i, it in enumerate(items) if it.source_type == "dialogue_anchor"]
-    if _render_len(items) <= max_chars:
+    if _render_len(items) <= budget:
         meta["pairs_rendered"] = len(anchor_idx)
         return items, meta
 
     if not anchor_idx:
-        # No anchors to arbitrate: legacy equal-allowance behavior.
         legacy = _budget_items_for_prompt(
-            items, owner_question=owner_question, max_chars=max_chars,
+            items, owner_question=owner_question, max_chars=budget,
             render_version=render_version, _held_now_bypass=True,
         )
         meta["domain"] = "no_anchors"
         return legacy, meta
 
     first_a, last_a = anchor_idx[0], anchor_idx[-1]
-    protected = items[:first_a]
-    anchors = [items[i] for i in anchor_idx]
-    middle_non_anchor = [
-        items[i] for i in range(first_a, last_a + 1) if i not in anchor_idx
-    ]
-    cuttable = items[last_a + 1:]
+    anchors = [items[i] for i in anchor_idx]  # newest first (seed order)
+    removed_ids: set[int] = set()
+    # anchor decisions keyed by identity: original -> replacement|None
+    anchor_out: dict[int, EvidenceItem | None] = {id(a): a for a in anchors}
 
-    # Step 1: drop cut material from the tail until we fit or run out.
-    while cuttable and _render_len(protected + middle_non_anchor + anchors + cuttable) > max_chars:
-        cuttable = cuttable[:-1]
-    while middle_non_anchor and _render_len(protected + middle_non_anchor + anchors + cuttable) > max_chars:
-        middle_non_anchor = middle_non_anchor[:-1]
-
-    def _cost_without_anchor_text() -> int:
-        blank = [replace(a, text="") for a in anchors]
-        return _render_len(protected + middle_non_anchor + blank + cuttable)
-
-    anchor_budget = max_chars - _cost_without_anchor_text()
-    question_only_budget = max_chars - len(owner_question or "")
-
-    def _finish(kept_anchors: list[EvidenceItem]) -> list[EvidenceItem]:
-        rebuilt = []
+    def _assembly() -> list[EvidenceItem]:
+        out: list[EvidenceItem] = []
         for it in items:
+            if id(it) in removed_ids:
+                continue
             if it.source_type == "dialogue_anchor":
-                match = next((a for a in kept_anchors if a.durable_id == it.durable_id or a.local_label == it.local_label), None)
-                if match is not None and match.text:
-                    rebuilt.append(match)
-            elif it in protected or it in middle_non_anchor or it in cuttable:
-                rebuilt.append(it)
-        return rebuilt
+                repl = anchor_out.get(id(it))
+                if repl is not None:
+                    out.append(repl)
+            else:
+                out.append(it)
+        return out
 
-    full_cost = sum(len(a.text) for a in anchors)
-    if anchor_budget >= full_cost:
+    def _fits() -> bool:
+        return _render_len(_assembly()) <= budget
+
+    # Step 1: cut material (post-last-anchor, then middle non-anchor),
+    # class-ordered: memory_context first, memory_evidence next, then
+    # anything else -- newest-position-last within each class.
+    def _cut_pool(indices: list[int]) -> None:
+        for wanted in ("memory_context", "memory_evidence", None):
+            for i in reversed(indices):
+                if _fits():
+                    return
+                it = items[i]
+                if id(it) in removed_ids:
+                    continue
+                if wanted is not None and it.source_type != wanted:
+                    continue
+                removed_ids.add(id(it))
+
+    _cut_pool(list(range(last_a + 1, len(items))))
+    if not _fits():
+        _cut_pool([i for i in range(first_a, last_a + 1) if i not in anchor_idx])
+
+    if _fits():
         meta.update(domain="full_count", pairs_rendered=len(anchors))
-        return _finish(anchors), meta
+        return _assembly(), meta
 
-    if anchor_budget >= ANCHOR_FLOOR_CHARS:
-        # Floor: newest first (anchors are newest-first), older empty
-        # first — an emptied anchor is REMOVED, and a truncated
-        # anchor's durable id is recomputed from final bytes.
-        kept: list[EvidenceItem] = []
-        remaining = anchor_budget
-        for a in anchors:
-            if remaining <= 0:
-                continue
-            text = a.text if len(a.text) <= remaining else _truncate_item_text(a.text, remaining)
-            if not text:
-                continue
-            remaining -= len(text)
-            kept.append(replace(a, text=text, durable_id=(
-                a.durable_id if text == a.text else _content_hash(text)
-            )))
+    # Step 2: anchors yield -- drop OLDEST first (anchors list is
+    # newest-first, so oldest is the tail).
+    kept = list(anchors)
+    while len(kept) > 1 and not _fits():
+        dropped = kept.pop()
+        anchor_out[id(dropped)] = None
+
+    if _fits():
         meta.update(domain="floor", pairs_rendered=len(kept))
-        return _finish(kept), meta
+        return _assembly(), meta
 
+    # Step 3: truncate the single newest anchor into remaining room.
+    newest = kept[0]
+    blank = replace(newest, text="")
+    anchor_out[id(newest)] = blank
+    base = _render_len(_assembly())
+    room = budget - base
+
+    if room >= ANCHOR_FLOOR_CHARS:
+        # Iterative allowance: always re-derive from the ORIGINAL text
+        # via _truncate_item_text so the marker survives every shrink
+        # (v1 renders the first item twice, so the char-room estimate
+        # can overshoot; converge by lowering the allowance).
+        allowance = min(room, len(newest.text))
+        text = ""
+        while allowance > 0:
+            text = _truncate_item_text(newest.text, allowance)
+            anchor_out[id(newest)] = replace(
+                newest,
+                text=text,
+                durable_id=(
+                    newest.durable_id if text == newest.text
+                    else _content_hash(text)
+                ),
+            )
+            if _fits():
+                break
+            allowance -= 128
+            text = ""
+        if text and _fits():
+            meta.update(domain="floor", pairs_rendered=1)
+            return _assembly(), meta
+
+    # Below floor: anchor-less, honest reason from REAL overhead.
+    anchor_out[id(newest)] = None
+    one_blank_line = len(
+        "\n".join(_render_evidence_lines([blank], render_version=render_version))
+    )
+    question_capacity = budget - len(owner_question or "") - one_blank_line
     meta.update(
         domain="below_floor",
         pairs_rendered=0,
         reason=(
             "question_consumed_budget"
-            if question_only_budget < ANCHOR_FLOOR_CHARS
+            if question_capacity < ANCHOR_FLOOR_CHARS
             else "higher_rank_consumed_budget"
         ),
     )
-    return _finish([]), meta
+    return _assembly(), meta
 
 
 def _budget_items_for_prompt(
@@ -1509,11 +1562,23 @@ def assemble_working_set(
     render_version = _citation_render_version()
     _held_now_meta: dict | None = None
     if held_now_enabled():
+        _containment_overhead = 0
+        try:
+            from core.routing import web_containment as _wc_est
+
+            if _wc_est.containment_enabled() and any(
+                it.source_type == "web_context" for it in items
+            ):
+                # standing instruction + per-segment wrapper allowance
+                _containment_overhead = len(_wc_est.standing_instruction()) + 96
+        except Exception:
+            _containment_overhead = 0
         items, _held_now_meta = _budget_items_held_now(
             items,
             owner_question=owner_question,
             max_chars=max_working_set_chars or _DEFAULT_WORKING_SET_CHAR_BUDGET,
             render_version=render_version,
+            containment_overhead=_containment_overhead,
         )
     else:
         items = _budget_items_for_prompt(
@@ -1539,10 +1604,9 @@ def assemble_working_set(
 
     total_chars = len(ordered) + len(owner_question or "")
     if _held_now_meta is not None:
-        # Containment reconciliation (gate round 5 note): wrappers and
-        # the standing instruction land after budgeting; record the
-        # overhead so domain receipts rest on complete arithmetic.
-        _held_now_meta["containment_overhead_chars"] = max(
+        # Reconciliation record: the ACTUAL post-render overhead beside
+        # the up-front estimate the allocator already deducted.
+        _held_now_meta["containment_overhead_actual"] = max(
             0, total_chars - len(owner_question or "") - sum(
                 len(line) + 1 for line in _render_evidence_lines(
                     items, render_version=render_version

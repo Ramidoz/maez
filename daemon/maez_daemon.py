@@ -3322,6 +3322,84 @@ logger.setLevel(logging.DEBUG)
 # once by root's handler.
 logger.propagate = False
 
+def _held_now_whole_turn(fn):
+    """Whole-turn receipt decorator (held-now C7, gate-approved pass 6,
+    code-gate round: decorator form so the function keeps its name and
+    body for the AST/introspection contracts).
+
+    Owns the exactly-once `held_now_shadow` receipt: turn-LOCAL holder
+    created before any guard can return or raise, injected as
+    `_hn_holder`, emitted in `finally` for every exit class. Emits only
+    under the held-now flags; emission failure never breaks a turn.
+    """
+    import functools as _functools
+    import uuid as _uuid
+
+    @_functools.wraps(fn)
+    def _wrapped(self, text, source="unknown", **kwargs):
+        holder = {"trace_id": _uuid.uuid4().hex[:16]}
+        self._held_now_turn_state = holder  # observability only
+        kwargs["_hn_holder"] = holder
+        try:
+            return fn(self, text, source, **kwargs)
+        except Exception:
+            holder["final_reply_path"] = "error"
+            raise
+        finally:
+            try:
+                from core.routing.focused_cognition import (
+                    held_now_enabled as _hn_on,
+                    held_now_shadow_enabled as _hn_shadow,
+                )
+
+                if _hn_on() or _hn_shadow():
+                    alloc = holder.get("held_now_alloc") or {}
+                    _final = (
+                        holder.get("final_reply_path")
+                        or holder.get("mode_hint")
+                        or "unknown"
+                    )
+                    _ineligible = {
+                        "clinical": "pre_seam_return",
+                        "camera": "pre_seam_return",
+                        "tool": "tool_mode",
+                        "echo": "echo_mode",
+                        "honest_empty": "honest_empty_mode",
+                        "self_status": "post_resolution_override",
+                        "error": "error",
+                    }.get(_final)
+                    logger.info(
+                        "held_now_shadow trace_id=%s surface=%s "
+                        "final_reply_path=%s ineligible_reason=%s "
+                        "turn_kind=%s needs_dialogue=%s "
+                        "fail_safe_legacy=%s date_cue=%s "
+                        "domain=%s reason=%s pairs_rendered=%s "
+                        "pairs_available=%s pairs_in_set=%s "
+                        "would_change=%s focused_row_id=%s",
+                        holder.get("trace_id"),
+                        source,
+                        _final,
+                        _ineligible,
+                        holder.get("turn_kind") or "unresolved",
+                        holder.get("needs_dialogue"),
+                        holder.get("fail_safe_legacy"),
+                        holder.get("date_cue"),
+                        alloc.get("domain"),
+                        alloc.get("reason"),
+                        alloc.get("pairs_rendered"),
+                        holder.get("pairs_available"),
+                        holder.get("pairs_in_set"),
+                        holder.get("would_change"),
+                        holder.get("focused_row_id"),
+                    )
+            except Exception as _hn_receipt_exc:
+                logger.debug(
+                    "held_now receipt emission failed: %s", _hn_receipt_exc
+                )
+
+    return _wrapped
+
+
 import logging.handlers as _logging_handlers
 
 # Slice 3 cleanup (2026-05-08): rotate maez.log. The maez.envelope
@@ -7003,60 +7081,8 @@ class MaezDaemon:
             source,
         )
 
-    def handle_message(self, text: str, source: str = "unknown", **kwargs) -> str:
-        """Whole-turn wrapper (held-now C7, gate-approved pass 6).
-
-        Owns the exactly-once `held_now_shadow` receipt: state is
-        initialized HERE, before any guard or import that can return
-        or raise, and the receipt is emitted in `finally` so every
-        owner turn that enters accounts for itself — clinical/camera
-        pre-returns, post-resolution overrides, and errors included.
-        The receipt is self-sufficient for the live witness
-        (final_reply_path, turn_kind, predicates, allocator domain,
-        focused row id, trace id). Emits only under the held-now flags.
-        """
-        import uuid as _uuid
-
-        holder: dict = {"trace_id": _uuid.uuid4().hex[:16]}
-        self._held_now_turn_state = holder
-        try:
-            reply = self._handle_message_body(text, source, **kwargs)
-            return reply
-        except Exception:
-            holder["final_reply_path"] = "error"
-            raise
-        finally:
-            try:
-                from core.routing.focused_cognition import (
-                    held_now_enabled as _hn_on,
-                    held_now_shadow_enabled as _hn_shadow,
-                )
-
-                if _hn_on() or _hn_shadow():
-                    alloc = holder.get("held_now_alloc") or {}
-                    logger.info(
-                        "held_now_shadow trace_id=%s surface=%s "
-                        "final_reply_path=%s turn_kind=%s "
-                        "dialogue_needs_or_uncertain=%s date_cue=%s "
-                        "domain=%s reason=%s pairs_rendered=%s "
-                        "focused_row_id=%s",
-                        holder.get("trace_id"),
-                        source,
-                        holder.get("final_reply_path")
-                        or holder.get("mode_hint")
-                        or "unknown",
-                        holder.get("turn_kind") or "unresolved",
-                        holder.get("dialogue_needs_or_uncertain"),
-                        holder.get("date_cue"),
-                        alloc.get("domain"),
-                        alloc.get("reason"),
-                        alloc.get("pairs_rendered"),
-                        holder.get("focused_row_id"),
-                    )
-            except Exception as _hn_receipt_exc:  # receipt must never break a turn
-                logger.debug("held_now receipt emission failed: %s", _hn_receipt_exc)
-
-    def _handle_message_body(
+    @_held_now_whole_turn
+    def handle_message(
         self,
         text: str,
         source: str = "unknown",
@@ -7074,6 +7100,7 @@ class MaezDaemon:
         send_intermediate=None,
         brain_failed: bool = False,
         held_now_history: "list | None" = None,
+        _hn_holder: "dict | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -7171,8 +7198,8 @@ class MaezDaemon:
                 camera_answer=camera_answer,
             )
         )
+        _hn_holder = _hn_holder if _hn_holder is not None else {}
         if _pre_tail_decision.skip_tail:
-            _hn_holder = getattr(self, "_held_now_turn_state", None) or {}
             if _pre_tail_decision.mode is ReplyMode.CLINICAL:
                 _hn_holder["final_reply_path"] = "clinical"
                 self._mark_m1_s4_policy(_s4_result.promotion_policy)
@@ -8215,9 +8242,19 @@ class MaezDaemon:
             and not _current_turn_echo_reply
             and not authoritative_tool_reply
         )
-        _hn_holder = getattr(self, "_held_now_turn_state", None) or {}
         _hn_holder["dialogue_needs_or_uncertain"] = bool(_dialogue_needs_or_uncertain)
         _hn_holder["date_cue"] = bool(_date_addressed_turn)
+        # Blocker 4: the witness needs the two predicates SEPARATELY.
+        try:
+            from core.routing.focused_cognition import (
+                dialogue_continuity_state as _hn_dcs,
+            )
+
+            _hn_state = _hn_dcs(text)
+            _hn_holder["needs_dialogue"] = bool(_hn_state.needs_dialogue)
+            _hn_holder["fail_safe_legacy"] = bool(_hn_state.fail_safe_legacy)
+        except Exception:
+            pass
         _reply_decision = resolve_reply_mode(
             ReplyDecisionSignals(
                 authoritative_tool_reply=bool(authoritative_tool_reply),
@@ -8667,6 +8704,41 @@ class MaezDaemon:
                         _hn_holder["held_now_alloc"] = (
                             _focused_working_set.held_now_alloc
                         )
+                    if not _held_now_on():
+                        # SHADOW counterfactual (code-gate blocker 2):
+                        # what WOULD the presence rule have seeded?
+                        try:
+                            from core.routing.focused_cognition import (
+                                dialogue_anchor_items as _hn_anchor_items,
+                                held_now_shadow_enabled as _hn_shadow_on,
+                            )
+
+                            if _hn_shadow_on():
+                                _cf_source = (
+                                    held_now_history
+                                    if held_now_history is not None
+                                    else chat_history
+                                )
+                                _cf_pairs = _hn_anchor_items(
+                                    _cf_source, limit_pairs=3
+                                )
+                                _actual = 0
+                                if _focused_working_set is not None:
+                                    _actual = sum(
+                                        1
+                                        for _it in _focused_working_set.items
+                                        if _it.source_type == "dialogue_anchor"
+                                    )
+                                _hn_holder["pairs_available"] = len(_cf_pairs)
+                                _hn_holder["pairs_in_set"] = _actual
+                                _hn_holder["would_change"] = (
+                                    len(_cf_pairs) > _actual
+                                )
+                        except Exception as _hn_cf_exc:
+                            logger.debug(
+                                "held_now shadow counterfactual skipped: %s",
+                                _hn_cf_exc,
+                            )
                     if _date_addressed_turn and _focused_working_set is not None:
                         _recall_carrier_receipt = RECALL_CARRIER_CONSULTED
                         _arm_recall_receipt()

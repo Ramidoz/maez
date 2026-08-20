@@ -3627,7 +3627,13 @@ class MemoryManager:
         # first appearance. A half is recognised by its content shape:
         # the owner half has no assistant marker; the reply half starts
         # with the assistant marker.
-        _TIER_RANK = {"untrusted": 0, "observed": 1, "lived": 2}
+        _TIER_RANK = {
+            "untrusted": 0,
+            "observed": 1,
+            "self_observed": 1,
+            "lived": 2,
+            "covenant": 3,
+        }
         by_link: dict[str, list[dict]] = {}
         logical: list[dict] = []
         for row in rows:
@@ -3647,14 +3653,32 @@ class MemoryManager:
                 resolved.append(entry)
                 continue
             halves = by_link.get(link, [])
-            owner_half = next(
-                (h for h in halves if "\nMaez:" not in (h.get("content") or "")),
-                None,
-            )
-            reply_half = next(
-                (h for h in halves if (h.get("content") or "").startswith("Maez:")),
-                None,
-            )
+            # Role by PROVENANCE first (the split writer stamps
+            # user_utterance on the owner half); content shape only as
+            # fallback — an owner message QUOTING "\nMaez:" must not
+            # misclassify the pair into an orphan (gate blocker 8).
+            owner_half = None
+            reply_half = None
+            if len(halves) == 2:
+                provs = [
+                    str((h.get("metadata") or {}).get("provenance_source") or "")
+                    for h in halves
+                ]
+                owners = [
+                    h for h, p in zip(halves, provs) if p == "user_utterance"
+                ]
+                if len(owners) == 1:
+                    owner_half = owners[0]
+                    reply_half = next(h for h in halves if h is not owner_half)
+            if owner_half is None or reply_half is None:
+                owner_half = next(
+                    (h for h in halves if "\nMaez:" not in (h.get("content") or "")),
+                    None,
+                )
+                reply_half = next(
+                    (h for h in halves if (h.get("content") or "").startswith("Maez:")),
+                    None,
+                )
             if owner_half is None or reply_half is None:
                 logger.warning(
                     "held_now_orphan_row link=%s halves=%d — skipped",
@@ -3674,6 +3698,10 @@ class MemoryManager:
             meta["provenance_source_reply"] = str(
                 (reply_half.get("metadata") or {}).get("provenance_source") or ""
             )
+            meta["timestamp"] = max(
+                str((owner_half.get("metadata") or {}).get("timestamp") or ""),
+                str((reply_half.get("metadata") or {}).get("timestamp") or ""),
+            )
             resolved.append({
                 "id": owner_half["id"],
                 "content": (
@@ -3681,6 +3709,9 @@ class MemoryManager:
                 ),
                 "metadata": meta,
             })
+        resolved.sort(
+            key=lambda m: str((m.get("metadata") or {}).get("timestamp") or "")
+        )
         if limit is not None and limit > 0:
             return resolved[-limit:]
         return resolved

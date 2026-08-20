@@ -573,7 +573,9 @@ async def run_inbound_turn(
                     held_now_shadow_enabled as _hn_shadow,
                 )
 
-                if _hn_on() or _hn_shadow():
+                if (_hn_on() or _hn_shadow()) and str(
+                    owner_surface_label or ""
+                ).startswith("telegram"):
                     _coalesced = await loop.run_in_executor(
                         get_shared_executor(),
                         lambda: _mem.get_telegram_exchanges_coalesced(

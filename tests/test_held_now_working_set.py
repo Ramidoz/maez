@@ -117,9 +117,15 @@ class TrustPassthroughTests(unittest.TestCase):
                 "provenance_source_reply": "self_web_claim",
             },
         }]
-        items = dialogue_anchor_items(hx)
+        with mock.patch.dict(os.environ, _ON):
+            items = dialogue_anchor_items(hx)
         self.assertEqual(items[0].origin_trust, "untrusted")
         self.assertEqual(items[0].origin_provenance, "self_web_claim")
+        # And flags-off: NO passthrough (C1 byte-identity; gate blocker 1)
+        with mock.patch.dict(os.environ, _OFF):
+            off_items = dialogue_anchor_items(hx)
+        self.assertIsNone(off_items[0].origin_trust)
+        self.assertIsNone(off_items[0].origin_provenance)
 
     def test_untrusted_reply_half_excluded_when_fresh_present(self):
         # The existing self_web_claim exclusion must bite on anchors
