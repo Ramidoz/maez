@@ -249,3 +249,46 @@ F3 An ordinary greeting arriving while the 3-pair history contains
 
 The legacy-verb doctrine seam now has its own committed ledger entry:
 docs/superpowers/plans/2026-08-20-legacy-verb-doctrine-seam.md.
+
+---
+
+# PASS 4 (after gate round 3: two folds + RED completions)
+
+## P1 addendum: deterministic-fact telemetry pinned
+Documented consequence, with pins: `mode=recall_triad`,
+`receipt_or_na=not_consulted`, `reply_path=tool`, and NO dispatcher
+routing-observation row for pre-dispatch turns. Predicate stays narrow
+to the pinned question forms; the mixed emotional-stock fixture
+(`test_brain_loop.py:1249` "I feel anxious about Nvidia stock") is a
+pinned NEGATIVE (dispatcher context must NOT be lost).
+
+## P2 fold: BOTH retained Telegram paths migrate
+The migration list gains the inline consumer
+(`maez_adapter.py:1192` extraction, `:1234` handle_message call) --
+same two absent-by-default fields. The non-structured kill-switch path
+(`telegram_voice._run_jarvis_loop` at `:3385`, invoked `:3733`): ruled
+-- action-lane continuation is UNAVAILABLE there (the path returns a
+plain string; both-axes cannot ride a string; the kill-switch is a
+rollback surface, not a growth surface). A guard pins that
+combined_mode never activates on non-structured calls. Consumer tests
+for both paths in the RED set.
+
+## P3 fold: referent authority matches real signatures
+- CardReferent: `get_open_for_channel(channel, chat_id)` THEN explicit
+  `user_id` filter on returned records (getter does not scope user);
+  OPEN only -- DEFERRED records are excluded from referent authority
+  (a deferred card is not an awaiting-consent object).
+- CommitmentReferent: exists ONLY after
+  `OfferReceipt.is_fresh(now_ts, turns_since)` passes; stale-by-time
+  and stale-by-turns are pinned negative tests.
+- ProposalReferent: unchanged (already correctly grounded).
+
+## P5 completion: five targeted REDs added
+7. Inline Telegram consumer preserves dispatcher_transcript +
+   combined_mode (mutation: drop either -> named test fails).
+8. Non-structured kill-switch path can never produce combined_mode
+   (guard test).
+9. Wrong-user open card yields NO CardReferent.
+10. Stale OfferReceipt (time; turns) yields NO CommitmentReferent.
+11. Pre-dispatch deterministic-fact turn emits the pinned telemetry
+    shape (mode/receipt/reply_path, no routing-observation row).
