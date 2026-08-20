@@ -7003,7 +7003,60 @@ class MaezDaemon:
             source,
         )
 
-    def handle_message(
+    def handle_message(self, text: str, source: str = "unknown", **kwargs) -> str:
+        """Whole-turn wrapper (held-now C7, gate-approved pass 6).
+
+        Owns the exactly-once `held_now_shadow` receipt: state is
+        initialized HERE, before any guard or import that can return
+        or raise, and the receipt is emitted in `finally` so every
+        owner turn that enters accounts for itself — clinical/camera
+        pre-returns, post-resolution overrides, and errors included.
+        The receipt is self-sufficient for the live witness
+        (final_reply_path, turn_kind, predicates, allocator domain,
+        focused row id, trace id). Emits only under the held-now flags.
+        """
+        import uuid as _uuid
+
+        holder: dict = {"trace_id": _uuid.uuid4().hex[:16]}
+        self._held_now_turn_state = holder
+        try:
+            reply = self._handle_message_body(text, source, **kwargs)
+            return reply
+        except Exception:
+            holder["final_reply_path"] = "error"
+            raise
+        finally:
+            try:
+                from core.routing.focused_cognition import (
+                    held_now_enabled as _hn_on,
+                    held_now_shadow_enabled as _hn_shadow,
+                )
+
+                if _hn_on() or _hn_shadow():
+                    alloc = holder.get("held_now_alloc") or {}
+                    logger.info(
+                        "held_now_shadow trace_id=%s surface=%s "
+                        "final_reply_path=%s turn_kind=%s "
+                        "dialogue_needs_or_uncertain=%s date_cue=%s "
+                        "domain=%s reason=%s pairs_rendered=%s "
+                        "focused_row_id=%s",
+                        holder.get("trace_id"),
+                        source,
+                        holder.get("final_reply_path")
+                        or holder.get("mode_hint")
+                        or "unknown",
+                        holder.get("turn_kind") or "unresolved",
+                        holder.get("dialogue_needs_or_uncertain"),
+                        holder.get("date_cue"),
+                        alloc.get("domain"),
+                        alloc.get("reason"),
+                        alloc.get("pairs_rendered"),
+                        holder.get("focused_row_id"),
+                    )
+            except Exception as _hn_receipt_exc:  # receipt must never break a turn
+                logger.debug("held_now receipt emission failed: %s", _hn_receipt_exc)
+
+    def _handle_message_body(
         self,
         text: str,
         source: str = "unknown",
@@ -7020,6 +7073,7 @@ class MaezDaemon:
         subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
         send_intermediate=None,
         brain_failed: bool = False,
+        held_now_history: "list | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -7118,10 +7172,13 @@ class MaezDaemon:
             )
         )
         if _pre_tail_decision.skip_tail:
+            _hn_holder = getattr(self, "_held_now_turn_state", None) or {}
             if _pre_tail_decision.mode is ReplyMode.CLINICAL:
+                _hn_holder["final_reply_path"] = "clinical"
                 self._mark_m1_s4_policy(_s4_result.promotion_policy)
                 return _s4_result.answer_text or ""
             if _pre_tail_decision.mode is ReplyMode.CAMERA:
+                _hn_holder["final_reply_path"] = "camera"
                 return camera_answer or ""
 
         from skills.web_search import (
@@ -8158,6 +8215,9 @@ class MaezDaemon:
             and not _current_turn_echo_reply
             and not authoritative_tool_reply
         )
+        _hn_holder = getattr(self, "_held_now_turn_state", None) or {}
+        _hn_holder["dialogue_needs_or_uncertain"] = bool(_dialogue_needs_or_uncertain)
+        _hn_holder["date_cue"] = bool(_date_addressed_turn)
         _reply_decision = resolve_reply_mode(
             ReplyDecisionSignals(
                 authoritative_tool_reply=bool(authoritative_tool_reply),
@@ -8167,6 +8227,7 @@ class MaezDaemon:
                 date_addressed=bool(_date_addressed_turn),
             )
         )
+        _hn_holder["mode_hint"] = getattr(_reply_decision.mode, "value", str(_reply_decision.mode))
         _legacy_call_purpose = _reply_decision.call_purpose
         if (
             transcript_context
@@ -8204,6 +8265,7 @@ class MaezDaemon:
             if _dialogue_needs_or_uncertain
             else "ordinary"
         )
+        _hn_holder["turn_kind"] = _rk_turn_kind
         _focused_working_set = None
         _focused_result = None
         _focused_verdict = None
@@ -8585,13 +8647,26 @@ class MaezDaemon:
                         record_focused_cognition_run as _record_focused_cognition_run,
                     )
 
+                    from core.routing.focused_cognition import (
+                        held_now_enabled as _held_now_on,
+                    )
+
+                    _hn_history = (
+                        held_now_history
+                        if (held_now_history is not None and _held_now_on())
+                        else chat_history
+                    )
                     _focused_working_set = _assemble_working_set(
                         transcript=transcript,
                         web_context=web_context,
                         owner_question=text,
-                        chat_history=chat_history,
+                        chat_history=_hn_history,
                         recall_items=recall_items,
                     )
+                    if _focused_working_set is not None:
+                        _hn_holder["held_now_alloc"] = (
+                            _focused_working_set.held_now_alloc
+                        )
                     if _date_addressed_turn and _focused_working_set is not None:
                         _recall_carrier_receipt = RECALL_CARRIER_CONSULTED
                         _arm_recall_receipt()
@@ -8673,7 +8748,7 @@ class MaezDaemon:
                         _rk_coverage = getattr(_focused_verdict, "citation_coverage", None)
                         _rk_reply_grounding = getattr(_focused_verdict, "reply_grounding", None)
                         _focused_reply = (_focused_result.reply or "").strip()
-                        _record_focused_cognition_run(
+                        _hn_holder["focused_row_id"] = _record_focused_cognition_run(
                             surface=source,
                             chat_id=chat_id,
                             working_set=_focused_working_set,
@@ -8687,6 +8762,7 @@ class MaezDaemon:
                             reply = _focused_reply
                             _focused_used = True
                             _focused_answer_used = True
+                            _hn_holder["final_reply_path"] = "focused"
                 except Exception as _focused_exc:
                     if (
                         _date_addressed_turn
@@ -9642,6 +9718,12 @@ class MaezDaemon:
                 _moment_diag_exc,
             )
 
+        try:
+            _hn_holder["final_reply_path"] = getattr(
+                _reply_path, "value", str(_reply_path)
+            )
+        except Exception:
+            pass
         return reply
 
     def _get_public_context(self) -> str:

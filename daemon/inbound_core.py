@@ -554,6 +554,7 @@ async def run_inbound_turn(
     # user message and drifts on follow-up questions. None-safe — fall open if
     # memory is unreachable.
     chat_history = None
+    held_now_history = None
     try:
         _mem = getattr(daemon, "memory", None)
         if _mem is not None:
@@ -565,6 +566,32 @@ async def run_inbound_turn(
             # pair before it reaches run_brain_loop. Preserves other keys
             # (metadata, id) so downstream contracts stay intact; only
             # `content` is rewritten, and only when the envelope prefix matches.
+            held_now_history = None
+            try:
+                from core.routing.focused_cognition import (
+                    held_now_enabled as _hn_on,
+                    held_now_shadow_enabled as _hn_shadow,
+                )
+
+                if _hn_on() or _hn_shadow():
+                    _coalesced = await loop.run_in_executor(
+                        get_shared_executor(),
+                        lambda: _mem.get_telegram_exchanges_coalesced(
+                            limit=chat_history_turns,
+                            origin_surface=owner_surface_label,
+                            chat_id=chat_id or None,
+                        ),
+                    )
+                    held_now_history = [
+                        {
+                            "content": clean_exchange(_row.get("content") or ""),
+                            "metadata": dict(_row.get("metadata") or {}),
+                        }
+                        for _row in _coalesced or []
+                    ]
+            except Exception as _hn_exc:
+                logger.warning("held_now history fetch failed (v2): %s", _hn_exc)
+                held_now_history = None
             chat_history = []
             for _ex in _raw_exchanges or []:
                 if not _ex:
@@ -757,6 +784,7 @@ async def run_inbound_turn(
                             tool_calls=jarvis_tool_calls or None,
                             recall_items=jarvis_recall_items,
                             subjective_duration_owner_auth=subjective_duration_owner_auth,
+                            held_now_history=held_now_history,
                             send_intermediate=send_progress_receipt,
                             brain_failed=brain_failed,
                         )

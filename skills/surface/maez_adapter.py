@@ -1073,6 +1073,7 @@ class MaezMessageHandler:
         # tool-planning path. None-safe — fall open if memory is
         # unreachable.
         chat_history = None
+        held_now_history = None
         try:
             _mem = getattr(self.daemon, "memory", None)
             if _mem is not None:
@@ -1082,6 +1083,37 @@ class MaezMessageHandler:
                         limit=_CHAT_HISTORY_TURNS,
                     ),
                 )
+                # Held-now C5: the coalesced, scope-filtered list is a
+                # SEPARATE carrier consumed only by working-set anchor
+                # construction — the raw list above keeps feeding the
+                # planner/legacy/comprehension consumers unchanged.
+                try:
+                    from core.routing.focused_cognition import (
+                        held_now_enabled as _hn_on,
+                        held_now_shadow_enabled as _hn_shadow,
+                    )
+
+                    if _hn_on() or _hn_shadow():
+                        _coalesced = await loop.run_in_executor(
+                            get_shared_executor(),
+                            lambda: _mem.get_telegram_exchanges_coalesced(
+                                limit=_CHAT_HISTORY_TURNS,
+                                origin_surface=SURFACE_NAME,
+                                chat_id=chat_id or None,
+                            ),
+                        )
+                        held_now_history = [
+                            {
+                                "content": _clean_exchange(
+                                    _row.get("content") or ""
+                                ),
+                                "metadata": dict(_row.get("metadata") or {}),
+                            }
+                            for _row in _coalesced or []
+                        ]
+                except Exception as _hn_exc:
+                    logger.warning("held_now history fetch failed: %s", _hn_exc)
+                    held_now_history = None
                 # 2026-04-23: clean the stored envelope into a tight
                 # "Rohit: ... / Maez: ..." pair before it reaches
                 # run_brain_loop. Without this, `chat_history` injects
@@ -1214,6 +1246,7 @@ class MaezMessageHandler:
                                 subjective_duration_owner_auth=subjective_duration_owner_auth,
                                 send_intermediate=_send_progress_receipt,
                                 brain_failed=brain_failed,
+                                held_now_history=held_now_history,
                             )
                         ),
                     )
