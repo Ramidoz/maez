@@ -1229,11 +1229,16 @@ def _budget_items_held_now(
         # Boundedness guard (code-gate round 2 blocker 4): a zero or
         # negative internal budget must never fall into the legacy
         # allocator's max_chars<=0 == "no limit" semantics. The turn
-        # is honestly item-less.
+        # is honestly item-less -- and the reason names what actually
+        # consumed the space (round-4 note).
         meta.update(
             domain="below_floor",
             pairs_rendered=0,
-            reason="question_consumed_budget",
+            reason=(
+                "containment_consumed_budget"
+                if containment_overhead >= max_chars
+                else "question_consumed_budget"
+            ),
         )
         return [], meta
 
@@ -1576,23 +1581,21 @@ def assemble_working_set(
     render_version = _citation_render_version()
     _held_now_meta: dict | None = None
     if held_now_enabled():
+        # GROUND-TRUTH LOOP (code-gate round 4): estimation is only a
+        # first guess -- the final contained render is measured and, if
+        # the budget is violated, allocation re-runs against the ACTUAL
+        # overhead. Terminal fallback is a bounded, honest empty set.
+        # This closes every estimator fail-open/underbound surface by
+        # construction: nothing ships unless the measured total fits.
+        _budget_requested = max_working_set_chars or _DEFAULT_WORKING_SET_CHAR_BUDGET
+        _pre_alloc_items = list(items)
         _containment_overhead = 0
-        _containment_expected = False
         try:
             from core.routing import web_containment as _wc_est
 
-            _containment_expected = _wc_est.containment_enabled() and any(
+            if _wc_est.containment_enabled() and any(
                 it.source_type == "web_context" for it in items
-            )
-        except Exception:
-            _containment_expected = False
-        if _containment_expected:
-            try:
-                # EXACT differential estimate (code-gate round 2
-                # blocker 3): render the current items contained vs
-                # plain and charge the true delta plus the standing
-                # instruction block. Nonce length is constant, so the
-                # estimate matches the final render's overhead.
+            ):
                 _est_nonce = _wc_est.new_nonce()
                 _plain = "\n".join(
                     _render_evidence_lines(items, render_version=render_version)
@@ -1601,26 +1604,84 @@ def assemble_working_set(
                     items, render_version=render_version,
                     nonce=_est_nonce, contain_enabled=True,
                 )
-                _contained = "\n".join(_contained_lines)
                 _containment_overhead = max(
-                    0, len(_contained) - len(_plain)
+                    0, len("\n".join(_contained_lines)) - len(_plain)
                 ) + len(_wc_est.standing_instruction()) + 2
+        except Exception:
+            # Estimation failure is tolerable: the measurement loop
+            # below is the enforcement.
+            _containment_overhead = 0
+
+        from core.routing import web_containment as _wc  # noqa: local import by design
+
+        ordered = ""
+        total_chars = 0
+        for _pass in range(3):
+            items, _held_now_meta = _budget_items_held_now(
+                list(_pre_alloc_items),
+                owner_question=owner_question,
+                max_chars=_budget_requested,
+                render_version=render_version,
+                containment_overhead=_containment_overhead,
+            )
+            try:
+                _contain = _wc.containment_enabled()
             except Exception:
-                # FAIL BOUNDED (code-gate round 3): final containment
-                # can still succeed independently, so an estimation
-                # failure must never become zero cost. Charge a
-                # conservative upper bound instead.
-                _n_web = sum(
-                    1 for it in items if it.source_type == "web_context"
-                )
-                _containment_overhead = 1024 + 256 * max(_n_web, 1)
-        items, _held_now_meta = _budget_items_held_now(
-            items,
-            owner_question=owner_question,
-            max_chars=max_working_set_chars or _DEFAULT_WORKING_SET_CHAR_BUDGET,
-            render_version=render_version,
-            containment_overhead=_containment_overhead,
-        )
+                _contain = False
+            _nonce = _wc.new_nonce() if _contain else ""
+            _lines, _web_segments, _web_digests = _render_evidence_lines_contained(
+                items, render_version=render_version, nonce=_nonce,
+                contain_enabled=_contain)
+            ordered = "\n".join(_lines)
+            if _contain and _web_segments:
+                ordered = _wc.standing_instruction() + "\n\n" + ordered
+            total_chars = len(ordered) + len(owner_question or "")
+            _plain_actual = "\n".join(
+                _render_evidence_lines(items, render_version=render_version)
+            )
+            _actual_overhead = max(
+                0, total_chars - len(owner_question or "") - len(_plain_actual)
+            )
+            _held_now_meta["containment_overhead_actual"] = _actual_overhead
+            _held_now_meta["reconcile_passes"] = _pass + 1
+            if total_chars <= _budget_requested:
+                break
+            # Over budget: the next pass charges MEASURED overhead
+            # plus margin. Monotone: fewer/shorter items -> overhead
+            # can only shrink.
+            _containment_overhead = _actual_overhead + 64
+        else:
+            # Terminal bounded fallback: honest empty set, with the
+            # reason naming the TRUE consumer (round-4 note): the
+            # question itself, measured containment expansion, or
+            # higher-ranked occupancy that could not be cut.
+            if len(owner_question or "") >= _budget_requested - 128:
+                _terminal_reason = "question_consumed_budget"
+            elif _actual_overhead > 0:
+                _terminal_reason = "containment_consumed_budget"
+            else:
+                _terminal_reason = "higher_rank_consumed_budget"
+            items = []
+            _held_now_meta = {
+                "domain": "below_floor",
+                "reason": _terminal_reason,
+                "pairs_rendered": 0,
+                "containment_overhead_chars": _containment_overhead,
+                "containment_overhead_actual": 0,
+                "reconcile_passes": 3,
+            }
+            ordered = ""
+            total_chars = len(owner_question or "")
+        # Receipt emission only for the FINAL render (single receipt).
+        try:
+            if items and ordered.startswith(_wc.standing_instruction()):
+                _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
+                _wc.emit_receipt(_wc.containment_receipt(
+                    ordered, nonce=_nonce, path="focused",
+                    expected_segments=_web_segments,
+                    digest=_web_digest))
+        except Exception:
+            pass
     else:
         items = _budget_items_for_prompt(
             items,
@@ -1628,31 +1689,21 @@ def assemble_working_set(
             max_chars=max_working_set_chars,
             render_version=render_version,
         )
+        from core.routing import web_containment as _wc  # local import: keep web_containment off focused_cognition's import path (no cycle; defensive)
+        _contain = _wc.containment_enabled()
+        _nonce = _wc.new_nonce() if _contain else ""
+        _lines, _web_segments, _web_digests = _render_evidence_lines_contained(
+            items, render_version=render_version, nonce=_nonce, contain_enabled=_contain)
+        ordered = "\n".join(_lines)
+        if _contain and _web_segments:
+            ordered = _wc.standing_instruction() + "\n\n" + ordered
+            _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
+            _wc.emit_receipt(_wc.containment_receipt(
+                ordered, nonce=_nonce, path="focused",
+                expected_segments=_web_segments,
+                digest=_web_digest))
+        total_chars = len(ordered) + len(owner_question or "")
 
-    from core.routing import web_containment as _wc  # local import: keep web_containment off focused_cognition's import path (no cycle; defensive)
-    _contain = _wc.containment_enabled()
-    _nonce = _wc.new_nonce() if _contain else ""
-    _lines, _web_segments, _web_digests = _render_evidence_lines_contained(
-        items, render_version=render_version, nonce=_nonce, contain_enabled=_contain)
-    ordered = "\n".join(_lines)
-    if _contain and _web_segments:
-        ordered = _wc.standing_instruction() + "\n\n" + ordered
-        _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
-        _wc.emit_receipt(_wc.containment_receipt(
-            ordered, nonce=_nonce, path="focused",
-            expected_segments=_web_segments,
-            digest=_web_digest))
-
-    total_chars = len(ordered) + len(owner_question or "")
-    if _held_now_meta is not None:
-        # Reconciliation record: the ACTUAL post-render overhead beside
-        # the up-front estimate the allocator already deducted.
-        _plain_actual = "\n".join(
-            _render_evidence_lines(items, render_version=render_version)
-        )
-        _held_now_meta["containment_overhead_actual"] = max(
-            0, total_chars - len(owner_question or "") - len(_plain_actual)
-        )
     return WorkingSet(
         items=items,
         ordered_evidence_text=ordered,

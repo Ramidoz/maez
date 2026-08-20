@@ -240,18 +240,25 @@ class AllocatorDomainTests(unittest.TestCase):
         )
         self.assertLessEqual(ws.working_set_chars, 4000)
 
-    def test_estimator_failure_fails_bounded(self):
-        # Round-3 blocker: a transient estimation failure must charge a
-        # conservative bound, never zero, so the final prompt cannot
-        # exceed the requested budget when containment later succeeds.
+    def test_estimator_failure_stays_bounded_by_measurement(self):
+        # Round-3/4: estimation failures are TOLERATED because the
+        # ground-truth loop measures the final render and re-allocates;
+        # the budget promise is on the measured output, never on trust
+        # in the estimate.
         from core.routing import web_containment as wc
+
+        _real_nonce = wc.new_nonce
+        _calls = {"n": 0}
+
+        def _flaky_nonce():
+            _calls["n"] += 1
+            if _calls["n"] == 1:
+                raise RuntimeError("transient")
+            return _real_nonce()
 
         with mock.patch.object(
             wc, "containment_enabled", return_value=True
-        ), mock.patch.object(
-            wc, "new_nonce",
-            side_effect=[RuntimeError("transient"), "nonce-ok-16chars"],
-        ):
+        ), mock.patch.object(wc, "new_nonce", side_effect=_flaky_nonce):
             ws = _ws(
                 self.ORDINARY_Q, _hx(3), _ON,
                 web_context="a fresh web snippet about gardens",
@@ -259,9 +266,24 @@ class AllocatorDomainTests(unittest.TestCase):
             )
         if ws is None:
             self.skipTest("no set")
-        alloc = ws.held_now_alloc
-        self.assertGreaterEqual(alloc["containment_overhead_chars"], 1024)
         self.assertLessEqual(ws.working_set_chars, 3000)
+
+    def test_marker_expansion_stays_bounded_by_measurement(self):
+        # Round-4 blocker 2 witness: marker neutralization can expand
+        # web content beyond any per-item constant; the loop must
+        # still land the measured total inside the budget.
+        from core.routing import web_containment as wc
+
+        marker_web = " ".join("<<EXT:x>>" for _ in range(100))
+        with mock.patch.object(wc, "containment_enabled", return_value=True):
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context=marker_web,
+                max_working_set_chars=3400,
+            )
+        if ws is None:
+            self.skipTest("no set")
+        self.assertLessEqual(ws.working_set_chars, 3400)
 
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
