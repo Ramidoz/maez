@@ -121,6 +121,26 @@ class ContinuationTests(unittest.TestCase):
         self.assertIsNone(planner["messages"])
 
 
+class V2ReachabilityTests(unittest.TestCase):
+    def test_v2_delegation_precedes_inline_body(self):
+        # Round-2 blocker 1: the relocation must never sever the V2
+        # strangler seam. The delegation call must exist inside
+        # __call__ and appear BEFORE the inline admission block.
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        tree = ast.parse(src)
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "__call__"
+        )
+        fn_src = ast.get_source_segment(src, fn) or ""
+        self.assertIn("inbound_core_v2_enabled()", fn_src)
+        self.assertIn("run_inbound_turn(**self._build_inbound_descriptor", fn_src)
+        self.assertLess(
+            fn_src.index("inbound_core_v2_enabled()"),
+            fn_src.index("advance the conversation turn ordinal"),
+        )
+
+
 class FlagRegistryTests(unittest.TestCase):
     def test_action_lane_flags_registered(self):
         from core.cockpit.flags import default_registry

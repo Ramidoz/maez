@@ -110,10 +110,18 @@ def assemble_action_referents(
     # ProposalReferent: adapter last-shown entry, chat-scoped, <=600s.
     try:
         if proposal_entry:
-            shown = float(proposal_entry.get("ts", 0.0))
+            shown = float(
+                proposal_entry.get("shown_at")
+                or proposal_entry.get("ts")
+                or 0.0
+            )
             if shown and (now - shown) <= _PROPOSAL_FRESHNESS_S:
                 out.append(ProposalReferent(
-                    kind=str(proposal_entry.get("kind", "proposal")),
+                    kind=str(
+                        proposal_entry.get("source")
+                        or proposal_entry.get("kind")
+                        or "proposal"
+                    ),
                     shown_ts=shown,
                 ))
     except Exception as exc:

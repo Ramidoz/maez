@@ -211,6 +211,7 @@ async def run_inbound_turn(
     # in ``_build_inbound_descriptor`` so the core never touches a surface event):
     text: str,
     event_identity: str = "",
+    proposal_entry: "dict | None" = None,
     chat_id: str = "",
     resolved_user_id: str,
     reply_to_message_id: "str | None",
@@ -313,6 +314,7 @@ async def run_inbound_turn(
             user_id=resolved_user_id,
             card_store=getattr(_pipe_for_ref, "card_store", None),
             controller=search_commitment_controller(),
+            proposal_entry=proposal_entry,
             current_turn_seq=current_turn_seq,
         )
     except Exception:

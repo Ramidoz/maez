@@ -760,6 +760,7 @@ class MaezMessageHandler:
             text=event.text or "",
             raw_platform_metadata=getattr(event, "raw_message", None),
             event_identity=_event_identity,
+            proposal_entry=self._last_shown_proposal.get(chat_id),
             chat_id=chat_id,
             resolved_user_id=resolved_user_id,
             reply_to_message_id=getattr(event, "reply_to_message_id", None),
@@ -788,6 +789,14 @@ class MaezMessageHandler:
         text = (event.text or "").strip()
         if not text:
             return None
+
+        # SLICE 0 strangler seam — flag-gated delegation to the
+        # surface-agnostic inbound core. DEFAULT OFF. When ON, the entire
+        # inbound pipeline below is run from daemon.inbound_core.run_inbound_turn
+        # with every surface-coupled literal injected via the descriptor. When
+        # OFF (default), the EXISTING inline body below runs UNTOUCHED.
+        if inbound_core_v2_enabled():
+            return await run_inbound_turn(**self._build_inbound_descriptor(event))
 
         # Phase 2 (inline): advance the conversation turn ordinal at
         # ADMISSION, before every interceptor (gate blocker 4).

@@ -1363,8 +1363,16 @@ _DET_FACT_RE = __import__("re").compile(
 _DET_FACT_EXCLUDE_RE = __import__("re").compile(
     r"\bI feel\b|\banxious\b|\bworried\b|\bnervous\b"
     r"|\bdebate\b|\bnews\b|\bwhether\b|\bwhy\b"
-    r"|\bquestion about\b|\bmanipulat|\bcollaps",
+    r"|\bquestion about\b|\bmanipulat|\bcollaps"
+    r"|\bstory\b|\bopinion\b|\bbehind\b|\bdiscussed\b"
+    r"|\bsalary\b|\bmy \b|\bwe \b"
+    r"|\bdo(?:n'?t| not) look\b",
     __import__("re").IGNORECASE,
+)
+# Deterministic facts require an amount-like or ticker-like token --
+# purely narrative currency talk must NOT bypass the dispatcher.
+_DET_FACT_TOKEN_RE = __import__("re").compile(
+    r"[0-9][0-9,.]*|[$\u20ac\u00a3\u20b9]|\bRs\.?|\b[A-Z]{2,6}\b"
 )
 
 
@@ -1380,6 +1388,8 @@ def _deterministic_fact_candidate(text: str) -> bool:
     if not t or len(t) > 160:
         return False
     if _DET_FACT_EXCLUDE_RE.search(t):
+        return False
+    if not _DET_FACT_TOKEN_RE.search(t):
         return False
     return bool(_DET_FACT_RE.match(t))
 

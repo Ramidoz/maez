@@ -54,9 +54,28 @@ class FixtureTests(unittest.TestCase):
             self.assertEqual(floor(t), "none", t)
 
     def test_deterministic_pinned_forms(self):
-        self.assertTrue(det("What is the current INR to USD exchange rate?"))
-        self.assertTrue(det("What is the SRXH stock price today?"))
-        self.assertFalse(det("Tell me a story about the stock market"))
+        for t in (
+            "What is the current INR to USD exchange rate?",
+            "What is the SRXH stock price today?",
+            "What's Rs.2,00,000 in USD?",
+            "What is 300 euros in usd?",
+            "What is \u20ac300 in dollars?",
+            "Look up the price of SRXH",
+            "Convert 500 CAD into INR",
+        ):
+            self.assertTrue(det(t), t)
+        for t in (
+            "Tell me a story about the stock market",
+            "What's the current debate about whether the stock price is manipulated?",
+            "What is the latest news about why the stock price collapsed?",
+            "Convert my question about what happened to USD please",
+            "What is the story behind 300 euros in USD?",
+            "What is your opinion on 300 euros in USD?",
+            "What is the amount we discussed in USD?",
+            "What is my salary in dollars?",
+            "What is 300 euros in USD? Do not look it up.",
+        ):
+            self.assertFalse(det(t), t)
 
 
 class WiringTests(unittest.TestCase):

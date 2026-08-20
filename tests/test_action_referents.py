@@ -114,17 +114,27 @@ class CommitmentReferentTests(unittest.TestCase):
 
 
 class ProposalReferentTests(unittest.TestCase):
-    def test_fresh_and_stale_windows(self):
+    def test_fresh_and_stale_windows_real_producer_shape(self):
+        # The PRODUCTION shape is {id, source, shown_at} (gate round 2
+        # blocker 2) -- the synthetic {kind, ts} dialect stays accepted.
         fresh = assemble_action_referents(
+            channel="t", chat_id="c1", user_id="rohit",
+            proposal_entry={"id": 7, "source": "dream", "shown_at": 900.0},
+            now_ts=1000.0,
+        )
+        self.assertIsInstance(fresh[0], ProposalReferent)
+        self.assertEqual(fresh[0].kind, "dream")
+        stale = assemble_action_referents(
+            channel="t", chat_id="c1", user_id="rohit",
+            proposal_entry={"id": 7, "source": "dream", "shown_at": 100.0},
+            now_ts=1000.0,
+        )
+        self.assertEqual(stale, ())
+        legacy = assemble_action_referents(
             channel="t", chat_id="c1", user_id="rohit",
             proposal_entry={"kind": "dream", "ts": 900.0}, now_ts=1000.0,
         )
-        self.assertIsInstance(fresh[0], ProposalReferent)
-        stale = assemble_action_referents(
-            channel="t", chat_id="c1", user_id="rohit",
-            proposal_entry={"kind": "dream", "ts": 100.0}, now_ts=1000.0,
-        )
-        self.assertEqual(stale, ())
+        self.assertIsInstance(legacy[0], ProposalReferent)
 
 
 class AnaphoraGatingTests(unittest.TestCase):
