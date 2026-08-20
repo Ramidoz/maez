@@ -1374,7 +1374,13 @@ _CODE = r"(?:USD|INR|EUR|GBP|JPY|CAD|AUD|usd|inr|eur|gbp|jpy|cad|aud)"
 _CURW = r"(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)"
 # Well-formed amounts only: 300 / 1,234.50 / 2,00,000 (Indian
 # grouping) / $300 / \u20ac300 / Rs.2,00,000 -- "1,," is not a number.
-_NUM = r"[0-9]+(?:,[0-9]{2,3})*(?:\.[0-9]+)?"
+_NUM = (
+    r"(?:"
+    r"[0-9]{1,3}(?:,[0-9]{3})+"          # Western: 1,234,567
+    r"|[0-9]{1,2}(?:,[0-9]{2})*,[0-9]{3}"  # Indian: 2,00,000 / 1,23,45,678
+    r"|[0-9]+"                            # plain: 300
+    r")(?:\.[0-9]+)?"
+)
 # The SOURCE side must carry a currency marker: symbol/Rs prefix on
 # the number, or a currency word after it ("What is 300 in USD?" --
 # 300 WHAT? -- is ambiguous and rejected; round-5 witness).
@@ -1387,7 +1393,7 @@ _TAIL = r"[\s?.!]*$"
 _DET_FORMS = [
     # exchange rate: STRICT code pair, no arbitrary prefix words
     __import__("re").compile(
-        rf"^what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
+        rf"^what(?:'s| is) (?:the )?(?:current |latest |today's )?"
         rf"{_CODE}(?:[ /-]| to ){_CODE} exchange rate{_TAIL}",
         __import__("re").IGNORECASE),
     # what is <marked amount> in/to <currency-word>
@@ -2188,7 +2194,9 @@ def run_brain_loop(
     # Phase 2 P1: deterministic live-fact questions take the UNCHANGED
     # Jarvis-only path BEFORE the dispatcher decision -- authoritative
     # currency/stock tools keep their exact pre-triad behavior, and
-    # these turns can never classify as body actions.
+    # these turns can never classify as body actions. Stock/ticker
+    # questions are OUT of reflex scope (see design P1-SCOPE-NARROWED)
+    # and take the dispatcher like any other turn.
     _det_fact_turn = recovery_seed is None and _deterministic_fact_candidate(
         user_text
     )

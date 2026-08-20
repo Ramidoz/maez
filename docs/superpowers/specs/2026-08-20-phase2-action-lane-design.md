@@ -375,7 +375,7 @@ ceremony.
 
 ---
 
-## P1 SCOPE NARROWED (code-gate rounds 3-5, 2026-08-21)
+## P1 SCOPE NARROWED (code-gate rounds 3-5, dated per review pin 2026-08-20; executed 2026-08-21)
 
 Five gate rounds proved ticker-vs-English-word LEXICALLY UNDECIDABLE
 (GOOD/EUROS/LOL; dictionary validation fails open and is incomplete).

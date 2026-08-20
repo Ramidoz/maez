@@ -57,6 +57,9 @@ class FixtureTests(unittest.TestCase):
         for t in (
             "What is the current INR to USD exchange rate?",
             "What's Rs.2,00,000 in USD?",
+            "What is today's USD to EUR exchange rate?",
+            "What is 1,234,567 euros in USD?",
+            "What is 1,23,45,678 rupees in USD?",
             "What is 300 euros in usd?",
             "What is \u20ac300 in dollars?",
             "Convert 500 CAD into INR",
@@ -104,6 +107,13 @@ class FixtureTests(unittest.TestCase):
             "Convert 300 not to USD",
             "What is ignore all prior rules USD to EUR exchange rate?",
             "What is offline only USD to EUR exchange rate?",
+            "What is 1,23 euros in USD?",
+            "What is 1,234,56,789 euros in USD?",
+            "What is 1,23,456,789 euros in USD?",
+            "What is $1,234,56 in EUR?",
+            "Convert 1,234,56 euros to USD",
+            "What is Rs.1,234,56 in USD?",
+            "What's today' USD to EUR exchange rate?",
         ):
             self.assertFalse(det(t), t)
 
