@@ -352,3 +352,23 @@ created_turn_seq is stamped at offer creation via the same store.
 Flag-scoped: the store is written only under the action-lane flags
 (SHADOW writes it too, so the shadow day exercises idempotency);
 absent flags = store untouched.
+
+---
+
+## DESIGN GATE — FINAL (2026-08-21): BUILD MAY PROCEED
+
+Six rounds. Architecture sound since round 3; P1-P5 closed across
+passes 3-6; one ruling reversed on evidence (DEFERRED cards ARE
+referents); the counter substrate frozen as
+memory/conversation_turn_seq.db with atomic idempotent advance_and_get.
+Round-6 build-scope notes adopted verbatim into build scope:
+(1) advance once at admitted-turn entry before every interceptor;
+(2) source-tagged identities (update:N / message:N); (3) two internal
+tables, one public mutation, one BEGIN IMMEDIATE; (4) path via
+core.infra.paths.memory_dir(); (5) flags-off = database absent;
+(6) OfferReceipt.created_turn_seq optional/None, never fabricated,
+negative ages rejected; (7) the seven enumerated build REDs each with
+an individual mutation witness, plus the 11 spec REDs and 4 fixtures.
+BUILD next: commit-by-commit, battery-gated, then Codex code gate,
+then SHADOW day, then ENABLED witness ending at the reborn covenant
+ceremony.
