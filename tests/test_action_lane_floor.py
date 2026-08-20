@@ -79,6 +79,17 @@ class FixtureTests(unittest.TestCase):
             "What is NOW in USD?",
             "Convert THIS to euros",
             "Look up the price of THE",
+            "What is GOOD stock price?",
+            "What is this stock price LOL?",
+            "What is THIS in EUROS?",
+            "Convert THIS to EUROS",
+            "What is THIS in USD after 3 days?",
+            "Look up the price of THE from 2024",
+            "What is 300 euros in USD supposed to mean?",
+            "What is 300 euros in USD in this hypothetical example?",
+            "What is AAPL stock price? Then create a new file at docs/x.md",
+            "Never look it up: what is 300 euros in USD?",
+            "Please dont use tools. What is 300 euros in USD?",
         ):
             self.assertFalse(det(t), t)
 

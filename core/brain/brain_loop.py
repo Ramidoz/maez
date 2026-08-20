@@ -1357,65 +1357,107 @@ _DET_FACT_EXCLUDE_RE = __import__("re").compile(
     r"|\bquestion about\b|\bmanipulat|\bcollaps"
     r"|\bstory\b|\bopinion\b|\bbehind\b|\bdiscussed\b"
     r"|\bsalary\b|\bmy \b|\bwe \b"
-    r"|\bdo(?:n'?t| not) look\b",
+    # broadened negation (gate round 4): any plain refusal of lookup
+    r"|\b(?:never|do not|don'?t|please don'?t)\s+"
+    r"(?:look|search|check|use tools?|fetch)\b",
     __import__("re").IGNORECASE,
 )
-_STOPCAPS = {
-    "THE", "THIS", "THAT", "NOW", "WHAT", "WHO", "WHY", "HOW", "AND",
-    "FOR", "YOU", "NOT", "ALL", "ANY", "ONE", "TWO", "CAN", "DID",
-    "GET", "HAS", "HAD", "HER", "HIS", "ITS", "OUR", "SHE", "WAS",
-    "WERE", "WILL", "WITH", "OK", "OKAY", "ASAP", "TODAY", "PLEASE",
-    # currency CODES are not tickers -- they qualify a turn only via
-    # the amount or exchange-rate branches, never alone.
-    "USD", "INR", "EUR", "GBP", "JPY", "CAD", "AUD",
+
+# Genuine ticker validation (gate round 4): caps 2-6, NOT a currency
+# code, NOT an English dictionary word (system word list, loaded once).
+_TICKER_EXCLUDE = {
+    "USD", "INR", "EUR", "GBP", "JPY", "CAD", "AUD", "OK", "ASAP",
 }
-_AMOUNTISH_RE = __import__("re").compile(
-    r"[0-9][0-9,.]*|[$\u20ac\u00a3\u20b9]\s?[0-9]|\bRs\.?\s?[0-9]"
-)
-_CUR_CODE_RE = __import__("re").compile(
-    r"\b(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)\b",
-    __import__("re").IGNORECASE,
-)
-_TICKERISH_RE = __import__("re").compile(r"\b[A-Z]{2,6}\b")
-_DET_FORM_RE = __import__("re").compile(
-    r"^(?:what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
-    r"(?:.{0,40}exchange rate|.{0,40}(?:stock|share) price"
-    r"|.{0,50}\b(?:in|to)\s+"
-    r"(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)\b)"
-    r"|convert \S+.{0,60}(?:to|into) [A-Za-z]{3,12}"
-    r"|look up the (?:price|stock price|share price) of \S+)",
-    __import__("re").IGNORECASE,
-)
+_DICT_WORDS_UPPER: "set[str] | None" = None
 
 
-def _has_real_ticker(text: str) -> bool:
-    return any(
-        tok not in _STOPCAPS for tok in _TICKERISH_RE.findall(text)
-    )
+def _dict_words_upper() -> "set[str]":
+    global _DICT_WORDS_UPPER
+    if _DICT_WORDS_UPPER is None:
+        words: set[str] = set()
+        try:
+            with open("/usr/share/dict/words", encoding="utf-8",
+                      errors="ignore") as fh:
+                for line in fh:
+                    w = line.strip()
+                    if 2 <= len(w) <= 6:
+                        words.add(w.upper())
+        except Exception:
+            pass
+        _DICT_WORDS_UPPER = words
+    return _DICT_WORDS_UPPER
+
+
+def _is_real_ticker(token: str) -> bool:
+    if not token or not (2 <= len(token) <= 6) or not token.isupper():
+        return False
+    if token in _TICKER_EXCLUDE:
+        return False
+    return token not in _dict_words_upper()
+
+
+# Supported forms, FULL-MATCH anchored (gate round 4: prefix matching
+# let trailing clauses -- "Then create a file", "supposed to mean",
+# "in this hypothetical" -- ride through). Substance is captured
+# INSIDE the form, never scanned from the whole utterance.
+_AMT = r"(?:[0-9][0-9,.]*|[$\u20ac\u00a3\u20b9]\s?[0-9][0-9,.]*|Rs\.?\s?[0-9][0-9,.]*)"
+_CURW = r"(?:usd|inr|eur|gbp|jpy|cad|aud|dollars?|euros?|rupees?|pounds?|yen)"
+_TAIL = r"[\s?.!]*$"
+_DET_FORMS = [
+    # exchange rate with explicit codes/currencies somewhere in the ask
+    __import__("re").compile(
+        rf"^what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
+        rf"(?:\w+[ /-]){{0,4}}?{_CURW}(?:[ /-]to[ /-]| ?/ ?){_CURW}"
+        rf" ?exchange rate{_TAIL}",
+        __import__("re").IGNORECASE),
+    # <TICKER> stock/share price (ticker validated separately, group 1)
+    __import__("re").compile(
+        r"^what(?:'s| is) (?:the )?(?:current |latest |today'?s? )?"
+        r"([A-Za-z.]{1,7}) ?(?:stock|share) price"
+        r"(?: today| now)?" + _TAIL,
+        __import__("re").IGNORECASE),
+    # what is <amount> in/to <currency>
+    __import__("re").compile(
+        rf"^what(?:'s| is) {_AMT} ?\w{{0,12}}? ?(?:in|to) {_CURW}{_TAIL}",
+        __import__("re").IGNORECASE),
+    # convert <amount> ... to/into <code/currency>
+    __import__("re").compile(
+        rf"^convert {_AMT} ?\w{{0,12}}? ?(?:to|into) {_CURW}{_TAIL}",
+        __import__("re").IGNORECASE),
+    # look up the price of <TICKER> (group 1 validated)
+    __import__("re").compile(
+        r"^look up the (?:price|stock price|share price) of "
+        r"([A-Za-z.]{1,7})" + _TAIL,
+        __import__("re").IGNORECASE),
+]
+_TICKER_FORM_INDEXES = {1, 4}
+
+
 def _deterministic_fact_candidate(text: str) -> bool:
-    """Phase 2 P1 (gate rounds 1-3 hardened): NARROW pre-dispatch
-    reflex for pinned currency/stock live-fact forms. Requires BOTH a
-    supported question form AND real substance: an amount-like token,
-    a currency code/word, or a genuine (non-stopword) ticker. Ordinary
-    capitalized words (THE/THIS/NOW) are never tickers; personal/
-    recalled/subjective/negated turns are excluded; mixed emotional
-    turns stay with the dispatcher."""
+    """Phase 2 P1 (gate rounds 1-4 hardened). A turn qualifies ONLY if:
+    the WHOLE utterance is one supported live-fact form (trailing
+    clauses disqualify); substance is captured inside the form (amount
+    in amount-forms; a dictionary-validated non-word ticker in ticker
+    forms); no exclusion (personal/recalled/subjective/negation)
+    matches; and the syntactic action floor sees NO action intent --
+    action intent always outranks this reflex, so a compound
+    'price?...then create a file' turn takes the dispatcher+action
+    lane, never the bypass."""
     t = (text or "").strip()
     if not t or len(t) > 160:
         return False
     if _DET_FACT_EXCLUDE_RE.search(t):
         return False
-    if not _DET_FORM_RE.match(t):
+    if _action_intent_syntactic_floor(t) != "none":
         return False
-    if _AMOUNTISH_RE.search(t):
-        return True
-    if _has_real_ticker(t):
-        return True
-    # currency codes alone qualify ONLY for the exchange-rate form
-    # ("INR to USD exchange rate"); "What is THIS in USD?" has a code
-    # but no amount/ticker and must fail.
-    lowered = t.lower()
-    if "exchange rate" in lowered and _CUR_CODE_RE.search(t):
+    for idx, form in enumerate(_DET_FORMS):
+        m = form.match(t)
+        if not m:
+            continue
+        if idx in _TICKER_FORM_INDEXES:
+            if _is_real_ticker((m.group(1) or "").strip()):
+                return True
+            continue
         return True
     return False
 
