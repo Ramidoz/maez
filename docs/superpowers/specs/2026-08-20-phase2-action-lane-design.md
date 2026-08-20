@@ -96,3 +96,80 @@ G3. `chat_history` for "go ahead" anaphora: raw list vs held-now
 carrier (Phase 1 shipped the carrier -- reuse under its flag?).
 G4. Interaction with TOOL-authoritative deterministic replies
 (currency/stock): those short-circuit in the daemon -- ordering?
+
+---
+
+# PASS 2 (after gate round 1: REVISE, 6 blockers)
+
+## R1 (A3): the dual-result carrier — both axes, no string games
+`_DispatcherPathResult` and `BrainLoopResult` carry BOTH axes as
+STRUCTURE, never concatenated strings: the dispatcher transcript and
+`recall_items` ride alongside any Jarvis transcript in separate typed
+fields. The early return at `brain_loop.py:2005` becomes conditional:
+non-empty transcript AND intent!=explicit_request -> return as today;
+explicit intent -> proceed into Jarvis with (a) the dispatcher
+transcript injected into the planner as a typed context block (new
+param, not appended prose), (b) the final BrainLoopResult carrying
+jarvis transcript + dispatcher transcript + dispatcher recall_items,
+(c) a NEW combined instruction block for dispatcher+jarvis turns
+(selection by typed flag, not marker sniffing -- the `:1790` shape
+classifier is bypassed for combined results). `_should_run_jarvis_loop`
+stays bypassed on the dispatcher path (gate note).
+
+## R2 (G3): history authority — typed reference or nothing
+`held_now_history` is passed into `run_brain_loop` and
+`_run_dispatcher_pipeline` (caller API ripple in scope, same selection
+rule as Phase 1: ENABLED and non-None, else legacy list). Anaphoric
+"go ahead" resolves ONLY against a TYPED prior object -- an open
+pending card, a recorded commitment, or a proposal object from the
+current session store -- never against prose in history. No typed
+referent -> uncertain -> conversation. History can NEVER create
+positive intent; it may only resolve an already-positive current-turn
+anaphora (gate false-positive shape 3 pinned as a test).
+
+## R3 (G4): deterministic live-fact precedence
+New intent value `deterministic_fact` for the supported live-fact
+question forms (currency/stock per `test_brain_loop.py:59` pins);
+it runs Jarvis exactly as today so the authoritative tool path and
+TOOL-mode reply selection are preserved byte-for-byte. The action-lane
+flag therefore cannot regress those questions. `explicit_request`
+covers body actions only.
+
+## R4 (A6): the exact authority claim
+Adopted verbatim: "No new authorization primitive or execution grant
+is introduced; the flag expands production reachability to existing
+guarded and inline authorities." The legacy-verb inline bypass
+(`brain_loop.py:2642/2655` vs TRACK_A.md:140 doctrine) is NOT widened
+or fixed by this phase; it is registered as its own doctrine-
+reconciliation seam (follow-up ledger) so the conflict is owned, not
+silently inherited.
+
+## R5 (A1/A5): two sites, one authority, compatible migration
+Two real construction sites (`:760`, `:1089`; `:129` is the field
+default). `action_intent` is a validated Literal
+("none"|"explicit_request"|"capability_question"|"deterministic_fact").
+`should_run_jarvis` REMAINS an ordinary writable field (existing test
+constructors keep working); authority comes from a single factory
+`make_dispatcher_result(...)` used by both production sites, which
+derives should_run_jarvis from intent + flag (snapshotted at
+construction) and is the only production constructor -- an invariant
+test asserts both production sites go through it and that derivation
+disagreement is impossible in production. Repair-refusal constructs
+with `action_intent="none"` (gate note). RED set: exactly the six the
+gate enumerated.
+
+## R6: the detector is a SYNTACTIC CANDIDATE FLOOR, not a meaning organ
+Renamed and rescoped per consent-spine doctrine: the deterministic
+component recognizes syntax candidates only, with explicit exclusions
+for negation/contrast ("Don't execute it -- just propose it"),
+quotation, hypotheticals, explanation requests, and idiom/cancellation
+("Nah forget about that"). All three gate-mined real-traffic
+false-positive shapes become pinned tests with the log-line shapes as
+fixtures. Meaning-level upgrade (intake-faculty schema gaining an
+action axis) is a named follow-up, not this phase; the floor is
+deliberately starving-conservative and the SHADOW day measures its
+real false-positive rate before ENABLED.
+
+`capability_question` consumer named (gate note): it feeds the
+affordance-declaration seam's reply guidance ("say what you can do")
+-- dead metadata until that seam lands, documented as such.
