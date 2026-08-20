@@ -84,6 +84,7 @@ _ORIGIN_TRUST_LABEL: dict[str, str] = {
     "covenant": "covenant",
     "lived": "lived",
     "observed": "observed/tool",
+    "self_observed": "self-observed",
     "untrusted": "untrusted",
 }
 _FRESH_SOURCE_TYPES: tuple[str, ...] = ("fresh_evidence", "web_context")
@@ -1224,9 +1225,22 @@ def _budget_items_held_now(
         meta["pairs_rendered"] = len(anchor_idx)
         return items, meta
 
+    if budget <= 0:
+        # Boundedness guard (code-gate round 2 blocker 4): a zero or
+        # negative internal budget must never fall into the legacy
+        # allocator's max_chars<=0 == "no limit" semantics. The turn
+        # is honestly item-less.
+        meta.update(
+            domain="below_floor",
+            pairs_rendered=0,
+            reason="question_consumed_budget",
+        )
+        return [], meta
+
     if not anchor_idx:
         legacy = _budget_items_for_prompt(
-            items, owner_question=owner_question, max_chars=budget,
+            items, owner_question=owner_question,
+            max_chars=max(budget, 1),
             render_version=render_version, _held_now_bypass=True,
         )
         meta["domain"] = "no_anchors"
@@ -1569,8 +1583,23 @@ def assemble_working_set(
             if _wc_est.containment_enabled() and any(
                 it.source_type == "web_context" for it in items
             ):
-                # standing instruction + per-segment wrapper allowance
-                _containment_overhead = len(_wc_est.standing_instruction()) + 96
+                # EXACT differential estimate (code-gate round 2
+                # blocker 3): render the current items contained vs
+                # plain and charge the true delta plus the standing
+                # instruction block. Nonce length is constant, so the
+                # estimate matches the final render's overhead.
+                _est_nonce = _wc_est.new_nonce()
+                _plain = "\n".join(
+                    _render_evidence_lines(items, render_version=render_version)
+                )
+                _contained_lines, _seg, _dig = _render_evidence_lines_contained(
+                    items, render_version=render_version,
+                    nonce=_est_nonce, contain_enabled=True,
+                )
+                _contained = "\n".join(_contained_lines)
+                _containment_overhead = max(
+                    0, len(_contained) - len(_plain)
+                ) + len(_wc_est.standing_instruction()) + 2
         except Exception:
             _containment_overhead = 0
         items, _held_now_meta = _budget_items_held_now(
@@ -1606,12 +1635,11 @@ def assemble_working_set(
     if _held_now_meta is not None:
         # Reconciliation record: the ACTUAL post-render overhead beside
         # the up-front estimate the allocator already deducted.
+        _plain_actual = "\n".join(
+            _render_evidence_lines(items, render_version=render_version)
+        )
         _held_now_meta["containment_overhead_actual"] = max(
-            0, total_chars - len(owner_question or "") - sum(
-                len(line) + 1 for line in _render_evidence_lines(
-                    items, render_version=render_version
-                )
-            )
+            0, total_chars - len(owner_question or "") - len(_plain_actual)
         )
     return WorkingSet(
         items=items,

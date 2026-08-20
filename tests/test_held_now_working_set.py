@@ -202,6 +202,24 @@ class AllocatorDomainTests(unittest.TestCase):
                  max_working_set_chars=12000)
         self.assertEqual(ws.held_now_alloc["domain"], "full_count")
 
+    def test_zero_budget_stays_bounded(self):
+        # Round-2 blocker 4: a consumed budget must never become
+        # "no limit" through the legacy delegate.
+        from core.routing.focused_cognition import _budget_items_held_now
+        from core.routing.focused_cognition import EvidenceItem
+
+        items = [EvidenceItem(
+            local_label="E1", source_type="memory_context",
+            text="x" * 5000, durable_id="ch_x", temporal_provenance=None,
+            origin_trust=None, origin_provenance=None,
+        )]
+        out, meta = _budget_items_held_now(
+            items, owner_question="q" * 400, max_chars=300,
+            render_version="v1", containment_overhead=350,
+        )
+        self.assertEqual(meta["domain"], "below_floor")
+        self.assertEqual(out, [])
+
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
         if ws is not None:

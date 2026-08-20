@@ -115,8 +115,12 @@ class WholeTurnReceiptTests(unittest.TestCase):
     def test_ineligible_reason_mapping(self):
         for path, reason in (
             ("clinical", "pre_seam_return"),
+            ("camera", "pre_seam_return"),
             ("tool", "tool_mode"),
+            ("echo", "echo_mode"),
+            ("honest_empty", "honest_empty_mode"),
             ("self_status", "post_resolution_override"),
+            ("error", "error"),
         ):
             def _body(self, text, source="unknown", _hn_holder=None, **kw):
                 _hn_holder["final_reply_path"] = path  # noqa: B023

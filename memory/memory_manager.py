@@ -3627,12 +3627,14 @@ class MemoryManager:
         # first appearance. A half is recognised by its content shape:
         # the owner half has no assistant marker; the reply half starts
         # with the assistant marker.
+        # Canonical worst-of ordering (see module header):
+        # covenant > lived > observed > self_observed > untrusted
         _TIER_RANK = {
             "untrusted": 0,
-            "observed": 1,
             "self_observed": 1,
-            "lived": 2,
-            "covenant": 3,
+            "observed": 2,
+            "lived": 3,
+            "covenant": 4,
         }
         by_link: dict[str, list[dict]] = {}
         logical: list[dict] = []

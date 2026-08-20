@@ -124,6 +124,24 @@ class CoalescedReaderTests(unittest.TestCase):
                 any("held_now_orphan_row" in line for line in logs.output)
             )
 
+    def test_worst_half_tier_order_is_canonical(self):
+        # covenant > lived > observed > self_observed > untrusted;
+        # worst-half must be direction-independent (round-2 blocker 1).
+        with IsolatedMemoryHarness() as h:
+            _add_raw(h.mm, "o1", "the owner (t): q1", timestamp=_ts(0),
+                     turn_link_id="L1", provenance_source="user_utterance",
+                     trust_tier="observed")
+            _add_raw(h.mm, "r1", "Maez: a1", timestamp=_ts(0),
+                     turn_link_id="L1", trust_tier="self_observed")
+            _add_raw(h.mm, "o2", "the owner (t): q2", timestamp=_ts(1),
+                     turn_link_id="L2", provenance_source="user_utterance",
+                     trust_tier="self_observed")
+            _add_raw(h.mm, "r2", "Maez: a2", timestamp=_ts(1),
+                     turn_link_id="L2", trust_tier="observed")
+            got = h.mm.get_telegram_exchanges_coalesced()
+            tiers = [g["metadata"]["trust_tier"] for g in got]
+            self.assertEqual(tiers, ["self_observed", "self_observed"])
+
     def test_original_reader_untouched_by_split_rows(self):
         # The 8 legacy callers keep exact legacy semantics: split rows
         # remain two raw rows there.
