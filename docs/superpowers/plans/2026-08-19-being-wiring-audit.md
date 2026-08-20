@@ -107,6 +107,18 @@ turn regardless of actual grounding. No recall benchmark of any kind
 exists (nothing shaped like "does last Tuesday's decision surface when
 relevant today").
 
+**CORRECTION 2026-08-20 (benchmark-scoping pass):** the sentence above
+overclaimed. A LongMemEval adapter EXISTS (`core/eval/longmemeval.py`,
+679 LOC, 5 recorded runs, best S-split 0.667 / oracle 0.767, session
+reports in `docs/eval/`) — verified on disk. The audit's substantive
+point survives narrowed: that harness scores the REASONING-CYCLE path
+(`recall_for_cycle`) with judge/overlap metrics; the LIVE Telegram path
+(`recall_for_telegram_living` + dispatcher framing) has never been
+measured, and no deterministic retrieval metric (recall@k / nDCG /
+evidence-hit-rate) exists anywhere. Temporal-reasoning scored 0.00-0.20
+even on the measured path. Ingredient 4 verdict stands as UNMEASURED
+*for the path that answers the owner*, not "no benchmark exists".
+
 ## Ingredient 5 — experience shapes self. DORMANT.
 
 - Birth gate: `memory/ledger.db` 0 bytes → `birth_phase` resolves
