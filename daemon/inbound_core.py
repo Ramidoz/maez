@@ -625,6 +625,8 @@ async def run_inbound_turn(
         # Brain-loop stage — runs the tool iteration synchronously
         # with the pipeline for card-or-inline decisions.
         jarvis_transcript = ""
+        dispatcher_transcript = ""
+        combined_mode = False
         jarvis_tool_calls: list[dict] = []
         jarvis_recall_items = ()
         consent_intent = None
@@ -664,6 +666,12 @@ async def run_inbound_turn(
                     jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
                     jarvis_recall_items = tuple(getattr(_result, "recall_items", ()) or ())
                     consent_intent = getattr(_result, "consent_intent", None)
+                    dispatcher_transcript = getattr(
+                        _result, "dispatcher_transcript", ""
+                    ) or ""
+                    combined_mode = bool(
+                        getattr(_result, "combined_mode", False)
+                    )
                 else:  # legacy str fallback
                     jarvis_transcript = _result or ""
         except Exception as e:
@@ -779,6 +787,8 @@ async def run_inbound_turn(
                             text,
                             owner_surface_label,
                             transcript=jarvis_transcript or "",
+                            dispatcher_transcript=dispatcher_transcript,
+                            combined_mode=combined_mode,
                             context_note=context_note,
                             photo_analysis=photo_analysis,
                             chat_history=chat_history,

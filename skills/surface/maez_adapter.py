@@ -1193,6 +1193,12 @@ class MaezMessageHandler:
                         jarvis_transcript = _result.transcript or ""
                         jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
                         jarvis_recall_items = tuple(getattr(_result, "recall_items", ()) or ())
+                        dispatcher_transcript = getattr(
+                            _result, "dispatcher_transcript", ""
+                        ) or ""
+                        combined_mode = bool(
+                            getattr(_result, "combined_mode", False)
+                        )
                     else:  # legacy str fallback
                         jarvis_transcript = _result or ""
             except Exception as e:
@@ -1247,6 +1253,8 @@ class MaezMessageHandler:
                                 send_intermediate=_send_progress_receipt,
                                 brain_failed=brain_failed,
                                 held_now_history=held_now_history,
+                                dispatcher_transcript=dispatcher_transcript,
+                                combined_mode=combined_mode,
                             )
                         ),
                     )

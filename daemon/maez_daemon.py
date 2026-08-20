@@ -7100,6 +7100,8 @@ class MaezDaemon:
         send_intermediate=None,
         brain_failed: bool = False,
         held_now_history: "list | None" = None,
+        dispatcher_transcript: str = "",
+        combined_mode: bool = False,
         _hn_holder: "dict | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
@@ -7916,7 +7918,21 @@ class MaezDaemon:
                     transcript[:100],
                 )
 
-                transcript_context = f"{transcript}\n\n{instruction_block}"
+                if combined_mode and dispatcher_transcript:
+                    # Phase 2 P2: typed combined turn -- dispatcher
+                    # recall AND jarvis authority instructions,
+                    # selected by flag, never by marker sniffing. The
+                    # two transcripts stay separate blocks.
+                    from core.brain.brain_loop import (
+                        _instruction_block_for_transcript as _ibft,
+                    )
+
+                    transcript_context = (
+                        f"{dispatcher_transcript}\n\n{transcript}\n\n"
+                        + _ibft(transcript)
+                    )
+                else:
+                    transcript_context = f"{transcript}\n\n{instruction_block}"
             except Exception as _tool_ctx_exc:
                 logger.debug("tool transcript context skipped: %s", _tool_ctx_exc)
         # ADR 0019 Phase 6 — lived recall brief. Built from the user's
