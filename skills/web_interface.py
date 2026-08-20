@@ -1585,6 +1585,7 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     <label>Session binding</label>
     <input id="authSession" value="manual-proof-auth">
     <button onclick="authorizeCard()">Authorize with navigator.credentials.get</button>
+    <button onclick="covenantFirstTap()">Covenant first tap (step 1 of 2)</button>
     <button onclick="executeAuthorizedCard()" class="secondary">Execute authorized guarded card</button>
   </section>
   <section>
@@ -1761,6 +1762,46 @@ async function createBackupRegistrationCard() {
     lastArtifactRequestId.value = "";
   } catch (err) {
     appendLog("backup registration card error", describeError(err));
+  }
+}
+async function covenantFirstTap() {
+  try {
+    const requestId = cardRequestId.value;
+    const session = authSession.value;
+    let selectedCredentialRef = credentialRef.value;
+    const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/covenant/first/begin`, {
+      session_binding: session,
+      credential_ref: selectedCredentialRef,
+    });
+    appendLog("covenant first begin", begin);
+    if (!begin.covenant_notice) {
+      appendLog("covenant first tap refused", "no covenant_notice in begin response");
+      return;
+    }
+    // RULING C: the owner must see the exact words BEFORE the tap. The
+    // challenge bytes the authenticator signs are a commitment to these
+    // words plus the rendered statement -- shown, then acknowledged.
+    const proceed = window.confirm(begin.covenant_notice + "\n\nProceed to tap?");
+    if (!proceed) {
+      appendLog("covenant first tap", "owner declined at the notice");
+      return;
+    }
+    selectedCredentialRef = selectedCredentialRef || (begin.allow_credentials || [])[0] || "";
+    if (selectedCredentialRef) credentialRef.value = selectedCredentialRef;
+    const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
+    const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/covenant/first/finish`, {
+      session_binding: session,
+      challenge_id: begin.challenge_id,
+      credential_ref: selectedCredentialRef || credential.id,
+      authentication_response: encodeCredentialResponse(credential),
+    });
+    appendLog("covenant first finish", finish);
+    if (finish.phase1_binding_sha256) {
+      appendLog("covenant phase 1 SEALED", finish.phase1_binding_sha256);
+      appendLog("cooling-off", "second tap possible after 24 hours; lapses after 7 days");
+    }
+  } catch (err) {
+    appendLog("covenant first tap error", describeError(err));
   }
 }
 async function authorizeCard() {
@@ -2390,6 +2431,32 @@ def api_s7_webauthn_proof_disable_credential():
         return _s7_cockpit_proxy_to_daemon(
             route,
             "/internal/s7/webauthn/proof/disable-credential",
+        )
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/covenant/first/begin", methods=["POST"])
+def api_s7_covenant_first_begin(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/covenant/first/begin"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            f"/internal/s7/cards/{request_id}/covenant/first/begin",
+        )
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/covenant/first/finish", methods=["POST"])
+def api_s7_covenant_first_finish(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/covenant/first/finish"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            f"/internal/s7/cards/{request_id}/covenant/first/finish",
         )
     return _s7_cockpit_ceremony_deferred(route)
 
