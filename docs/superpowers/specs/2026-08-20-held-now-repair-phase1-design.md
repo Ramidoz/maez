@@ -269,3 +269,34 @@ passed into assembly.
 ## Non-goals — unchanged, plus: the two bypass helpers (C5), and any
 change to `evidence_recency_days` (the 14-day wall belongs to the
 weighting arc; measured in docs/eval/telegram_recall_v0_20260820.md).
+
+---
+
+## BUILD LEDGER (2026-08-20/21)
+
+Gate verdict BUILD MAY PROCEED (round 6). Landed:
+- Commit A `5c2da46`: C4 write side (10/10 callsites stamped) + C5
+  coalesced reader (scope filter, legacy wildcard, worst-half trust,
+  orphan skip + starvation pin). 7 tests.
+- Commit B `9569db5` + fix `a8b4d32`: C2 presence (3 pairs; [:2]
+  authoritative; old flag subsumed), per-message 900 caps, positional
+  two-domain allocator with typed metadata on WorkingSet, emptied→
+  removed, anchor durable-ID recompute on allocator truncation, seed
+  trust/provenance passthrough + hygiene-exclusion pin. 15 tests.
+  (Logging-capture order-dependence found and fixed; batteries now
+  gate on pytest exit codes.)
+- Commit C `f4ae8e0`: C7 whole-turn wrapper (receipt state at entry,
+  finally emission, _reply_path as authoritative final route, focused
+  row-id captured) + C5 carrier threaded through inline adapter AND
+  V2 inbound core (raw list untouched for all other consumers; None
+  never enters assembly). 6 tests.
+- Commit D: cockpit flag registry entries (T1/T2 with witness
+  recipes), deterministic witness integration test (discriminator
+  both ways, ordinary turn, old flag pinned; the blur case that
+  motivated the pin is itself a test), old-flag×HELD_NOW matrix,
+  long-turn cases (20K pairs; 12K question → anchor-less receipt).
+  10 tests.
+
+38 held-now tests total; ~190-test adjacent battery green, flags-off
+byte-identical. NEXT: Codex gate on code → owner restarts services →
+SHADOW ≥1 day → ENABLED + live sampling witness per this design.

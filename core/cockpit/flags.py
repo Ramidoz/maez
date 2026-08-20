@@ -199,6 +199,28 @@ def default_registry() -> dict[str, FlagRegistryEntry]:
             witness="Set MAEZ_RECALL_CONTEXT_FLOOR_ENABLED=1, restart maez.service, verify diary quiets and self-asks unchanged.",
         ),
         _entry(
+            "MAEZ_HELD_NOW_SHADOW",
+            label="Held-now shadow",
+            tier="T1",
+            description=(
+                "Observe-only: one held_now_shadow receipt per owner turn "
+                "(final path, turn kind, allocator domain). No behavior change."
+            ),
+            witness="Set MAEZ_HELD_NOW_SHADOW=1, restart maez.service, grep held_now_shadow in maez.log across a day of turns.",
+        ),
+        _entry(
+            "MAEZ_HELD_NOW_ENABLED",
+            label="Held-now enforce",
+            tier="T2",
+            description=(
+                "The now is HELD: 3 dialogue pairs seed every working set "
+                "from the coalesced scope-filtered history; two-domain "
+                "anchor allocator; subsumes MAEZ_LIVE_THREAD_ANCHOR. "
+                "2026-08-20 design, 6-round gate."
+            ),
+            witness="After a SHADOW day: set MAEZ_HELD_NOW_ENABLED=1, restart, run the sampling sentinel witness (design pass 6) — focused+ordinary receipts, discriminator tuple, mutation leg.",
+        ),
+        _entry(
             "MAEZ_CLAIM_RECEIPT_SHADOW",
             label="Claim-receipt rail shadow",
             tier="T1",
