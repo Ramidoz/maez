@@ -465,17 +465,18 @@ class DialogueContinuityStateTests(unittest.TestCase):
 
 
 class DialogueAnchorTests(unittest.TestCase):
-    def test_dialogue_anchor_reuses_history_to_messages(self):
+    def test_dialogue_anchor_reuses_shared_exchange_parser(self):
+        # Held-now pass 6 moved anchor construction to per-entry
+        # parsing (metadata alignment), still through the SAME
+        # canonical parser (_split_exchange) history threading uses —
+        # the invariant this test pins is parser unity, not call shape.
         from unittest import mock
 
         from core.routing import focused_cognition
 
         with mock.patch(
-            "core.brain.conversation_history.history_to_messages",
-            return_value=[
-                {"role": "user", "content": "Search r/LocalLLaMA"},
-                {"role": "assistant", "content": "I found LiquidAI [E1]."},
-            ],
+            "core.brain.conversation_history._split_exchange",
+            return_value=("Search r/LocalLLaMA", "I found LiquidAI [E1]."),
         ) as parser:
             items = focused_cognition.dialogue_anchor_items(
                 [{"content": "ignored because parser is patched"}],

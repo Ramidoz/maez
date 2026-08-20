@@ -98,6 +98,22 @@ def live_thread_anchor_enabled(env=os.environ) -> bool:
     )
 
 
+# Held-now repair (2026-08-20 design, pass 6, gate-approved). SHADOW
+# emits counterfactual receipts only; ENABLED applies the presence
+# rule, the two-domain allocator, and the coalesced history carrier.
+_HELD_NOW_TRUE = ("1", "true", "yes", "on")
+ANCHOR_FLOOR_CHARS = 1800  # one capped pair
+_ANCHOR_MESSAGE_CAP = 900  # per-message head-preserving cap (C8)
+
+
+def held_now_shadow_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_HELD_NOW_SHADOW", "") or "").strip().lower() in _HELD_NOW_TRUE
+
+
+def held_now_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_HELD_NOW_ENABLED", "") or "").strip().lower() in _HELD_NOW_TRUE
+
+
 def turn_has_fresh_evidence(working_set) -> bool:
     """True iff the focused working set cites any FRESH / non-recall evidence — a
     `_FRESH_SOURCE_TYPES` item (fresh current observation/tool/body, or web). That is the
@@ -415,6 +431,8 @@ class EvidenceItemSeed:
     source_type: str
     text: str
     durable_id: str
+    origin_trust: str | None = None
+    origin_provenance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -426,6 +444,7 @@ class WorkingSet:
     working_set_tokens_est: int
     citation_render_version: str = "v1"
     thin_evidence: bool = False
+    held_now_alloc: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -975,28 +994,43 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
     )
 
 
+def _cap_anchor_message(text: str) -> str:
+    """C8 per-message cap: head-preserving, 900 chars, marked."""
+    if not held_now_enabled() or len(text) <= _ANCHOR_MESSAGE_CAP:
+        return text
+    return text[: _ANCHOR_MESSAGE_CAP - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
+
+
 def dialogue_anchor_items(
     chat_history: Iterable[dict] | None,
     *,
     limit_pairs: int = 3,
 ) -> list[EvidenceItemSeed]:
-    from core.brain.conversation_history import history_to_messages
+    from core.brain.conversation_history import _split_exchange
 
-    messages = history_to_messages(chat_history)
-    pairs: list[tuple[str, str]] = []
-    pending_user: str | None = None
-    for message in messages:
-        role = message.get("role")
-        content = (message.get("content") or "").strip()
-        if not content:
+    # Per-entry parsing (held-now C5/B6): each history entry is one
+    # exchange, so parsing entry-by-entry keeps the entry's metadata
+    # aligned with its pair — history_to_messages would flatten the
+    # list and lose which row carried which trust tier. Well-formed
+    # entries parse identically either way.
+    pairs: list[tuple[str, str, dict]] = []
+    for entry in chat_history or []:
+        if not isinstance(entry, dict):
             continue
-        if role == "user":
-            pending_user = content
-        elif role == "assistant" and pending_user:
-            pairs.append((pending_user, content))
-            pending_user = None
+        parsed = _split_exchange(entry.get("content") or "")
+        if parsed is None:
+            continue
+        user_msg, assistant_msg = parsed
+        pairs.append((user_msg, assistant_msg, dict(entry.get("metadata") or {})))
 
-    selected = list(reversed(pairs[-limit_pairs:]))
+    selected = [
+        (
+            _cap_anchor_message(user_text),
+            _cap_anchor_message(assistant_text),
+            meta,
+        )
+        for user_text, assistant_text, meta in reversed(pairs[-limit_pairs:])
+    ]
     return [
         EvidenceItemSeed(
             source_type="dialogue_anchor",
@@ -1008,8 +1042,20 @@ def dialogue_anchor_items(
                 f"{_strip_local_citations(user_text)}\n"
                 f"{_strip_local_citations(assistant_text)}"
             ),
+            # Worst-half governs (design C5/B6): a coalesced pair whose
+            # reply half was self_web_claim/untrusted carries that
+            # provenance so the existing exclusion predicate applies.
+            origin_trust=meta.get("trust_tier") or None,
+            origin_provenance=(
+                "self_web_claim"
+                if "self_web_claim" in (
+                    str(meta.get("provenance_source_reply") or ""),
+                    str(meta.get("provenance_source") or ""),
+                )
+                else None
+            ),
         )
-        for user_text, assistant_text in selected
+        for user_text, assistant_text, meta in selected
     ]
 
 
@@ -1134,12 +1180,118 @@ def _truncate_item_text(text: str, limit: int) -> str:
     return text[: limit - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
 
 
+def _budget_items_held_now(
+    items: list[EvidenceItem],
+    *,
+    owner_question: str,
+    max_chars: int,
+    render_version: str,
+) -> tuple[list[EvidenceItem], dict]:
+    """Held-now C8 allocator: positional two-domain budgeting.
+
+    Partition is POSITIONAL against the ranked sequence (gate round 6):
+    everything before the first dialogue_anchor is protected occupancy
+    (never cut here); everything after the last anchor is cut material,
+    cut FIRST; anchors themselves live between and yield per domain.
+    An item emptied by this allocator is REMOVED from the set (and so
+    from the evidence map) — never left as an ID-bearing husk.
+    Anchor durable IDs are recomputed from final rendered text.
+    """
+    def _render_len(candidate: list[EvidenceItem]) -> int:
+        return len(
+            "\n".join(_render_evidence_lines(candidate, render_version=render_version))
+        ) + len(owner_question or "")
+
+    meta: dict = {"domain": "full_count", "reason": None, "pairs_rendered": 0}
+    anchor_idx = [i for i, it in enumerate(items) if it.source_type == "dialogue_anchor"]
+    if _render_len(items) <= max_chars:
+        meta["pairs_rendered"] = len(anchor_idx)
+        return items, meta
+
+    if not anchor_idx:
+        # No anchors to arbitrate: legacy equal-allowance behavior.
+        legacy = _budget_items_for_prompt(
+            items, owner_question=owner_question, max_chars=max_chars,
+            render_version=render_version, _held_now_bypass=True,
+        )
+        meta["domain"] = "no_anchors"
+        return legacy, meta
+
+    first_a, last_a = anchor_idx[0], anchor_idx[-1]
+    protected = items[:first_a]
+    anchors = [items[i] for i in anchor_idx]
+    middle_non_anchor = [
+        items[i] for i in range(first_a, last_a + 1) if i not in anchor_idx
+    ]
+    cuttable = items[last_a + 1:]
+
+    # Step 1: drop cut material from the tail until we fit or run out.
+    while cuttable and _render_len(protected + middle_non_anchor + anchors + cuttable) > max_chars:
+        cuttable = cuttable[:-1]
+    while middle_non_anchor and _render_len(protected + middle_non_anchor + anchors + cuttable) > max_chars:
+        middle_non_anchor = middle_non_anchor[:-1]
+
+    def _cost_without_anchor_text() -> int:
+        blank = [replace(a, text="") for a in anchors]
+        return _render_len(protected + middle_non_anchor + blank + cuttable)
+
+    anchor_budget = max_chars - _cost_without_anchor_text()
+    question_only_budget = max_chars - len(owner_question or "")
+
+    def _finish(kept_anchors: list[EvidenceItem]) -> list[EvidenceItem]:
+        rebuilt = []
+        for it in items:
+            if it.source_type == "dialogue_anchor":
+                match = next((a for a in kept_anchors if a.durable_id == it.durable_id or a.local_label == it.local_label), None)
+                if match is not None and match.text:
+                    rebuilt.append(match)
+            elif it in protected or it in middle_non_anchor or it in cuttable:
+                rebuilt.append(it)
+        return rebuilt
+
+    full_cost = sum(len(a.text) for a in anchors)
+    if anchor_budget >= full_cost:
+        meta.update(domain="full_count", pairs_rendered=len(anchors))
+        return _finish(anchors), meta
+
+    if anchor_budget >= ANCHOR_FLOOR_CHARS:
+        # Floor: newest first (anchors are newest-first), older empty
+        # first — an emptied anchor is REMOVED, and a truncated
+        # anchor's durable id is recomputed from final bytes.
+        kept: list[EvidenceItem] = []
+        remaining = anchor_budget
+        for a in anchors:
+            if remaining <= 0:
+                continue
+            text = a.text if len(a.text) <= remaining else _truncate_item_text(a.text, remaining)
+            if not text:
+                continue
+            remaining -= len(text)
+            kept.append(replace(a, text=text, durable_id=(
+                a.durable_id if text == a.text else _content_hash(text)
+            )))
+        meta.update(domain="floor", pairs_rendered=len(kept))
+        return _finish(kept), meta
+
+    meta.update(
+        domain="below_floor",
+        pairs_rendered=0,
+        reason=(
+            "question_consumed_budget"
+            if question_only_budget < ANCHOR_FLOOR_CHARS
+            else "higher_rank_consumed_budget"
+        ),
+    )
+    return _finish([]), meta
+
+
 def _budget_items_for_prompt(
     items: list[EvidenceItem],
     *,
     owner_question: str,
     max_chars: int | None,
     render_version: str | None = None,
+    _held_now_bypass: bool = False,
 ) -> list[EvidenceItem]:
     version = render_version or _citation_render_version()
     if max_chars is None:
@@ -1192,7 +1344,17 @@ def assemble_working_set(
     ):
         return None
     anchor_flag_on = live_thread_anchor_enabled()
-    if anchor_flag_on and chat_history:
+    if held_now_enabled():
+        # Held-now C2: the now is HELD, not classifier-gated. Presence
+        # whenever history is non-empty (the intra-turn-echo early
+        # return above is the one carve-out). The old flag is subsumed.
+        if anchor_flag_on:
+            logger.info(
+                "held_now: MAEZ_LIVE_THREAD_ANCHOR is subsumed by "
+                "MAEZ_HELD_NOW_ENABLED and ignored"
+            )
+        anchors = dialogue_anchor_items(chat_history, limit_pairs=3)
+    elif anchor_flag_on and chat_history:
         anchors = dialogue_anchor_items(chat_history, limit_pairs=2)
     else:
         anchors = (
@@ -1205,7 +1367,7 @@ def assemble_working_set(
         and not override_continuity
     )
     if dialogue_authoritative or date_cue:
-        anchors = anchors[:1]
+        anchors = anchors[:2] if held_now_enabled() else anchors[:1]
 
     if (
         (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy)
@@ -1281,7 +1443,14 @@ def assemble_working_set(
                 raw_items.append(("web_context", item_text, None, None, None, None))
 
     for anchor in anchors:
-        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None, None, None))
+        raw_items.append((
+            anchor.source_type,
+            anchor.text,
+            anchor.durable_id,
+            None,
+            anchor.origin_trust,
+            anchor.origin_provenance,
+        ))
 
     if date_cue:
         has_confirmed = any(
@@ -1338,12 +1507,21 @@ def assemble_working_set(
         ) in enumerate(raw_items)
     ]
     render_version = _citation_render_version()
-    items = _budget_items_for_prompt(
-        items,
-        owner_question=owner_question,
-        max_chars=max_working_set_chars,
-        render_version=render_version,
-    )
+    _held_now_meta: dict | None = None
+    if held_now_enabled():
+        items, _held_now_meta = _budget_items_held_now(
+            items,
+            owner_question=owner_question,
+            max_chars=max_working_set_chars or _DEFAULT_WORKING_SET_CHAR_BUDGET,
+            render_version=render_version,
+        )
+    else:
+        items = _budget_items_for_prompt(
+            items,
+            owner_question=owner_question,
+            max_chars=max_working_set_chars,
+            render_version=render_version,
+        )
 
     from core.routing import web_containment as _wc  # local import: keep web_containment off focused_cognition's import path (no cycle; defensive)
     _contain = _wc.containment_enabled()
@@ -1360,6 +1538,17 @@ def assemble_working_set(
             digest=_web_digest))
 
     total_chars = len(ordered) + len(owner_question or "")
+    if _held_now_meta is not None:
+        # Containment reconciliation (gate round 5 note): wrappers and
+        # the standing instruction land after budgeting; record the
+        # overhead so domain receipts rest on complete arithmetic.
+        _held_now_meta["containment_overhead_chars"] = max(
+            0, total_chars - len(owner_question or "") - sum(
+                len(line) + 1 for line in _render_evidence_lines(
+                    items, render_version=render_version
+                )
+            )
+        )
     return WorkingSet(
         items=items,
         ordered_evidence_text=ordered,
@@ -1368,6 +1557,7 @@ def assemble_working_set(
         working_set_tokens_est=total_chars // 4,
         citation_render_version=render_version,
         thin_evidence=state.thin_evidence,
+        held_now_alloc=_held_now_meta,
     )
 
 
