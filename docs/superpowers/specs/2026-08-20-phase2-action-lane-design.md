@@ -388,3 +388,22 @@ production; the ENABLED action lane may serve them later where flags
 and S7 bound the blast radius. "What is 300 in USD?" (unmarked source)
 rejects. All 5 remaining positives + 40 accumulated negatives pinned;
 the routing RED now BITES (truthy engine + faked planner).
+
+---
+
+## CODE GATE — FINAL (2026-08-21): SHADOW MAY GO LIVE
+
+Seven rounds on code (after six on design). Fix commits: 9aba715,
+ab72f04 (all 7 round-1 blockers), fa4c419 (V2 route restored + AST
+ordering pin; proposal shapes; substance token), 07f7d78 (structural
+rebuild: full-match anchoring, floor precedence), 630191f (SCOPE
+NARROWED: tickers ruled lexically undecidable and excluded; strict
+currency grammar only; dictionary machinery deleted), 5aafbb9 (real
+number grammar; today's atom). Round 7: zero blockers; 41 action-lane
+tests green; 746-trace sweep unchanged; leading-zero renderings noted
+acceptable; .5-euro conservative false negative acceptable.
+ACTIVATION: owner adds MAEZ_ACTION_LANE_SHADOW=1 + restart (can ride
+tomorrow's held-now flip restart); >=1 day of action_lane_shadow
+receipts (intent false-positive rate on ordinary chat is THE number);
+then MAEZ_ACTION_LANE_ENABLED=1 + the Phase-2 witness ending at the
+reborn covenant ceremony.
