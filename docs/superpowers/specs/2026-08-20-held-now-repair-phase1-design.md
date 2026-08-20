@@ -1,11 +1,17 @@
-# Held-now repair — Phase 1 design (pass 3, after gate round 2: REVISE)
+# Held-now repair — Phase 1 design (pass 4, after gate round 3: REVISE)
 
-2026-08-20. Round 2 resolved B2/B3/B8-flagging and upheld five
-blockers, two of them exposing pass-2 mechanisms as overreach: the
-anchor reservation was arithmetically impossible against the pinned
-360-char budget test, and my writer inventory listed 5 of 10 real
-callsites (re-enumerated myself: 10 confirmed). Pass 3 narrows the
-mechanisms instead of defending them.
+2026-08-20. Round 3 resolved B7 (writer matrix confirmed, 10 sites)
+and B6's direction (with a field-name correction), and upheld/raised
+four: the witness needed four explicit assertions and a receipt join;
+the C8 arithmetic was STILL impossible for my own 12K-question test
+(the owner question consumes the budget before anchors see a char —
+`focused_cognition.py:1149`, `:65`); the coalesced list at the two
+adapter fetches leaks to four non-held-now consumers; and the C7
+exactly-once receipt cannot live at the reply-mode seam (pre-seam
+clinical/camera returns at `maez_daemon.py:7114`, post-resolution
+SELF_STATUS overrides at `:8452`). Pass 4 accepts the arithmetic,
+splits the history carrier, and moves the receipt to a whole-turn
+seam.
 
 Defect and levers: unchanged (pass 1/2, with gate-corrected anchors).
 
@@ -57,13 +63,22 @@ Reader filtering (ENABLED only): both keys, legacy-wildcard for
 unstamped rows. Both held-now read sites pass scope
 (`maez_adapter.py:742`, `:1081`). Test-fake kwarg migration in scope.
 
-### C5. Split-store rejoin — SEPARATE function, scoped blast radius (B5)
-The coalescer is **not** installed inside `get_telegram_exchanges`
-(8 production callers — too wide). New
-`get_telegram_exchanges_coalesced(...)`, called ONLY by the two
-held-now read sites under ENABLED: fetch with metadata → coalesce via
-`turn_link_id` → last-N logical exchanges. Orphan half → skip +
-`held_now_orphan_row` WARNING.
+### C5. Split-store rejoin — DEDICATED CARRIER, not a swapped list (B5, round 3)
+Round 3 showed the pass-3 shape still leaked: the two adapter fetch
+sites feed brain_loop planner history, legacy synthesis threading,
+routing-comprehension tails, and protected-refusal handling — swapping
+their list changes four non-held-now consumers. Corrected shape:
+
+- `get_telegram_exchanges_coalesced(...)` exists as pass 3 defined it,
+  BUT the adapter keeps fetching the RAW list exactly as today and
+  passes it everywhere it goes today, unchanged.
+- The coalesced list travels in a NEW, separate parameter
+  (`held_now_history`) threaded from the adapter through
+  `handle_message` into working-set anchor construction ONLY. No other
+  consumer sees it. Under ENABLED; None otherwise.
+- Orphan half → skip + `held_now_orphan_row` WARNING. Pinned
+  starvation test (gate note): >N newest orphan rows ahead of N intact
+  exchanges must still yield N logical exchanges.
 
 **Acknowledged, unchanged bypasses:** `_recent_telegram_exchange_rows`
 and `_latest_telegram_exchange_rows` still see split halves — they feed
@@ -82,50 +97,89 @@ reply half cannot enter as an unlabeled anchor.
 
 ### C6. Fall-open WARNING — unchanged.
 
-### C7. Receipts — seam confirmed, eligibility defined (round-2 note)
-Seam: the reply-mode resolution site (`daemon/maez_daemon.py:8083` /
-`:8161` region) where dialogue_state and chat_history are both in
-scope. **Eligible turn** = an owner text turn that reaches reply-mode
-resolution; TOOL-authoritative short-circuits, intra-turn ECHO, and
-HONEST_EMPTY outcomes are ineligible and receipt
-`held_now_shadow mode=ineligible reason=<class>` instead — the
-receipt line always fires exactly once per owner turn.
+### C7. Receipts — whole-turn seam (round-3 NEW blocker)
+The reply-mode seam cannot honor exactly-once: clinical/camera turns
+return BEFORE it (`maez_daemon.py:7114`) and post-resolution
+intercepts can override the mode AFTER it (`:8452`). Corrected:
 
-### C8. Anchor budget — truncate-LAST ordering, no reservation (B4)
-The pass-2 reservation is withdrawn (arithmetically impossible under
-the existing budget definition; contradicted a pinned test). Replaced
-with an ordering guarantee that is scale-free:
+- The receipt is emitted from a **whole-turn finally seam** wrapping
+  the owner-turn body of `handle_message`: exactly once per owner text
+  turn that ENTERS handle_message, regardless of exit path.
+- The counterfactual evaluation still runs at reply-mode resolution
+  when reached, and stashes its numbers on the turn trace; the finally
+  seam emits them, or `mode=ineligible reason=<class>` where class ∈
+  {pre_seam_return, tool_mode, echo_mode, honest_empty_mode,
+  post_resolution_override, error} — ReplyMode values
+  (`reply_mode.py:17`) for the mode classes, plus the two boundary
+  classes. (Gate note honored: ReplyMode and OutcomeClass are separate
+  taxonomies; the receipt names modes, never outcome classes.)
 
-- Per-message cap: 900 chars, head-preserving, applied in
-  `dialogue_anchor_items`. Capped text feeds durable-ID computation
-  (round-2 note) so IDs match what is rendered.
-- **Truncation order under ENABLED:** when the budget forces cuts,
-  anchor texts are reduced only AFTER `memory_context` and
-  `memory_evidence` items, and the NEWEST anchor pair is the last
-  item in the entire set to be emptied. Fresh evidence /
-  web_context are never displaced by anchors (rank unchanged).
-- At any budget ≥ one capped pair (~1.8K), at least one pair
-  survives. Below that (e.g. the 360-char pinned case) behavior is:
-  flags off → byte-identical; ENABLED → newest pair truncated to fit,
-  possibly to a stub, never silently dropped while any memory_* item
-  retains chars.
-- Long-turn tests: 20K pairs and a 12K owner question assert
-  `pairs_rendered >= 1` with non-empty text and no fresh-evidence
-  displacement.
+### C8. Anchor budget — bounded promise, class-ordered cuts (B4, round 3)
+Round 3 proved the promise must be bounded by arithmetic: the owner
+question consumes the budget BEFORE item text gets any allowance
+(`focused_cognition.py:1149`; total budget 12,000 at `:65`), so no
+ordering rule can guarantee a pair under a 12K question. The pass-3
+long-turn test was impossible as specified and is withdrawn. Bounded
+contract:
 
-## Witness plan (B1, corrected)
-Both legs assert `reply_path=focused` from the recall_outcome line
-(`daemon/maez_daemon.py:9256` region); a legacy-path run is VOID for
-either leg. The discriminator is NOT the reply text: it is the
-**evidence map** — the sentinel pair's durable ID present in the
-focused working set (`focused_cognition.py:2068` region) in the
-ENABLED leg, absent (or truncated out) in the OFF leg. Reply-text
-success in the OFF leg is expected and irrelevant (legacy history can
-answer; that is not what this repair changes). Sentinel novelty
-pre-check, filler pairs, and the scripted shape stand from pass 2.
-Prediction adds the orphan exception: zero-pair sets occur only on
-empty history, echo-degenerate turns, or all-orphan windows (each
-orphan WARNING-logged).
+- **Domain:** all anchor guarantees apply only when
+  `budget_after_question >= ANCHOR_FLOOR_CHARS` (1,800 — one capped
+  pair). Below that the turn is legitimately anchor-less and the
+  receipt says `reason=question_consumed_budget`. C2's rendered-pairs
+  promise is likewise domain-bounded: 3/2/2 pairs **when budget
+  admits them at their allowance**, floor of one non-empty pair while
+  the domain condition holds.
+- Per-message cap 900 chars in `dialogue_anchor_items`. The durable
+  ID is computed from the FINAL rendered bytes — recomputed after any
+  working-set budget truncation — so the evidence map always matches
+  what the model saw (round-3 correction: capping at seed time is not
+  enough).
+- **Class-ordered allocator under ENABLED only** (today's truncator is
+  a flat equal-allowance loop, `:1160`; ranking precedes budgeting at
+  `:1320`, so a class-aware allocator slots in without reordering
+  assembly): within the domain, cuts land on `memory_context` →
+  `memory_evidence` → older anchors → newest anchor, and an item
+  emptied by the allocator is REMOVED from the set and its ID from
+  the evidence map (round-3 correction: emptied-but-present items
+  poisoned the witness discriminator). Fresh/web items keep their
+  rank; they are never displaced by anchors — reconciled with
+  "newest-anchor-last" by the domain bound: when both cannot fit, the
+  domain condition has failed and the anchor guarantee is void.
+- Flags off → byte-identical, including the 360-char pinned test.
+- Long-turn tests (revised): 20K pairs under a normal question assert
+  `pairs_rendered >= 1` non-empty; a 12K question asserts the
+  anchor-less receipt reason and no crash and no fresh displacement.
+
+## Witness plan (B1, round-3 assertions folded)
+Both legs assert `reply_path=focused`; a legacy-path run is VOID.
+Round-3 additions, all mandatory:
+
+- The probe is an ORDINARY turn: assert `needs_dialogue=false`,
+  `fail_safe_legacy=false`, no date cue, and `turn_kind=ordinary`
+  (classification at `maez_daemon.py:8198`) — otherwise the OFF leg
+  can admit anchors through the classifier gate and the discriminator
+  blurs. Focused eligibility for the probe comes from independent
+  fresh evidence (`:8143`), not from dialogue needs.
+- The discriminator asserts the TUPLE (`source_type=dialogue_anchor`,
+  expected durable ID) in the evidence map — never the ID alone.
+  "Truncated out" language is withdrawn: under C8's correction an
+  emptied item leaves the set AND the map, so presence/absence is
+  clean.
+- **Join:** the `held_now_shadow` receipt carries the focused row ID
+  (the recorder's return value, currently ignored at
+  `maez_daemon.py:8676`), joining the receipt to the persisted
+  evidence-map row without touching the recall_outcome line.
+- Reply-text success in the OFF leg is expected and irrelevant.
+  Sentinel novelty pre-check, filler pairs, scripted shape stand.
+  Zero-pair prediction: empty history, echo-degenerate turns,
+  all-orphan windows (WARNING-logged), or out-of-domain budgets
+  (`question_consumed_budget` receipts).
+
+Implementation notes carried from round 3: seed `trust_tier` maps to
+the rendered `origin_trust` field (`focused_cognition.py:287`) while
+`origin_provenance` is carried independently for the exclusion
+predicate (`:1303`); telegram_voice scope values name
+`update.effective_chat.id` with an explicit fallback.
 
 ## Non-goals — unchanged, plus: the two bypass helpers (C5), and any
 change to `evidence_recency_days` (the 14-day wall belongs to the
