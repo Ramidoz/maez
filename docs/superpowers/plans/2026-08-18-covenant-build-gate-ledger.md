@@ -91,3 +91,29 @@ synthetic inputs — the same synthetic-input failure the full-body audit
 named in S7's own validator, reproduced by me, caught by the process
 built to catch it. The witness stays unscheduled until this ledger is
 empty and the gate reads SOUND.
+
+---
+
+## FINAL: WITNESS MAY BE SCHEDULED (gate round 4, commit c692dbd)
+
+Four gate-on-code rounds: 14 → 3 → 2 → 0 witness-blocking. All repairs
+verified by the gate against code, including its own probes (the
+tampered-salt refusal fired before any verifier call; the provisioner
+created nothing on an absent store).
+
+**The gate's preconditions for the owner's window, verbatim scope:**
+pinned clean c692dbd; the live store v2-activated with its migration
+receipt; the covenant table provisioned ONCE via the held directory fd;
+store inode unchanged across both phases; recovery posture ready,
+bonded_user credential enabled, internal channel trusted; the client
+displays the exact notice and rendered request before WebAuthn;
+identical request id / envelope hash / work class across phases; phase
+2 at 24h+ and before the 7-day lapse; and the witness ENDS at the
+expected owner_read_receipt_required refusal — structurally
+non-authorizing, no execution.
+
+**Still open, all judged non-blocking for this serialized witness and
+required before any live consumer switch:** concurrency races +
+sign-count CAS; pathname reads inside insert-time validation;
+corruption-vs-absence classification in the daemon helper; retention-
+test depth; base64 canonical validation on the salt column.
