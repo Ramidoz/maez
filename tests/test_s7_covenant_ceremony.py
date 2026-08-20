@@ -965,6 +965,53 @@ class BuildGateRepairRound1Tests(unittest.TestCase):
         self.assertEqual(c.exception.reason, "covenant_phase1_mismatch")
 
 
+class ProvisioningTests(unittest.TestCase):
+    def test_begin_response_carries_the_notice_before_the_tap(self):
+        import inspect
+        from core.governance import s7_webauthn_ceremony as svc
+
+        src = inspect.getsource(svc.S7LocalWebAuthnCeremonyService.covenant_first_begin)
+        self.assertIn('"covenant_notice": COVENANT_PHASE1_NOTICE', src)
+
+    def test_held_fd_provisioner_is_idempotent_on_a_real_store(self):
+        import os
+
+        from core.governance.s7_covenant_ceremony import (
+            provision_covenant_phase_table_at,
+        )
+        from tests.s7_store_fixture import bootstrap_with_authorization
+
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-prov-")
+        self.addCleanup(tmp.cleanup)
+        store = bootstrap_with_authorization(Path(tmp.name) / "s7_1_webauthn")
+        dir_fd = os.open(store.db_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            provision_covenant_phase_table_at(store_dir_fd=dir_fd)
+            provision_covenant_phase_table_at(store_dir_fd=dir_fd)  # idempotent
+        finally:
+            os.close(dir_fd)
+        ps = CovenantPhaseStore(store.db_path, create=False)
+        self.assertIsNone(ps.current_phase1(request_id="r", now=NOW))
+        ps.insert_phase1(**_phase1_kwargs())  # provisioned: write succeeds
+
+    def test_provisioner_never_creates_missing_paths(self):
+        import os
+
+        from core.governance.s7_covenant_ceremony import (
+            provision_covenant_phase_table_at,
+        )
+
+        tmp = tempfile.TemporaryDirectory(prefix="maez-cov-prov2-")
+        self.addCleanup(tmp.cleanup)
+        dir_fd = os.open(tmp.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with self.assertRaises(OSError):
+                provision_covenant_phase_table_at(store_dir_fd=dir_fd)
+        finally:
+            os.close(dir_fd)
+        self.assertEqual(os.listdir(tmp.name), [], "nothing may be created")
+
+
 class DaemonRouteWiringTests(unittest.TestCase):
     def test_covenant_routes_and_phase_store_threading_exist(self):
         import inspect

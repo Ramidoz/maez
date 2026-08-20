@@ -449,11 +449,17 @@ class S7LocalWebAuthnCeremonyService:
             now=now,
             expires_at=_add_minutes(now, 5),
         )
+        from core.governance.s7_covenant_ceremony import COVENANT_PHASE1_NOTICE
+
         return S7CeremonyServiceResult(
             body={
                 "ok": True,
                 "challenge_id": challenge["challenge_id"],
                 "challenge_kind": "covenant_first_confirmation",
+                # RULING C: shown BEFORE the tap. The challenge bytes the
+                # authenticator will sign are a commitment to exactly these
+                # words plus the rendered statement.
+                "covenant_notice": COVENANT_PHASE1_NOTICE,
                 "public_key_options": {
                     "rpId": "localhost",
                     "challenge": challenge["challenge_b64"],

@@ -468,14 +468,48 @@ class CovenantPhaseStore:
         })
 
 
-def provision_covenant_phase_store(db_path: str | Path) -> None:
-    """Explicit SETUP authority for the phase table on an existing ceremony
-    database (build gate round 2: routes were reachable but the live store
-    had no repository-owned provisioning path). Idempotent; refuses contract
-    drift; never called from a request path."""
-    store = CovenantPhaseStore(db_path, create=True)
-    with closing(sqlite3.connect(store.db_path)) as conn:
-        store._require_contract(conn)
+def provision_covenant_phase_table_at(*, store_dir_fd: int) -> None:
+    """Explicit SETUP authority for the phase table on the EXISTING ceremony
+    database, on the R11 provisioner's safety pattern (build gate round 3:
+    the pathname version created directories and files, which is not
+    live-store setup authority). O_NOFOLLOW open of the canonical file,
+    held-descriptor connection, BEGIN IMMEDIATE, activation verified, then
+    create-if-missing and contract check. Idempotent. Never a request path.
+    """
+    import os
+
+    from core.governance import operator_user_boundary as s7
+
+    store_fd = os.open(
+        "ceremony.sqlite3",
+        os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=store_dir_fd,
+    )
+    connection = None
+    try:
+        connection = s7._open_s7_connection_from_held_store(
+            dir_fd=store_dir_fd,
+            store_fd=store_fd,
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        s7._verify_held_store_activation(store_dir_fd, store_fd, connection)
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (_TABLE,),
+        ).fetchone()
+        if exists is None:
+            connection.execute(_DDL)
+        probe = CovenantPhaseStore.__new__(CovenantPhaseStore)
+        probe._require_contract(connection)
+        connection.commit()
+    except BaseException:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        os.close(store_fd)
 
 
 def assemble_covenant_ceremony_evidence(
