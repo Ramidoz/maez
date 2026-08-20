@@ -1,4 +1,16 @@
-# Held-now repair — Phase 1 design (pass 5, after gate round 4: REVISE, 3 blockers)
+# Held-now repair — Phase 1 design (pass 6, after gate round 5: REVISE, 4 mechanical blockers)
+
+Round 5 froze the core: C1/C4/C5/C6 and C7's placement carry no
+contradiction; the tuple discriminator is clean (no remaining OFF-leg
+route). Four mechanical blockers folded below: two-domain rendered
+counts; protected occupancy from the TURN-SPECIFIC ranked sequence
+(not a static cut class); the exactly-once receipt carries final
+reply_path + turn_kind + predicates itself; each live sampling attempt
+rebuilds a full window with an attempt-specific sentinel. Plus the
+containment-overhead note (allocator arithmetic must include
+post-budget wrapper overhead).
+
+---
 
 Round 4 PASSED C5 (dedicated carrier; V2 signature ripple noted as
 in-scope) and C7 (whole-turn finally seam verified wrappable). Three
@@ -126,6 +138,14 @@ intercepts can override the mode AFTER it (`:8452`). Corrected:
   (`reply_mode.py:17`) for the mode classes, plus the two boundary
   classes. (Gate note honored: ReplyMode and OutcomeClass are separate
   taxonomies; the receipt names modes, never outcome classes.)
+- **Round-5 blocker 3 — the receipt is self-sufficient for the
+  witness:** it carries `final_reply_path` (the path actually taken,
+  distinguishing a FOCUSED decision that fell back to legacy at
+  `maez_daemon.py:8686/8756`), `turn_kind`, the three ordinary-turn
+  predicates (needs_dialogue / fail_safe_legacy / date_cue), the
+  domain verdict, and the focused row ID when one exists. No join to
+  recall_outcome is required to qualify a sampling attempt; a shared
+  per-turn trace id is included anyway for cross-checking.
 
 ### C8. Anchor budget — bounded promise, class-ordered cuts (B4, round 3)
 Round 3 proved the promise must be bounded by arithmetic: the owner
@@ -135,18 +155,36 @@ ordering rule can guarantee a pair under a 12K question. The pass-3
 long-turn test was impossible as specified and is withdrawn. Bounded
 contract:
 
-- **Domain (round-4 corrected):** the predicate is computed INSIDE the
-  allocator, after higher-ranked occupancy: guarantees apply only when
-  `budget_after_question_and_higher_ranked_items_and_overhead >=
-  ANCHOR_FLOOR_CHARS` (1,800 — one capped pair). Ranking precedes
-  budgeting (`focused_cognition.py:1320`), so every fresh/web item's
-  cost and the rendering overhead are known at that point. Outside the
-  domain the turn is honestly anchor-less with receipt
-  `reason=question_consumed_budget` or
-  `reason=higher_rank_consumed_budget`. **The precedence ruling is
-  explicit: fresh/web evidence is NEVER displaced by anchors; the
-  anchor floor is the guarantee that yields.** C2's rendered-pairs
-  promise is bounded by the same domain.
+- **Domains (round-5 corrected): TWO, not one.**
+  - **Full-count domain:** post-question, post-protected-occupancy,
+    post-overhead budget admits 3/2/2 pairs at their allowance → C2's
+    rendered-count promise applies in full.
+  - **Floor domain:** the same computed budget admits ≥ one capped
+    pair (1,800) but not the full count → the promise degrades
+    explicitly to `pairs_rendered >= 1` with the NEWEST pair
+    surviving; older pairs empty first. Receipt records which domain
+    held.
+  - Below floor → anchor-less with `reason=question_consumed_budget`
+    or `reason=higher_rank_consumed_budget`.
+- **Protected occupancy is derived from the TURN-SPECIFIC ranked
+  sequence, never a static class list** (round-5 blocker 2): anything
+  the turn's ranking places ABOVE the anchors — including confirmed
+  memory on date-cue turns (`focused_cognition.py:1097`) — is
+  protected and counts as occupancy in the domain predicate; only
+  items ranked BELOW the anchors are pre-anchor cut material. C3
+  (rank unchanged) is thereby honored by construction.
+- **Overhead arithmetic includes post-budget containment** (round-5
+  note): web-containment wrappers and standing instruction are added
+  after budgeting and outside the truncation budget
+  (`focused_cognition.py:348`, `:1348`); the allocator receives the
+  containment overhead policy (or returns allocation metadata for
+  final reconciliation) so domain receipts are computed from complete
+  arithmetic.
+- Ranking precedes budgeting (`:1320`), so all of the above is
+  computable at the allocator without reordering assembly. **The
+  precedence ruling stands: turn-ranked-higher evidence is NEVER
+  displaced by anchors; the anchor floor is the guarantee that
+  yields.**
 - Per-message cap 900 chars in `dialogue_anchor_items`. The durable
   ID is computed from the FINAL rendered bytes — recomputed after any
   working-set budget truncation — so the evidence map always matches
@@ -185,13 +223,18 @@ Both legs assert `reply_path=focused`; a legacy-path run is VOID.
      fresh-evidence item, forces FOCUSED, and asserts the full
      discriminator both ways (ENABLED: tuple present; disabled:
      absent). This is where determinism lives.
-  2. **Live layer (sampling):** each leg REPEATS its scripted probe
-     until a receipt shows `mode=focused` AND `turn_kind=ordinary`
-     AND the ordinary-turn assertions hold (needs_dialogue=false,
-     fail_safe_legacy=false, no date cue, `maez_daemon.py:8198`);
-     non-qualifying runs are VOID and re-run with fresh filler, max 5
-     attempts per leg before the witness is recorded BLOCKED (not
-     failed). Qualifying runs assert the discriminator.
+  2. **Live layer (sampling):** each attempt is a COMPLETE rebuild
+     (round-5 blocker 4): a freshly generated, freshly pre-checked
+     sentinel + new filler pairs forming a full three-pair window,
+     then the probe — so a void attempt's own exchanges can never
+     slide a previous sentinel out of the window. The expected
+     durable ID is attempt-specific. An attempt qualifies when its
+     exactly-once receipt shows `final_reply_path=focused` AND
+     `turn_kind=ordinary` AND all three predicates false; max 5
+     attempts per leg, then the witness is recorded **BLOCKED — no
+     live verdict obtained** (never PASS, and no allegation the
+     implementation failed; activation certification stays withheld).
+     Qualifying attempts assert the discriminator tuple.
 - The probe is an ORDINARY turn by the assertions above; focused
   candidacy arises from whatever evidence the live turn genuinely
   carries — asserted from receipts, never assumed.
