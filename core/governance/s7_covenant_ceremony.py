@@ -69,6 +69,7 @@ CREATE TABLE {_TABLE} (
     challenge_expires_at TEXT NOT NULL,
     phase_expires_at TEXT,
     artifact_id TEXT,
+    artifact_binding_sha256 TEXT,
     first_phase_binding_sha256 TEXT UNIQUE,
     supersedes_binding_sha256 TEXT UNIQUE,
     recorded_at TEXT NOT NULL,
@@ -83,7 +84,7 @@ _COLUMNS = (
     "session_binding_hash", "internal_channel_binding_hash",
     "credential_ref", "user_presence", "user_verification", "sign_count",
     "challenge_created_at", "challenge_expires_at", "phase_expires_at",
-    "artifact_id", "first_phase_binding_sha256",
+    "artifact_id", "artifact_binding_sha256", "first_phase_binding_sha256",
     "supersedes_binding_sha256", "recorded_at", "binding_sha256",
 )
 
@@ -156,18 +157,45 @@ def covenant_phase1_binding(
     })
 
 
+_ARTIFACT_IDENTITY_FIELDS = (
+    "artifact_id", "request_id", "request_envelope_hash",
+    "rendered_text_hash", "action", "action_params_hash",
+    "precondition_hash", "authority_context_hash", "derived_work_class",
+    "derived_aggregation_group", "nonce", "credential_ref", "auth_method",
+    "grant_source", "user_presence", "user_verification", "created_at",
+    "expires_at", "ceremony_kind", "schema_version",
+)
+
+
+def covenant_artifact_binding(artifact_fields: dict) -> str:
+    """Digest over the artifact's COMPLETE immutable identity (2b's device
+    shape, this design's domain). consumed_at / consumed_by_request_id are
+    excluded: consumption mutates them inside the very transaction that
+    re-derives this digest."""
+    missing = [k for k in _ARTIFACT_IDENTITY_FIELDS if k not in artifact_fields]
+    if missing:
+        raise CovenantCeremonyRefusal("covenant_artifact_fields_incomplete")
+    return canonical_hash({
+        "domain": "s7.covenant_artifact_binding.v1",
+        **{k: artifact_fields[k] for k in _ARTIFACT_IDENTITY_FIELDS},
+    })
+
+
 def covenant_phase2_binding(
     *,
     first_phase_binding_sha256: str,
     artifact_id: str,
+    artifact_binding_sha256: str | None = None,
     **phase1_shaped,
 ) -> str:
-    """The phase-2 correspondence digest: this design's OWN device (same
-    shape as 2b's artifact binding, distinct domain tag, no dependency)."""
+    """The phase-2 correspondence digest. Covers the ceremony body, the
+    phase-1 link, AND the artifact's complete identity digest (build gate
+    round 2: artifact_id alone was a name, not an identity)."""
     body = covenant_phase1_binding(**phase1_shaped)
     return canonical_hash({
-        "domain": "s7.covenant_phase2_binding.v1",
+        "domain": "s7.covenant_phase2_binding.v2",
         "artifact_id": artifact_id,
+        "artifact_binding_sha256": artifact_binding_sha256 or "",
         "ceremony_body_sha256": body,
         "first_phase_binding_sha256": first_phase_binding_sha256,
     })
@@ -382,6 +410,7 @@ class CovenantPhaseStore:
                 recorded + timedelta(seconds=PHASE1_LIFETIME_SECONDS)
             ),
             "artifact_id": None,
+            "artifact_binding_sha256": None,
             "first_phase_binding_sha256": None,
             "supersedes_binding_sha256": supersedes_binding_sha256,
             "binding_sha256": binding,
@@ -392,6 +421,7 @@ class CovenantPhaseStore:
         *,
         first_phase_binding_sha256: str,
         artifact_id: str,
+        artifact_binding_sha256: str | None = None,
         connection: sqlite3.Connection | None = None,
         **kw,
     ) -> str:
@@ -421,6 +451,7 @@ class CovenantPhaseStore:
         binding = covenant_phase2_binding(
             first_phase_binding_sha256=first_phase_binding_sha256,
             artifact_id=artifact_id,
+            artifact_binding_sha256=artifact_binding_sha256,
             **kw,
         )
         return self._insert(connection=connection, values={
@@ -430,10 +461,21 @@ class CovenantPhaseStore:
             "user_verification": 1,
             "phase_expires_at": None,
             "artifact_id": artifact_id,
+            "artifact_binding_sha256": artifact_binding_sha256,
             "first_phase_binding_sha256": first_phase_binding_sha256,
             "supersedes_binding_sha256": None,
             "binding_sha256": binding,
         })
+
+
+def provision_covenant_phase_store(db_path: str | Path) -> None:
+    """Explicit SETUP authority for the phase table on an existing ceremony
+    database (build gate round 2: routes were reachable but the live store
+    had no repository-owned provisioning path). Idempotent; refuses contract
+    drift; never called from a request path."""
+    store = CovenantPhaseStore(db_path, create=True)
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        store._require_contract(conn)
 
 
 def assemble_covenant_ceremony_evidence(
@@ -534,9 +576,33 @@ def revalidate_covenant_ceremony_for_consumption(
     )
     if recomputed_p1 != phase1["binding_sha256"]:
         raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    artifact_row = connection.execute(
+        """
+        SELECT artifact_id, request_id, request_envelope_hash,
+               rendered_text_hash, action, action_params_hash,
+               precondition_hash, authority_context_hash, derived_work_class,
+               derived_aggregation_group, nonce, credential_ref, auth_method,
+               grant_source, user_presence, user_verification, created_at,
+               expires_at, ceremony_kind, schema_version
+        FROM s7_authorization_artifacts_v2 WHERE artifact_id = ?
+        """,
+        (phase2["artifact_id"],),
+    ).fetchone()
+    if artifact_row is None:
+        raise CovenantCeremonyRefusal("covenant_artifact_missing")
+    live_binding = covenant_artifact_binding(dict(zip(_ARTIFACT_IDENTITY_FIELDS, (
+        *artifact_row[:14],
+        bool(artifact_row[14]), bool(artifact_row[15]),
+        *artifact_row[16:],
+    ))))
+    if phase2["artifact_binding_sha256"] not in (None, live_binding):
+        raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    if phase2["artifact_binding_sha256"] is None:
+        raise CovenantCeremonyRefusal("covenant_artifact_binding_missing")
     recomputed_p2 = covenant_phase2_binding(
         first_phase_binding_sha256=phase2["first_phase_binding_sha256"],
         artifact_id=phase2["artifact_id"],
+        artifact_binding_sha256=phase2["artifact_binding_sha256"],
         **{k: phase2[k] for k in (
             "request_id", "request_envelope_hash", "derived_work_class",
             "challenge_id", "challenge_b64_sha256", "rendered_text_hash",

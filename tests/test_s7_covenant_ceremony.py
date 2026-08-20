@@ -202,6 +202,48 @@ class PhaseStoreTests(unittest.TestCase):
             self.store.insert_phase1(**_phase1_kwargs())
 
 
+def _seed_artifact_row(db, artifact_id="art-1", work_class="covenant_touching_change"):
+    """The consume seat always has the v2 artifact table; tests must model
+    it. Returns the covenant_artifact_binding for the seeded row."""
+    import sqlite3 as _sq
+
+    from core.governance.s7_covenant_ceremony import covenant_artifact_binding
+
+    fields = {
+        "artifact_id": artifact_id, "request_id": "req-1",
+        "request_envelope_hash": H, "rendered_text_hash": "c" * 64,
+        "action": "soul.append_note", "action_params_hash": "d" * 64,
+        "precondition_hash": "f" * 64, "authority_context_hash": "e" * 64,
+        "derived_work_class": work_class, "derived_aggregation_group": "agg-1",
+        "nonce": "nonce-1", "credential_ref": "cred-1",
+        "auth_method": "founder_webauthn", "grant_source": "founder_webauthn",
+        "user_presence": True, "user_verification": True,
+        "created_at": "2026-08-19T10:02:00Z", "expires_at": "2026-08-19T10:07:00Z",
+        "ceremony_kind": "founder_local_webauthn",
+        "schema_version": "s7.authorization_artifact.v2",
+    }
+    with _sq.connect(db) as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS s7_authorization_artifacts_v2 (
+                artifact_id TEXT PRIMARY KEY, request_id TEXT,
+                request_envelope_hash TEXT, rendered_text_hash TEXT,
+                action TEXT, action_params_hash TEXT, precondition_hash TEXT,
+                authority_context_hash TEXT, derived_work_class TEXT,
+                derived_aggregation_group TEXT, nonce TEXT, credential_ref TEXT,
+                auth_method TEXT, grant_source TEXT, user_presence INTEGER,
+                user_verification INTEGER, created_at TEXT, expires_at TEXT,
+                ceremony_kind TEXT, schema_version TEXT)"""
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO s7_authorization_artifacts_v2 VALUES "
+            "(" + ",".join("?" * 20) + ")",
+            tuple(
+                int(v) if isinstance(v, bool) else v for v in fields.values()
+            ),
+        )
+    return covenant_artifact_binding(fields)
+
+
 class AssemblerAndInterlockTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="maez-covenant-")
@@ -209,11 +251,13 @@ class AssemblerAndInterlockTests(unittest.TestCase):
         self.db = Path(self.tmp.name) / "test.sqlite3"
         self.store = CovenantPhaseStore(self.db)
         self.b1 = self.store.insert_phase1(**_phase1_kwargs())
+        self.artifact_binding = _seed_artifact_row(self.db)
         self.b2 = self.store.insert_phase2(
             **_phase1_kwargs(challenge_id="chal-2",
                              challenge_created_at="2026-08-19T10:01:00Z",
                              recorded_at="2026-08-19T10:02:00Z"),
             first_phase_binding_sha256=self.b1, artifact_id="art-1",
+            artifact_binding_sha256=self.artifact_binding,
         )
 
     def test_assembles_only_from_rows(self):
@@ -848,11 +892,13 @@ class BuildGateRepairRound1Tests(unittest.TestCase):
         db = Path(tmp.name) / "c.sqlite3"
         store = CovenantPhaseStore(db)
         b1 = store.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
+        ab = _seed_artifact_row(db, work_class="covenant_touching_change")
         store.insert_phase2(
             **_phase1_kwargs(request_id="req-cov-1", challenge_id="chal-2",
                              challenge_created_at="2026-08-19T10:01:00Z",
                              recorded_at="2026-08-19T10:02:00Z"),
             first_phase_binding_sha256=b1, artifact_id="art-1",
+            artifact_binding_sha256=ab,
         )
         ev = assemble_covenant_ceremony_evidence(
             store, request_id="req-cov-1", now="2026-08-19T11:00:00Z"

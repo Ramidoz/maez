@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     derived_aggregation_group TEXT NOT NULL DEFAULT '',
     nonce TEXT NOT NULL DEFAULT '',
     consultation_exemption_projection_hash TEXT,
-    covenant_phase2_of TEXT
+    covenant_phase2_of TEXT,
+    covenant_salt_b64 TEXT
 );
 
 CREATE TABLE IF NOT EXISTS s7_refusal_history (
@@ -330,6 +331,7 @@ class S7WebAuthnBootstrapStore:
             "derived_aggregation_group": "TEXT NOT NULL DEFAULT ''",
             "nonce": "TEXT NOT NULL DEFAULT ''",
             "covenant_phase2_of": "TEXT",
+            "covenant_salt_b64": "TEXT",
         }
         for column, ddl in challenge_desired.items():
             if column not in challenge_existing:
@@ -1137,7 +1139,21 @@ class S7WebAuthnBootstrapStore:
         _parse_time(expires_at)
         _validate_hash64_text(precondition_hash, field="precondition_hash")
         challenge_id = f"s7cov1_{uuid.uuid4().hex}"
-        challenge_b64 = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+        # RULING C: the owner must not tap on a false picture. The challenge
+        # bytes ARE a commitment to the approved notice and the rendered
+        # statement, so the authenticator's signature covers both. Finish
+        # recomputes this before verification. (The 2b Construction-4 device,
+        # applied to this new challenge kind.)
+        from core.governance.s7_covenant_ceremony import COVENANT_PHASE1_NOTICE
+
+        covenant_salt = secrets.token_bytes(32)
+        commitment = hashlib.sha256(
+            covenant_salt
+            + hashlib.sha256(COVENANT_PHASE1_NOTICE.encode("utf-8")).digest()
+            + bytes.fromhex(str(rendered_statement.rendered_text_hash))
+        ).digest()
+        challenge_b64 = base64.urlsafe_b64encode(commitment).decode("ascii").rstrip("=")
+        covenant_salt_b64 = base64.urlsafe_b64encode(covenant_salt).decode("ascii").rstrip("=")
         session_binding_hash = _fingerprint(session_binding)
         internal_channel_binding_hash = _fingerprint(internal_channel_binding)
         challenge_hash = _fingerprint(
@@ -1165,10 +1181,10 @@ class S7WebAuthnBootstrapStore:
                     internal_channel_binding_hash, request_id, uv_required, created_at,
                     request_envelope_hash, rendered_text_hash, action_params_hash,
                     precondition_hash, authority_context_hash,
-                    derived_aggregation_group, nonce
+                    derived_aggregation_group, nonce, covenant_salt_b64
                 ) VALUES (?, 'covenant_first_confirmation', ?, NULL, NULL, ?, ?,
                           'localhost', 'http://localhost:11437', 'localhost:11437',
-                          ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     challenge_id, expires_at, challenge_hash, challenge_b64,
@@ -1181,6 +1197,7 @@ class S7WebAuthnBootstrapStore:
                     rendered_statement.authority_context_hash,
                     rendered_statement.derived_aggregation_group,
                     rendered_statement.nonce,
+                    covenant_salt_b64,
                 ),
             )
         return {
@@ -1213,7 +1230,7 @@ class S7WebAuthnBootstrapStore:
                        maez_voice_consultation_hash,
                        consultation_exemption_projection_hash,
                        derived_aggregation_group,
-                       nonce, uv_required, created_at
+                       nonce, uv_required, created_at, covenant_salt_b64
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND challenge_kind = 'covenant_first_confirmation'

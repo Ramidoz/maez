@@ -517,6 +517,28 @@ class S7LocalWebAuthnCeremonyService:
             precondition_hash=precondition_hash,
         ):
             return _d12_binding_mismatch()
+        # RULING C commitment: the signed challenge bytes must reproduce from
+        # the approved notice + the presented statement, BEFORE verification.
+        import base64 as _b64
+
+        try:
+            _salt = _b64.urlsafe_b64decode(
+                str(challenge.get("covenant_salt_b64") or "") + "=="
+            )
+            _expected = _b64.urlsafe_b64encode(
+                _hashlib.sha256(
+                    _salt
+                    + _hashlib.sha256(COVENANT_PHASE1_NOTICE.encode("utf-8")).digest()
+                    + bytes.fromhex(str(rendered_statement.rendered_text_hash))
+                ).digest()
+            ).decode("ascii").rstrip("=")
+        except (ValueError, TypeError):
+            _expected = None
+        if _expected is None or _expected != str(challenge["challenge_b64"]):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_covenant_notice_commitment_mismatch"},
+                status_code=409,
+            )
         credential = store.get_credential(claimed_credential_ref)
         if credential is None or not credential.enabled or "bonded_user" not in credential.role_names:
             return S7CeremonyServiceResult(
@@ -840,6 +862,7 @@ class S7LocalWebAuthnCeremonyService:
         # named at begin, never a freshly selected current one.
         from core.governance.s7_covenant_ceremony import (
             COVENANT_WORK_CLASSES as _COVENANT_CLASSES,
+            CovenantCeremonyRefusal,
         )
 
         covenant_phase1_row = None
@@ -1199,11 +1222,21 @@ class S7LocalWebAuthnCeremonyService:
 
         covenant_phase2_writer = None
         if covenant_phase1_row is not None:
+            from dataclasses import asdict as _asdict
+
+            from core.governance.s7_covenant_ceremony import (
+                covenant_artifact_binding,
+            )
+
+            _artifact_fields = _asdict(artifact)
+            _artifact_binding = covenant_artifact_binding(_artifact_fields)
+
             def covenant_phase2_writer(conn, _c=challenge, _a=artifact_id):
                 import hashlib as _hashlib
 
                 covenant_phase_store.insert_phase2(
                     connection=conn,
+                    artifact_binding_sha256=_artifact_binding,
                     request_id=str(rendered_statement.request_id),
                     request_envelope_hash=str(rendered_statement.request_envelope_hash),
                     derived_work_class=str(rendered_statement.derived_work_class),
@@ -1235,6 +1268,14 @@ class S7LocalWebAuthnCeremonyService:
                 consultation_exemption=consultation_exemption,
                 durable_cutover_selection=durable_cutover_selection,
                 covenant_phase2_writer=covenant_phase2_writer,
+            )
+        except CovenantCeremonyRefusal as exc:
+            # The anchored transaction rolled the artifact back with the
+            # refused phase row (gate round 2, NEW finding: this previously
+            # escaped as an unhandled exception).
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": exc.reason},
+                status_code=409,
             )
         except ValueError as exc:
             if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
