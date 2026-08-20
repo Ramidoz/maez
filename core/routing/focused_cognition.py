@@ -1589,35 +1589,15 @@ def assemble_working_set(
         # construction: nothing ships unless the measured total fits.
         _budget_requested = max_working_set_chars or _DEFAULT_WORKING_SET_CHAR_BUDGET
         _pre_alloc_items = list(items)
-        _containment_overhead = 0
-        try:
-            from core.routing import web_containment as _wc_est
-
-            if _wc_est.containment_enabled() and any(
-                it.source_type == "web_context" for it in items
-            ):
-                _est_nonce = _wc_est.new_nonce()
-                _plain = "\n".join(
-                    _render_evidence_lines(items, render_version=render_version)
-                )
-                _contained_lines, _seg, _dig = _render_evidence_lines_contained(
-                    items, render_version=render_version,
-                    nonce=_est_nonce, contain_enabled=True,
-                )
-                _containment_overhead = max(
-                    0, len("\n".join(_contained_lines)) - len(_plain)
-                ) + len(_wc_est.standing_instruction()) + 2
-        except Exception:
-            # Estimation failure is tolerable: the measurement loop
-            # below is the enforcement.
-            _containment_overhead = 0
 
         from core.routing import web_containment as _wc  # noqa: local import by design
 
-        # Containment state decided ONCE, fail-CLOSED (code-gate round
-        # 5 blocker 1): if the state cannot be established while web
-        # evidence is present, the web items are WITHHELD rather than
-        # rendered raw without an envelope.
+        # THE containment decision -- made exactly once (code-gate
+        # round 6): estimation, every render pass, and the receipt all
+        # use this same value. Unknown state with web present fails
+        # CLOSED (web withheld, WARNING); withheld or disabled web
+        # charges ZERO containment overhead, so allocation metadata
+        # can never publish a false containment reason.
         try:
             _contain = _wc.containment_enabled()
         except Exception:
@@ -1635,6 +1615,29 @@ def assemble_working_set(
                     if it.source_type != "web_context"
                 ]
             _contain = False
+
+        _containment_overhead = 0
+        if _contain and any(
+            it.source_type == "web_context" for it in _pre_alloc_items
+        ):
+            try:
+                _est_nonce = _wc.new_nonce()
+                _plain = "\n".join(
+                    _render_evidence_lines(
+                        _pre_alloc_items, render_version=render_version
+                    )
+                )
+                _contained_lines, _seg, _dig = _render_evidence_lines_contained(
+                    _pre_alloc_items, render_version=render_version,
+                    nonce=_est_nonce, contain_enabled=True,
+                )
+                _containment_overhead = max(
+                    0, len("\n".join(_contained_lines)) - len(_plain)
+                ) + len(_wc.standing_instruction()) + 2
+            except Exception:
+                # Estimation failure tolerable: the measurement loop
+                # below is the enforcement.
+                _containment_overhead = 0
 
         ordered = ""
         total_chars = 0

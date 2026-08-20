@@ -326,6 +326,45 @@ class AllocatorDomainTests(unittest.TestCase):
                     max_working_set_chars=6000,
                 )
 
+    def test_divergent_containment_charges_zero_when_disabled(self):
+        # Round-6 blocker: the containment question is asked ONCE --
+        # when containment is off, no stale estimation overhead may
+        # evict evidence or publish a containment reason.
+        from core.routing import web_containment as wc
+
+        with mock.patch.object(wc, "containment_enabled", return_value=False):
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context="raw web line kept as-is when containment off",
+                max_working_set_chars=6000,
+            )
+        self.assertIsNotNone(ws)
+        alloc = ws.held_now_alloc
+        self.assertEqual(alloc["containment_overhead_chars"], 0)
+        self.assertNotEqual(alloc.get("reason"), "containment_consumed_budget")
+        self.assertEqual(alloc["pairs_rendered"], 3)
+        self.assertTrue(
+            any(i.source_type == "web_context" for i in ws.items)
+        )
+
+    def test_withheld_web_charges_zero_overhead(self):
+        # Fail-closed withholding must also charge zero: the withheld
+        # turn keeps its full anchor budget.
+        from core.routing import web_containment as wc
+
+        with mock.patch.object(
+            wc, "containment_enabled",
+            side_effect=RuntimeError("state unavailable"),
+        ), self.assertLogs("maez", level="WARNING"):
+            ws = _ws(
+                self.ORDINARY_Q, _hx(3), _ON,
+                web_context="withheld web line",
+                max_working_set_chars=6000,
+            )
+        alloc = ws.held_now_alloc
+        self.assertEqual(alloc["containment_overhead_chars"], 0)
+        self.assertEqual(alloc["pairs_rendered"], 3)
+
     def test_flags_off_alloc_is_none(self):
         ws = _ws("What did you just say?", _hx(3), _OFF)
         if ws is not None:
