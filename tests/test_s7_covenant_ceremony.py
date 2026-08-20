@@ -245,7 +245,6 @@ class AssemblerAndInterlockTests(unittest.TestCase):
             with self.assertRaises(CovenantCeremonyRefusal) as c:
                 revalidate_covenant_ceremony_for_consumption(
                     connection=conn,
-                    store=self.store,
                     evidence=ev,
                     request_id="req-1",
                     request_envelope_hash=H,
@@ -269,7 +268,7 @@ class AssemblerAndInterlockTests(unittest.TestCase):
         with sqlite3.connect(self.db) as conn:
             with self.assertRaises(CovenantCeremonyRefusal) as c:
                 revalidate_covenant_ceremony_for_consumption(
-                    connection=conn, store=self.store, evidence=forged,
+                    connection=conn, evidence=forged,
                     request_id="req-1", request_envelope_hash=H,
                     derived_work_class="covenant_touching_change",
                     artifact_id="art-1", now="2026-08-19T11:00:00Z",
@@ -284,7 +283,7 @@ class AssemblerAndInterlockTests(unittest.TestCase):
         with sqlite3.connect(self.db) as conn:
             with self.assertRaises(CovenantCeremonyRefusal) as c:
                 revalidate_covenant_ceremony_for_consumption(
-                    connection=conn, store=self.store, evidence=forged,
+                    connection=conn, evidence=forged,
                     request_id="req-1", request_envelope_hash=H,
                     derived_work_class="covenant_touching_change",
                     artifact_id="art-1", now="2026-08-19T11:00:00Z",
@@ -458,7 +457,9 @@ class Phase1RouteTests(unittest.TestCase):
         self.bootstrap = S7WebAuthnBootstrapStore(root / "s7_1_webauthn")
         _seed_credential(self.bootstrap)
         _seed_credential(self.bootstrap, ref="cred-backup", kind="backup")
-        self.phase_store = CovenantPhaseStore(root / "phases.sqlite3")
+        # Production shape: the phase table lives IN the ceremony database,
+        # which is what makes consume+insert one transaction possible.
+        self.phase_store = CovenantPhaseStore(self.bootstrap.db_path)
         self.service = S7LocalWebAuthnCeremonyService(
             verifier=_CovenantVerifier(),
             store_factory=lambda: self.bootstrap,
@@ -613,7 +614,7 @@ class Phase2GateTests(unittest.TestCase):
         self.bootstrap = S7WebAuthnBootstrapStore(root / "s7_1_webauthn")
         _seed_credential(self.bootstrap)
         _seed_credential(self.bootstrap, ref="cred-backup", kind="backup")
-        self.phase_store = CovenantPhaseStore(root / "phases.sqlite3")
+        self.phase_store = CovenantPhaseStore(self.bootstrap.db_path)
         self.service = S7LocalWebAuthnCeremonyService(
             verifier=_CovenantVerifier(),
             store_factory=lambda: self.bootstrap,
@@ -760,42 +761,20 @@ class MintFollowupAndWiringTests(unittest.TestCase):
             ro.insert_phase1(**_phase1_kwargs())
         self.assertEqual(c.exception.reason, "covenant_store_unprovisioned")
 
-    def test_phase2_after_mint_helper_writes_the_row(self):
-        from core.governance.s7_webauthn_ceremony import _covenant_phase2_after_mint
-
-        b1 = self.store.insert_phase1(**_phase1_kwargs(request_id="req-cov-1"))
-        challenge = {
-            "challenge_b64": "abc123",
-            "rendered_text_hash": "c" * 64,
-            "session_binding_hash": "d" * 64,
-            "internal_channel_binding_hash": "e" * 64,
-            "created_at": "2026-08-19T10:01:00Z",
-            "expires_at": "2026-08-19T10:06:00Z",
-            "covenant_phase2_of": b1,
-        }
-        result = _covenant_phase2_after_mint(
-            phase_store=self.store,
-            rendered_statement=_covenant_rendered(),
-            challenge=challenge,
-            challenge_id="chal-p2",
-            credential_ref="cred-primary",
-            sign_count=2,
-            artifact_id="art-99",
-            now="2026-08-19T10:02:00Z",
-        )
-        self.assertIsNone(result, "success returns None (no refusal)")
-        p2 = self.store.phase2_for_request(request_id="req-cov-1")
-        self.assertEqual(p2["artifact_id"], "art-99")
-        self.assertEqual(p2["first_phase_binding_sha256"], b1)
-
-    def test_finish_source_calls_the_helper_after_mint(self):
+    def test_finish_passes_the_atomic_phase2_writer_into_the_mint(self):
+        """Gate finding 5: the phase-2 row is written INSIDE the mint's
+        anchored transaction, not after it."""
         import inspect
         from core.governance import s7_webauthn_ceremony as svc
 
         src = inspect.getsource(svc.S7LocalWebAuthnCeremonyService.authorize_finish)
-        mint_at = src.index("mint_authorization_artifact(")
-        self.assertIn("_covenant_phase2_after_mint", src[mint_at:],
-                      "phase-2 row write must follow the mint")
+        self.assertIn("covenant_phase2_writer=covenant_phase2_writer", src)
+        from core.governance import s7_guarded_execution as g
+
+        seam = inspect.getsource(g.S7GuardedStateStore.put_artifact_with_bundle_reservation)
+        put_at = seam.index("self.authorization_store.put(artifact, connection=conn)")
+        self.assertIn("covenant_phase2_writer(conn)", seam[put_at:],
+                      "the writer must run inside the same anchored transaction")
 
     def test_consume_seat_wires_the_covenant_revalidator(self):
         """Dataflow pin: the sole SQL updater calls the covenant revalidator
@@ -888,7 +867,7 @@ class BuildGateRepairRound1Tests(unittest.TestCase):
         with _sq.connect(db) as conn:
             with self.assertRaises(CovenantCeremonyRefusal) as c:
                 revalidate_covenant_ceremony_for_consumption(
-                    connection=conn, store=store, evidence=ev,
+                    connection=conn, evidence=ev,
                     request_id="req-cov-1", request_envelope_hash=H,
                     derived_work_class="covenant_touching_change",
                     artifact_id="art-1", now="2026-08-19T11:00:00Z",
@@ -901,7 +880,7 @@ class BuildGateRepairRound1Tests(unittest.TestCase):
             )
         with _sq.connect(db) as conn:
             revalidate_covenant_ceremony_for_consumption(
-                connection=conn, store=store, evidence=ev,
+                connection=conn, evidence=ev,
                 request_id="req-cov-1", request_envelope_hash=H,
                 derived_work_class="covenant_touching_change",
                 artifact_id="art-1", now="2026-08-19T11:00:00Z",
@@ -938,3 +917,21 @@ class BuildGateRepairRound1Tests(unittest.TestCase):
                 first_phase_binding_sha256=b1, artifact_id="art-1",
             )
         self.assertEqual(c.exception.reason, "covenant_phase1_mismatch")
+
+
+class DaemonRouteWiringTests(unittest.TestCase):
+    def test_covenant_routes_and_phase_store_threading_exist(self):
+        import inspect
+
+        import daemon.maez_daemon as dm
+
+        src = inspect.getsource(dm)
+        self.assertIn("/covenant/first/begin", src)
+        self.assertIn("/covenant/first/finish", src)
+        self.assertIn("service.covenant_first_begin(", src)
+        self.assertIn("service.covenant_first_finish(", src)
+        self.assertEqual(
+            src.count("covenant_phase_store=_covenant_phase_store_for(store)"), 2,
+            "both authorize routes must thread the read-only phase store",
+        )
+        self.assertIn("phase_store=_covenant_phase_store_for(store)", src)

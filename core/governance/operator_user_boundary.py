@@ -3014,21 +3014,12 @@ def consume_for_execution_on_connection(
         # receipt exists. Read-only phase store: no creation authority here.
         from core.governance.s7_covenant_ceremony import (
             CovenantCeremonyRefusal,
-            CovenantPhaseStore,
+            revalidate_covenant_ceremony_for_consumption,
         )
 
-        db_row = connection.execute("PRAGMA database_list").fetchone()
-        if db_row is None or not db_row[2]:
-            return None, None
         try:
-            revalidate_store = CovenantPhaseStore(db_row[2], create=False)
-            from core.governance.s7_covenant_ceremony import (
-                revalidate_covenant_ceremony_for_consumption,
-            )
-
             revalidate_covenant_ceremony_for_consumption(
                 connection=connection,
-                store=revalidate_store,
                 evidence=covenant_ceremony_evidence,
                 request_id=rendered.request_id,
                 request_envelope_hash=rendered.request_envelope_hash,

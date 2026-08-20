@@ -1353,9 +1353,16 @@ class S7WebAuthnBootstrapStore:
             return "session_mismatch"
         return "active"
 
-    def consume_challenge(self, challenge_id: str, *, now: str) -> bool:
+    def consume_challenge(
+        self,
+        challenge_id: str,
+        *,
+        now: str,
+        connection: "sqlite3.Connection | None" = None,
+    ) -> bool:
         now_text = _parse_time(now).isoformat()
-        with closing(self._conn()) as conn:
+
+        def _consume(conn) -> bool:
             cur = conn.execute(
                 """
                 UPDATE s7_ceremony_challenges
@@ -1368,6 +1375,13 @@ class S7WebAuthnBootstrapStore:
                 (now_text, challenge_id, now_text),
             )
             return cur.rowcount == 1
+
+        if connection is not None:
+            # Caller owns the transaction: consumption becomes atomic with
+            # whatever ceremony write shares it (covenant phase rows).
+            return _consume(connection)
+        with closing(self._conn()) as conn:
+            return _consume(conn)
 
     def challenge_is_active(self, challenge_id: str, *, now: str) -> bool:
         with closing(self._conn()) as conn:

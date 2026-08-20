@@ -31,6 +31,14 @@ from core.governance.successor_governance import canonical_hash
 COOLING_OFF_FLOOR_SECONDS = 24 * 3600
 PHASE1_LIFETIME_SECONDS = 7 * 24 * 3600
 
+# RULING C statement bytes, approved verbatim by the owner 2026-08-18.
+COVENANT_PHASE1_NOTICE = (
+    "COVENANT CEREMONY \u2014 STEP 1 OF 2. This tap authorizes nothing. It "
+    "opens a 24-hour cooling-off period for the request below. After the "
+    "cooling-off, a second tap will be required before anything can "
+    "execute. An unconfirmed first tap lapses after 7 days."
+)
+
 COVENANT_WORK_CLASSES = frozenset({
     "covenant_touching_change",
     "autonomy_lowering_or_protection_reducing",
@@ -178,12 +186,12 @@ class CovenantPhaseStore:
 
     def __init__(self, db_path: str | Path, *, create: bool = True):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         if not create:
             # The daemon's single-callsite rule: no creation authority on a
-            # live request path. Reads of an unprovisioned store see no rows;
-            # writes refuse.
+            # live request path -- not even an empty db file or a parent
+            # directory (gate finding 14). Reads see no rows; writes refuse.
             return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -238,6 +246,8 @@ class CovenantPhaseStore:
 
     def current_phase1(self, *, request_id: str, now: str) -> dict | None:
         now_dt = _parse_z(now)
+        if not self.db_path.exists():
+            return None
         with closing(sqlite3.connect(self.db_path)) as conn:
             if not self._table_exists(conn):
                 return None
@@ -253,7 +263,31 @@ class CovenantPhaseStore:
             raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
         return live[0]
 
+    def head_phase1(self, *, request_id: str) -> dict | None:
+        """The lineage head: the unsuperseded phase-1 row, EXPIRED OR NOT.
+
+        Supersession must link to the head even when it has lapsed --
+        otherwise expired rows vanish from selection and their replacement
+        carries no lineage (gate finding 9)."""
+        if not self.db_path.exists():
+            return None
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            if not self._table_exists(conn):
+                return None
+            self._require_contract(conn)
+            rows = self._rows(conn, request_id, "first_authorization")
+        superseded = {r["supersedes_binding_sha256"] for r in rows
+                      if r["supersedes_binding_sha256"]}
+        heads = [r for r in rows if r["binding_sha256"] not in superseded]
+        if not heads:
+            return None
+        if len(heads) > 1:
+            raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+        return heads[0]
+
     def phase2_for_request(self, *, request_id: str) -> dict | None:
+        if not self.db_path.exists():
+            return None
         with closing(sqlite3.connect(self.db_path)) as conn:
             if not self._table_exists(conn):
                 return None
@@ -266,6 +300,8 @@ class CovenantPhaseStore:
         return rows[0]
 
     def phase1_by_binding(self, *, binding_sha256: str) -> dict | None:
+        if not self.db_path.exists():
+            return None
         with closing(sqlite3.connect(self.db_path)) as conn:
             if not self._table_exists(conn):
                 return None
@@ -284,10 +320,11 @@ class CovenantPhaseStore:
         return row
 
     # -- writes -----------------------------------------------------------
-    def _insert(self, values: dict) -> str:
+    def _insert(self, *, values: dict, connection: sqlite3.Connection | None = None) -> str:
         values = dict(values)
         values["row_seal_sha256"] = _row_seal(values)
-        with closing(sqlite3.connect(self.db_path)) as conn:
+
+        def _write(conn: sqlite3.Connection) -> None:
             if not self._table_exists(conn):
                 raise CovenantCeremonyRefusal("covenant_store_unprovisioned")
             self._require_contract(conn)
@@ -297,15 +334,26 @@ class CovenantPhaseStore:
                     f"VALUES ({', '.join('?' for _ in range(len(_COLUMNS) + 1))})",
                     tuple(values[k] for k in (*_COLUMNS, "row_seal_sha256")),
                 )
-                conn.commit()
             except sqlite3.IntegrityError:
                 raise CovenantCeremonyRefusal("covenant_uniqueness_conflict") from None
+
+        if connection is not None:
+            # Caller owns the transaction: the write is atomic with whatever
+            # ceremony act shares it (challenge consumption, artifact mint).
+            _write(connection)
+        else:
+            if not self.db_path.exists():
+                raise CovenantCeremonyRefusal("covenant_store_unprovisioned")
+            with closing(sqlite3.connect(self.db_path)) as conn:
+                _write(conn)
+                conn.commit()
         return values["binding_sha256"]
 
     def insert_phase1(
         self,
         *,
         supersedes_binding_sha256: str | None = None,
+        connection: sqlite3.Connection | None = None,
         **kw,
     ) -> str:
         if kw.get("derived_work_class") not in COVENANT_WORK_CLASSES:
@@ -325,7 +373,7 @@ class CovenantPhaseStore:
             if predecessor is None:
                 raise CovenantCeremonyRefusal("covenant_supersedes_unknown")
         binding = covenant_phase1_binding(**kw)
-        return self._insert({
+        return self._insert(connection=connection, values={
             **kw,
             "phase": "first_authorization",
             "user_presence": 1,
@@ -344,6 +392,7 @@ class CovenantPhaseStore:
         *,
         first_phase_binding_sha256: str,
         artifact_id: str,
+        connection: sqlite3.Connection | None = None,
         **kw,
     ) -> str:
         if kw.get("derived_work_class") not in COVENANT_WORK_CLASSES:
@@ -374,7 +423,7 @@ class CovenantPhaseStore:
             artifact_id=artifact_id,
             **kw,
         )
-        return self._insert({
+        return self._insert(connection=connection, values={
             **kw,
             "phase": "second_confirmation",
             "user_presence": 1,
@@ -414,10 +463,32 @@ def assemble_covenant_ceremony_evidence(
     )
 
 
+def _rows_on(conn: sqlite3.Connection, request_id: str, phase: str) -> list[dict]:
+    """Seal-verified phase rows read through the CALLER'S connection --
+    at the consume seat that is the descriptor-held connection, so the rows
+    come from the same inode as the artifact CAS (gate finding 4)."""
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_TABLE,)
+    ).fetchone()
+    if table is None:
+        return []
+    cur = conn.execute(
+        f"SELECT {', '.join(_COLUMNS)}, row_seal_sha256 FROM {_TABLE} "
+        "WHERE request_id = ? AND phase = ?",
+        (request_id, phase),
+    )
+    out = []
+    for raw in cur.fetchall():
+        row = dict(zip((*_COLUMNS, "row_seal_sha256"), raw))
+        if _row_seal(row) != row["row_seal_sha256"]:
+            raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+        out.append(row)
+    return out
+
+
 def revalidate_covenant_ceremony_for_consumption(
     *,
     connection: sqlite3.Connection,
-    store: CovenantPhaseStore,
     evidence,
     request_id: str,
     request_envelope_hash: str,
@@ -436,12 +507,64 @@ def revalidate_covenant_ceremony_for_consumption(
     """
     if derived_work_class not in COVENANT_WORK_CLASSES:
         raise CovenantCeremonyRefusal("covenant_work_class_invalid")
-    assembled = assemble_covenant_ceremony_evidence(
-        store, request_id=request_id, now=now
-    )
-    if assembled is None:
+    phase2_rows = _rows_on(connection, request_id, "second_confirmation")
+    if len(phase2_rows) > 1:
+        raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    if not phase2_rows:
         raise CovenantCeremonyRefusal("covenant_ceremony_incomplete")
-    phase2 = store.phase2_for_request(request_id=request_id)
+    phase2 = phase2_rows[0]
+    phase1_rows = [
+        r for r in _rows_on(connection, request_id, "first_authorization")
+        if r["binding_sha256"] == phase2["first_phase_binding_sha256"]
+    ]
+    if not phase1_rows:
+        raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    phase1 = phase1_rows[0]
+    # Both correspondence digests recomputed from the persisted inputs, and
+    # the cooling-off recomputed from the rows -- never trusted from the
+    # carrier (gate finding 8).
+    recomputed_p1 = covenant_phase1_binding(
+        **{k: phase1[k] for k in (
+            "request_id", "request_envelope_hash", "derived_work_class",
+            "challenge_id", "challenge_b64_sha256", "rendered_text_hash",
+            "session_binding_hash", "internal_channel_binding_hash",
+            "credential_ref", "sign_count", "challenge_created_at",
+            "challenge_expires_at", "recorded_at",
+        )}
+    )
+    if recomputed_p1 != phase1["binding_sha256"]:
+        raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    recomputed_p2 = covenant_phase2_binding(
+        first_phase_binding_sha256=phase2["first_phase_binding_sha256"],
+        artifact_id=phase2["artifact_id"],
+        **{k: phase2[k] for k in (
+            "request_id", "request_envelope_hash", "derived_work_class",
+            "challenge_id", "challenge_b64_sha256", "rendered_text_hash",
+            "session_binding_hash", "internal_channel_binding_hash",
+            "credential_ref", "sign_count", "challenge_created_at",
+            "challenge_expires_at", "recorded_at",
+        )}
+    )
+    if recomputed_p2 != phase2["binding_sha256"]:
+        raise CovenantCeremonyRefusal("covenant_store_integrity_failure")
+    if (
+        covenant_seconds_between(
+            phase1["recorded_at"], phase2["challenge_created_at"]
+        )
+        < COOLING_OFF_FLOOR_SECONDS
+    ):
+        raise CovenantCeremonyRefusal("covenant_cooling_off_immature")
+    from core.governance.operator_user_boundary import CovenantCeremonyEvidence
+
+    assembled = CovenantCeremonyEvidence(
+        request_id=phase2["request_id"],
+        request_envelope_hash=phase2["request_envelope_hash"],
+        ceremony_kind="cooling_off_second_confirmation",
+        first_authorized_at=phase1["recorded_at"],
+        second_confirmed_at=phase2["recorded_at"],
+        second_confirmation_ref_hash=phase2["binding_sha256"],
+        reviewed_equivalent_ref_hash=None,
+    )
     if (
         evidence is None
         or evidence.request_id != assembled.request_id

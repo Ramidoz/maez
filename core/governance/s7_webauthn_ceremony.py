@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 import os
 import uuid
+from pathlib import Path
 
 from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
@@ -482,6 +483,7 @@ class S7LocalWebAuthnCeremonyService:
         import hashlib as _hashlib
 
         from core.governance.s7_covenant_ceremony import (
+            COVENANT_PHASE1_NOTICE,
             CovenantCeremonyRefusal,
         )
 
@@ -563,45 +565,66 @@ class S7LocalWebAuthnCeremonyService:
         )
         if sign_count.get("ok") is not True:
             return S7CeremonyServiceResult(body=sign_count, status_code=409)
-        if not store.consume_challenge(challenge_id, now=now):
+        # Consume + phase-row insert in ONE transaction on ONE connection
+        # (gate finding 5): a crash cannot leave a consumed tap without its
+        # sealed record. Requires the phase table in the same database.
+        if Path(phase_store.db_path) != Path(store.db_path):
             return S7CeremonyServiceResult(
-                body={"ok": False, "error": "s7_challenge_replayed"},
-                status_code=410,
+                body={"ok": False, "error": "s7_covenant_store_mismatch"},
+                status_code=409,
             )
-        # The new tap IS the supersession act for any live predecessor.
-        live = phase_store.current_phase1(
-            request_id=str(rendered_statement.request_id), now=now
+        # The new tap IS the supersession act for any predecessor -- the
+        # lineage HEAD, expired or not (gate finding 9: expired rows must
+        # still receive their supersession link).
+        head = phase_store.head_phase1(
+            request_id=str(rendered_statement.request_id)
         )
-        try:
-            binding = phase_store.insert_phase1(
-                request_id=str(rendered_statement.request_id),
-                request_envelope_hash=str(rendered_statement.request_envelope_hash),
-                derived_work_class=str(rendered_statement.derived_work_class),
-                challenge_id=challenge_id,
-                challenge_b64_sha256=_hashlib.sha256(
-                    str(challenge["challenge_b64"]).encode("utf-8")
-                ).hexdigest(),
-                rendered_text_hash=str(challenge["rendered_text_hash"]),
-                session_binding_hash=str(challenge["session_binding_hash"]),
-                internal_channel_binding_hash=str(challenge["internal_channel_binding_hash"]),
-                credential_ref=credential_ref,
-                sign_count=int(verified.get("sign_count", 0)),
-                challenge_created_at=str(challenge["created_at"]),
-                challenge_expires_at=str(challenge["expires_at"]),
-                recorded_at=now,
-                supersedes_binding_sha256=(
-                    live["binding_sha256"] if live is not None else None
-                ),
-            )
-        except CovenantCeremonyRefusal as exc:
-            return S7CeremonyServiceResult(
-                body={"ok": False, "error": exc.reason}, status_code=409
-            )
+        import sqlite3 as _sqlite3
+        from contextlib import closing as _closing
+
+        with _closing(_sqlite3.connect(store.db_path)) as _txn:
+            _txn.execute("BEGIN IMMEDIATE")
+            if not store.consume_challenge(
+                challenge_id, now=now, connection=_txn
+            ):
+                _txn.rollback()
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_challenge_replayed"},
+                    status_code=410,
+                )
+            try:
+                binding = phase_store.insert_phase1(
+                    connection=_txn,
+                    request_id=str(rendered_statement.request_id),
+                    request_envelope_hash=str(rendered_statement.request_envelope_hash),
+                    derived_work_class=str(rendered_statement.derived_work_class),
+                    challenge_id=challenge_id,
+                    challenge_b64_sha256=_hashlib.sha256(
+                        str(challenge["challenge_b64"]).encode("utf-8")
+                    ).hexdigest(),
+                    rendered_text_hash=str(challenge["rendered_text_hash"]),
+                    session_binding_hash=str(challenge["session_binding_hash"]),
+                    internal_channel_binding_hash=str(challenge["internal_channel_binding_hash"]),
+                    credential_ref=credential_ref,
+                    sign_count=int(verified.get("sign_count", 0)),
+                    challenge_created_at=str(challenge["created_at"]),
+                    challenge_expires_at=str(challenge["expires_at"]),
+                    recorded_at=now,
+                    supersedes_binding_sha256=(
+                        head["binding_sha256"] if head is not None else None
+                    ),
+                )
+            except CovenantCeremonyRefusal as exc:
+                _txn.rollback()
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": exc.reason}, status_code=409
+                )
+            _txn.commit()
         return S7CeremonyServiceResult(
             body={
                 "ok": True,
                 "phase1_binding_sha256": binding,
-                "cooling_off_ends_at": None,  # informational rendering is D17 work
+                "covenant_notice": COVENANT_PHASE1_NOTICE,
             },
             status_code=200,
         )
@@ -1174,6 +1197,32 @@ class S7LocalWebAuthnCeremonyService:
         )
         from core.governance.s7_guarded_execution import mint_authorization_artifact
 
+        covenant_phase2_writer = None
+        if covenant_phase1_row is not None:
+            def covenant_phase2_writer(conn, _c=challenge, _a=artifact_id):
+                import hashlib as _hashlib
+
+                covenant_phase_store.insert_phase2(
+                    connection=conn,
+                    request_id=str(rendered_statement.request_id),
+                    request_envelope_hash=str(rendered_statement.request_envelope_hash),
+                    derived_work_class=str(rendered_statement.derived_work_class),
+                    challenge_id=challenge_id,
+                    challenge_b64_sha256=_hashlib.sha256(
+                        str(_c["challenge_b64"]).encode("utf-8")
+                    ).hexdigest(),
+                    rendered_text_hash=str(_c["rendered_text_hash"]),
+                    session_binding_hash=str(_c["session_binding_hash"]),
+                    internal_channel_binding_hash=str(_c["internal_channel_binding_hash"]),
+                    credential_ref=credential_ref,
+                    sign_count=int(verified.get("sign_count", 0)),
+                    challenge_created_at=str(_c["created_at"]),
+                    challenge_expires_at=str(_c["expires_at"]),
+                    recorded_at=now,
+                    first_phase_binding_sha256=str(_c["covenant_phase2_of"]),
+                    artifact_id=_a,
+                )
+
         try:
             mint_authorization_artifact(
                 artifact=artifact,
@@ -1185,6 +1234,7 @@ class S7LocalWebAuthnCeremonyService:
                 now=now,
                 consultation_exemption=consultation_exemption,
                 durable_cutover_selection=durable_cutover_selection,
+                covenant_phase2_writer=covenant_phase2_writer,
             )
         except ValueError as exc:
             if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
@@ -1202,29 +1252,6 @@ class S7LocalWebAuthnCeremonyService:
                     status_code=409,
                 )
             raise
-        if covenant_phase1_row is not None:
-            # Phase-2 row, written right after the mint. A crash between the
-            # two leaves an incomplete ceremony that consumption refuses --
-            # the safe direction.
-            covenant_refusal = _covenant_phase2_after_mint(
-                phase_store=covenant_phase_store,
-                rendered_statement=rendered_statement,
-                challenge=challenge,
-                challenge_id=challenge_id,
-                credential_ref=credential_ref,
-                sign_count=int(verified.get("sign_count", 0)),
-                artifact_id=artifact_id,
-                now=now,
-            )
-            if covenant_refusal is not None:
-                return S7CeremonyServiceResult(
-                    body={"ok": False, "error": covenant_refusal,
-                          "artifact_id": artifact_id,
-                          "detail": "artifact minted but covenant phase-2 row "
-                                    "refused; ceremony incomplete, consumption "
-                                    "will refuse"},
-                    status_code=409,
-                )
         authorization_record_id = store.record_authorization_history(
             envelope=envelope,
             rendered_text_hash=rendered_statement.rendered_text_hash,
@@ -1782,53 +1809,6 @@ def _schema_invalid(detail: str) -> S7CeremonyServiceResult:
         body={"ok": False, "error": "s7_schema_invalid", "detail": detail},
         status_code=400,
     )
-
-
-def _covenant_phase2_after_mint(
-    *,
-    phase_store: Any,
-    rendered_statement: Any,
-    challenge: dict[str, Any],
-    challenge_id: str,
-    credential_ref: str,
-    sign_count: int,
-    artifact_id: str,
-    now: str,
-) -> str | None:
-    """Write the sealed phase-2 row after a covenant-class mint.
-
-    A crash between mint and this insert leaves an artifact whose ceremony
-    is incomplete -- consumption then refuses covenant_ceremony_incomplete,
-    which is the safe direction. Returns a refusal reason string, or None
-    on success.
-    """
-    import hashlib as _hashlib
-
-    from core.governance.s7_covenant_ceremony import CovenantCeremonyRefusal
-
-    try:
-        phase_store.insert_phase2(
-            request_id=str(rendered_statement.request_id),
-            request_envelope_hash=str(rendered_statement.request_envelope_hash),
-            derived_work_class=str(rendered_statement.derived_work_class),
-            challenge_id=challenge_id,
-            challenge_b64_sha256=_hashlib.sha256(
-                str(challenge["challenge_b64"]).encode("utf-8")
-            ).hexdigest(),
-            rendered_text_hash=str(challenge["rendered_text_hash"]),
-            session_binding_hash=str(challenge["session_binding_hash"]),
-            internal_channel_binding_hash=str(challenge["internal_channel_binding_hash"]),
-            credential_ref=credential_ref,
-            sign_count=int(sign_count),
-            challenge_created_at=str(challenge["created_at"]),
-            challenge_expires_at=str(challenge["expires_at"]),
-            recorded_at=now,
-            first_phase_binding_sha256=str(challenge["covenant_phase2_of"]),
-            artifact_id=artifact_id,
-        )
-    except CovenantCeremonyRefusal as exc:
-        return exc.reason
-    return None
 
 
 def _challenge_matches_rendered_d12(

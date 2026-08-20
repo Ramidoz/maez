@@ -3517,6 +3517,7 @@ class S7GuardedStateStore:
         source_ref_hash: str | None = None,
         reservation_token: str | None = None,
         now: str | None = None,
+        covenant_phase2_writer: Any | None = None,
     ) -> None:
         validated = require_source_bundle_validation_for_mint(source_bundle_validation)
         if self.voice_bundle_use_store is None:
@@ -3547,6 +3548,11 @@ class S7GuardedStateStore:
                 connection=conn,
             )
             self.authorization_store.put(artifact, connection=conn)
+            if covenant_phase2_writer is not None:
+                # Covenant phase-2 row, atomic with the artifact it seals
+                # (covenant build gate, finding 5). The writer raises to roll
+                # the whole mint back.
+                covenant_phase2_writer(conn)
 
 
 def mint_authorization_artifact(
@@ -3560,6 +3566,7 @@ def mint_authorization_artifact(
     now: str | None = None,
     consultation_exemption: Any | None = None,
     durable_cutover_selection: Any | None = None,
+    covenant_phase2_writer: Any | None = None,
 ) -> None:
     """Sole authorization-artifact mint entry point.
 
@@ -3617,6 +3624,11 @@ def mint_authorization_artifact(
             source_ref_hash=source_ref_hash,
             reservation_token=reservation_token,
             now=now,
+            covenant_phase2_writer=covenant_phase2_writer,
         )
         return
+    if covenant_phase2_writer is not None:
+        raise ValueError(
+            "covenant phase-2 evidence requires the guarded voice-seat mint"
+        )
     authorization_store.put(artifact)

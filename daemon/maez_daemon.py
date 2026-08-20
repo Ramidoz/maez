@@ -496,6 +496,14 @@ def _s7_guarded_execution_consumer_live(pipe, card_store, dream) -> bool:
     )
 
 
+def _covenant_phase_store_for(store):
+    """Read-only phase store on the ceremony database. No creation authority
+    on the live request path -- provisioning is a setup act."""
+    from core.governance.s7_covenant_ceremony import CovenantPhaseStore
+
+    return CovenantPhaseStore(store.db_path, create=False)
+
+
 def _covenant_evidence_for_authorization(store, rendered, now):
     """Assemble covenant ceremony evidence for RULING-O classes, from rows.
 
@@ -12407,6 +12415,72 @@ class MaezDaemon:
                 )
             ), 503
 
+        @app.route("/internal/s7/cards/<request_id>/covenant/first/begin", methods=["POST"])
+        def s7_covenant_first_begin(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                material = _s7_authorization_route_material(
+                    self, request, request_id=request_id, now=now, store=store,
+                )
+                if material.ok is not True:
+                    return jsonify(material.body), material.status_code
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: store,
+                )
+                result = service.covenant_first_begin(
+                    now=now,
+                    rendered_statement=material.kwargs["rendered_statement"],
+                    precondition_hash=material.kwargs["precondition_hash"],
+                    session_binding=material.kwargs["session_binding"],
+                    internal_channel_binding=material.kwargs["internal_channel_binding"],
+                )
+                return jsonify(result.body), result.status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/covenant/first/begin",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/covenant/first/finish", methods=["POST"])
+        def s7_covenant_first_finish(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                material = _s7_authorization_route_material(
+                    self, request, request_id=request_id, now=now, store=store,
+                )
+                if material.ok is not True:
+                    return jsonify(material.body), material.status_code
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: store,
+                )
+                result = service.covenant_first_finish(
+                    now=now,
+                    rendered_statement=material.kwargs["rendered_statement"],
+                    precondition_hash=material.kwargs["precondition_hash"],
+                    session_binding=material.kwargs["session_binding"],
+                    internal_channel_binding=material.kwargs["internal_channel_binding"],
+                    request_json=material.kwargs["request_json"],
+                    phase_store=_covenant_phase_store_for(store),
+                )
+                return jsonify(result.body), result.status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/covenant/first/finish",
+                )
+            ), 503
+
         @app.route("/internal/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
         def s7_webauthn_authorize_begin(request_id: str):
             if live_webauthn_ceremony_enabled():
@@ -12436,6 +12510,7 @@ class MaezDaemon:
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     allow_degraded_primary_only=material.kwargs["allow_degraded_primary_only"],
                     allow_degraded_backup_only=material.kwargs["allow_degraded_backup_only"],
+                    covenant_phase_store=_covenant_phase_store_for(store),
                 )
                 if (
                     result.status_code == 200
@@ -12540,6 +12615,7 @@ class MaezDaemon:
                     source_bundle_validation=voice_source.kwargs.get("source_bundle_validation"),
                     source_ref_hash=voice_source.kwargs.get("source_ref_hash"),
                     reservation_token=voice_source.kwargs.get("reservation_token"),
+                    covenant_phase_store=_covenant_phase_store_for(store),
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(

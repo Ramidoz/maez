@@ -20,6 +20,37 @@ remains, and what each remaining item needs.
    insert_phase2 now refuse envelope-hash or work-class drift against
    the exact phase-1 row (`s7_covenant_phase1_mismatch`).
 
+## Repaired in round 2 (structural)
+
+4. **Atomicity (CRITICALs 4+5) — CLOSED.** The phase table lives in the
+   ceremony database (enforced: phase-1 finish refuses
+   s7_covenant_store_mismatch on differing paths). Phase 1: challenge
+   consumption and the sealed row are ONE transaction on ONE connection.
+   Phase 2: the row is written by a writer callback INSIDE the mint's
+   anchored transaction — artifact and row commit or roll back together.
+   Consume-side revalidation reads the rows THROUGH the held connection
+   (same inode as the artifact CAS), recomputes BOTH correspondence
+   digests from persisted inputs, and recomputes the cooling-off from
+   the rows. The old after-mint helper is deleted.
+5. **Reachability (HIGH 6) — CLOSED.** Two daemon routes
+   (/covenant/first/begin, /finish) mirror the authorize pattern, and
+   both authorize routes thread the read-only phase store. Provisioning
+   the phase table on the LIVE store remains a setup act (create=False
+   everywhere on request paths — and create=False no longer creates
+   even an empty file or directory, closing MEDIUM 14).
+6. **RULING C statement bytes (HIGH 7) — CLOSED.** The owner approved
+   the exact text ("COVENANT CEREMONY — STEP 1 OF 2…"); it ships as
+   COVENANT_PHASE1_NOTICE in the phase-1 begin/finish responses. Whether
+   it must also enter the SIGNED statement bytes (D17) is a question
+   for the re-gate.
+7. **Digest completeness + cooling-off recompute (HIGH 8) — CLOSED at
+   the revalidator** (both digests + cooling-off recomputed from rows).
+   The phase-2 digest domain covering the FULL artifact identity
+   remains open — re-gate question.
+8. **Lineage (part of HIGH 9) — IMPROVED.** Supersession now links to
+   the lineage HEAD, expired or not, so lapsed rows keep their chain.
+   Concurrency races and sign-count CAS remain open.
+
 ## Remaining, in dependency order
 
 4. **Atomicity (CRITICALs 4+5).** Neither phase row is written in its
