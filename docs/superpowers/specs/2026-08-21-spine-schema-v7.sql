@@ -412,3 +412,33 @@ BEGIN
   SELECT RAISE(ABORT,'started_ts not later than every prior start')
   WHERE NEW.started_ts <= COALESCE((SELECT MAX(started_ts) FROM scan_runs),-1e18);
 END;
+
+-- ============================================================
+-- pass 7.2: two more self-found holes
+-- ============================================================
+
+-- (5) WRONG-ROW ATTRIBUTION: atoms of one row attributed to another.
+-- The schema cannot see live bytes, but it CAN refuse a row whose atoms
+-- disagree about their own row hash -- failing at insert, not at seal.
+CREATE TRIGGER occ_row_hash_consistent BEFORE INSERT ON atom_occurrences
+BEGIN
+  SELECT RAISE(ABORT,'row_content_hash disagrees with existing atoms of this row')
+  WHERE EXISTS (SELECT 1 FROM atom_occurrences
+    WHERE layer=NEW.layer AND body_row_id=NEW.body_row_id
+      AND splitter_version=NEW.splitter_version
+      AND row_content_hash <> NEW.row_content_hash);
+END;
+
+-- (6) GAP SPAM: disposing rows as gaps instead of investigating them.
+-- A gap is sometimes the truth, so it is not forbidden -- it is made
+-- UNDENIABLE: a run closing 'complete' with any gaps must have declared
+-- them in a coverage note first.
+CREATE TRIGGER gaps_must_be_declared_before_complete
+BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'complete with undeclared gaps: record a coverage note')
+  WHERE NEW.status='complete'
+    AND EXISTS (SELECT 1 FROM observation_gaps WHERE run_id=NEW.run_id)
+    AND NOT EXISTS (SELECT 1 FROM coverage_notes
+      WHERE run_id=NEW.run_id AND note_class='HISTORICAL_UNTRACEABLE');
+END;

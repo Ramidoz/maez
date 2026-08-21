@@ -441,6 +441,27 @@ it would reject a true state. The real obligation is a verifier check:
 `manifest_sha` must equal the hash of the membership actually recorded
 for that run. Restriction is not the same as correctness.
 
+
+## 2.2 Pass 7.2 — two more, and the line between schema and verifier
+
+| Self-attack | Outcome |
+|---|---|
+| Atoms of one row attributed to a **different** row in the same layer | Partially closable: the schema cannot see live bytes, but it can refuse a row whose atoms **disagree about their own row hash** — now enforced at insert, not only at seal (`occ_row_hash_consistent`) |
+| **Gap spam**: dispose every row as a gap instead of investigating, then close `complete` | A gap is sometimes the truth, so it is not forbidden — it is made **undeniable**: a run closing `complete` with any gaps must first declare them in a coverage note (`gaps_must_be_declared_before_complete`) |
+
+The wrong-row attack is the honest boundary of what any schema can do.
+A *fully* self-consistent misattribution — every atom of row B carrying
+row A's content and A's hash — is invisible inside the file, because
+the truth is in the live store. It cannot earn a PASS: the verifier's
+`row_covered` check reads the real row, hashes it, and fails. So the
+receipt can exist but can never be read as evidence.
+
+That is the division this design keeps making: the **schema** stops
+what is expressible in the file, the **verifier** stops what requires
+the world, and PASS is withheld until the verifier has spoken for every
+row. Neither half is sufficient; naming which is which is what keeps
+the claim honest.
+
 ## 3. What the schema now refuses (round 6's admitted list, retested)
 
 All executed in-memory against the file above; honest operations
