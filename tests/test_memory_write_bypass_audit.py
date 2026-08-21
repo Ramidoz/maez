@@ -91,6 +91,27 @@ _ALLOWLIST: dict[str, str] = {
     "core/eval/longmemeval.py":
         "Benchmark-only writes wrapped in IsolatedMemoryHarness which "
         "monkeypatches BASE_DB to tmpdir; never touches production.",
+
+    # 2026-08-21, evidence-atom spine S0 prep: this entry records a
+    # bypass that was already present and already failing this audit at
+    # baseline — it is not a new escape hatch.
+    #   1. Why not the chokepoint: store_telegram stamps datetime.now(),
+    #      which destroys the backdating the temporal LongMemEval
+    #      question types are built on. Backdated corpus rows cannot be
+    #      written through it without changing what the bench measures.
+    #   2. Defense: the only production caller is
+    #      core/eval/recall_bench.py:158, inside `with
+    #      IsolatedMemoryHarness()`. On top of that harness monkeypatch,
+    #      ingest_corpus carries its OWN runtime refusal (raises if
+    #      BASE_DB resolves to, or under, the production store) — a
+    #      stronger defense than the longmemeval entry above, which
+    #      relies on the harness alone. That guard is repo-root-derived,
+    #      not a hardcoded literal, so it keeps guarding if the checkout
+    #      moves.
+    "core/eval/telegram_corpus.py":
+        "Benchmark-only backdated corpus ingest; IsolatedMemoryHarness "
+        "plus an in-function refusal when BASE_DB resolves to or under "
+        "the production store.",
 }
 
 # Directories whose .py files are scanned. Production-only paths;

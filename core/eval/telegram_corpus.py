@@ -149,8 +149,19 @@ def ingest_corpus(mm, corpus: QuestionCorpus, *, batch_size: int = 64) -> int:
     """
     import memory.memory_manager as mm_mod
 
-    base = str(mm_mod.BASE_DB)
-    if base.startswith("/home/rohit/maez/memory/db"):
+    # Repo-root-derived, not a hardcoded literal: a literal silently
+    # stops guarding if the checkout moves, which is the exact shape of
+    # the hermetic-sandbox path hazard.
+    from pathlib import Path as _Path
+
+    _production_db = (
+        _Path(__file__).resolve().parents[2] / "memory" / "db"
+    ).resolve()
+    try:
+        _base = _Path(str(mm_mod.BASE_DB)).resolve()
+    except OSError:  # unresolvable path cannot be the production tree
+        _base = _Path(str(mm_mod.BASE_DB))
+    if _base == _production_db or _production_db in _base.parents:
         raise RuntimeError(
             "ingest_corpus refused: BASE_DB points at the production store"
         )
