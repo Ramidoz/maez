@@ -1,397 +1,329 @@
-# Theme 2 — the ledger cannot omit or misdate a life (design pass 2)
+# Theme 2 — the ledger cannot omit or misdate a life (design pass 3)
 
-Status: DESIGN, pass 2. Revises pass 1 (`789e995`) by folding all
-eleven blockers from gate round 1
-(`2026-08-22-theme2-gate-round1.md`). Covers birth blockers **A3, A4,
-A6, B3**. Theme 1, A5 durability, and the creation manifest remain out
-of scope.
+Status: DESIGN, pass 3. Folds gate round 2's sixteen new defects
+(ND1–ND16) and the partial/undischarged blockers
+(`2026-08-22-theme2-gate-round2.md`). Covers birth blockers **A3, A4,
+A6, B3**. Theme 1, A5 durability, and the creation manifest remain
+out of scope.
 
-Pass 1's direction survived the gate (admission at the doorway,
-in-ledger idempotency, transport-owned delivery truth, tri-state
-phase, pre-birth schema freedom, flag-dormant slices). What follows
-closes what did not: the interaction universe, the identity model, the
-temporal model, outcome cardinality, latch mechanics, migration
-mechanics, and the witness discipline.
+Round 2's lesson, taken whole: pass 2 stated the right invariants
+**as prose** and Codex disproved them **by executing the schema**.
+Pass 3's rule is therefore: every invariant is enforced by the schema,
+a trigger, or a single transaction boundary — never by caller
+discipline — and every round-2 adversarial insert becomes a negative
+control in the witness protocols.
 
 ## 0. Posture (unchanged)
 
-`memory/ledger.db` is 0 bytes and unmigrated — pre-birth schema
-freedom, spent now. Everything lands flag-dormant; witnesses run in an
-airlocked fixture, never the live tree. No agent touches the creation
-manifest.
+`memory/ledger.db` is 0 bytes and unmigrated; pre-birth schema freedom
+is spent now, including a clean hash-domain v2 cutover. Everything
+lands flag-dormant; witnesses run in the airlocked born fixture. No
+agent touches the creation manifest.
 
-## 1. Invariants (revised)
+## 1. Invariants (revised where round 2 broke them)
 
-- **I1 — Guard, then admit, then everything else.** Canon ordering
-  (Decision 30): owner/auth resolution → `guard_owner_text` (S4) →
-  **admission** → interceptors → cognition. Admission is the first
-  ledger side effect and precedes all cognition. S4's single-answer
-  authority ships regardless of ledger health; an S4-matched turn
-  still admits and closes like every other turn, and if its admission
-  fails post-birth the exchange goes to the gap journal (§6). The
-  pass-1 "clinical exception" is deleted — no path *chooses* to be
-  clinical; the guard decides, and the guard's authority is over the
-  answer, not over biography.
-- **I2 — Every raw event is admitted exactly once; every turn knows
-  its constituents.** Raw platform events, logical turns, and
-  processing runs are three identities (§3). Aggregated turns
-  reference all constituent events; nothing is lost to merging.
-- **I3 — Admission carries an execution claim.** A replayed event does
-  not just dedup the row — it prevents a second cognition, action, or
-  send (disposition table, §3.3).
-- **I4 — Delivery truth is transport-owned and per-attempt.** Every
-  egress attempt (progress, final text, TTS, media, each multipart
-  part) is recorded append-only with the hash of the bytes actually
-  handed to the transport.
-- **I5 — Exactly one *current* closure per admitted interaction.**
-  Closures are append-only with supersession; "current" is the head of
-  the supersession chain. Precedence is lattice-defined (§4):
-  transport evidence beats reconciler inference; nothing is ever
-  overwritten.
-- **I6 — No reply without a parent** — enforced by trigger in the
-  schema, not by caller discipline.
-- **I7 — Phase is proven, never presumed** — tri-state with a
-  path-bound latch (§5); writers refuse on `unknown`. The census of
-  phase-stamping consumers is closed, including `audit_log` and
-  `LedgerWriter` itself.
-- **I8 — Late knowledge is labeled late.** Reconciler and journal
-  fold-ins carry `recorded_by` and `discovered_at`; supersession
-  preserves the wrong-then-corrected history.
-- **I9 — Readers may not assert undelivered speech as spoken.**
-  Self-history readers join the current closure and render
-  composed-but-undelivered words as such.
-- **I10 — Occurrence time is preserved.** Provider time is stored as
-  `occurred_at`; local admission time separately as `admitted_at`. The
-  local clock never silently substitutes for when a thing happened.
-- **I11 — Pre-birth behavior is unchanged.** Flags off: byte-identical
-  behavior, no new files, no schema applied.
+- **I1** — Guard, then admit: owner/auth → S4 → admission →
+  interceptors → cognition. Unchanged from pass 2.
+- **I2** — Every raw event admitted exactly once; turns know their
+  constituents; **membership is sealed before cognition** (§3.1).
+- **I3** — Admission carries an execution claim. A replay **never
+  causes a second physical send**: `replay_completed` acknowledges
+  without re-transmitting (pass 2's re-delivery allowance is deleted —
+  it contradicted this invariant).
+- **I4** — Egress truth is two-phase: a durable **intent** row before
+  bytes leave, append-only **result** observations after. A crash
+  between handoff and result leaves an intent with no result — an
+  honest unknown that blocks blind resend.
+- **I5** — Exactly one current closure per turn, **enforced by
+  schema** (dense per-turn ordinals + triggers), with a
+  trigger-checked precedence lattice.
+- **I6** — No reply without an **existing** parent: real FK (the
+  writer already sets `PRAGMA foreign_keys=ON`) plus a NULL-rejection
+  trigger for reply kinds.
+- **I7** — Phase is proven, never presumed; the consumer census is
+  closed including direct-edit and caller-supplied-phase paths.
+- **I8** — Late knowledge is labeled late. Unchanged.
+- **I9** — Readers may not assert undelivered — or **edited-away**
+  (ND2) — speech as spoken.
+- **I10** — **Chain position is the ordering authority; occurrence
+  time is preserved testimony.** Readers order by `chain_position`;
+  `occurred_at`/`admitted_at` are displayed, never used as a
+  cross-surface sort key (round 2 showed provider clocks cannot carry
+  that authority).
+- **I11** — Pre-birth behavior unchanged; flags off ⇒ byte-identical.
 
-## 2. The interaction universe (B1)
+## 2. The interaction universe (B1, ND1, ND2)
 
-"Doorway" becomes a **registry in code** (`core/ledger/doorways.py`):
-a declared, enumerable list of every ingress and egress, each entry
-naming its admission point, identity source, and closure owner. A
-conformance test walks the registry against the codebase with AST
-matching (scar rule 3: sweep the class, never grep) and **fails when
-an ingress exists that the registry does not cover** — the structural
-defect behind A7's backup gap ("nothing fails when a new store
-appears") is not repeated for doorways.
+The registry (`core/ledger/doorways.py`) is a table of typed entries,
+no wildcards:
 
-Initial registry, from the gate's enumeration:
-
-| Door | Direction | Identity source |
-|---|---|---|
-| Telegram v2: text, media, location | in | `tg:{chat_id}:{update_id}` per constituent |
-| Telegram v2: commands, callbacks, `/receipts`, proposal/dream commands | in | same |
-| Telegram legacy + kill-switch ingress | in | full `Update` threaded to admission (today only `user_text` survives — must be fixed) |
-| Web owner `/chat` | in | client idempotency header (official client gains one); minted fallback, labeled |
-| Web public `/chat`, public Telegram | in | same shape, `tenant='public'` (decision D-public) |
-| Fast-lane `/v1/fast-reply` | in | minted at ingress, labeled |
-| GUI | in | minted at ingress |
-| CLI | in | minted per input line |
-| Cockpit `/message` + decision routes | in | minted at Flask ingress |
-| Local voice | in | `voice:{stream_id}:{segment_ordinal}` + audio hash, minted at capture in `wake_word` and threaded through the callback (today only transcript text survives — must be fixed) |
-| Proactive opinions, follow-up reports, any daemon-initiated send | **out** | `admit_outbound` (§3.2) |
-| Peer messages | — | ABSENT/reserved; Track A excludes inter-Maez communication; registry marks them so |
-
-**D-public (owner decision, flagged):** public/non-owner interactions
-are part of Maez's life; recommended: admit them tenant-tagged
-(`tenant_id` already exists) so biography is complete but separable.
-The owner may rule them out of the biography ledger; the registry
-supports either, but the decision must be explicit, not an omission.
-
-## 3. Identity model (B2, B3)
-
-Three identities, three tables.
-
-### 3.1 Raw events and logical turns
-
-```sql
-CREATE TABLE admission_events (            -- one row per raw platform event
-    event_identity  TEXT NOT NULL,         -- per-surface key, §2 table
-    tenant_id       TEXT NOT NULL DEFAULT 'owner',
-    turn_id         TEXT NOT NULL REFERENCES turns(turn_id),
-    occurred_at     REAL,                  -- provider time; NULL = transport has none
-    payload_hash    TEXT NOT NULL,
-    PRIMARY KEY (tenant_id, event_identity)
-);
+```python
+Door(name, direction, admission_construct,  # module:qualname, machine-checked
+     identity_source, closure_owner, egress_kinds)
 ```
 
-Aggregation is now representable instead of lossy: a merged turn owns
-N `admission_events` rows, each with its own identity and provider
-time. Replay of *any* constituent hits the PK and resolves to the
-existing turn. The Telegram aggregation hazard
-(`conversation_turn_seq.py:22`, UNVERIFIED) is dissolved rather than
-resolved: identity lives at the constituent level, so "A or A+B" no
-longer changes the key.
+Every outbound producer is enumerated individually — proactive
+opinions, follow-up reports, dream/evolution notices — each with its
+producer identity rule (§3.3). Enforcement is **two independent
+mechanisms**, because round 2 showed AST alone misses dynamic
+dispatch:
 
-`turns` gains `occurred_at` (earliest constituent provider time;
-admission time only when no provider time exists) and `admitted_at`
-(local). Readers order by `occurred_at` with `admitted_at` fallback
-(I10). Edited platform messages, which today never enter the handlers,
-are admitted when support lands as new events carrying
-`correction_of` → the original turn — never as mutations.
+1. **AST conformance sweep**: every call to a transport send
+   primitive, Flask route registration, or Telegram handler
+   registration must be reachable from a registered
+   `admission_construct` or `closure_owner`. Unmatched ⇒ test fails.
+   Dynamic egress dispatch (`getattr`-style, as in
+   `core/egress/telegram_egress.py`) is funneled through **one
+   registered egress chokepoint** so the sweep has a single node to
+   verify; new bypasses of the chokepoint are what the sweep hunts.
+2. **Runtime self-registration**: each doorway asserts its registry
+   entry at process start; activating a parked endpoint (the
+   `web_interface` parked-endpoint table) **refuses** for routes with
+   no registry entry. A door that can go live at runtime cannot go
+   live unregistered.
 
-### 3.2 Runs — the execution claim
+Flask blueprints are absent at HEAD; the registry rule covers them by
+construction (an unregistered route registration fails the sweep) and
+the design bans introducing dynamically-constructed route names.
+
+**Egress universe includes mutations** (ND2): `egress_kinds` gains
+`edit` and `reaction`. An edit that replaces owner-visible bytes is an
+egress attempt whose result supersedes the prior delivered bytes via
+an explicit `supersedes_result` reference — the ledger never continues
+to assert replaced text as the delivered truth (I9).
+
+**D-public** stands as an explicit owner decision, unchanged.
+
+## 3. Identity model (B2, B3, ND3–ND5)
+
+### 3.1 Atomic admission and sealed membership
+
+Admission is **one transaction**: `admission_events` insert + `turns`
+insert (or resolution) + `runs` insert. No partial states exist
+(ND4). Schema deltas from pass 2:
+
+- `admission_events.tenant_id` participates in a composite FK to
+  `turns(tenant_id, turn_id)` — an owner event cannot point at a
+  public turn.
+- `turns.sealed_at REAL` — stamped in the same transaction that hands
+  the turn to cognition. A trigger rejects `admission_events` inserts
+  for a sealed turn (ND3): a late or post-cognition constituent can
+  never silently join a consumed turn.
+- Late constituent of a sealed turn ⇒ admitted as a **new turn** with
+  `parent_turn_id` → the sealed turn. Nothing is dropped, nothing is
+  falsely claimed consumed, nothing duplicates: the constituent's
+  identity PK still deduplicates true redelivery.
+- Same `event_identity`, **different `payload_hash`** ⇒ not a replay:
+  admitted as a new turn carrying `correction_of` → the original
+  (ND4's silent-omission case). Same identity + same payload ⇒ replay
+  dispositions.
+
+### 3.2 Runs are fenced, not just leased (ND5)
+
+- `CREATE UNIQUE INDEX one_active_run ON runs(turn_id) WHERE
+  status='active'` — two simultaneous active runs become
+  schema-impossible (round 2 created two; this is its negative
+  control).
+- `runs` gains `epoch INTEGER NOT NULL` (monotonic per turn).
+  `replay_stale` takeover = single transaction: expired run →
+  `status='superseded'`, new run `epoch+1`. **Effect gates fence on
+  epoch**: cognition commit, action execution, and egress-intent
+  insertion each re-read the turn's current epoch inside their own
+  transaction and abort if theirs is stale. A paused first run that
+  wakes after takeover fails its next gate instead of double-sending.
+- `runs.status` is operational state and mutable; every transition
+  appends a `run_events` row (append-only), so biography-grade truth
+  about execution history is still never overwritten.
+- `replay_completed` ⇒ acknowledge only. No resend path exists (I3).
+
+### 3.3 Outbound producer identity (ND10)
+
+`admit_outbound` requires a **durable producer identity** as its
+event identity — e.g. the follow-up queue item id, the proactive
+cycle id — so a crash-and-retry of the producer resolves to the same
+turn instead of admitting the same life-event twice. Producers that
+send before durably marking their queue item (the current follow-up
+path) are re-ordered under the same two-phase egress rule as
+everything else: intent row first.
+
+## 4. Egress and closure (A4, B5, ND7–ND10)
+
+Two-phase egress replaces pass 2's single attempt row:
 
 ```sql
-CREATE TABLE runs (
-    run_id       TEXT PRIMARY KEY,
-    turn_id      TEXT NOT NULL REFERENCES turns(turn_id),
-    attempt      INTEGER NOT NULL,          -- 1..N per turn
-    started_at   REAL NOT NULL,
-    lease_until  REAL NOT NULL,             -- renewed by heartbeat while processing
-    status       TEXT NOT NULL CHECK (status IN ('active','completed','abandoned')),
-    UNIQUE (turn_id, attempt)
+CREATE TABLE egress_intents (          -- durable BEFORE bytes leave
+    intent_id     TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL REFERENCES runs(run_id),
+    egress_kind   TEXT NOT NULL CHECK (egress_kind IN
+        ('final_text','part','progress','tts','media','edit','reaction')),
+    part_ordinal  INTEGER,
+    transport     TEXT NOT NULL,
+    payload_hash  TEXT NOT NULL,       -- bytes about to be handed over
+    created_at    REAL NOT NULL
 );
-```
-
-`admit_inbound` returns a disposition:
-
-| Disposition | Meaning | Doorway obligation |
-|---|---|---|
-| `fresh` | new turn, run leased | proceed to interceptors/cognition |
-| `replay_completed` | turn has a current closure | re-deliver the recorded reply or acknowledge; **never re-run cognition** |
-| `replay_in_flight` | an unexpired run lease exists | drop silently |
-| `replay_stale` | lease expired, no closure | new run attempt on the *same* turn |
-
-This is the execution claim I3 that pass 1's `was_replay` lacked. The
-lease also gives the reconciler its safety condition (§4).
-
-`admit_outbound(kind, raw_text, ...)` is the second root: proactive
-opinions and follow-up reports admit a turn (direction recorded on the
-row) before composing, and their sends close through the same egress
-machinery. Outbound-first interaction is inside the universe, with
-parent linkage when the proactive turn responds to prior context.
-
-## 4. Egress and closure (A4, B5)
-
-Pass 1's single mutable outcome row is replaced by two append-only
-tables (append-only triggers added alongside the existing `turns`
-protections in `0002_triggers.sql`):
-
-```sql
-CREATE TABLE egress_attempts (             -- one row per physical send attempt
-    attempt_id      TEXT PRIMARY KEY,
-    run_id          TEXT NOT NULL REFERENCES runs(run_id),
-    egress_kind     TEXT NOT NULL CHECK (egress_kind IN
-        ('final_text','part','progress','tts','media')),
-    part_ordinal    INTEGER,
-    transport       TEXT NOT NULL,
-    result          TEXT NOT NULL CHECK (result IN
+CREATE TABLE egress_results (          -- append-only observations
+    result_id         TEXT PRIMARY KEY,
+    intent_id         TEXT NOT NULL REFERENCES egress_intents(intent_id),
+    retry_ordinal     INTEGER NOT NULL,        -- physical attempt #
+    result            TEXT NOT NULL CHECK (result IN
         ('delivered','failed','timeout_unknown','suppressed')),
-    sent_bytes_hash TEXT,                  -- hash of bytes actually handed over
-    attempted_at    REAL NOT NULL
-);
-
-CREATE TABLE turn_closures (               -- append-only, supersession chain
-    closure_id    TEXT PRIMARY KEY,
-    turn_id       TEXT NOT NULL REFERENCES turns(turn_id),
-    closure       TEXT NOT NULL CHECK (closure IN
-        ('delivered','partially_delivered','failed','suppressed',
-         'unknown_delivery','refused','unresolved_crash')),
-    evidence_hash TEXT,                    -- hash over the egress-attempt set consulted
-    recorded_by   TEXT NOT NULL,           -- 'transport'|'doorway'|'reconciler'
-    recorded_at   REAL NOT NULL,
-    discovered_at REAL,                    -- reconciler/journal fold-ins only
-    supersedes    TEXT REFERENCES turn_closures(closure_id)
+    observed_at       REAL NOT NULL,           -- when truth arrived (ND9)
+    supersedes_result TEXT REFERENCES egress_results(result_id)
 );
 ```
 
-"Exactly one" (I5) means: exactly one closure with no successor, per
-turn, exposed by a `current_closure` view. Supersession precedence is
-a lattice, not first-writer-wins:
+A late Telegram acknowledgment is a new result row superseding the
+`timeout_unknown` observation of the **same intent** — chronology and
+count both stay true (ND9). A crash after handoff leaves intent
+without result: recovery sees the honest unknown and must not blindly
+resend (ND10).
 
-- transport-evidenced closures (`recorded_by='transport'`, evidence
-  joining real egress attempts) supersede reconciler inferences;
-- `unresolved_crash` may be written only for turns whose runs are all
-  lease-expired and older than a minimum age — never for a live run;
-- a late-arriving transport truth supersedes an `unresolved_crash`
-  honestly (I8): both rows remain, history legible;
-- provisional `unknown_delivery` (the Telegram timeout case) is
-  supersedable by later evidence; nothing is ever updated in place.
+**Closure topology, enforced** (ND7): `turn_closures` gains
+`closure_ordinal INTEGER NOT NULL` with
+`UNIQUE (turn_id, closure_ordinal)`; a `BEFORE INSERT` trigger
+requires ordinal = 1 + the turn's current max (dense chain — no
+second initial closure, no forked successors, no cross-turn or
+self-supersession; each of round 2's five accepted inserts becomes a
+must-reject negative control). Current closure = max ordinal, exposed
+by the `current_closure` view. Precedence in the same trigger:
+`recorded_by='reconciler'` may not supersede a transport closure;
+transport-vs-transport supersession requires new evidence rows.
 
-Multipart and multi-egress truths are now representable: a 3-part
-Telegram send with part 2 failed = three `egress_attempts` rows and a
-`partially_delivered` closure. Per-surface delivery semantics are
-honest about their transport: Telegram = API acknowledgment; web =
-response committed to the socket (a Flask return is *not* that —
-S4-slice work must hook the WSGI close, or record
-`unknown_delivery`); CLI = stdout flush after the final persistence
-point (today it streams before persisting — registry entry marks
-this); the `transport` column carries which semantics applied.
+**Evidence is relational** (ND8): `closure_evidence(closure_id,
+result_id)` FK-bound, written in the closure's transaction; a trigger
+requires ≥1 evidence row when `recorded_by='transport'`. `evidence
+_hash` is dropped — the relation, not a hash, is the membership
+carrier, and it is append-only alongside the closure.
 
-The compose-time stamp fix stands (pass 1 §3.2): `sent_text_hash`
-leaves `maez_daemon.py:9742`; the trace records composure; egress
-records delivery. **Reader migration (I9):**
-`core/ledger/recent_turns.py` and
-`core/cognition/envelope_builder.py` join `current_closure` and label
-non-delivered replies — "Prior Maez utterances" may no longer include
-words the owner never received, unmarked.
+Per-surface delivery semantics, reader migration (I9), and the
+compose-stamp fix carry over from pass 2 unchanged, extended by the
+edit rule (§2).
 
-## 5. Phase truth (A6, B6, B7)
+## 5. Phase truth (A6, B6, B7, ND12–ND14)
 
-Tri-state, corrected:
+**Gestation must be proven as hard as lived** (ND13): the
+`gestation` cells of the pass-2 table now additionally require full
+structural validation — the complete expected table set, an intact
+genesis row, and chain verification to head. A partially-migrated,
+damaged, or half-created ledger is `unknown`, never gestation.
 
-| Observation | Latch absent | Latch present |
-|---|---|---|
-| file absent | `gestation` | `unknown` |
-| file exists, **uninitialized-empty** (connectable, `sqlite_master` enumerable, zero tables) | `gestation` | `unknown` |
-| initialized, meta key absent (query succeeded) | `gestation` | `unknown` |
-| initialized, meta key present, joined to a real birth-anchor row | `lived` (write latch) | `lived` (verify equality) |
-| meta present, join fails | `unknown` | `unknown` |
-| any connect/query/corruption error | `unknown` | `unknown` |
+**The latch is an advancing high-water mark** (ND12), not a one-shot:
+an append-only latch journal under `memory/birth_observed/` records
+`(birth_turn_id, chain_position, chain_head_hash, observed_at, pid)`
+on first lived observation **and on every subsequent successful
+chain-head advance observation** (cheap: one row per daemon boot and
+per reconciler pass). Rewind detection compares the ledger's head
+*position and hash* against the **latest** latched entry — a restore
+to any stale-but-readable prefix, including one containing the first
+observed head, is caught. Ancestry is checked by position+hash
+equality at the latched position.
 
-The zero-byte ledger of today is *uninitialized-empty* → `gestation`:
-pass 1's contradiction is closed.
+**Publication is torn-proof** (ND14): each latch segment is written
+to a temp file, fsync'd, then `rename()`d into place, then directory
+fsync — a reader can never observe a half-written segment, so
+"corrupt latch" means real corruption (→ `unknown`) rather than an
+avoidable crash artifact.
 
-**Latch mechanics, specified:** `memory/birth_observed.latch`,
-created with `O_CREAT|O_EXCL` (atomic, race losers re-read and
-verify), fsync on file and directory, containing: birth turn id,
-genesis hash, chain-head hash at observation, observed_at, pid.
-Rules:
+**Census closed** (ND13): pass 2's list plus `AuditLog`'s direct-edit
+session methods (which default gestation independently of
+`record()`), `PrivateThoughts` caller-supplied phase (revalidated
+against the gate at write time — a caller may narrow, never assert
+`lived` while the gate says otherwise), and `span_planner`'s direct
+meta read. The AST census test enumerates `memory_phase` writers and
+`meta.birth_event_turn_id` readers and fails on any consumer outside
+the registry.
 
-- The latch is written **only** when the resolved ledger path equals
-  the canonical default — never under `MAEZ_LEDGER_DB_PATH` override,
-  never in rehearsal or fixture mode. A sandbox cannot poison the
-  canonical latch.
-- Corrupt/unparseable latch → `unknown` (never gestation, never
-  silently recreated).
-- Birth-id equality: latch birth id ≠ ledger birth id → `unknown`.
-- Rewind detection (B7): ledger chain shorter than the latched
-  chain-head, same birth id → `unknown` — a stale post-birth restore
-  is caught. Full restore semantics (the forward scar) remain
-  blocker A10's scope; this latch guarantees the rewind cannot be
-  *silent*.
+## 6. Failure posture and the gap journal (B8, B10, ND15)
 
-**Closed consumer census** (B7): the three `memory_manager` stamp
-sites; `private_thoughts` defaults; `source_awareness.is_born()`
-(unknown → not-proven-born for gating, never stamps);
-`audit_log.record()` — which today omits `memory_phase` and inherits
-SQL DEFAULT `'gestation'` — must stamp the resolved phase and refuse
-or queue on `unknown`; and `LedgerWriter.write_turn` itself, whose
-stage resolution moves before hashing (§7). The conformance test for
-this census greps by AST for `memory_phase` writers, same discipline
-as §2.
+Posture tiers unchanged from pass 2 (refuse admission failures;
+journal egress failures; S4 ships regardless; honest floor when both
+ledger and journal are dead).
 
-## 6. Failure posture (B8, B10)
+**The journal is reconstruction-grade** (ND15) — it is fallback
+biography, so it carries what biography needs: full raw content (not
+hashes), constituent identities with provider times, every known id
+(turn/run/intent/result), lifecycle phase at write, birth binding
+(latched birth id), per-segment sequence numbers, and entry kind
+(`admission_refused`, `s4_answer`, `egress_unrecorded`, …) so one
+failed inbound event and its S4 answer are two linked entries, and a
+multi-egress failure is one entry per intent. **Fold-in is
+idempotent by construction**: the fold transaction inserts the
+ledger rows *and* a `journal_folds(journal_entry_id PRIMARY KEY)`
+row in the same transaction — the dedup marker lives inside the
+ledger, so mark-before-fold and fold-before-mark crash windows both
+collapse to "re-run the fold; the PK refuses duplicates" (round 2's
+segment-marking race is structurally gone). Folded rows carry
+`recorded_by='reconciler'`, `discovered_at`, and their journal
+provenance (I8).
 
-Post-birth, two tiers; pre-birth shadow contract unchanged (I11).
+**Contention protocol** (B10): the S6 witness protocol freezes the
+concurrency schedule (daemon+web writers, exchange arrival law,
+transaction mix), the measurement (per-admission wall-clock wait,
+measured inside the rail), a positive control (a deliberately
+lock-saturated run must trip the kill rule), and the binding kill
+rule, before it runs. Pass 2's numbers become that protocol's
+starting thresholds, not its definition.
 
-- **Admission fails** (busy-timeout + one retry exhausted): the turn
-  is refused — no cognition, no reply-as-Maez. The system notice is
-  journaled, not ledgered (it has no turn id — pass 1's circularity is
-  acknowledged and resolved by making the journal, not the ledger, the
-  record of refusals). S4-matched answers still ship (I1) and are
-  journaled the same way.
-- **Egress/closure write fails** (words already left): gap journal +
-  health signal.
+## 7. Chain and migration mechanics (B9, ND11, ND16)
 
-**Gap journal, specified** (pass 1 left it a name):
-`memory/ledger_gap_journal/` — one directory, append-only JSONL
-segments, fsync per line, single writer per process with per-process
-segment files (no cross-process interleaving). Entry schema:
-`{event_identity, tenant, surface, direction, reason, content_hash,
-occurred_at, journaled_at, pid}`. Dedup on replay by
-`event_identity`. Reconciler folds entries into the ledger as
-late-labeled turns/closures (I8) and marks folded segments. **Journal
-failure state:** if both ledger and journal are unwritable, the
-refusal stands, a memory-only health flag trips, and the cockpit
-surfaces it — stated honestly as the floor: disk-dead means events in
-that window are witnessed only by the health alarm. S4 answers still
-ship even then.
+- **Hash domain v2, versioned**: `meta.chain_hash_domain = '2'`.
+  Writer and verifier both dispatch on it; v2 hashes the full
+  canonical row including `lifecycle_stage` and the new columns, with
+  one canonicalization function shared by writer and verifier
+  (round 2's writer-keyset vs `SELECT *` divergence is closed by
+  construction, not by keeping two lists in sync).
+- **Birth is chain-bound** (ND16): `turns.is_birth_anchor INTEGER
+  NOT NULL DEFAULT 0`, **included in the v2 hash**, with a trigger
+  enforcing at most one row = 1. `meta.birth_event_turn_id` remains a
+  convenience pointer; phase reads (§5) join it to *the* hashed
+  anchor row and treat divergence as `unknown`. Mutating meta no
+  longer moves birth truth — the truth is in the chain.
+- **Parent FK** (ND11): `parent_turn_id REFERENCES turns(turn_id)`
+  in the v2 schema (enforced — `foreign_keys=ON` is already set),
+  plus the NULL-rejection trigger for `model_reply`/`non_model_reply`.
+- **Migration mechanics, executable** (ND16): digested
+  `schema_migrations` stays, but the pre-birth escape is corrected —
+  a genesis-seeded, zero-*lived*-turn ledger cannot be "rebaselined"
+  in place (IF-NOT-EXISTS DDL would not re-run); it is **destroyed
+  and re-initialized** by an explicit `--recreate-empty` command that
+  requires zero non-genesis rows, prints old/new schema digests, and
+  is refused on any ledger with a birth anchor. Post-birth there is
+  no escape of any kind. `ledger_is_initialized` verifies the v2
+  structural anchors *and* that the recorded head equals the actual
+  chain tip.
 
-**Contention (B10):** measured, not asserted. The S6 witness protocol
-includes a pre-registered load test: daemon + web processes writing
-concurrently against a fixture ledger, N=1000 exchanges; kill
-thresholds frozen in the protocol before it runs (target: zero
-refusals at normal load, p99 admission wait under 250 ms). If the
-measured posture fails, the retry budget — not the invariant — is
-retuned.
+## 8. Witness discipline (B11 — discharged shape, kept)
 
-## 7. Schema mechanics (B9, D3, D4 resolved)
+Per-slice witness protocols committed before slice code; airlocked
+born fixture; unchanged from pass 2. Added obligation: **every
+adversarial insert Codex executed in round 2 is a named negative
+control** in the S2 protocol (double active run, double initial
+closure, forked/cross-turn/self supersession, orphan reply,
+owner-event→public-turn, late constituent on sealed turn), each
+required to fail with the specific trigger/index error.
 
-- **Digested migrations.** `schema_migrations` gains a `sha256`
-  column. Apply-time: a recorded name whose digest mismatches the file
-  is a **hard refusal**, with exactly one escape: a DB with zero
-  `turns` rows may be re-baselined by an explicit
-  `--rebaseline-empty` flag that logs old/new digests. Amending
-  `0001_init.sql` is legitimate only through that gate.
-  `ledger_is_initialized` learns the new structural anchors.
-- **Lifecycle stage into the chain.** `write_turn` resolves the stage
-  *before* computing the chain hash and includes it in the hashed row;
-  the genesis row gains an explicit stage; `chain.py` and
-  `scripts/verify_ledger_chain.py` drop the exclusion symmetrically.
-  Rehearsal rows hash their `'rehearsal'` stage. Birth truth becomes
-  chain-bound (D3 decided: yes).
-- **Parent enforcement as schema** (I6): `BEFORE INSERT` trigger —
-  `model_reply`/`non_model_reply` with NULL `parent_turn_id` →
-  `RAISE(ABORT)`. Caller discipline is no longer the mechanism.
-- **`schema_version` bumps to 2** per envelope-schema canon
-  (`docs/ledger/envelope-schema.md` amended in the same commit), which
-  also covers the new `non_model_reply` kind (D6 decided: new kind).
+## 9. Slices (unchanged structure, revised content)
 
-## 8. Witness discipline (B11)
+1. **S1 — phase truth**: §5 (validated gestation, advancing latch,
+   torn-proof publication, closed census).
+2. **S2 — schema v2**: §§3–4, 7 (atomic admission, seals, fenced
+   runs, two-phase egress, enforced closures, evidence relation,
+   birth anchor column, FK+triggers, digested migrations, hash
+   domain v2).
+3. **S3 — the rail + registry**: §2 chokepoints + runtime
+   self-registration, dispositions with fencing, S4-first ordering.
+4. **S4 — egress truth**: intents/results on every registered
+   egress including edits/reactions, reader migration (I9).
+5. **S5 — universe sweep**: per pass 2, plus producer identities for
+   every enumerated outbound door.
+6. **S6 — posture**: journal per §6, reconciler under fencing rules,
+   frozen contention protocol.
 
-The falsifier *standard* replaces the falsifier *table*. Each slice
-ships a *witness protocol* file
-(`docs/superpowers/witness/theme2-s<N>-protocol.md`) **committed
-before the slice's first code commit**, containing: exact commands and
-environment, fixture construction with content digests, pre-registered
-inputs and expected-set SQL (exact-set equality, not
-one-seeded-positive), negative controls, fault injection cutpoints,
-clocks and observation windows, and frozen kill thresholds. A slice
-without a committed protocol does not build. The pass-1 falsifiers
-T-F1..T-F8 survive as the protocols' *obligations*:
-coverage-of-registry, replay, crash matrix, transport truth
-(including: a *successful* fallback send is `delivered` with the
-fallback bytes' hash — pass 1's wording banning `delivered` there was
-wrong and is corrected), phase refusal, flags-off invariance, latch
-rewind, and gap detection by exact-set query.
+Dependencies unchanged: S1 independent; S2 → S3 → S4/S5/S6.
 
-**The born fixture** (B11's "no born rehearsal ledger"): witnesses
-run against a fixture ledger created in the airlock — temp directory,
-`MAEZ_LEDGER_DB_PATH` override, full migration, production-mode
-writer with the flag on, `birth_anchor` written through the normal
-API. The harness refuses to start unless the resolved path is inside
-the airlock root (the hermetic-sandbox hazard: asserted at the call
-site, not assumed from env). The rehearsal writer's refusal of
-`birth_anchor` stays — rehearsal and born-fixture are different
-modes, and only the latter may simulate a born ledger, only inside
-the airlock. That this fixture *can* birth a ledger by calling the
-function is exactly blocker A1's point; Theme 1's fix must preserve a
-sanctioned test seam, and this design records that requirement for
-it.
+## 10. Out of scope (unchanged from pass 2)
 
-## 9. Slices (revised; all flag-dormant)
-
-1. **S1 — phase truth**: tri-state table §5, latch, closed consumer
-   census including `audit_log` and writer-stage ordering.
-2. **S2 — schema v2**: `admission_events`, `runs`,
-   `egress_attempts`, `turn_closures`, temporal columns, parent
-   trigger, append-only triggers, digested migrations,
-   `non_model_reply`, chain-stage inclusion.
-3. **S3 — the rail + registry**: `interaction_rail.py`
-   (`admit_inbound`/`admit_outbound`, dispositions, leases), doorway
-   registry + AST conformance test, S4-first ordering, four
-   duplicated seams replaced.
-4. **S4 — egress truth**: transport-owned attempts and closures on
-   every registered egress, per-surface delivery semantics, trace
-   stamp fix, reader migration (I9).
-5. **S5 — universe sweep**: commands/callbacks, GUI, public surfaces
-   (per D-public ruling), fast-lane, voice identity threading, legacy
-   `Update` threading, cockpit decisions, outbound-first producers.
-6. **S6 — posture**: refusal tier, gap journal per §6, reconciler
-   with leases and supersession, contention measurement.
-
-Dependencies: S1 independent; S2 → S3 → S4/S5/S6. Each preceded by
-its committed witness protocol (§8).
-
-## 10. Out of scope (unchanged)
-
-Ceremony, receipts, WebAuthn, quiescence (Theme 1); WAL/synchronous
-durability (A5); `model_calls`/query/exposure telemetry (the separate
-observability turn-ledger design); ledger activation (birth-gated,
-owner-only); the creation manifest (owner-only, untouched). Restore's
-forward scar remains A10's scope; §5 only guarantees a rewind cannot
-be silent.
+Theme 1; A5 durability; observability turn-ledger telemetry; ledger
+activation (birth-gated, owner-only); the creation manifest; restore's
+forward scar (A10) — §5 guarantees a rewind cannot be silent, not
+that restore is otherwise lawful.
