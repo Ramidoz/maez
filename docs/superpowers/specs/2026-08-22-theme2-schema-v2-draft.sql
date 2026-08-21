@@ -265,13 +265,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_result_successor
     ON egress_results (supersedes_result) WHERE supersedes_result IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_result_attempt
     ON egress_results (intent_id, retry_ordinal) WHERE supersedes_result IS NULL;
-CREATE TRIGGER IF NOT EXISTS trg_egress_results_supersede_same_intent
+-- Supersession is a RE-OBSERVATION of the same physical attempt:
+-- same intent AND same retry_ordinal (round-5 partial finding). New
+-- physical attempts enter only as non-superseding rows, which are
+-- unique per (intent, ordinal) — no phantom attempt can be minted.
+CREATE TRIGGER IF NOT EXISTS trg_egress_results_supersede_same_attempt
 BEFORE INSERT ON egress_results
 WHEN NEW.supersedes_result IS NOT NULL
-     AND (SELECT intent_id FROM egress_results WHERE result_id = NEW.supersedes_result)
-         <> NEW.intent_id
 BEGIN
-    SELECT RAISE(ABORT, 'result may only supersede a result of its own intent');
+    SELECT CASE
+        WHEN (SELECT intent_id FROM egress_results WHERE result_id = NEW.supersedes_result)
+             <> NEW.intent_id
+            THEN RAISE(ABORT, 'result may only supersede a result of its own intent')
+        WHEN (SELECT retry_ordinal FROM egress_results WHERE result_id = NEW.supersedes_result)
+             <> NEW.retry_ordinal
+            THEN RAISE(ABORT, 'supersession re-observes the same attempt: retry_ordinal must match')
+    END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_results_no_update BEFORE UPDATE ON egress_results
 BEGIN SELECT RAISE(ABORT, 'egress_results is append-only'); END;
