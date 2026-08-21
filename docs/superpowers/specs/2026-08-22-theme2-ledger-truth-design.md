@@ -484,3 +484,87 @@ is non-null-bound and undeletable.
   registrations, and the transport send primitive list including the
   raw Bot-API caller in `skills/dev_notifier.py` (registered as a
   dev-channel egress or explicitly allowlisted with justification).
+
+## 13. Pass 6 — round-5-rerun folds (DDL revision 4 + literal inventories)
+
+**Label correction:** the executable artifact is **revision 4** (rev 2
+= pass 5; rev 3 = same-attempt supersession fix; rev 4 = this pass).
+
+**In DDL rev 4** (all P-probes from the rerun executed as negative
+controls): every table is `STRICT`, so all seven identifier primary
+keys reject NULL (P24–P26); `turns` is append-only outright — no
+UPDATE, no DELETE — which closes every UPDATE-path bypass of parent,
+anchor, and tenant semantics (P18–P21); lease renewal must advance and
+active→active journaling noise is gone (P02, P04); `run_events`
+inserts must describe a real just-performed transition — from
+'active', matching the run's live status (P03); a correction revision
+must land on a `parent_kind='correction'` turn (P07); logical send
+identity is payload-independent — one `final_text` slot per turn, one
+slot per (kind, part); replacements are `edit` lineage, retries are
+results (P17); physical attempts are dense and a new attempt requires
+the prior attempt's current head to be a resolved non-delivery —
+`timeout_unknown` must be superseded first, `delivered` forecloses
+(P15, P16); closure evidence must be a JSON array in sorted canonical
+form (set-equality is string-equality; P09, P10), cite only current
+result heads (P11), at most one head per physical attempt (P12);
+outcome-asserting closures (`delivered`/`partially_delivered`/
+`failed`) require evidence regardless of recorder (P13); reconciler
+closures carry `discovered_at` NOT NULL (P14).
+
+**Literal doorway inventory** (ND1/B1; the registry ships seeded with
+exactly these rows — adding a door means adding a row here first):
+
+| # | Door | Dir | Admission construct | Identity |
+|---|---|---|---|---|
+| 1 | Telegram v2 text/media/location | in | `skills/surface/maez_adapter.py` `MaezMessageHandler.__call__` | `tg:{chat_id}:{update_id}` per constituent |
+| 2 | Telegram v2 commands/callbacks/`/receipts`/proposal/dream | in | `skills/surface/telegram_adapter.py` handler registrations | same |
+| 3 | Telegram legacy + kill-switch | in | `skills/telegram_voice.py` `_handle_message` (full `Update` threaded) | same |
+| 4 | Web owner `/chat` | in | `skills/web_interface.py` chat route | client header, else minted+labeled |
+| 5 | Web public `/chat` + public Telegram | in | same route; `skills/telegram_public.py` | same shape, tenant per D-public |
+| 6 | Fast-lane `/v1/fast-reply` | in | `skills/web_interface.py` fast route | minted+labeled |
+| 7 | GUI | in | `gui.py` send path | minted+labeled |
+| 8 | CLI | in | `cli/maez_chat.py` `_handle_chat` | minted per line |
+| 9 | Cockpit `/message` + decision routes | in | `daemon/maez_daemon.py` Flask routes | minted at ingress |
+| 10 | Local voice | in | `skills/wake_word.py` capture → `handle_voice_stream` | `voice:{stream}:{segment}` + audio hash |
+| 11 | Follow-up reports | out | `daemon/maez_daemon.py` follow-up queue | queue item id |
+| 12 | Proactive opinions | out | `daemon/maez_daemon.py` proactive cycle | cycle id |
+| 13 | Dream/evolution notices | out | their queue/proposal ids | proposal id |
+| 14 | Dev notifier | out | `skills/dev_notifier.py` (raw Bot-API) | registered dev-channel egress |
+| 15 | Peer messages | — | ABSENT/reserved (Track A excludes) | — |
+
+AST primitive set, literal: `@app.route`/`add_url_rule` (Flask);
+`add_handler`/`MessageHandler`/`CommandHandler`/`CallbackQueryHandler`
+(python-telegram-bot); the transport send list = `send_message`/
+`send_*` on bot objects, `requests.post` to `api.telegram.org`
+(dev_notifier), the v2 egress chokepoint in
+`core/egress/telegram_egress.py`, socket-committing returns in the
+web/CLI/GUI paths. Every occurrence must be reachable from a
+registered construct or carry an allowlist entry with justification.
+
+**Phase structural contract** (ND13/B6), literal: `gestation` requires
+connectable DB whose table set ⊇ {meta, turns, claims,
+claim_judgements, model_swaps, audit_trace_lineage, schema_migrations,
+turn_seals, admission_events, runs, run_events, effect_claims,
+egress_intents, egress_results, turn_closures, journal_folds}, an
+intact genesis row, chain verification to the recorded head, head =
+actual tip, and no birth anchor. Anything less → `unknown`. The
+consumer census, literal: `memory_manager` stamp sites (3),
+`private_thoughts` (default + caller-supplied revalidation),
+`source_awareness.is_born`, `audit_log.record` + its direct-edit
+session methods, `span_planner` direct meta read, `LedgerWriter`
+stage resolution, `lean_idle_heartbeat` reads. The latch binds the
+canonical ledger identity: it stores the resolved canonical path and
+the DB's genesis hash; a latch consulted against any other
+path/genesis → `unknown`.
+
+**F6 recreate exclusivity, participating openers:** v2 writers take a
+shared `flock` on `ledger.lock` (sidecar) at connection open and hold
+it for the connection's life; `--recreate-empty` takes the exclusive
+`flock` on the same sidecar (which cannot be granted while any
+cooperating opener lives), verifies quiescence and sidecar absence,
+builds at a temp path, renames, then releases. An opener that starts
+after the rename sees the new inode via per-call path resolution; an
+opener holding the old inode cannot exist, because it would hold the
+shared lock. Non-cooperating openers are excluded by the S2
+conformance test: any `sqlite3.connect` to the canonical path outside
+the lock-taking rail fails the AST sweep.

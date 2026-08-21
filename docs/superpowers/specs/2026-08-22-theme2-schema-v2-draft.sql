@@ -1,4 +1,13 @@
--- Theme 2 schema v2 DRAFT, revision 2 (gate round 5).
+-- Theme 2 schema v2 DRAFT, revision 4 (gate round 6).
+-- (Revision 3 = round-5 same-attempt supersession fix; revision 4 =
+--  round-5-rerun folds P01-P26: STRICT tables so TEXT PRIMARY KEYs
+--  reject NULL; turns immutable and undeletable; run_events inserts
+--  validated against live run state; lease renewal monotonic;
+--  correction revisions bound to correction turns; closure evidence
+--  array-typed, self-normalized, current-head, per-attempt distinct,
+--  outcome-classes-with-evidence; dense retry admission with no
+--  retry past an unresolved or delivered attempt; payload-independent
+--  logical send identity.)
 -- Status: DESIGN ARTIFACT. Becomes migrations only after the gate
 -- passes and S2's witness protocol is committed.
 -- Rule: every invariant is HERE as a constraint or trigger.
@@ -48,6 +57,13 @@ BEGIN
     SELECT RAISE(ABORT, 'reply kinds require parent_turn_id');
 END;
 
+-- turns is append-only, full stop: no UPDATE (closes P18-P20 UPDATE
+-- bypasses of parent/anchor semantics), no DELETE (P21).
+CREATE TRIGGER IF NOT EXISTS trg_turns_no_update BEFORE UPDATE ON turns
+BEGIN SELECT RAISE(ABORT, 'turns is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_turns_no_delete BEFORE DELETE ON turns
+BEGIN SELECT RAISE(ABORT, 'turns is append-only'); END;
+
 CREATE TRIGGER IF NOT EXISTS trg_turns_single_birth_anchor
 BEFORE INSERT ON turns
 WHEN NEW.is_birth_anchor = 1
@@ -63,7 +79,7 @@ END;
 CREATE TABLE IF NOT EXISTS turn_seals (
     turn_id   TEXT PRIMARY KEY REFERENCES turns(turn_id),
     sealed_at REAL NOT NULL
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_turn_seals_no_update BEFORE UPDATE ON turn_seals
 BEGIN SELECT RAISE(ABORT, 'turn_seals is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trg_turn_seals_no_delete BEFORE DELETE ON turn_seals
@@ -85,7 +101,7 @@ CREATE TABLE IF NOT EXISTS admission_events (
     admitted_at    REAL NOT NULL,
     PRIMARY KEY (tenant_id, event_identity, revision),
     FOREIGN KEY (tenant_id, turn_id) REFERENCES turns(tenant_id, turn_id)
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_admission_revision_rules
 BEFORE INSERT ON admission_events
 BEGIN
@@ -99,6 +115,10 @@ BEGIN
             THEN RAISE(ABORT, 'same identity+payload is a replay, not a new revision')
         WHEN EXISTS (SELECT 1 FROM turn_seals WHERE turn_id = NEW.turn_id)
             THEN RAISE(ABORT, 'turn is sealed — admit a new turn instead')
+        WHEN NEW.revision > 1 AND
+             (SELECT parent_kind FROM turns WHERE turn_id = NEW.turn_id)
+             IS NOT 'correction'
+            THEN RAISE(ABORT, 'a correction revision must land on a correction turn')
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_admission_events_no_update BEFORE UPDATE ON admission_events
@@ -119,7 +139,7 @@ CREATE TABLE IF NOT EXISTS runs (
     lease_until REAL NOT NULL,
     UNIQUE (turn_id, attempt),
     UNIQUE (turn_id, epoch)
-);
+) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run
     ON runs (turn_id) WHERE status = 'active';
 CREATE TRIGGER IF NOT EXISTS trg_runs_epoch_monotonic
@@ -143,6 +163,8 @@ BEGIN
             THEN RAISE(ABORT, 'run identity fields are immutable')
         WHEN OLD.status <> 'active'
             THEN RAISE(ABORT, 'terminal run states are frozen')
+        WHEN NEW.status = 'active' AND NEW.lease_until < OLD.lease_until
+            THEN RAISE(ABORT, 'lease renewal must advance')
         WHEN NEW.status NOT IN ('active','completed','superseded','abandoned')
             THEN RAISE(ABORT, 'unknown run status')
     END;
@@ -156,12 +178,28 @@ CREATE TABLE IF NOT EXISTS run_events (
     from_status  TEXT NOT NULL,
     to_status    TEXT NOT NULL,
     at           REAL NOT NULL
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_runs_journal_transition
 AFTER UPDATE OF status ON runs
+WHEN OLD.status <> NEW.status
 BEGIN
     INSERT INTO run_events(run_id, from_status, to_status, at)
     VALUES (NEW.run_id, OLD.status, NEW.status, unixepoch('subsec'));
+END;
+-- History rows must describe a real, just-performed transition (P03):
+-- from must be 'active' (the only non-terminal state) and to must be
+-- the run's live status at insert time.
+CREATE TRIGGER IF NOT EXISTS trg_run_events_valid_history
+BEFORE INSERT ON run_events
+BEGIN
+    SELECT CASE
+        WHEN NEW.from_status <> 'active'
+            THEN RAISE(ABORT, 'transitions only leave active')
+        WHEN NEW.to_status <> (SELECT status FROM runs WHERE run_id = NEW.run_id)
+            THEN RAISE(ABORT, 'history row must match live run state')
+        WHEN NEW.from_status = NEW.to_status
+            THEN RAISE(ABORT, 'not a transition')
+    END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_run_events_no_update BEFORE UPDATE ON run_events
 BEGIN SELECT RAISE(ABORT, 'run_events is append-only'); END;
@@ -182,7 +220,7 @@ CREATE TABLE IF NOT EXISTS effect_claims (
     effect_identity TEXT NOT NULL,
     claimed_at      REAL NOT NULL,
     UNIQUE (turn_id, effect_identity)
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_effect_claims_fence
 BEFORE INSERT ON effect_claims
 BEGIN
@@ -220,12 +258,15 @@ CREATE TABLE IF NOT EXISTS egress_intents (
     created_at   REAL NOT NULL,
     CHECK ((egress_kind = 'edit' AND edits_intent IS NOT NULL)
         OR (egress_kind <> 'edit' AND edits_intent IS NULL))
-);
+) STRICT;
 -- One logical send shape per TURN (not per run): takeover epochs
 -- cannot recreate the same send. progress is exempt (repeatable).
+-- Logical send identity is payload-INDEPENDENT (P17): one final_text
+-- slot per turn, one slot per (kind, part); replacements go through
+-- egress_kind='edit' lineage, retries through egress_results.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_egress_intent_shape
-    ON egress_intents (turn_id, egress_kind, COALESCE(part_ordinal, -1), payload_hash)
-    WHERE egress_kind <> 'progress';
+    ON egress_intents (turn_id, egress_kind, COALESCE(part_ordinal, -1))
+    WHERE egress_kind NOT IN ('progress','edit','reaction');
 CREATE TRIGGER IF NOT EXISTS trg_egress_intents_fence
 BEFORE INSERT ON egress_intents
 BEGIN
@@ -258,7 +299,7 @@ CREATE TABLE IF NOT EXISTS egress_results (
     supersedes_result TEXT REFERENCES egress_results(result_id),
     CHECK (supersedes_result IS NULL OR supersedes_result <> result_id),
     UNIQUE (intent_id, retry_ordinal, supersedes_result)
-);
+) STRICT;
 -- No forked chains (unique successor) and no duplicate physical
 -- attempt rows: a late ack supersedes; it does not re-count.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_result_successor
@@ -280,6 +321,30 @@ BEGIN
         WHEN (SELECT retry_ordinal FROM egress_results WHERE result_id = NEW.supersedes_result)
              <> NEW.retry_ordinal
             THEN RAISE(ABORT, 'supersession re-observes the same attempt: retry_ordinal must match')
+    END;
+END;
+-- Physical attempts are dense (P15) and eligible (P16): a new attempt
+-- may start only when the previous attempt's current head is a
+-- resolved non-delivery ('failed'/'suppressed'). timeout_unknown must
+-- be superseded by a real observation first (I4: no blind resend past
+-- an unknown), and 'delivered' forecloses further attempts.
+CREATE TRIGGER IF NOT EXISTS trg_egress_results_attempt_admission
+BEFORE INSERT ON egress_results
+WHEN NEW.supersedes_result IS NULL
+BEGIN
+    SELECT CASE
+        WHEN NEW.retry_ordinal <> 1 + COALESCE(
+                (SELECT MAX(retry_ordinal) FROM egress_results
+                 WHERE intent_id = NEW.intent_id AND supersedes_result IS NULL), 0)
+            THEN RAISE(ABORT, 'physical attempts are dense per intent')
+        WHEN NEW.retry_ordinal > 1 AND (
+                SELECT r.result FROM egress_results r
+                WHERE r.intent_id = NEW.intent_id
+                  AND r.retry_ordinal = NEW.retry_ordinal - 1
+                  AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                  WHERE s.supersedes_result = r.result_id)
+             ) NOT IN ('failed','suppressed')
+            THEN RAISE(ABORT, 'new attempt requires the prior attempt resolved as non-delivered')
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_results_no_update BEFORE UPDATE ON egress_results
@@ -308,7 +373,7 @@ CREATE TABLE IF NOT EXISTS turn_closures (
     recorded_at     REAL NOT NULL,
     discovered_at   REAL,
     UNIQUE (turn_id, closure_ordinal)
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_turn_closures_topology
 BEFORE INSERT ON turn_closures
 BEGIN
@@ -328,9 +393,35 @@ BEGIN
                          WHERE turn_id = NEW.turn_id AND recorded_by = 'transport'
                            AND evidence_json = NEW.evidence_json)
             THEN RAISE(ABORT, 'transport supersession requires new evidence')
-        WHEN NEW.recorded_by = 'transport'
+        WHEN json_type(NEW.evidence_json) IS NOT 'array'
+            THEN RAISE(ABORT, 'closure evidence must be a JSON array')
+        -- self-normalized: the stored array must be sorted, so equal
+        -- sets are equal strings (P09 reorder-as-new-evidence)
+        WHEN NEW.evidence_json <> (
+                SELECT COALESCE(json_group_array(value), json_array())
+                FROM (SELECT je.value AS value FROM json_each(NEW.evidence_json) je
+                      ORDER BY je.value))
+            THEN RAISE(ABORT, 'closure evidence must be sorted canonical form')
+        -- outcome classes that assert egress facts require evidence
+        -- whoever records them (P13)
+        WHEN NEW.closure IN ('delivered','partially_delivered','failed')
              AND json_array_length(NEW.evidence_json) < 1
-            THEN RAISE(ABORT, 'transport closure requires evidence')
+            THEN RAISE(ABORT, 'outcome closures require evidence')
+        WHEN NEW.recorded_by = 'reconciler' AND NEW.discovered_at IS NULL
+            THEN RAISE(ABORT, 'reconciler closures carry discovered_at')
+        -- evidence must be current heads (P11), one per physical
+        -- attempt (P12)
+        WHEN EXISTS (
+                SELECT 1 FROM json_each(NEW.evidence_json) je
+                JOIN egress_results r ON r.result_id = je.value
+                WHERE EXISTS (SELECT 1 FROM egress_results s
+                              WHERE s.supersedes_result = r.result_id))
+            THEN RAISE(ABORT, 'closure evidence must be current result heads')
+        WHEN (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
+             <> (SELECT COUNT(DISTINCT r.intent_id || ':' || r.retry_ordinal)
+                 FROM json_each(NEW.evidence_json) je
+                 JOIN egress_results r ON r.result_id = je.value)
+            THEN RAISE(ABORT, 'one evidence head per physical attempt')
         -- evidence is a set of real result-ids of THIS turn
         WHEN (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
              <> (SELECT COUNT(DISTINCT value) FROM json_each(NEW.evidence_json))
@@ -381,7 +472,7 @@ CREATE TABLE IF NOT EXISTS journal_folds (
     entry_sha256     TEXT NOT NULL,
     folded_turn_id   TEXT NOT NULL REFERENCES turns(turn_id),
     folded_at        REAL NOT NULL
-);
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_journal_folds_no_update BEFORE UPDATE ON journal_folds
 BEGIN SELECT RAISE(ABORT, 'journal_folds is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trg_journal_folds_no_delete BEFORE DELETE ON journal_folds
