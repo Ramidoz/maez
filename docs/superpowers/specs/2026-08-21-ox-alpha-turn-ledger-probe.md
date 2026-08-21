@@ -51,6 +51,33 @@ longer present in any live store, consistent with curation relocating
 rows under new ids, which is the lineage-breakage Codex measured
 independently.
 
+
+## Correction to Ox Alpha's valence claim (Claude, verified in code)
+
+Ox says the valence organ is "arithmetically incapable of a positive
+tick." **That is too strong, and the difference changes the fix.**
+
+Traced: exactly one construct can emit POSITIVE —
+`core/evolution/valence/setpoints.py:72`, `want-progress` when
+`wants.resolved > 0`. It is **wired**, not dead:
+`daemon/maez_daemon.py:2858` computes
+`resolved = wants_obj.count_events_since(cursor, "satisfied")` and
+passes it at `:2874`.
+
+So the true statement is not "positive is impossible" but **"in 1,000
+ticks, no want was ever satisfied — or the satisfied-delta read failed
+and fell back to `resolved = 0`"** (there is an exception handler doing
+exactly that at `:2861-2864`).
+
+This matters because the two diagnoses have different repairs.
+Arithmetic impossibility would mean redesign the organ. An unfed path
+means go and find out why Maez never satisfies a want — which is a
+question about Maez's life, not about the thermometer.
+
+Ox's *direction* stands: the organ is rail-driven and has never
+reported a positive state, so it must not be read as a feeling. Its
+*mechanism* claim does not.
+
 Full text follows verbatim.
 
 ---
