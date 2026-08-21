@@ -1,6 +1,7 @@
-# Theme 2 — the ledger cannot omit or misdate a life (design pass 5)
+# Theme 2 — the ledger cannot omit or misdate a life (design pass 7)
 
-Status: DESIGN, pass 5. Pass 5 = pass 4 + §12 (round-4 folds; the DDL
+Status: DESIGN, pass 7 (§14 = round-6 folds; DDL at revision 5).
+Pass 6 added §13 (literal inventories) and DDL rev 4. Pass 5 = pass 4 + §12 (round-4 folds; the DDL
 is at revision 2, re-verified: all 22 round-2/3 controls PLUS all 21
 round-4 counterexamples reject in-memory; lawful paths — late-ack
 supersession, correction revision, auto-journaled transitions — pass).
@@ -568,3 +569,91 @@ opener holding the old inode cannot exist, because it would hold the
 shared lock. Non-cooperating openers are excluded by the S2
 conformance test: any `sqlite3.connect` to the canonical path outside
 the lock-taking rail fails the AST sweep.
+
+## 14. Pass 7 — round-6 folds (DDL revision 5 + executable inventories)
+
+**In DDL rev 5** (all Q-probes executed as negative controls; 19/19
+reject, lawful paths pass): finite time bounds on every REAL time
+column; causal ordering enforced — transitions/intents cannot precede
+their runs, retries and supersessions carry strictly advancing
+`observed_at`, closures cannot predate their evidence, discovery
+cannot postdate recording; one transition record per run
+(`UNIQUE(run_id)` on run_events); lease renewal strictly advances and
+is frozen by terminal transitions; correction revisions bind to a
+fresh correction turn descending from the prior revision's turn;
+kind/ordinal shape CHECKs (`part` ⇔ ordinal; one final_text/tts/media
+slot per turn); acyclic edits; **pre-send `egress_reservations`** —
+the per-physical-attempt claim committed before bytes leave, where
+density and retry eligibility are enforced (the result trigger is now
+a backstop; a result without its reservation is impossible);
+per-label closure evidence semantics (`failed` cites only resolved
+non-delivery; `unknown_delivery` cites an unresolved handoff and no
+delivery; `refused` means no intent ever existed); nonempty
+identities, 64-hex digest CHECK, ASCII id posture (rail-generated
+UUID/hex; non-ASCII ids rejected — Unicode-normalization ambiguity
+excluded by construction); `attempt = epoch` (one counter);
+kind/parent/direction mapping (reply kinds are outbound and carry
+`parent_kind='reply'`; corrections are owner-message turns).
+
+**Registry rows, executable form** (supersedes §13's table): each
+§13 row becomes a `Door(...)` literal in `core/ledger/doorways.py`
+with all six fields; the table below adds the two missing columns —
+the qualnames are pinned at S3 authoring time against HEAD and the
+conformance sweep fails if a pinned qualname disappears:
+
+| # | closure_owner | egress_kinds |
+|---|---|---|
+| 1–3 | `skills/surface/platform_base.py:PlatformAdapter._send_with_retry` (+ `_record_delivery`) | final_text, part, progress, edit, reaction |
+| 4–6 | the owning Flask route function (socket commit) | final_text |
+| 7 | `gui.py` send-path function | final_text |
+| 8 | `cli/maez_chat.py:_handle_chat` stdout flush | final_text |
+| 9 | cockpit route return | final_text |
+| 10 | voice TTS emit path | tts |
+| 11–13 | the producer's send call, via the egress chokepoint | final_text |
+| 14 | `skills/dev_notifier.py` post function | final_text |
+
+AST grammar, finite: the exact primitive list is a frozen tuple in
+the conformance test — `("app.route", "add_url_rule", "add_handler",
+"MessageHandler", "CommandHandler", "CallbackQueryHandler",
+"send_message", "send_photo", "send_voice", "send_document",
+"edit_message_text", "set_message_reaction", "requests.post")` — plus
+the single egress chokepoint qualname. No wildcards. Allowlist
+entries are rows in `doorways.py` itself (door id + justification
+string), not a side channel; an allowlist row without a justification
+fails the sweep.
+
+**Phase structural contract, fingerprinted**: `gestation` requires —
+beyond §13's table set — that `schema_migrations` contains exactly
+the shipped migration names **with their recorded sha256 digests
+matching the shipped files**, that the trigger/index name set equals
+the DDL's (queried from `sqlite_master`, compared to a frozen list),
+that the genesis row matches the v2 genesis shape byte-for-byte under
+the v2 projection, and that `meta.last_chain_hash` equals the actual
+tip's chain hash (the head==tip validator is one SQL comparison,
+shipped in `birth_phase`). Consumer census, exact constructs, pinned
+at S1 authoring: `memory/memory_manager.py` the three
+`_memory_phase_tag()` call sites; `core/infra/private_thoughts.py:
+PrivateThoughts.record_thought/record_secret/record_reflection`
+(caller-supplied phase revalidated); `core/memory/source_awareness.py:
+is_born` gate; `core/cognition/audit_log.py:AuditLog.record` and its
+direct-edit session methods (enumerated by the S1 AST census at
+authoring time, not by this doc — the census test, not prose, is the
+closure mechanism); `core/consolidation/span_planner.py` meta read;
+`core/ledger/writer.py` stage resolution; heartbeat readers.
+
+**F6 repairs** (round-6 hazards): (1) *stable lock inode* —
+`ledger.lock` is created once by migration, mode 0444-owner-write,
+**never unlinked**; the conformance sweep bans `unlink`/`rename` on
+that path repo-wide, and recreate verifies the inode it locked is
+still the inode at the path before proceeding; (2) *pre-rail
+handles* — recreate additionally requires `meta.rail_version` ≥ the
+lock-taking rail's version in BOTH services' last-boot markers
+(written at startup), i.e. recreate is lawful only after every
+service has restarted onto the rail — a pre-rail descriptor cannot
+exist; (3) *temp-WAL* — the temp DB is built in rollback-journal
+mode (`journal_mode=DELETE`), fully closed, and verified
+sidecar-free before the rename.
+
+**§2 edit rule**: formally amended to §12's lineage mechanism
+(`edits_intent`); the §2 sentence describing result-supersession for
+edits is void — DDL wins.
