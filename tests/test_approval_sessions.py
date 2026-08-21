@@ -7,9 +7,37 @@ says "reading is fine" in natural language, so subsequent read-safe
 ops auto-execute instead of stacking proposal cards."""
 from __future__ import annotations
 
+import pathlib
+import tempfile
 import unittest
 
 from core import approval_sessions as ap
+
+
+def setUpModule():
+    """Redirect approval-session state to a throwaway file.
+
+    ``ap._diag_clear_for_test`` UNLINKS ``ap._STATE_PATH``, a
+    module-global absolute path to the live
+    ``memory/approval_sessions.json``. This module called it in
+    setUp/tearDown with no redirection, so running it deleted real
+    approval state. Third instance of the same hazard found on
+    2026-08-21; the first two were recall_stats and inner_residue.
+
+    Found by Codex reading the actual call site. A grep-based sweep of
+    mine cleared this file by mistake -- it matched "/tmp/x" inside
+    test DATA (command strings being checked for safety) and concluded
+    the module was isolated.
+    """
+    global _TMPDIR, _ORIG_STATE_PATH
+    _TMPDIR = tempfile.TemporaryDirectory(prefix="maez-approval-test-")
+    _ORIG_STATE_PATH = ap._STATE_PATH
+    ap._STATE_PATH = pathlib.Path(_TMPDIR.name) / "approval_sessions.json"
+
+
+def tearDownModule():
+    ap._STATE_PATH = _ORIG_STATE_PATH
+    _TMPDIR.cleanup()
 
 
 class ReadSafeClassifier(unittest.TestCase):
