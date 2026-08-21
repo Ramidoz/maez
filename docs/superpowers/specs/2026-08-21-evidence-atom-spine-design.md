@@ -1,227 +1,387 @@
-# Evidence-Atom Spine — design pass 4
+# Evidence-Atom Spine — design pass 5 (batch derivation, full DDL)
 
-Status: DESIGN, pass 4. Gate history: pass 1 BLOCKED (12), pass 2
-BLOCKED (10 open + 8 new, 0/15 falsifiers executable), pass 3 BLOCKED
-(8 closed, 6 open, 1 new, 4/12 falsifiers executable). Round reports
-preserved at `2026-08-21-spine-gate-round{1,2,3}.md`.
+Status: DESIGN, pass 5. Gate history: pass 1 BLOCKED (12), pass 2
+(10 open + 8 new), pass 3 (8 closed, 6 open, 1 new), pass 4 (1 closed,
+6 open, 5 new; **5/13 falsifiers executable**). Round reports at
+`2026-08-21-spine-gate-round{1,2,3,4}.md`. Scope remains D1+D2 only.
 
-Scope is unchanged from pass 3 and confirmed honest by the gate: **D1
-(atoms) and D2 (lineage) only.** D3 (recall events) and D4 (prompt
-exposures) remain deferred to their own design; blockers 6, 7, 19 and
-the terminal-model-call problem left with them and have not been
-smuggled back.
+## 0. Two admissions, then the change
 
-## 0. The two structural changes in this pass
+**Admission 1 — I described the fix instead of writing it.** Pass 4
+said triggers were "written out per table." The gate counted the
+committed document: **one `CREATE TABLE`, zero `CREATE TRIGGER`.** I
+wrote a table of attacks-and-fixes in prose and called it DDL. That is
+precisely the laundering this repo's doctrine exists to catch, and it
+was mine. §3 of this pass is the complete schema, literally.
 
-**(a) The live store is the authority; gaps are derived, not caught.**
-Pass 3 promised durable queue-overflow receipts written by a
-non-blocking, never-raising producer. The gate proved that combination
-unachievable: a synchronous fsync'd append can block or raise on the
-reply thread, and enqueuing an overflow receipt into the full queue is
-circular.
+**Admission 2 — my architecture was inside a corruption window.**
+Pass 4 had the observer fire inside the chokepoint in every writing
+process (daemon + web + GUI), i.e. multiple connections writing and
+checkpointing a WAL database concurrently. This host runs SQLite
+**3.46.1** (`libsqlite3-0:amd64 3.46.1-9ubuntu0.2`, verified directly
+via `sqlite3.sqlite_version` and `dpkg`). SQLite documents a WAL-reset
+corruption bug affecting versions through 3.51.2 under exactly that
+topology, fixed in 3.51.3 with backports to 3.44.6 / 3.50.7 — none
+present in this package. Recorded as a repo-wide hazard, not just a
+spine one.
 
-The narrowed scope dissolves this. For atoms and lineage, **every
-observation has an authoritative external source — the live row
-itself.** So the spine does not need to catch a failure at the moment
-it happens. A reconciliation pass compares live-store row ids against
-observed occurrences and *derives* every gap after the fact. Overflow,
-crash, `os._exit` at `daemon/maez_daemon.py:12371`, a killed drain
-thread — all produce the same detectable state, and all are recorded
-durably by the next reconciliation. Producers may therefore drop
-silently into an in-memory counter, which is achievable.
+### The change: derive, don't observe
 
-(This is also why the D3/D4 deferral was right: query and exposure
-events have **no** external authority, so their loss genuinely is
-undetectable — a much harder problem that deserves its own design.)
+The spine no longer hooks the write path at all. It is a **batch
+deriver**: a single-process job that reads the live store and
+atomizes what it finds.
 
-**(b) Every process that writes through the chokepoint also observes.**
-Pass 3 declared a daemon-only scope. Verified topology says that
-excludes real owner turns: the web process writes via
-`skills/web_interface.py:7429` and the desktop GUI via `gui.py:685` —
-both calling `store_telegram`, i.e. **through the same chokepoint**.
-`core/brain/brain_loop.py:349` constructs a second `MemoryManager`
-in-process as well.
+This is not a patch; it deletes the defect class:
 
-So the hook lives inside `memory/memory_manager.py` and fires wherever
-a memory is written. SQLite WAL supports multiple writing processes
-with `busy_timeout`; the daemon additionally owns the reconciliation
-pass. "Daemon-only" would have been a smaller promise that quietly
-missed owner conversations — the wrong kind of narrowing.
+| Defect | Why it is gone |
+|---|---|
+| B18, N24 multi-process writers, WAL corruption window | one process, one writer, ever |
+| N23 causal gap labels indistinguishable | no queue, no crash window — a row either exists at scan time or it does not |
+| B9 durable-overflow impossibility | no queue to overflow |
+| reply-path hazard (`daemon/maez_daemon.py:9676` stores before broadcast) | nothing runs on the reply path; no lazy open, no hashing, no tokenization |
+| F11 crash injection | the batch is idempotent and restartable; a killed run re-derives |
+| F12 flags-off cost | it is a separate script the daemon never imports |
 
-## 1. Scope, measured
+What it costs, stated plainly: a row written and then removed by
+curation **before the batch runs is never atomized**. That is N22, and
+it is unavoidable for any design — pass 4 only appeared to solve it.
+The batch answers it honestly instead (§4).
 
-| Defect | Measured | In scope |
-|---|---|---|
-| D1 truncation blindness | over-limit rows: raw 3,571/44,037 (8.11%, max 2,910 tok); daily 24/40 (**60.00%**); core 10/134 (7.46%) | YES |
-| D2 unfollowable ancestry | 16/82 lineage rows carry `,+N` (19.51%); 2,948/4,700 declared ancestor edges (**62.72%**) have no id anywhere | YES |
-| D3 query vectors / D4 exposures | 0 retained / construct absent | deferred, own gate |
+## 1. Scope
 
-## 2. The five write doors (unchanged, gate-CLOSED)
+D1 atoms · D2 lineage. Measured: over-limit rows raw 3,571/44,037
+(8.11%, max 2,910 tok), daily 24/40 (**60.00%**), core 10/134 (7.46%);
+lineage 16/82 rows carry `,+N` (19.51%), 2,948/4,700 declared ancestor
+edges (**62.72%**) have no recorded id. D3/D4 remain deferred with
+their own gate (gate-confirmed honest, not reopened).
 
-`:1535` `store` · `:1616` `store_telegram` · `:1662` `_write_quiet_stub`
-· `:1884` `consolidate_daily` · `:2079` `store_core` — all in
-`memory/memory_manager.py`. AST pin asserts exactly five `.add(` sites.
+## 2. How the batch runs
 
-## 3. Contract registry (closes B3, enables F1/F4)
+Single process, invoked by cron or by hand, never by the daemon:
 
-Pass 3 stored an opaque `contract_hash`, which made "recomputable from
-stored data alone" false — nothing mapped the hash to a tokenizer or
-model. The registry fixes it:
+1. Open the live stores **read-only, immutable URI**. The spine never
+   holds a write handle to Chroma.
+2. Record a `scan_runs` row: start time, per-layer row count, and the
+   **scan watermark** — the set boundary the run could see.
+3. For each layer, for each row id not already atomized under the
+   current `splitter_version`: read the document, split, store atoms,
+   record correspondence *at observation time* (§4), derive lineage.
+4. Close the run: end time, counts, and the derived
+   `HISTORICAL_UNTRACEABLE` / `PRE_SPINE` classes.
+
+Idempotent by construction: re-running derives nothing new, because
+`(layer, body_row_id, splitter_version)` is unique. Interrupt at any
+point and re-run; there is no partial-write class to reason about.
+
+## 3. The schema — complete, literal
 
 ```sql
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA recursive_triggers = ON;
+PRAGMA busy_timeout = 5000;
+
 CREATE TABLE embedding_contracts (
-  contract_hash   TEXT NOT NULL PRIMARY KEY
-                  CHECK (length(contract_hash) = 64),
-  contract_json   TEXT NOT NULL,   -- verbatim embedding_contract.json
-  model_name      TEXT NOT NULL,
-  tokenizer_id    TEXT NOT NULL,
+  contract_hash     TEXT NOT NULL PRIMARY KEY
+                    CHECK (length(contract_hash) = 64
+                           AND contract_hash NOT GLOB '*[^0-9a-f]*'),
+  contract_json     TEXT NOT NULL,
+  model_name        TEXT NOT NULL,
+  model_artifact_sha TEXT,          -- NULL => artifact unavailable, see §5
+  tokenizer_id      TEXT NOT NULL,
   truncation_tokens INTEGER NOT NULL CHECK (truncation_tokens > 0),
-  dimensions      INTEGER NOT NULL CHECK (dimensions > 0),
-  package_version TEXT NOT NULL,
-  recorded_ts     REAL NOT NULL
+  dimensions        INTEGER NOT NULL CHECK (dimensions > 0),
+  package_version   TEXT NOT NULL,
+  recorded_ts       REAL NOT NULL
 ) STRICT;
+
+CREATE TABLE scan_runs (
+  run_id        TEXT NOT NULL PRIMARY KEY,
+  started_ts    REAL NOT NULL,
+  finished_ts   REAL,
+  raw_seen      INTEGER NOT NULL DEFAULT 0,
+  daily_seen    INTEGER NOT NULL DEFAULT 0,
+  core_seen     INTEGER NOT NULL DEFAULT 0,
+  splitter_version INTEGER NOT NULL CHECK (splitter_version >= 0),
+  status        TEXT NOT NULL CHECK (status IN ('running','complete','aborted'))
+) STRICT;
+
+CREATE TABLE atom_content (
+  content_id  TEXT NOT NULL PRIMARY KEY
+              CHECK (length(content_id) = 64
+                     AND content_id NOT GLOB '*[^0-9a-f]*'),
+  bytes       BLOB NOT NULL,
+  byte_len    INTEGER NOT NULL CHECK (byte_len > 0 AND byte_len = length(bytes)),
+  created_ts  REAL NOT NULL
+) STRICT;
+
+CREATE TABLE atom_embeddings (
+  content_id    TEXT NOT NULL REFERENCES atom_content(content_id),
+  contract_hash TEXT NOT NULL REFERENCES embedding_contracts(contract_hash),
+  vector        BLOB NOT NULL CHECK (length(vector) % 4 = 0),
+  vector_hash   TEXT NOT NULL CHECK (length(vector_hash) = 64
+                                     AND vector_hash NOT GLOB '*[^0-9a-f]*'),
+  token_count   INTEGER NOT NULL CHECK (token_count > 0),
+  embed_ts      REAL NOT NULL,
+  PRIMARY KEY (content_id, contract_hash)
+) STRICT;
+
+-- vector length must match the contract's declared dimensions
+CREATE TRIGGER emb_dim_match BEFORE INSERT ON atom_embeddings
+BEGIN
+  SELECT RAISE(ABORT, 'vector length != contract dimensions * 4')
+  WHERE (SELECT dimensions FROM embedding_contracts
+         WHERE contract_hash = NEW.contract_hash) * 4 <> length(NEW.vector);
+  SELECT RAISE(ABORT, 'token_count exceeds contract truncation limit')
+  WHERE NEW.token_count > (SELECT truncation_tokens FROM embedding_contracts
+                           WHERE contract_hash = NEW.contract_hash);
+END;
+
+CREATE TABLE atom_occurrences (
+  occurrence_id TEXT NOT NULL PRIMARY KEY
+                CHECK (length(occurrence_id) = 64
+                       AND occurrence_id NOT GLOB '*[^0-9a-f]*'),
+  content_id    TEXT NOT NULL REFERENCES atom_content(content_id),
+  run_id        TEXT NOT NULL REFERENCES scan_runs(run_id),
+  layer         TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
+  body_row_id   TEXT NOT NULL,
+  ordinal       INTEGER NOT NULL CHECK (ordinal >= 0),
+  byte_start    INTEGER NOT NULL CHECK (byte_start >= 0),
+  byte_end      INTEGER NOT NULL CHECK (byte_end > byte_start),
+  row_content_hash TEXT NOT NULL CHECK (length(row_content_hash) = 64
+                       AND row_content_hash NOT GLOB '*[^0-9a-f]*'),
+  splitter_version INTEGER NOT NULL CHECK (splitter_version >= 0),
+  role          TEXT NOT NULL CHECK (role IN (
+                  'owner_utterance','maez_response','observation',
+                  'reasoning','digest','external','unknown')),
+  parse_status  TEXT NOT NULL CHECK (parse_status IN (
+                  'boundary_parsed','turn_linked_half','unparsed_container')),
+  pair_id       TEXT,
+  provenance_source TEXT,
+  trust_tier    TEXT,
+  observed_ts   REAL NOT NULL,
+  CHECK (parse_status <> 'turn_linked_half' OR pair_id IS NOT NULL),
+  UNIQUE (layer, body_row_id, ordinal, splitter_version),
+  UNIQUE (layer, body_row_id, byte_start, byte_end, splitter_version)
+) STRICT;
+
+-- span length must equal the referenced content's byte length
+CREATE TRIGGER occ_span_matches_content BEFORE INSERT ON atom_occurrences
+BEGIN
+  SELECT RAISE(ABORT, 'span length != content byte_len')
+  WHERE (NEW.byte_end - NEW.byte_start) <>
+        (SELECT byte_len FROM atom_content WHERE content_id = NEW.content_id);
+END;
+
+CREATE TABLE lineage_edges (
+  child_id  TEXT NOT NULL,
+  parent_id TEXT NOT NULL,
+  relation  TEXT NOT NULL CHECK (relation IN (
+              'consolidated_from','promoted_from','derived_from')),
+  parent_resolved INTEGER NOT NULL CHECK (parent_resolved IN (0,1)),
+  run_id    TEXT NOT NULL REFERENCES scan_runs(run_id),
+  edge_ts   REAL NOT NULL,
+  PRIMARY KEY (child_id, parent_id, relation)
+) STRICT;
+
+CREATE TABLE lineage_summary (
+  child_id             TEXT NOT NULL PRIMARY KEY,
+  declared_count       INTEGER NOT NULL CHECK (declared_count >= 0),
+  unknown_parent_count INTEGER NOT NULL CHECK (unknown_parent_count >= 0),
+  source_key           TEXT NOT NULL,
+  run_id               TEXT NOT NULL REFERENCES scan_runs(run_id),
+  summary_ts           REAL NOT NULL
+) STRICT;
+
+-- the summary is SEALED: arithmetic checked at insert, and no edge may
+-- be added for a child that already has one (closes the "valid summary
+-- then an extra edge" attack)
+CREATE TRIGGER lineage_summary_arithmetic BEFORE INSERT ON lineage_summary
+BEGIN
+  SELECT RAISE(ABORT, 'known + unknown != declared')
+  WHERE (SELECT COUNT(*) FROM lineage_edges WHERE child_id = NEW.child_id)
+        + NEW.unknown_parent_count <> NEW.declared_count;
+END;
+
+CREATE TRIGGER lineage_edges_after_seal BEFORE INSERT ON lineage_edges
+BEGIN
+  SELECT RAISE(ABORT, 'child already sealed by a summary')
+  WHERE EXISTS (SELECT 1 FROM lineage_summary WHERE child_id = NEW.child_id);
+END;
+
+CREATE TABLE observation_gaps (
+  layer       TEXT CHECK (layer IS NULL OR layer IN ('raw','daily','core')),
+  body_row_id TEXT,
+  gap_class   TEXT NOT NULL CHECK (gap_class IN (
+                'HISTORICAL_UNTRACEABLE','PRE_SPINE','ROW_VANISHED',
+                'UNREADABLE_DOCUMENT','CONTRACT_UNAVAILABLE')),
+  reason      TEXT NOT NULL,
+  run_id      TEXT NOT NULL REFERENCES scan_runs(run_id),
+  detected_ts REAL NOT NULL,
+  PRIMARY KEY (layer, body_row_id, gap_class)     -- no duplicate gap rows
+) STRICT;
+
+-- Verification is a RUN, not a forgeable per-row flag.
+CREATE TABLE verification_runs (
+  verify_id   TEXT NOT NULL PRIMARY KEY,
+  started_ts  REAL NOT NULL,
+  finished_ts REAL,
+  scope       TEXT NOT NULL CHECK (scope IN ('full','incremental')),
+  result      TEXT CHECK (result IN ('PASS','FAIL','UNVERIFIABLE')),
+  detail_json TEXT
+) STRICT;
+
+CREATE TABLE verification_findings (
+  verify_id TEXT NOT NULL REFERENCES verification_runs(verify_id),
+  check_id  TEXT NOT NULL,
+  subject   TEXT NOT NULL,
+  outcome   TEXT NOT NULL CHECK (outcome IN ('pass','fail','unverifiable')),
+  note      TEXT,
+  PRIMARY KEY (verify_id, check_id, subject)
+) STRICT;
+
+-- Append-only, written out per table. No summarising comment.
+CREATE TRIGGER embedding_contracts_no_update BEFORE UPDATE ON embedding_contracts
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER embedding_contracts_no_delete BEFORE DELETE ON embedding_contracts
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_content_no_update BEFORE UPDATE ON atom_content
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_content_no_delete BEFORE DELETE ON atom_content
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_embeddings_no_update BEFORE UPDATE ON atom_embeddings
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_embeddings_no_delete BEFORE DELETE ON atom_embeddings
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_occurrences_no_update BEFORE UPDATE ON atom_occurrences
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER atom_occurrences_no_delete BEFORE DELETE ON atom_occurrences
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER lineage_edges_no_update BEFORE UPDATE ON lineage_edges
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER lineage_edges_no_delete BEFORE DELETE ON lineage_edges
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER lineage_summary_no_update BEFORE UPDATE ON lineage_summary
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER lineage_summary_no_delete BEFORE DELETE ON lineage_summary
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER observation_gaps_no_update BEFORE UPDATE ON observation_gaps
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER observation_gaps_no_delete BEFORE DELETE ON observation_gaps
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER verification_findings_no_update BEFORE UPDATE ON verification_findings
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER verification_findings_no_delete BEFORE DELETE ON verification_findings
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+-- scan_runs and verification_runs permit exactly one UPDATE: closing an
+-- open run. Enforced by predicate, not by convention.
+CREATE TRIGGER scan_runs_close_only BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT, 'only an open run may be closed')
+  WHERE OLD.finished_ts IS NOT NULL
+     OR NEW.run_id <> OLD.run_id
+     OR NEW.started_ts <> OLD.started_ts;
+END;
+CREATE TRIGGER scan_runs_no_delete BEFORE DELETE ON scan_runs
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER verification_runs_close_only BEFORE UPDATE ON verification_runs
+BEGIN
+  SELECT RAISE(ABORT, 'only an open run may be closed')
+  WHERE OLD.finished_ts IS NOT NULL OR NEW.verify_id <> OLD.verify_id;
+END;
+CREATE TRIGGER verification_runs_no_delete BEFORE DELETE ON verification_runs
+  BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 ```
 
-`contract_hash = sha256(canonical(contract_json))`. Every embedding and
-every token count is now recomputable from the spine alone: take the
-bytes, take the named tokenizer and limit, redo the work.
+Notes on specific attacks the gate landed:
 
-Gate evidence this is sound: re-embedding five real stored document
-strings reproduced their vectors **byte-identically, max component
-delta 0**.
+- `door_site` is **gone** — the batch has no doors to record.
+- `reassembly_ok` is **gone** as a stored flag; forging it was possible
+  because "verifier-only" was an application convention. Tiling is now
+  a `verification_findings` row tied to a run.
+- Non-hex 64-char hashes are rejected by `NOT GLOB '*[^0-9a-f]*'`.
+- `byte_len = length(bytes)` and span-vs-content-length are enforced.
+- Duplicate gap rows are impossible (composite PK).
+- `turn_linked_half` without `pair_id` is rejected.
+- An extra edge after a sealed summary is rejected.
 
-## 4. DDL — the attack, and what now stops it
+What DDL still cannot enforce, by nature: that `content_id` truly
+hashes its bytes, that a vector re-embeds, and that a `body_row_id`
+exists in the live store. Those are §5.
 
-The gate created pass 3's literal SQL and wrote false receipts into it.
-Everything it admitted is listed here with the fix, because a schema
-that admits a lie is a schema that will eventually record one.
+## 4. Correspondence, honestly (closes N22's second half)
 
-| Attack that was ADMITTED | Fix in pass 4 |
-|---|---|
-| `UPDATE`/`DELETE` on every table except `atom_content` | Triggers are now **written out per table**, not summarized in a comment (the fatal shorthand of pass 3) |
-| `INSERT OR REPLACE` silently replaced content bytes | `PRAGMA recursive_triggers = ON`, asserted at open; plus an explicit insert-conflict trigger |
-| FK enforcement vanished on reopen (`foreign_keys` defaults to 0) | Single `open_spine()` helper sets **and verifies** every pragma; F13 fails the build if any connection lacks them |
-| Wrong `content_id` for the stored bytes | Cannot be expressed in `CHECK`; enforced by the verifier (§6, F1) which recomputes `sha256(bytes)` for every row |
-| Arbitrary vector / vector_hash | `CHECK (length(vector) = 1536)` (384×float32) + `CHECK (length(vector_hash) = 64)`; verifier re-embeds and compares |
-| Span length inconsistent with content; negative splitter version | `CHECK (splitter_version >= 0)` + trigger asserting `byte_end - byte_start = (SELECT byte_len FROM atom_content WHERE content_id = NEW.content_id)` |
-| Overlapping occurrences with `reassembly_ok = 1` | Verifier tiles every row (F3); `reassembly_ok` is **written by the verifier only**, never by the writer |
-| Orphan reassembly, negative byte counts | `CHECK (covered_bytes >= 0 AND row_bytes > 0)` + FK-style trigger requiring at least one occurrence for the row |
-| `declared_count = 4` with zero edges and zero unknown parents | Trigger on `lineage_summary` insert asserting `(SELECT COUNT(*) FROM lineage_edges WHERE child_id = NEW.child_id) + NEW.unknown_parent_count = NEW.declared_count` |
-| Same byte span reused under another ordinal | `UNIQUE (layer, body_row_id, byte_start, byte_end, splitter_version)` |
-| Malformed hash strings | `CHECK (length(x) = 64)` on every hash column |
+Correspondence is verified **at observation time** and recorded then:
+the row existed in that layer and its document hashed to
+`row_content_hash`, witnessed under `run_id` with `observed_ts`.
 
-**The strongest attack, and the honest answer.** The gate built a
-bundle that satisfied all five stated equations while its
-`body_row_id` existed in no live store at all. It concluded: *"same
-file proves internal consistency, not that the receipt corresponds to
-the claimed live write."* That is correct and no `CHECK` can fix it,
-because the truth lives outside the file.
+Later re-verification therefore has **three** outcomes, not two:
+`pass`, `fail` (the row exists and its bytes differ — a real alarm),
+and `unverifiable` (the row is no longer at that id, e.g. curation
+relocated it at `scripts/metabolic_curation.py:370`). Pass 4 would have
+called that third case a failure and slandered an honest receipt.
 
-So pass 4 adds an **external correspondence check** as a first-class
-falsifier (F2): for every occurrence, the `body_row_id` must exist in
-the named layer of the live store, and that row's document, encoded
-strict UTF-8, must hash to the stored `row_content_hash`. Internal
-consistency is checked by the schema; correspondence is checked
-against reality. A receipt that passes both is not merely
-self-consistent — it is *about* something.
+Rows removed before the batch ever saw them are `ROW_VANISHED` /
+`PRE_SPINE` and are never claimed as observed.
 
-## 5. Failure posture (closes B9, B18)
+## 5. The verifier as an admission boundary
 
-- The hook fires inside the chokepoint in **any** writing process
-  (§0b). WAL + `busy_timeout=5000`; short transactions.
-- Producers enqueue non-blocking. **On overflow they drop and
-  increment an in-memory counter** — no fsync, no raise, nothing on the
-  reply path. This is now honest because loss is detectable later.
-- **Reconciliation is the authority.** The daemon runs it at start and
-  on a timer: live-store ids in the window minus observed occurrences
-  ⇒ an `observation_gaps` row per missing id, with `gap_class`
-  distinguishing `CRASH_WINDOW`, `QUEUE_OVERFLOW` (counter non-zero),
-  `WRITE_FAILED`, `CAPACITY_STOP`, `HISTORICAL_UNTRACEABLE`.
-- Late observation is permitted only while the bytes remain at the
-  recorded id, marked `observed_late = 1`. If
-  `scripts/metabolic_curation.py:370` has relocated the row, the gap is
-  permanent and says so.
-- `spine_gaps.jsonl` remains for the drain thread's own durable
-  logging under SQLite lock failure — the gate confirmed a 29-byte
-  append+fsync survives an exclusive SQLite lock. It is explicitly
-  **not** claimed to survive `ENOSPC`, `EROFS`, quota exhaustion, or
-  device failure; those are detected by reconciliation like any other
-  loss.
-- Shutdown: a drain hook before `self.memory.close()`
-  (`daemon/maez_daemon.py:12371`); if `os._exit` beats it, the next
-  reconciliation derives the gap.
+`scripts/spine/verify.py` recomputes rather than trusts: `sha256`,
+re-embedding, tokenization, tiling, lineage arithmetic, and live
+correspondence. It writes a `verification_runs` row and per-check
+findings.
 
-## 6. Verifier as a first-class component
+Two rules make it a boundary rather than a diagnostic:
+1. **Fail-closed consumption.** No consumer may read spine rows whose
+   most recent covering verification run is not `PASS`. A later organ
+   asking "is this atom evidence?" gets `no` unless verification says
+   yes.
+2. **`UNVERIFIABLE` is a first-class result** — e.g. the model artifact
+   named by `model_artifact_sha` is absent, so a vector cannot be
+   recomputed. That is neither pass nor fail, and it is never silently
+   coerced (the same discipline as the examined-life organ's
+   `UNRECONCILABLE`).
 
-`scripts/spine/verify.py` is part of the deliverable, not a test
-helper. It recomputes, rather than trusts: `sha256(bytes)`,
-re-embedding under the registry contract, token counts, span tiling,
-lineage arithmetic, and live-store correspondence. `reassembly_ok` is
-written only by it.
+`canonical(contract_json)` is defined: JSON with sorted keys, no
+insignificant whitespace, UTF-8, LF — `json.dumps(obj, sort_keys=True,
+separators=(",", ":"), ensure_ascii=False)`.
 
-## 7. Retention, privacy, backup (B10 residue)
+## 6. Falsifiers — 11, with the artifact each needs
 
-One file, lifetime, no rotation in v0. Numeric kills: projected
-12-month size > 5 GB, or volume free space < 10 GB. Directory `0700`,
-files `0600`.
+| # | Falsifier | Artifact / definition | Kill |
+|---|---|---|---|
+| F1 | `content_id == sha256(bytes)`; `byte_len == length(bytes)`; vector re-embeds to `vector_hash` under the registry contract | canonical JSON per §5; vector serialized little-endian float32; artifact absent ⇒ `unverifiable`, not pass | any mismatch |
+| F2 | Correspondence at observation time; re-verify yields pass/fail/unverifiable per §4 | live store read-only | any `fail` |
+| F3 | Tiling: ordered atoms cover each row with no gap/overlap and hash to `row_content_hash` | internal | any row < 100% |
+| F4 | `token_count` recomputed **equals** the stored value and ≤ limit | registry tokenizer_id + truncation_tokens; special tokens included as the encoder counts them | any mismatch |
+| F5 | Tokenizer-visible mutation changes the vector | `tests/data/spine_mutations.json`: ≥50 entries, each pre-verified to change token ids, seed recorded, sha256 pinned in the slice commit; "changes" = cosine < 0.9999 | < 95% |
+| F6 | Coverage: every live row present at the run's watermark is atomized or has a gap row | scan_runs watermark | any row neither |
+| F7 | `COUNT(edges) + unknown_parent_count == declared_count`, and every `parent_resolved = 1` edge names a row that existed at scan time | internal + live store | any violation |
+| F8 | Capacity: bytes/day over a 7-day window, linear annualization | numerator = spine file size delta; day = UTC midnight | projected > 5 GB/yr or free < 10 GB |
+| F9 | Backup/restore: canonical dump matches | tables ordered by name, rows by PK, `.mode quote`, LF; canary = a fixed sentinel `scan_runs` row; batch quiesced during capture (no live-write linearization problem, because the spine has no live writer) | any mismatch |
+| F10 | Write confinement by **inode**, not path string | compare `st_dev`/`st_ino` of the target against the allowlisted tree; rejects hardlinks, which `Path.resolve()` cannot (closes N26) | any escape |
+| F11 | Append-only + pragma enforcement: every trigger fires; `open_spine()` is the only opener; a connection without the pragmas is refused | AST test forbidding other `sqlite3.connect` on the spine path, including aliased/dynamic opens | any bypass |
 
-**"Restore matches" is now fully defined:** identical per-table row
-counts; identical sha256 over a canonical dump (every table ordered by
-primary key, values serialized as `sqlite3` `.mode quote` output, LF
-line endings, UTF-8); **`spine_gaps.jsonl` byte-identical up to the
-line count recorded in the backup manifest** (it is append-only, so a
-longer live file is legal and the manifest pins the compared prefix);
-the §4 invariants re-verified on the restored copy; and a canary row
-present. Backup routing adds `spine.sqlite3` to
-`_SQLITE_FILENAMES_INSIDE_DIRS` (`scripts/backup/backup.py:129`); the
-JSONL copies flat. The backup test writes continuously during capture.
+Gone with the architecture: crash-injection, queue-overflow, and
+flags-off-cost falsifiers — there is no queue, no crash window, and
+nothing imported by the daemon.
 
-## 8. Falsifiers (B12) — each names its missing artifact
+## 7. Slices
 
-Pass 3 scored 4/12 executable. Each entry below now names the artifact
-that made it unexecutable and where that artifact comes from.
+- **S0** — schema + `open_spine()` + confinement + backup routing.
+  Witness: F9, F10, F11.
+- **S1** — the batch deriver: atoms, embeddings, correspondence, gaps.
+  Witness: F1–F6, F8.
+- **S2** — lineage derivation. Witness: F7.
+- **S3** — the verifier and the fail-closed consumption boundary.
 
-| # | Falsifier | Artifact that unblocks it | Slice | Kill |
-|---|---|---|---|---|
-| F1 | `content_id == sha256(bytes)`; vector re-embeds to `vector_hash` | **contract registry** (§3) supplies model/tokenizer; comparison oracle = exact byte equality (gate measured delta 0 on 5/5 real rows) | S1 | any mismatch |
-| F2 | **Correspondence:** every `body_row_id` exists in its layer and hashes to `row_content_hash` | live store read-only; no new artifact | S1 | any occurrence without a real row |
-| F3 | Reassembly tiles each row exactly | internal oracle | S1 | any row < 100% |
-| F4 | `token_count` recomputed ≤ limit | registry maps `contract_hash` → tokenizer + `truncation_tokens` | S1 | any atom over |
-| F5 | Tokenizer-visible mutation changes the vector | **pinned mutation set** generated at S0 (`tests/data/spine_mutations.json`, sha256 in the slice commit), each entry pre-verified to change token ids; "changes" = cosine < 0.9999 | S1 | < 95% |
-| F6 | Five doors observed; AST count == 5 | positive control per door | S1 | any door silent |
-| F7 | `COUNT(edges) + unknown_parent_count == declared_count` | none | S2 | any child violating |
-| F8 | Capacity: bytes/day + breach behavior | **window = 7 days; projection = linear on observed bytes/day; workload = the real daemon; breach simulated by a faked `statvfs`, which tests the *response* (stop + gap), not the kill threshold** — pass 3 conflated the two | S1 | projection > 5 GB/yr, free < 10 GB, or a blocked turn |
-| F9 | Backup/restore matches | canonical dump defined in §7; JSONL prefix from the manifest; canary = a fixed sentinel row id | S0 | any mismatch |
-| F10 | Write confinement | **path-injection seam**: the writer resolves its target with `Path.resolve()` and rejects anything not under `memory/db/spine/`; oracle probes `..`, symlink, and hardlink targets | S0 | any escape |
-| F11 | Crash: injected kills always leave a derivable gap | **injection points**: after live `add` returns, before enqueue, after enqueue, mid-drain; denominator = ids the live store gained during the run; deadline = first reconciliation after restart | S1 | any loss not derived |
-| F12 | Flags-off ⇒ no import, no open, no file | call-site oracle | S0 | any touch |
-| F13 | Every spine connection has `foreign_keys`, `recursive_triggers`, WAL, `busy_timeout` set **and verified** | `open_spine()` is the only opener; AST test forbids other `sqlite3.connect` on the spine path | S0 | any unverified connection |
+## 8. What this claims
 
-## 9. N21 — the organ-readiness claim is withdrawn
+That the spine records what existed when it looked, proves each atom's
+bytes and vector recomputable, proves each atom's place in its row,
+records ancestry or counts it unknown, and refuses to be read as
+evidence unless verification currently passes.
 
-The gate is right, and this is the correction I most want on the
-record. Pass 3 said the atom layer "serves" Return Parallax and the
-examined-life organ. It does not.
-
-- **Return Parallax** needs conversation-cluster identity, bound
-  turn-event and response-atom ids, ordinals and separation, and later
-  a truthful `PARALLAX_EXPOSED` state. The spine gives it byte
-  equality and occurrence distinctness — **necessary, not sufficient.**
-- **Examined-life** needs typed lineage with real targets; free-text
-  ancestor ids with no referent cannot produce a defensible
-  `UNRECONCILABLE`.
-
-Corrected claim: atoms and lineage are a **prerequisite** for both
-organs and sufficient for neither. The identity layer each needs is
-named future work, gated separately. Nothing may cite the spine as
-making an organ ready.
-
-## 10. What this claims
-
-Every atom's bytes stored; its vector and token count recomputable
-from a recorded contract; its place in its row provable; its row
-provably real; its ancestry recorded or counted as unknown; every
-non-observation derived and written down.
-
-Not meaning. Not importance. Not organ-readiness. And not completeness
-— only that incompleteness is visible.
+Not meaning. Not importance. Not organ-readiness (N21 withdrawal
+stands). Not completeness — only that incompleteness is visible and
+that the boundary of the last look is written down.
