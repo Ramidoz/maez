@@ -462,6 +462,36 @@ the world, and PASS is withheld until the verifier has spoken for every
 row. Neither half is sufficient; naming which is which is what keeps
 the claim honest.
 
+
+## 2.3 Over-restriction check — an honest run must still complete
+
+Seven rounds of adversarial review create a real pull toward proving
+rigor by refusing more. A schema that blocks honest work is a failed
+schema, so the design is checked in the constructive direction too: a
+complete lifecycle, start to consumable evidence, with **16 steps and
+zero blocks**.
+
+1–5 open a run, capture `raw` then `daily` (parents first), record
+membership for 3 rows, register the embedding contract.
+6–9 atomize a row into two atoms that tile it exactly, embed both under
+the contract, record the occurrences, seal the row.
+10–11 atomize and seal the remaining raw row and the daily digest.
+12 record lineage: one **proved** parent (membership + boundary) and
+one honestly **unknown** ancestor, declared count 2.
+13 close the run `complete` — permitted because every membership row is
+disposed and there are no gaps.
+14–16 open a verification run, record `row_covered` for every
+membership row, close as `PASS`.
+
+Result: the most recent covering verification reads `PASS`, so the run
+is consumable as evidence; 4 atoms, 3 sealed rows, ancestry recorded as
+1 known + 1 unknown.
+
+This is the shape the whole design is for: a memory that is fully
+visible, provably placed in its row, with ancestry that says exactly
+how much it does not know — and no step of it is blocked by the rules
+that stop the forgeries.
+
 ## 3. What the schema now refuses (round 6's admitted list, retested)
 
 All executed in-memory against the file above; honest operations
