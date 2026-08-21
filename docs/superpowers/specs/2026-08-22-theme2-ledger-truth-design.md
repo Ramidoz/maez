@@ -1,8 +1,11 @@
-# Theme 2 — the ledger cannot omit or misdate a life (design pass 4)
+# Theme 2 — the ledger cannot omit or misdate a life (design pass 5)
 
-Status: DESIGN, pass 4. Pass 4 = pass 3 + §11, which binds the design
-to executable DDL (`2026-08-22-theme2-schema-v2-draft.sql`) and folds
-gate round 3's F1–F10. Pass 3 folded round 2's sixteen new defects
+Status: DESIGN, pass 5. Pass 5 = pass 4 + §12 (round-4 folds; the DDL
+is at revision 2, re-verified: all 22 round-2/3 controls PLUS all 21
+round-4 counterexamples reject in-memory; lawful paths — late-ack
+supersession, correction revision, auto-journaled transitions — pass).
+Pass 4 bound the design to executable DDL and folded round 3's
+F1–F10. Pass 3 folded round 2's sixteen new defects
 (ND1–ND16) and the partial/undischarged blockers
 (`2026-08-22-theme2-gate-round2.md`). Covers birth blockers **A3, A4,
 A6, B3**. Theme 1, A5 durability, and the creation manifest remain
@@ -421,3 +424,63 @@ Resolutions of round 3's findings not already inside the DDL:
   rule: any refusal, or p99 wait > 250 ms; positive control: a
   deliberate 6 s lock-hold run must trip the kill rule. The S6
   protocol may tighten but not loosen these.
+
+## 12. Pass 5 — round-4 folds
+
+**In the DDL (revision 2, all executed as negative controls):** DELETE
+triggers on every append-only table and `runs`; run transition matrix
+(born active; active→terminal only; terminal frozen) with
+**self-journaling** — an `AFTER UPDATE OF status` trigger writes the
+`run_events` row, so the transition record cannot be forgotten;
+`effect_claims` carry `effect_identity` with `UNIQUE (turn_id,
+effect_identity)` — a takeover epoch cannot re-claim a logical effect
+any epoch already claimed; cognition claims require a sealed turn;
+egress shape uniqueness re-keyed to the **turn** (progress exempt), so
+takeover epochs cannot recreate a send; result chains cannot fork
+(unique successor) and physical attempts cannot double-count (unique
+`(intent, retry_ordinal)` for non-superseding rows); closure outcome
+must agree with its cited evidence (`delivered` cites only delivered
+results; `failed` cites none; `partially_delivered` requires mixed),
+evidence must be a set, and only transport-with-new-evidence may
+supersede a transport closure; admission identity gains a dense
+`revision` dimension — same identity + same payload is a replay
+(SELECT, no insert), same identity + new payload is a lawful
+correction revision on a new turn; `parent_kind` ↔ `parent_turn_id`
+is a two-way CHECK; **edits carry lineage** via `edits_intent`
+(same-turn, trigger-checked) instead of cross-intent result
+supersession — §2's edit rule is amended accordingly; `journal_folds`
+is non-null-bound and undeletable.
+
+**Outside the DDL:**
+
+- **Latch two-line protocol** (F3's window closed): before COMMIT of
+  a lived turn, append + fsync an `advancing <position>` line; after
+  COMMIT, append `committed <position>`. Restore-in-window is now
+  detectable: an `advancing` line without its `committed` mate, or a
+  ledger behind the last `advancing` line, → `unknown`. The pass-4
+  claim "rewindable tail = zero" is restated exactly: zero committed
+  turns can be lost silently; the pre-commit line is durable before
+  the commit it guards.
+- **Journal stamp carriers completed**: entries carry `turn_kind` and
+  `caller` alongside `taint_labels`/`privacy_access`, so fold-in
+  passes the production `validate_turn_stamp` door with failure-time
+  values. Canonical entry bytes = the entry's JSON with hash fields
+  removed, keys sorted, UTF-8, compact separators (the ledger's own
+  `_canonical_json` convention); segment footer = sha256 over the
+  segment's entry-hash sequence.
+- **v2 hash-consumer census closed**: writer, genesis seeder,
+  verifier, `core/consolidation/citation_lock.py`, and
+  `core/ledger/span_reader.py` all project through the one
+  `chain.py`-owned v2 function, dispatched on `chain_hash_domain`.
+- **B10 frozen exactly**: pre-generated deterministic arrival
+  schedule (seed 20260822), exactly N=1000 exchanges (500 per
+  writer), measured quantity = wall-clock `BEGIN IMMEDIATE`
+  acquisition time per ledger transaction, p99 by nearest-rank; kill
+  = any refusal or p99 > 250 ms; positive control = one scheduled 6 s
+  lock-hold that must trip the rule.
+- **Registry literals**: `doorways.py` ships in S3 seeded with §2's
+  table row-for-row; the AST primitive set is `flask` route
+  decorators/`add_url_rule`, `python-telegram-bot` handler
+  registrations, and the transport send primitive list including the
+  raw Bot-API caller in `skills/dev_notifier.py` (registered as a
+  dev-channel egress or explicitly allowlisted with justification).
