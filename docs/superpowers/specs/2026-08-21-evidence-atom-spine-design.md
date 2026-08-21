@@ -54,6 +54,38 @@ which is now checkable rather than asserted (N25).
 If a backup cannot be taken, the run aborts. It never falls back to
 reading a moving store.
 
+### 1.1 Measured cost (executed on the live stores, read-only)
+
+| Layer | Backup | Snapshot size | Manifest |
+|---|---|---|---|
+| raw | 191.0 ms | 516.76 MB | 44,037 ids in 24.3 ms |
+| daily | 2.2 ms | 3.51 MB | 92 ids in 0.4 ms |
+| core | 1.8 ms | 2.89 MB | 208 ids in 0.2 ms |
+| **total** | **195 ms** | **523 MB transient** | 25 ms |
+
+Volume free space at measurement: 327.8 GB. So a run costs about a
+fifth of a second and half a gigabyte of transient disk — negligible
+for a nightly batch, and the snapshot is deleted at run end.
+
+### 1.2 Capture ORDER is load-bearing: children first, parents last
+
+Three separate Chroma databases mean three **non-atomic** backups
+(~195 ms apart). Lineage points backwards in time — a consolidation's
+parents always predate it — so the ordering follows:
+
+**Capture `core`, then `daily`, then `raw`.**
+
+A child captured at T₁ references parents created before T₁; capturing
+the parent layer at T₂ > T₁ means those parents are still present
+unless deleted in between. The reverse order (parents first) would miss
+parents of any child created during the window, marking honest
+ancestry as unknown.
+
+Residual, stated rather than hidden: a parent removed by curation
+between T₁ and T₂ yields `parent_resolved = 0` and is counted as an
+unknown parent. That is an undercount of knowledge, never an
+overclaim — the safe direction.
+
 ## 2. Honest limits (N22, and what cannot be claimed)
 
 A row written and removed before **any** scan is unknowable. Pass 5
