@@ -48,373 +48,17 @@ append-only by trigger. `scan_runs.run_ordinal` and
 what makes "the most recent covering verification" a defined query
 rather than a wish.
 
-```sql
-PRAGMA foreign_keys = ON;
-PRAGMA recursive_triggers = ON;
+**The schema lives in one file, not in this document.**
+`docs/superpowers/specs/2026-08-21-spine-schema-v7.sql` is
+authoritative: 14 tables, 52 triggers, `integrity_check=ok`.
 
-CREATE TABLE embedding_contracts (
-  contract_hash TEXT NOT NULL PRIMARY KEY
-    CHECK (length(contract_hash)=64 AND contract_hash NOT GLOB '*[^0-9a-f]*'),
-  contract_json TEXT NOT NULL CHECK (json_valid(contract_json)),
-  model_name TEXT NOT NULL,
-  model_artifact_sha TEXT NOT NULL
-    CHECK (length(model_artifact_sha)=64 AND model_artifact_sha NOT GLOB '*[^0-9a-f]*'),
-  tokenizer_id TEXT NOT NULL,
-  truncation_tokens INTEGER NOT NULL CHECK (truncation_tokens > 0),
-  dimensions INTEGER NOT NULL CHECK (dimensions > 0),
-  package_version TEXT NOT NULL,
-  recorded_ts REAL NOT NULL
-) STRICT;
+This document deliberately does **not** embed a copy. Round 6 admitted
+17 false receipts precisely because the schema was split across two
+documents and had to be reassembled; the confirmation round then found
+the same failure returning as drift — the embedded copy had already
+fallen behind the file (`lineage_summary.child_layer` was missing from
+it). One artifact, one truth: read the `.sql`.
 
-CREATE TABLE scan_runs (
-  run_id TEXT NOT NULL PRIMARY KEY
-    CHECK (length(run_id)=64 AND run_id NOT GLOB '*[^0-9a-f]*'),
-  run_ordinal INTEGER NOT NULL UNIQUE CHECK (run_ordinal > 0),
-  started_ts REAL NOT NULL,
-  finished_ts REAL,
-  splitter_version INTEGER NOT NULL CHECK (splitter_version >= 0),
-  schema_attestation TEXT NOT NULL
-    CHECK (length(schema_attestation)=64 AND schema_attestation NOT GLOB '*[^0-9a-f]*'),
-  status TEXT NOT NULL CHECK (status IN ('running','complete','aborted'))
-) STRICT;
-
-CREATE TABLE scan_layers (
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  layer TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
-  capture_order INTEGER NOT NULL CHECK (capture_order > 0),
-  boundary_start_ts REAL NOT NULL,
-  boundary_end_ts REAL NOT NULL CHECK (boundary_end_ts >= boundary_start_ts),
-  snapshot_digest TEXT NOT NULL
-    CHECK (length(snapshot_digest)=64 AND snapshot_digest NOT GLOB '*[^0-9a-f]*'),
-  manifest_sha TEXT NOT NULL
-    CHECK (length(manifest_sha)=64 AND manifest_sha NOT GLOB '*[^0-9a-f]*'),
-  row_count INTEGER NOT NULL CHECK (row_count >= 0),
-  PRIMARY KEY (run_id, layer)
-) STRICT;
-
-CREATE TABLE scan_membership (
-  run_id TEXT NOT NULL,
-  layer TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
-  body_row_id TEXT NOT NULL,
-  PRIMARY KEY (run_id, layer, body_row_id),
-  FOREIGN KEY (run_id, layer) REFERENCES scan_layers(run_id, layer)
-) STRICT;
-
-CREATE TABLE atom_content (
-  content_id TEXT NOT NULL PRIMARY KEY
-    CHECK (length(content_id)=64 AND content_id NOT GLOB '*[^0-9a-f]*'),
-  bytes BLOB NOT NULL,
-  byte_len INTEGER NOT NULL CHECK (byte_len > 0 AND byte_len = length(bytes)),
-  created_ts REAL NOT NULL
-) STRICT;
-
-CREATE TABLE atom_embeddings (
-  content_id TEXT NOT NULL REFERENCES atom_content(content_id),
-  contract_hash TEXT NOT NULL REFERENCES embedding_contracts(contract_hash),
-  vector BLOB NOT NULL,
-  vector_hash TEXT NOT NULL
-    CHECK (length(vector_hash)=64 AND vector_hash NOT GLOB '*[^0-9a-f]*'),
-  token_count INTEGER NOT NULL CHECK (token_count > 0),
-  embed_ts REAL NOT NULL,
-  PRIMARY KEY (content_id, contract_hash)
-) STRICT;
-
-CREATE TRIGGER emb_matches_contract BEFORE INSERT ON atom_embeddings
-BEGIN
-  SELECT RAISE(ABORT,'vector length != dimensions*4')
-  WHERE (SELECT dimensions FROM embedding_contracts
-         WHERE contract_hash=NEW.contract_hash)*4 <> length(NEW.vector);
-  SELECT RAISE(ABORT,'token_count over contract limit')
-  WHERE NEW.token_count > (SELECT truncation_tokens FROM embedding_contracts
-                           WHERE contract_hash=NEW.contract_hash);
-END;
-
-CREATE TABLE atom_occurrences (
-  occurrence_id TEXT NOT NULL PRIMARY KEY
-    CHECK (length(occurrence_id)=64 AND occurrence_id NOT GLOB '*[^0-9a-f]*'),
-  content_id TEXT NOT NULL REFERENCES atom_content(content_id),
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  layer TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
-  body_row_id TEXT NOT NULL,
-  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
-  byte_start INTEGER NOT NULL CHECK (byte_start >= 0),
-  byte_end INTEGER NOT NULL CHECK (byte_end > byte_start),
-  row_content_hash TEXT NOT NULL
-    CHECK (length(row_content_hash)=64 AND row_content_hash NOT GLOB '*[^0-9a-f]*'),
-  splitter_version INTEGER NOT NULL CHECK (splitter_version >= 0),
-  role TEXT NOT NULL CHECK (role IN ('owner_utterance','maez_response',
-    'observation','reasoning','digest','external','unknown')),
-  parse_status TEXT NOT NULL CHECK (parse_status IN
-    ('boundary_parsed','turn_linked_half','unparsed_container')),
-  pair_id TEXT,
-  provenance_source TEXT,
-  trust_tier TEXT,
-  observed_ts REAL NOT NULL,
-  CHECK (parse_status <> 'turn_linked_half' OR pair_id IS NOT NULL),
-  UNIQUE (layer, body_row_id, ordinal, splitter_version),
-  UNIQUE (layer, body_row_id, byte_start, byte_end, splitter_version)
-) STRICT;
-
-CREATE TABLE row_atomized (
-  layer TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
-  body_row_id TEXT NOT NULL,
-  splitter_version INTEGER NOT NULL CHECK (splitter_version >= 0),
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  atom_count INTEGER NOT NULL CHECK (atom_count > 0),
-  row_content_hash TEXT NOT NULL
-    CHECK (length(row_content_hash)=64 AND row_content_hash NOT GLOB '*[^0-9a-f]*'),
-  completed_ts REAL NOT NULL,
-  PRIMARY KEY (layer, body_row_id, splitter_version)
-) STRICT;
-
--- occurrence: must be in this run's membership, version-consistent, unsealed
-CREATE TRIGGER occ_guards BEFORE INSERT ON atom_occurrences
-BEGIN
-  SELECT RAISE(ABORT,'span length != content byte_len')
-  WHERE (NEW.byte_end-NEW.byte_start) <>
-        (SELECT byte_len FROM atom_content WHERE content_id=NEW.content_id);
-  SELECT RAISE(ABORT,'row not in this run membership')
-  WHERE NOT EXISTS (SELECT 1 FROM scan_membership
-    WHERE run_id=NEW.run_id AND layer=NEW.layer AND body_row_id=NEW.body_row_id);
-  SELECT RAISE(ABORT,'splitter_version != run splitter_version')
-  WHERE NEW.splitter_version <>
-        (SELECT splitter_version FROM scan_runs WHERE run_id=NEW.run_id);
-  SELECT RAISE(ABORT,'row already sealed by a completion marker')
-  WHERE EXISTS (SELECT 1 FROM row_atomized WHERE layer=NEW.layer
-    AND body_row_id=NEW.body_row_id AND splitter_version=NEW.splitter_version);
-END;
-
--- marker: must match the atoms that exist, and the run version
-CREATE TRIGGER marker_binds_atoms BEFORE INSERT ON row_atomized
-BEGIN
-  SELECT RAISE(ABORT,'atom_count != actual occurrences')
-  WHERE NEW.atom_count <> (SELECT COUNT(*) FROM atom_occurrences
-    WHERE layer=NEW.layer AND body_row_id=NEW.body_row_id
-      AND splitter_version=NEW.splitter_version);
-  SELECT RAISE(ABORT,'row_content_hash disagrees with its atoms')
-  WHERE EXISTS (SELECT 1 FROM atom_occurrences
-    WHERE layer=NEW.layer AND body_row_id=NEW.body_row_id
-      AND splitter_version=NEW.splitter_version
-      AND row_content_hash <> NEW.row_content_hash);
-  SELECT RAISE(ABORT,'splitter_version != run splitter_version')
-  WHERE NEW.splitter_version <>
-        (SELECT splitter_version FROM scan_runs WHERE run_id=NEW.run_id);
-END;
-
-CREATE TABLE lineage_edges (
-  child_id TEXT NOT NULL,
-  child_layer TEXT NOT NULL CHECK (child_layer IN ('raw','daily','core')),
-  parent_id TEXT NOT NULL,
-  parent_layer TEXT NOT NULL CHECK (parent_layer IN ('raw','daily','core')),
-  relation TEXT NOT NULL CHECK (relation IN
-    ('consolidated_from','promoted_from','derived_from')),
-  parent_resolved INTEGER NOT NULL CHECK (parent_resolved IN (0,1)),
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  edge_ts REAL NOT NULL,
-  PRIMARY KEY (child_id, parent_id, relation)
-) STRICT;
-
--- resolved means: the parent was in THIS run's membership for its layer,
--- and its layer boundary closed no later than the child's (temporal proof)
-CREATE TRIGGER edge_resolution_is_proved BEFORE INSERT ON lineage_edges
-BEGIN
-  SELECT RAISE(ABORT,'parent_resolved=1 without membership proof')
-  WHERE NEW.parent_resolved=1 AND NOT EXISTS (SELECT 1 FROM scan_membership
-    WHERE run_id=NEW.run_id AND layer=NEW.parent_layer AND body_row_id=NEW.parent_id);
-  SELECT RAISE(ABORT,'parent_resolved=1 without temporal proof')
-  WHERE NEW.parent_resolved=1 AND
-    (SELECT boundary_end_ts FROM scan_layers
-      WHERE run_id=NEW.run_id AND layer=NEW.parent_layer) >
-    (SELECT boundary_start_ts FROM scan_layers
-      WHERE run_id=NEW.run_id AND layer=NEW.child_layer);
-END;
-
-CREATE TABLE lineage_summary (
-  child_id TEXT NOT NULL PRIMARY KEY,
-  declared_count INTEGER NOT NULL CHECK (declared_count >= 0),
-  unknown_parent_count INTEGER NOT NULL CHECK (unknown_parent_count >= 0),
-  source_key TEXT NOT NULL,
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  summary_ts REAL NOT NULL
-) STRICT;
-
-CREATE TRIGGER lineage_summary_arithmetic BEFORE INSERT ON lineage_summary
-BEGIN
-  SELECT RAISE(ABORT,'known + unknown != declared')
-  WHERE (SELECT COUNT(*) FROM lineage_edges WHERE child_id=NEW.child_id)
-        + NEW.unknown_parent_count <> NEW.declared_count;
-END;
-
-CREATE TRIGGER lineage_edges_after_seal BEFORE INSERT ON lineage_edges
-BEGIN
-  SELECT RAISE(ABORT,'child already sealed')
-  WHERE EXISTS (SELECT 1 FROM lineage_summary WHERE child_id=NEW.child_id);
-END;
-
-CREATE TABLE observation_gaps (
-  gap_id TEXT NOT NULL PRIMARY KEY
-    CHECK (length(gap_id)=64 AND gap_id NOT GLOB '*[^0-9a-f]*'),
-  layer TEXT NOT NULL CHECK (layer IN ('raw','daily','core')),
-  body_row_id TEXT NOT NULL,
-  gap_class TEXT NOT NULL CHECK (gap_class IN
-    ('ROW_VANISHED','UNREADABLE_DOCUMENT','CONTRACT_UNAVAILABLE')),
-  reason TEXT NOT NULL,
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  detected_ts REAL NOT NULL,
-  UNIQUE (layer, body_row_id, gap_class, run_id)
-) STRICT;
-
--- ROW_VANISHED requires prior observation (N22), by run_ordinal
-CREATE TRIGGER vanished_requires_prior_sighting BEFORE INSERT ON observation_gaps
-BEGIN
-  SELECT RAISE(ABORT,'ROW_VANISHED for a never-observed row')
-  WHERE NEW.gap_class='ROW_VANISHED' AND NOT EXISTS (
-    SELECT 1 FROM scan_membership m JOIN scan_runs r ON r.run_id=m.run_id
-    WHERE m.layer=NEW.layer AND m.body_row_id=NEW.body_row_id
-      AND r.run_ordinal < (SELECT run_ordinal FROM scan_runs WHERE run_id=NEW.run_id));
-END;
-
-CREATE TABLE coverage_notes (
-  run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  note_class TEXT NOT NULL CHECK (note_class IN
-    ('COVERAGE_BEGINS_HERE','HISTORICAL_UNTRACEABLE','SNAPSHOT_FAILED')),
-  detail TEXT NOT NULL,
-  noted_ts REAL NOT NULL,
-  PRIMARY KEY (run_id, note_class)
-) STRICT;
-
-CREATE TABLE verification_runs (
-  verify_id TEXT NOT NULL PRIMARY KEY
-    CHECK (length(verify_id)=64 AND verify_id NOT GLOB '*[^0-9a-f]*'),
-  scan_run_id TEXT NOT NULL REFERENCES scan_runs(run_id),
-  verify_ordinal INTEGER NOT NULL UNIQUE CHECK (verify_ordinal > 0),
-  started_ts REAL NOT NULL,
-  finished_ts REAL,
-  scope TEXT NOT NULL CHECK (scope IN ('full','incremental')),
-  result TEXT CHECK (result IN ('PASS','FAIL','UNVERIFIABLE')),
-  detail_json TEXT
-) STRICT;
-
-CREATE TABLE verification_findings (
-  verify_id TEXT NOT NULL REFERENCES verification_runs(verify_id),
-  check_id TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unverifiable')),
-  note TEXT,
-  PRIMARY KEY (verify_id, check_id, subject)
-) STRICT;
-
--- findings may only be added to an OPEN run (no late fail after PASS)
-CREATE TRIGGER findings_only_while_open BEFORE INSERT ON verification_findings
-BEGIN
-  SELECT RAISE(ABORT,'finding added to a closed verification run')
-  WHERE (SELECT finished_ts FROM verification_runs
-         WHERE verify_id=NEW.verify_id) IS NOT NULL;
-  SELECT RAISE(ABORT,'row_covered subject not in the scan membership')
-  WHERE NEW.check_id='row_covered' AND NOT EXISTS (
-    SELECT 1 FROM scan_membership m
-    JOIN verification_runs v ON v.scan_run_id=m.run_id
-    WHERE v.verify_id=NEW.verify_id
-      AND (m.layer || '/' || m.body_row_id) = NEW.subject);
-END;
-
--- PASS is EARNED, on INSERT and on UPDATE, by MEMBERSHIP not cardinality
-CREATE TRIGGER verify_pass_earned_insert BEFORE INSERT ON verification_runs
-BEGIN
-  SELECT RAISE(ABORT,'closed-with-result insert is not permitted')
-  WHERE NEW.result IS NOT NULL;
-END;
-
-CREATE TRIGGER verify_pass_earned_update BEFORE UPDATE ON verification_runs
-BEGIN
-  SELECT RAISE(ABORT,'only an open run may be closed')
-  WHERE OLD.finished_ts IS NOT NULL OR NEW.verify_id <> OLD.verify_id
-     OR NEW.scan_run_id <> OLD.scan_run_id OR NEW.started_ts <> OLD.started_ts;
-  SELECT RAISE(ABORT,'result set without finishing')
-  WHERE NEW.result IS NOT NULL AND NEW.finished_ts IS NULL;
-  SELECT RAISE(ABORT,'PASS with non-pass findings')
-  WHERE NEW.result='PASS' AND EXISTS (SELECT 1 FROM verification_findings
-    WHERE verify_id=NEW.verify_id AND outcome<>'pass');
-  SELECT RAISE(ABORT,'PASS without covering every membership row')
-  WHERE NEW.result='PASS' AND EXISTS (
-    SELECT 1 FROM scan_membership m WHERE m.run_id=NEW.scan_run_id
-      AND NOT EXISTS (SELECT 1 FROM verification_findings f
-        WHERE f.verify_id=NEW.verify_id AND f.check_id='row_covered'
-          AND f.subject = (m.layer || '/' || m.body_row_id)));
-  SELECT RAISE(ABORT,'scan already has a PASS')
-  WHERE NEW.result='PASS' AND EXISTS (SELECT 1 FROM verification_runs
-    WHERE scan_run_id=NEW.scan_run_id AND result='PASS' AND verify_id<>NEW.verify_id);
-END;
-
--- membership is frozen once its scan closes
-CREATE TRIGGER membership_frozen_after_close BEFORE INSERT ON scan_membership
-BEGIN
-  SELECT RAISE(ABORT,'membership insert after scan close')
-  WHERE (SELECT finished_ts FROM scan_runs WHERE run_id=NEW.run_id) IS NOT NULL;
-END;
-
-CREATE TRIGGER scan_runs_close_only BEFORE UPDATE ON scan_runs
-BEGIN
-  SELECT RAISE(ABORT,'only an open run may be closed')
-  WHERE OLD.finished_ts IS NOT NULL OR NEW.run_id<>OLD.run_id
-     OR NEW.run_ordinal<>OLD.run_ordinal OR NEW.started_ts<>OLD.started_ts
-     OR NEW.splitter_version<>OLD.splitter_version
-     OR NEW.schema_attestation<>OLD.schema_attestation;
-END;
-
-CREATE TRIGGER embedding_contracts_no_update BEFORE UPDATE ON embedding_contracts
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER embedding_contracts_no_delete BEFORE DELETE ON embedding_contracts
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER scan_runs_no_delete BEFORE DELETE ON scan_runs
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER scan_layers_no_update BEFORE UPDATE ON scan_layers
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER scan_layers_no_delete BEFORE DELETE ON scan_layers
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER scan_membership_no_update BEFORE UPDATE ON scan_membership
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER scan_membership_no_delete BEFORE DELETE ON scan_membership
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_content_no_update BEFORE UPDATE ON atom_content
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_content_no_delete BEFORE DELETE ON atom_content
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_embeddings_no_update BEFORE UPDATE ON atom_embeddings
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_embeddings_no_delete BEFORE DELETE ON atom_embeddings
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_occurrences_no_update BEFORE UPDATE ON atom_occurrences
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER atom_occurrences_no_delete BEFORE DELETE ON atom_occurrences
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER row_atomized_no_update BEFORE UPDATE ON row_atomized
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER row_atomized_no_delete BEFORE DELETE ON row_atomized
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER lineage_edges_no_update BEFORE UPDATE ON lineage_edges
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER lineage_edges_no_delete BEFORE DELETE ON lineage_edges
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER lineage_summary_no_update BEFORE UPDATE ON lineage_summary
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER lineage_summary_no_delete BEFORE DELETE ON lineage_summary
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER observation_gaps_no_update BEFORE UPDATE ON observation_gaps
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER observation_gaps_no_delete BEFORE DELETE ON observation_gaps
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER coverage_notes_no_update BEFORE UPDATE ON coverage_notes
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER coverage_notes_no_delete BEFORE DELETE ON coverage_notes
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER verification_runs_no_delete BEFORE DELETE ON verification_runs
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER verification_findings_no_update BEFORE UPDATE ON verification_findings
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-CREATE TRIGGER verification_findings_no_delete BEFORE DELETE ON verification_findings
-  BEGIN SELECT RAISE(ABORT,'append-only'); END;
-```
 
 
 ## 2.1 Pass 7.1 — four holes I found in my own schema
@@ -524,6 +168,34 @@ probe wrote completion markers claiming atoms that did not exist, and
 schema. Worth recording, because "my check failed, so my code is
 broken" is exactly as unexamined as "my check passed, so my code is
 right."
+
+
+## 2.5 Pass 7.4 — the INSERT paths I left open
+
+The confirmation round ruled 3 of 6 fixes correct and 3 **partial**,
+with one clean pattern behind all three: **I guarded `UPDATE` and left
+`INSERT` open.**
+
+- A scan run could be *born* `complete`, or born already finished —
+  skipping every close-time check at once: counts, membership,
+  disposition, declared gaps.
+- A layer could be inserted **after** the run closed, raising the
+  declared `row_count` after the count↔membership check had already
+  run, leaving a stored `complete`/`PASS` describing rows the scan
+  never saw.
+
+Fixed by three birth rules: `scan_runs_born_open`,
+`scan_layers_only_while_open`, `verification_runs_born_open`. All four
+attacks now rejected; the honest lifecycle still completes.
+
+Also from that round: the required-check set was **necessary but not
+sufficient** — `snapshot_digest_verified` was missing, so a PASS could
+bind the manifest without binding the copied snapshot it was derived
+from. Added; the honest lifecycle is now 19 steps.
+
+The lesson generalises past this schema: **a rule enforced on one path
+into a state is not a rule about that state.** Every guard here now has
+to answer "and what about the other door?"
 
 ## 3. What the schema now refuses (round 6's admitted list, retested)
 

@@ -508,7 +508,39 @@ BEGIN
   WHERE NEW.result='PASS' AND EXISTS (
     SELECT c.name FROM (SELECT 'schema_attested' AS name
                         UNION ALL SELECT 'contract_verified'
-                        UNION ALL SELECT 'manifest_bound') c
+                        UNION ALL SELECT 'manifest_bound'
+                        UNION ALL SELECT 'snapshot_digest_verified') c
     WHERE NOT EXISTS (SELECT 1 FROM verification_findings f
       WHERE f.verify_id=NEW.verify_id AND f.check_id=c.name AND f.outcome='pass'));
+END;
+
+-- ============================================================
+-- pass 7.4: the INSERT paths I left open while guarding UPDATE
+-- ============================================================
+
+-- A run must be BORN OPEN. Guarding only UPDATE let a caller insert a
+-- scan that was already 'complete' (or already finished), skipping every
+-- close-time check: counts, membership, disposition, declared gaps.
+CREATE TRIGGER scan_runs_born_open BEFORE INSERT ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'a scan run must be inserted as running')
+  WHERE NEW.status <> 'running';
+  SELECT RAISE(ABORT,'a scan run must be inserted unfinished')
+  WHERE NEW.finished_ts IS NOT NULL;
+END;
+
+-- Layers may not appear after the run closed: otherwise declared
+-- row_count can be raised after the count<->membership check has run,
+-- leaving a stored complete/PASS describing a scan that never saw them.
+CREATE TRIGGER scan_layers_only_while_open BEFORE INSERT ON scan_layers
+BEGIN
+  SELECT RAISE(ABORT,'layer captured after the scan closed')
+  WHERE (SELECT finished_ts FROM scan_runs WHERE run_id=NEW.run_id) IS NOT NULL;
+END;
+
+-- Same for verification runs: born open, never inserted pre-closed.
+CREATE TRIGGER verification_runs_born_open BEFORE INSERT ON verification_runs
+BEGIN
+  SELECT RAISE(ABORT,'a verification run must be inserted unfinished')
+  WHERE NEW.finished_ts IS NOT NULL;
 END;
