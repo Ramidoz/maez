@@ -492,6 +492,39 @@ visible, provably placed in its row, with ancestry that says exactly
 how much it does not know — and no step of it is blocked by the rules
 that stop the forgeries.
 
+
+## 2.4 Pass 7.3 — the verdict round's six fixes
+
+Round 8 returned **BLOCKED with exactly six named fixes** — and real
+movement: N26, N29, N30 closed at design level, falsifier readiness
+5/12 → 8/12.
+
+The decisive false receipt was elegant: `row_count = 2`,
+`membership = 0`, status `complete`, `PASS` with zero findings. Every
+rule I had written quantified over *recorded* membership — and the
+empty set satisfies "for all" **for free**. A run that recorded nothing
+could claim to have verified everything.
+
+| Fix | Rule |
+|---|---|
+| Bind declared counts to membership before `complete` | `complete_requires_membership_matches_counts` (also: no `complete` with zero captured layers) |
+| `PASS` only for a completed scan, non-empty membership, and the full required-check set | `pass_requires_completed_scan_and_checks` |
+| Close-state consistency — "finished but still running" is not a state | `close_state_is_consistent` |
+| Layer-qualify lineage children — a `daily` child may not borrow a `raw` row's membership | `lineage_summary.child_layer` + updated `lineage_summary_child_is_real` |
+| `ROW_VANISHED` requires **current absence**, not merely a prior sighting | `vanished_requires_current_absence` |
+| Verification ordinal and time advance together | `verify_ordinal_monotonic_with_time` |
+
+All six rejected on retest; the honest lifecycle still completes in 18
+steps under all 49 triggers and ends consumable (`PASS`).
+
+**A note on how one of those retests went.** My first honest-path probe
+failed — and my instinct was that I had over-restricted. I had not: the
+probe wrote completion markers claiming atoms that did not exist, and
+`marker_binds_atoms` correctly refused. The test was wrong, not the
+schema. Worth recording, because "my check failed, so my code is
+broken" is exactly as unexamined as "my check passed, so my code is
+right."
+
 ## 3. What the schema now refuses (round 6's admitted list, retested)
 
 All executed in-memory against the file above; honest operations

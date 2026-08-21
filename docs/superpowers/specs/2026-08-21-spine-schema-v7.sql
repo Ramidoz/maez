@@ -180,6 +180,7 @@ END;
 
 CREATE TABLE lineage_summary (
   child_id TEXT NOT NULL PRIMARY KEY,
+  child_layer TEXT NOT NULL CHECK (child_layer IN ('raw','daily','core')),
   declared_count INTEGER NOT NULL CHECK (declared_count >= 0),
   unknown_parent_count INTEGER NOT NULL CHECK (unknown_parent_count >= 0),
   source_key TEXT NOT NULL,
@@ -398,9 +399,10 @@ END;
 -- this run actually saw.
 CREATE TRIGGER lineage_summary_child_is_real BEFORE INSERT ON lineage_summary
 BEGIN
-  SELECT RAISE(ABORT,'lineage summary for a child not in run membership')
+  -- layer-qualified: a 'daily' child may not borrow a 'raw' row's membership
+  SELECT RAISE(ABORT,'lineage summary for a child not in run membership for its layer')
   WHERE NOT EXISTS (SELECT 1 FROM scan_membership
-    WHERE run_id=NEW.run_id AND body_row_id=NEW.child_id);
+    WHERE run_id=NEW.run_id AND layer=NEW.child_layer AND body_row_id=NEW.child_id);
 END;
 
 -- (4) ORDINAL/TIME DISAGREEMENT: run_ordinal must advance with time, or
@@ -441,4 +443,72 @@ BEGIN
     AND EXISTS (SELECT 1 FROM observation_gaps WHERE run_id=NEW.run_id)
     AND NOT EXISTS (SELECT 1 FROM coverage_notes
       WHERE run_id=NEW.run_id AND note_class='HISTORICAL_UNTRACEABLE');
+END;
+
+-- ============================================================
+-- pass 7.3: the six minimum reopening fixes from the verdict round
+-- ============================================================
+
+-- (1) VACUOUS DISPOSITION: an empty membership satisfies "every row is
+-- disposed" for free. Bind each layer's declared row_count to the
+-- membership actually recorded before a run may close complete.
+CREATE TRIGGER complete_requires_membership_matches_counts
+BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'declared row_count != recorded membership for a layer')
+  WHERE NEW.status='complete' AND EXISTS (
+    SELECT 1 FROM scan_layers l WHERE l.run_id=NEW.run_id
+      AND l.row_count <> (SELECT COUNT(*) FROM scan_membership m
+            WHERE m.run_id=l.run_id AND m.layer=l.layer));
+  SELECT RAISE(ABORT,'complete with no captured layers')
+  WHERE NEW.status='complete'
+    AND NOT EXISTS (SELECT 1 FROM scan_layers WHERE run_id=NEW.run_id);
+END;
+
+-- (3) CLOSE-STATE CONSISTENCY: finished but still 'running' is not a state.
+CREATE TRIGGER close_state_is_consistent BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'finished_ts set while status is running')
+  WHERE NEW.finished_ts IS NOT NULL AND NEW.status='running';
+  SELECT RAISE(ABORT,'status closed without finished_ts')
+  WHERE NEW.status IN ('complete','aborted') AND NEW.finished_ts IS NULL;
+END;
+
+-- (5) ROW_VANISHED must mean gone NOW, not merely seen before.
+CREATE TRIGGER vanished_requires_current_absence BEFORE INSERT ON observation_gaps
+BEGIN
+  SELECT RAISE(ABORT,'ROW_VANISHED for a row present in this run membership')
+  WHERE NEW.gap_class='ROW_VANISHED' AND EXISTS (
+    SELECT 1 FROM scan_membership WHERE run_id=NEW.run_id
+      AND layer=NEW.layer AND body_row_id=NEW.body_row_id);
+END;
+
+-- (6) VERIFICATION ORDINAL/TIME MONOTONIC: otherwise a chronologically
+-- later FAIL can sort behind an earlier PASS and "most recent" lies.
+CREATE TRIGGER verify_ordinal_monotonic_with_time BEFORE INSERT ON verification_runs
+BEGIN
+  SELECT RAISE(ABORT,'verify_ordinal not greater than every prior ordinal')
+  WHERE NEW.verify_ordinal <= COALESCE((SELECT MAX(verify_ordinal) FROM verification_runs),0);
+  SELECT RAISE(ABORT,'started_ts not later than every prior verification start')
+  WHERE NEW.started_ts <= COALESCE((SELECT MAX(started_ts) FROM verification_runs),-1e18);
+END;
+
+-- (2) PASS REQUIRES A COMPLETED SCAN AND THE FULL REQUIRED-CHECK SET.
+-- An aborted or empty scan can no longer earn a vacuous PASS.
+CREATE TRIGGER pass_requires_completed_scan_and_checks
+BEFORE UPDATE ON verification_runs
+BEGIN
+  SELECT RAISE(ABORT,'PASS for a scan that did not complete')
+  WHERE NEW.result='PASS' AND (SELECT status FROM scan_runs
+    WHERE run_id=NEW.scan_run_id) <> 'complete';
+  SELECT RAISE(ABORT,'PASS for a scan with empty membership')
+  WHERE NEW.result='PASS' AND NOT EXISTS (
+    SELECT 1 FROM scan_membership WHERE run_id=NEW.scan_run_id);
+  SELECT RAISE(ABORT,'PASS without the required check set')
+  WHERE NEW.result='PASS' AND EXISTS (
+    SELECT c.name FROM (SELECT 'schema_attested' AS name
+                        UNION ALL SELECT 'contract_verified'
+                        UNION ALL SELECT 'manifest_bound') c
+    WHERE NOT EXISTS (SELECT 1 FROM verification_findings f
+      WHERE f.verify_id=NEW.verify_id AND f.check_id=c.name AND f.outcome='pass'));
 END;
