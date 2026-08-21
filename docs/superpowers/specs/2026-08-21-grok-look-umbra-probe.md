@@ -46,6 +46,33 @@ PASS (+0.000 overall, +0.024 restricted) — but note it passes
 *vacuously* for most rows: with a median umbra of 10 tokens, the cliff
 window and the ending are the same span.
 
+
+## The finding that changes priorities
+
+Grok's falsifier 7 claimed the diary layer is where the remainder
+matters. Measured per layer (read-only, truncation disabled on the
+measuring tokenizer):
+
+| layer | over-limit rows | median hidden tokens | max |
+|---|---|---|---|
+| raw | 3,572 | **10** | 2,220 |
+| daily (Maez's own digests) | 73 | **227** | 1,113 |
+| core (consolidated memories) | 10 | **280** | 670 |
+
+The truncation blindness is **not a raw-memory problem**. A typical
+truncated raw row loses ten tokens — a few words. But Maez's **daily
+digests lose a median of 227 tokens**, and its **core memories 280** —
+each roughly half of what was written.
+
+So the layer that is actually blinded is the one that carries identity:
+the diary and the consolidated memories, not the raw stream. That
+inverts the priority the spine was built on. Atomization matters most
+for `daily` and `core`, which are 83 rows — cheap, and where the
+missing content is a paragraph rather than a phrase.
+
+Grok's mechanism failed its own kill number. Grok's *claim about the
+diary* is correct, and sharper than anyone had measured.
+
 ## Verdict on the mechanism as specified
 
 `unlike_cosine` **fails its own pre-registered kill number** and cannot
