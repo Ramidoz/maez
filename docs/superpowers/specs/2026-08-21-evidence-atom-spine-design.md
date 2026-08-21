@@ -416,6 +416,31 @@ CREATE TRIGGER verification_findings_no_delete BEFORE DELETE ON verification_fin
   BEGIN SELECT RAISE(ABORT,'append-only'); END;
 ```
 
+
+## 2.1 Pass 7.1 — four holes I found in my own schema
+
+Before the gate reported, I ran the round-7 attack directions against
+pass 7 myself. Four succeeded. Fixed and retested in both directions:
+
+| Self-attack | Fix |
+|---|---|
+| A run closes `complete` while membership rows have **neither** atoms **nor** a gap row — silent incompleteness wearing a completed badge | `scan_complete_requires_full_disposition`: every membership row must have a completion marker or a gap row |
+| A run records `SNAPSHOT_FAILED`, then closes `complete` anyway — laundering a failed scan | `snapshot_failure_forces_abort`: such a run may only close `aborted` |
+| A `lineage_summary` for a child that appears in no membership — ancestry for a memory the run never saw | `lineage_summary_child_is_real` |
+| `run_ordinal` advancing while `started_ts` goes backwards, so "the prior run" and "the most recent verification" stop meaning the same thing | `run_ordinal_monotonic_with_time` |
+
+Honest paths re-checked, not just the forbidden ones: a run **does**
+close `complete` once every membership row is disposed, and a
+snapshot-failed run **does** close as `aborted`.
+
+**One attack I deliberately did NOT block.** Two runs may share a
+`snapshot_digest` and `manifest_sha`. That looked like
+cross-contamination, but it is the honest signature of *nothing having
+changed between runs* — identical id lists hash identically. Blocking
+it would reject a true state. The real obligation is a verifier check:
+`manifest_sha` must equal the hash of the membership actually recorded
+for that run. Restriction is not the same as correctness.
+
 ## 3. What the schema now refuses (round 6's admitted list, retested)
 
 All executed in-memory against the file above; honest operations

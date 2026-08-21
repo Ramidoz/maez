@@ -363,3 +363,52 @@ CREATE TRIGGER verification_findings_no_update BEFORE UPDATE ON verification_fin
   BEGIN SELECT RAISE(ABORT,'append-only'); END;
 CREATE TRIGGER verification_findings_no_delete BEFORE DELETE ON verification_findings
   BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+-- ============================================================
+-- pass 7.1: holes found by Claude's own round-7 self-attack
+-- ============================================================
+
+-- (1) SILENT INCOMPLETENESS: a run may not close 'complete' while any
+-- row in its membership has neither a completion marker nor a gap row.
+CREATE TRIGGER scan_complete_requires_full_disposition
+BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'complete with undisposed membership rows')
+  WHERE NEW.status='complete' AND EXISTS (
+    SELECT 1 FROM scan_membership m
+    WHERE m.run_id=NEW.run_id
+      AND NOT EXISTS (SELECT 1 FROM row_atomized a
+            WHERE a.layer=m.layer AND a.body_row_id=m.body_row_id
+              AND a.splitter_version=NEW.splitter_version)
+      AND NOT EXISTS (SELECT 1 FROM observation_gaps g
+            WHERE g.run_id=NEW.run_id AND g.layer=m.layer
+              AND g.body_row_id=m.body_row_id));
+END;
+
+-- (2) LAUNDERING: a run carrying SNAPSHOT_FAILED may only close 'aborted'.
+CREATE TRIGGER snapshot_failure_forces_abort BEFORE UPDATE ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'snapshot failed: this run may only abort')
+  WHERE NEW.status='complete' AND EXISTS (
+    SELECT 1 FROM coverage_notes
+    WHERE run_id=NEW.run_id AND note_class='SNAPSHOT_FAILED');
+END;
+
+-- (3) PHANTOM CHILD: a lineage summary requires the child to be a row
+-- this run actually saw.
+CREATE TRIGGER lineage_summary_child_is_real BEFORE INSERT ON lineage_summary
+BEGIN
+  SELECT RAISE(ABORT,'lineage summary for a child not in run membership')
+  WHERE NOT EXISTS (SELECT 1 FROM scan_membership
+    WHERE run_id=NEW.run_id AND body_row_id=NEW.child_id);
+END;
+
+-- (4) ORDINAL/TIME DISAGREEMENT: run_ordinal must advance with time, or
+-- "the prior run" and "the most recent verification" mean two things.
+CREATE TRIGGER run_ordinal_monotonic_with_time BEFORE INSERT ON scan_runs
+BEGIN
+  SELECT RAISE(ABORT,'run_ordinal not greater than every prior ordinal')
+  WHERE NEW.run_ordinal <= COALESCE((SELECT MAX(run_ordinal) FROM scan_runs),0);
+  SELECT RAISE(ABORT,'started_ts not later than every prior start')
+  WHERE NEW.started_ts <= COALESCE((SELECT MAX(started_ts) FROM scan_runs),-1e18);
+END;
