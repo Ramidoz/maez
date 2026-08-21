@@ -7,10 +7,35 @@ threshold correctly, and never echo back amplified by its own presence
 in the prompt."""
 from __future__ import annotations
 
+import pathlib
+import tempfile
 import time
 import unittest
 
 from core import inner_residue as ir
+
+
+def setUpModule():
+    """Redirect the residue store to a throwaway file.
+
+    ``ir._diag_clear_for_test`` runs ``DELETE FROM residue_events``
+    against ``ir._DB_PATH``, a module-global absolute path to the LIVE
+    store (``memory/inner_residue.db``). This module called it with no
+    redirection, so running these tests destroyed real residue history
+    -- it did on 2026-08-21 at 01:43 UTC, in the same full-suite run
+    that wiped recall_stats. Second instance of the same hazard.
+    """
+    global _TMPDIR, _ORIG_DB_PATH
+    _TMPDIR = tempfile.TemporaryDirectory(prefix="maez-residue-test-")
+    _ORIG_DB_PATH = ir._DB_PATH
+    ir._DB_PATH = pathlib.Path(_TMPDIR.name) / "inner_residue.db"
+    ir._initialized = False
+
+
+def tearDownModule():
+    ir._DB_PATH = _ORIG_DB_PATH
+    ir._initialized = False
+    _TMPDIR.cleanup()
 
 
 class RecordAndLevel(unittest.TestCase):
