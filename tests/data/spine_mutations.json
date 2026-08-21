@@ -1,0 +1,739 @@
+{
+  "purpose": "F5: mutations pre-verified to change token ids under the production tokenizer, so 'the vector must change' is a valid oracle.",
+  "tokenizer": "chromadb ONNXMiniLM_L6_V2 (all-MiniLM-L6-v2)",
+  "rule": "every entry satisfies token_ids_differ == true; byte-different but token-identical mutations are EXCLUDED by construction (gate round 3 proved five such pairs tokenize identically).",
+  "vector_change_threshold_cosine": 0.9999,
+  "validated_vector_move_rate": 1.0,
+  "entries": [
+    {
+      "kind": "append_word",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four afterwards",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "7045622134e8abdc2c08d0a2c2e4b5280c1076bf6a9182101848cb542179c331",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four. and then it changed.",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "f8c671ab2a7db2e0b6ff42d12afa78237065269f929dc2a9ccd63bb5f7b87dc1",
+      "base_token_count": 9,
+      "mutated_token_count": 15,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "actually the meeting is on tuesday at four",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "7aa86c1bafec1ef35ae22886c39df8cb9242d12fd984c70c3ac5e4b226c2c7da",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the really meeting is on tuesday at four",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "897b6627e2064ff39de413e020c9f6e53c09c8af60236454b54d54d3504f3e73",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "negate",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is not on tuesday at four",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "19625e091a10a65d279072d11bd5c3b1f9ed52e20888c49b66da56eadd8bafa8",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "number_change",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at five",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "2dca7b3294b14546ec0a6ee179366755d63aaa07e2b1d1f6292823620e48d3e7",
+      "base_token_count": 9,
+      "mutated_token_count": 9,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four?",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "54915cdb67beb6627adf47cef485bc554aef85e0f82a4ded46b15f61a281ddb7",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four 2026",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "16e55ea6eaac617b4643af74467dddb11f4a2d6a40f4271d9d1667fcef6d4f93",
+      "base_token_count": 9,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four 🌐",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "915a3a2f1505981a1439f275f1b763ab4a49d0feab84345f9c04c95c574e017f",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the meeting is on tuesday at four which nobody expected",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "fa48aa81ff6d0e5105d622354ea71a5f35aaf2d20b4ac3efcab14e2a538a9e11",
+      "base_token_count": 9,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "substitute_noun",
+      "base": "the meeting is on tuesday at four",
+      "mutated": "the deadline is on tuesday at four",
+      "base_sha256": "33085dec5756ab6e0bc9cb5186e6623023d39b2fb1a14a3f9a641c83bf826a08",
+      "mutated_sha256": "e9d47aa152203c248d9609abc0a09c4b63e4c0ec4d2d66b6e06c3bcd78d055c7",
+      "base_token_count": 9,
+      "mutated_token_count": 9,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated afterwards",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "76b8bd6fc0b863cfee2958c3d3eb5c534cfa038f15b2575071d9d9254e29a2da",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated. and then it changed.",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "b1acf66c21791224cf578e3b2703e1b5e796525f913c8fbcf489b6db93f4ea8a",
+      "base_token_count": 9,
+      "mutated_token_count": 15,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "she said the archive was already migrated",
+      "mutated": "actually she said the archive was already migrated",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "f83e24e57d47f39337700c406502dfb5bdba5f14de91de3558d7f4dc2338b159",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "she said the archive was already migrated",
+      "mutated": "she really said the archive was already migrated",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "4db5bcd048a9b94bd8263790178f6a98c005d979f2fe94f1cbc38c528b83aa7b",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "negate",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was not already migrated",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "f0896a9e26077d668e5072dd7071a9319ba88d0f0147f3ba268954798a5a0949",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated?",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "dce9500e4bc1f419d6eb4dac387e240a892e98ed13a1a9d7351ec1556e1f657a",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated 2026",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "0e205a696c86fcc7fd17ffc6e97ab6da65a3efb86a24818088692efe2a3e4489",
+      "base_token_count": 9,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated 🌐",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "bba22db33aa193a84a8752e80587abe347506961f2268753d9d9f38098cdf906",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the archive was already migrated which nobody expected",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "bfb87cbe67160d213edabc6ae1b363408edca423b05b9bf2f26f163a898cce0d",
+      "base_token_count": 9,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "substitute_noun",
+      "base": "she said the archive was already migrated",
+      "mutated": "she said the ledger was already migrated",
+      "base_sha256": "7ddfc84f640fb68fd5388aea6022d7e9d3fcbd68c91c13f580be58c1c41fceb5",
+      "mutated_sha256": "b1db6b20198c6e9a9b0d5002e84ae75d4c35e331d062efbe3ae17a3effb4ab95",
+      "base_token_count": 9,
+      "mutated_token_count": 9,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record afterwards",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "887c77ac88ba9d38894350dc01167e027b23a4f08b75d43fb0b1ace708440c9e",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record. and then it changed.",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "a45f642a1c69e6bae3fd592d1146f4717e4e8601f185a605cb04351db4c6152c",
+      "base_token_count": 10,
+      "mutated_token_count": 16,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "actually a quiet day with nothing much to record",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "0023b0a75e38626ec506c9d99125b5b7704b2cad9ed3306bca0c63bcdb5b8620",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a really quiet day with nothing much to record",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "dc70cd955a6aa035f41daff90ae94d0ae60103a9b4822555fc74ea0cd4122974",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record?",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "7b810ac7c1355708ed04350ff0abe5758fa0884b3810402b0919abb86da75f4b",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record 2026",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "fd690908fe6d6c0387c87effbf6f11ccae22cd6a56c7de7f0ab5ea1df21844e3",
+      "base_token_count": 10,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record 🌐",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "39a96bd43446cfc7d9e0cfd9913be567a1514e95d27594817082bd4d0fda171b",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "a quiet day with nothing much to record",
+      "mutated": "a quiet day with nothing much to record which nobody expected",
+      "base_sha256": "8c5352b5ed549343b975fb0920cefb0f21e0277498fc90c25166a1f74fac4a2b",
+      "mutated_sha256": "403ccab9a9bfd5583e9e03c1dd090d718ef1f3b044147302cd8fe8551cebdc3a",
+      "base_token_count": 10,
+      "mutated_token_count": 13,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart afterwards",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "bd808d88fa724a125ff9e0f167780dfab376c3920f519a63cfb2eb5b9268f315",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart. and then it changed.",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "75b4978f1b916df6a918c5612c13d67694a8fd7bfd008bf771cf4d03591dceec",
+      "base_token_count": 10,
+      "mutated_token_count": 16,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "remember to check the backup before the restart",
+      "mutated": "actually remember to check the backup before the restart",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "2f6cb6787f763dd3709d7f8c4c527822a7f95bb509bc2c76baaf77c7c31a2c50",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember really to check the backup before the restart",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "7e60f7e383bfdc7c071f5a8431ecd3dc9d2ab12cd11a50666c0087a04dfe9cea",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart?",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "cf6fb7e17c5130a518f136bcf9055d97aa45c19b7eda594a62b3f538582d6d7f",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart 2026",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "74742733dbbc41627d8b9a476b3f624e382dc22448fcd6466bbd479348984cf2",
+      "base_token_count": 10,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart 🌐",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "30422f21ac82fe32ec8a2c328de6aab8a41035a365d62f6b684f4f0da7a04b96",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "remember to check the backup before the restart",
+      "mutated": "remember to check the backup before the restart which nobody expected",
+      "base_sha256": "83768cb8310842bd9212b34d842c747c38d9f482ca72ed8ed899ae22dbdcc19b",
+      "mutated_sha256": "f82000e51d00155fa52f6cbb15c90e9c308f07ca302fc5ea84abe32fc25bde94",
+      "base_token_count": 10,
+      "mutated_token_count": 13,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week afterwards",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "310c0cab68e22c4ba43f34fcd9db90893c94cc16eb701c3de780e813b19355c6",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week. and then it changed.",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "3eb18e4cff457edcef208d4296be343671740179c1bba9a789994d7283d7b0e0",
+      "base_token_count": 11,
+      "mutated_token_count": 17,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "the number of rows went up again this week",
+      "mutated": "actually the number of rows went up again this week",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "c6e68245c51ad0a3e4445b0336199542477a4e064b77a5931ffa21f67513957a",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "the number of rows went up again this week",
+      "mutated": "the really number of rows went up again this week",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "c0094d04636d6f24c13529dc0d89b0e74e42423ac4a7e59053583ed3125e9dad",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "number_change",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this month",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "f5be4b2b5fd60ac1047ded6fa241e6c859ece6cb9cba435cb547aabedf76d677",
+      "base_token_count": 11,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week?",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "373f42f5d4c51ff5b451bd954760c2aca94f366ae1bbd0885435692cff237389",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week 2026",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "a3b91c75fd4ade33de2983dd1145042a83c6f84e6570c33b0cc231836620e97c",
+      "base_token_count": 11,
+      "mutated_token_count": 13,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week 🌐",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "2c4dfc851cc33b33a63e735f98fdf53614c06ab490cc6d8359cf5b8b1b468e72",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of rows went up again this week which nobody expected",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "f627c6e3088cbe7ab55b309d7198633c1a22e46946461148ccfdb8ae5d86d43c",
+      "base_token_count": 11,
+      "mutated_token_count": 14,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "substitute_noun",
+      "base": "the number of rows went up again this week",
+      "mutated": "the number of atoms went up again this week",
+      "base_sha256": "bc9a537c275d22c0e7cbd9ca01f5ab3833197a7008b8922393a66544449beb68",
+      "mutated_sha256": "c303ac0c5319bc3bb0e49196dd963a1580c59df1108b9bc4456a8a89177ef4c5",
+      "base_token_count": 11,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired afterwards",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "187ca949f3cef589537569185dcb8f932b4965855f4eff59fda9d713f84b2290",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired. and then it changed.",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "af8849a376f6acd7788876547ee5b25371880b28f6625b355a31c79f85d5e948",
+      "base_token_count": 11,
+      "mutated_token_count": 17,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "actually the model was swapped and the old one retired",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "b2d90b73d60b0e41178e5a7a33301a648dc180114c4a0db08469ed3677139dac",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the really model was swapped and the old one retired",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "d5e768049d52d225488d7f897a072794b93d4852c1c256aa0968e145c129452e",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "negate",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was not swapped and the old one retired",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "6c45086e9ac61f4d800399e1084defbda1e7ef7eebf24ac1ea5b928753a619ad",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired?",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "5661f6c66d0ef06c0350d006b66c369c529a35f193c21a26a1e3174b1e3a1678",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired 2026",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "4ca33deef1a39ac438a60c6f93027654b2fee1d6cff63391ef3c2b8d7e3b6856",
+      "base_token_count": 11,
+      "mutated_token_count": 13,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired 🌐",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "d063a060a88fc0c1570f1a1ff22d53510567b4317c661de3a940a4179b18e19a",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the model was swapped and the old one retired which nobody expected",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "1785e977e7bbc316da1deb1f9226f125891164922afcaf90cbffffb99ac8090a",
+      "base_token_count": 11,
+      "mutated_token_count": 14,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "substitute_noun",
+      "base": "the model was swapped and the old one retired",
+      "mutated": "the tokenizer was swapped and the old one retired",
+      "base_sha256": "1f145af7a86e8ce85f7e5debf5d0ea4e882b7db7d05e9eab3fbacacda37fb16a",
+      "mutated_sha256": "2a4c02c29fc3fd1feac9bfd7afce03d1d337e1bbfeeca4c3909b84063cda4ec1",
+      "base_token_count": 11,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified afterwards",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "50a9ee5844ab17b25ab297d223127de45a1c712eb62ded5925e44f9c10461fe4",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified. and then it changed.",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "bedef504fc360ad87a05449955e2554a2341e5f7b30302a16a857420b34bbcf5",
+      "base_token_count": 10,
+      "mutated_token_count": 16,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "actually he asked whether the receipts were ever verified",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "c36e115c6d8a48a13081b3a8bcde2a712b10850931f63d75e04c6eafab5bcfbc",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he really asked whether the receipts were ever verified",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "156a4a0684628da4c31cf8de0e0f945b7813fe1efbb957280051f2ae15af6a09",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified?",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "40eea42684e3a590aaaca9d9d004c8d2112d2feadd1708e98dca6c4800011a38",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified 2026",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "70b0bce9031a2fe32133b8d20db5bb079dc70bd2d11fdf5ea6beadf4d6b99a77",
+      "base_token_count": 10,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified 🌐",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "12252d441a606644c6da12bc7257f0a2d23301d35dd43e2ab28742a64581e605",
+      "base_token_count": 10,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "he asked whether the receipts were ever verified",
+      "mutated": "he asked whether the receipts were ever verified which nobody expected",
+      "base_sha256": "b132a8047572f5b80ab176fe95de8bebeaf908684d80842dd34ad8682319fe9d",
+      "mutated_sha256": "d97f71dce3f4aae64919e78f9630c4252db079c5194f0ef85fd8a04c5f4ca46e",
+      "base_token_count": 10,
+      "mutated_token_count": 13,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_word",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening afterwards",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "e03ba601d5d58fefde494db81735914ac72041c9d64fbe3bb25dc66e00b2ac59",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "append_sentence",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening. and then it changed.",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "48bfc2603a866bf12d9048a93104461ddd20882078479770c456ef3831cb9465",
+      "base_token_count": 9,
+      "mutated_token_count": 15,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "prepend_word",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "actually nothing happened between noon and the evening",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "3072c59f46901a8684a5d5daca5f77d984c6a38352298ee66141a5f4c835998d",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "insert_middle",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing really happened between noon and the evening",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "ca5f1ce71d2bb2882d5c570fa046d14b93a2b26001470a77c3e6efb292d7bed3",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "punctuation_add",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening?",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "5f9046ef5ed40b013807f539e761f768a0a715ac060a77d9e12acc0b505db8c4",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "digit_append",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening 2026",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "1ea237af74419a4ad3caee95d46882395dd47688ad4bf5737c880c0f618bbdfe",
+      "base_token_count": 9,
+      "mutated_token_count": 11,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "emoji_append",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening 🌐",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "0638a98b94646d3f9b91df6727e8c850880e41591720188d2193b9fac4b2c0e3",
+      "base_token_count": 9,
+      "mutated_token_count": 10,
+      "token_ids_differ": true
+    },
+    {
+      "kind": "clause_append",
+      "base": "nothing happened between noon and the evening",
+      "mutated": "nothing happened between noon and the evening which nobody expected",
+      "base_sha256": "1b44b4d0a35e9cd6fc3748e0d6a5a9c4154d9037e3e237e727738748bdc98fd8",
+      "mutated_sha256": "91af6762bde49072a106a237df15c541b26ce3a9f669cefd298b31e60427113a",
+      "base_token_count": 9,
+      "mutated_token_count": 12,
+      "token_ids_differ": true
+    }
+  ]
+}
