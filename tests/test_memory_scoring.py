@@ -8,6 +8,8 @@ no dream-state behavior change is asserted (dream integration is a
 follow-up, per scope)."""
 from __future__ import annotations
 
+import pathlib
+import tempfile
 import time
 import unittest
 
@@ -16,6 +18,30 @@ from core.memory_scoring import (
     derive_concept_tags, record_recall, get_stats, mark_consolidated,
     promotion_score, RecallStats, PromotionWeights, MAX_CONCEPT_TAGS,
 )
+
+
+def setUpModule():
+    """Redirect the recall sidecar to a throwaway file for this module.
+
+    ``_diag_clear_for_test`` issues ``DELETE FROM recall_stats`` against
+    whatever ``_DB_PATH`` points at, and this module calls it in four
+    places. ``_DB_PATH`` is a MODULE-GLOBAL ABSOLUTE PATH to the live
+    store, so running these tests -- from the repo, from a worktree,
+    from anywhere -- destroyed Maez's real recall history. It did, on
+    2026-08-21 at 01:43 UTC, during a full-suite run.
+
+    Same shape as the hardcoded-path hazard already recorded in this
+    repo: sandboxing the environment does not sandbox a module global.
+    """
+    global _TMPDIR, _ORIG_DB_PATH
+    _TMPDIR = tempfile.TemporaryDirectory(prefix="maez-recall-test-")
+    _ORIG_DB_PATH = ms._DB_PATH
+    ms._DB_PATH = pathlib.Path(_TMPDIR.name) / "recall_stats.db"
+
+
+def tearDownModule():
+    ms._DB_PATH = _ORIG_DB_PATH
+    _TMPDIR.cleanup()
 
 
 # ── concept tag derivation ────────────────────────────────────────────
