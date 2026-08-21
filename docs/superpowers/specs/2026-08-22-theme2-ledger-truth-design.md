@@ -1,6 +1,8 @@
-# Theme 2 — the ledger cannot omit or misdate a life (design pass 3)
+# Theme 2 — the ledger cannot omit or misdate a life (design pass 4)
 
-Status: DESIGN, pass 3. Folds gate round 2's sixteen new defects
+Status: DESIGN, pass 4. Pass 4 = pass 3 + §11, which binds the design
+to executable DDL (`2026-08-22-theme2-schema-v2-draft.sql`) and folds
+gate round 3's F1–F10. Pass 3 folded round 2's sixteen new defects
 (ND1–ND16) and the partial/undischarged blockers
 (`2026-08-22-theme2-gate-round2.md`). Covers birth blockers **A3, A4,
 A6, B3**. Theme 1, A5 durability, and the creation manifest remain
@@ -327,3 +329,95 @@ Theme 1; A5 durability; observability turn-ledger telemetry; ledger
 activation (birth-gated, owner-only); the creation manifest; restore's
 forward scar (A10) — §5 guarantees a rewind cannot be silent, not
 that restore is otherwise lawful.
+
+## 11. Pass 4 — the executable layer (folds F1–F10)
+
+**The DDL is the design.** Every schema/trigger claim in §§3–4, 7 is
+now carried by `2026-08-22-theme2-schema-v2-draft.sql`, executed
+against in-memory SQLite with **all 22 round-2/round-3 adversarial
+inserts as negative controls, all rejecting** (double active run,
+regressed epoch, self/NULL/future/kindless parent, `is_birth_anchor=2`,
+second anchor, late/updated constituent on a sealed turn, cross-tenant
+FK, duplicate intent shape, self/cross-intent result supersession,
+evidence-less or cross-turn-evidence transport closure, double-initial
+/gapped/reconciler-over-transport closures, mutation of closures,
+claims and intents from superseded runs) and the lawful paths passing
+(late-ack supersession within an intent; claim by the current
+active-epoch run). Where prose and DDL disagree, the DDL wins; where
+the DDL is silent, the invariant is not yet enforced and may not be
+claimed.
+
+Resolutions of round 3's findings not already inside the DDL:
+
+- **F1 — the fence is a committed row, not a re-read.** External
+  effects require a committed `effect_claims` row (egress: the
+  `egress_intents` row) written under `BEGIN IMMEDIATE`; the fence
+  trigger aborts stale-epoch or non-active claimants at claim time.
+  Cross-process validity follows from SQLite's write serialization:
+  a takeover commits `superseded` before the new run exists, so a
+  later claim by the old run cannot observe a snapshot in which it is
+  still current. Witnessed cross-process in the S3 protocol.
+- **F2 — parent semantics are typed.** `parent_kind
+  ('reply','continuation','correction')` distinguishes causal
+  parenting from late-constituent (`continuation`) and
+  identity-conflict (`correction`) turns; `turns` remains strictly
+  append-only — sealing is its own append-only table (`turn_seals`).
+- **F3 — the latch advances with every lived commit.** The latch
+  append (one fsync'd line) happens in the same code path as every
+  successful lived-turn commit, not per boot: the rewindable tail is
+  zero committed turns. Direction rules: ledger ahead of latch (crash
+  between commit and append) is lawful and self-heals on the next
+  observation; **latch ahead of ledger** (power loss recovers the DB
+  behind the separately-fsynced latch, possible under
+  `synchronous=NORMAL`) → `unknown` + alarm — recorded here as a
+  Theme 1/A5 interplay: birth-grade durability decisions belong
+  there. WAL checkpoint and VACUUM preserve logical position+hash and
+  must not report rewind; the S1 protocol witnesses both.
+- **F4 — the journal preserves provenance stamps.** Entries carry
+  `taint_labels` and `privacy_access` captured at failure time (the
+  rail holds them at admission; egress failures inherit the turn's).
+  Fold-in uses the recorded stamps through the ordinary
+  `validate_turn_stamp` door; an entry missing stamps is **refused by
+  the fold**, stays journaled, and trips the health flag — provenance
+  is never invented at fold time.
+- **F5 — journal integrity is chained.** Each entry carries
+  `sha256(canonical entry bytes)` and `prev_entry_sha256` within its
+  segment; segment close writes a sealed footer. The fold records
+  `entry_sha256` in `journal_folds`; a mismatch between recomputed
+  and recorded hashes refuses the fold. Altered journal bytes can no
+  longer be laundered into chain-attested biography.
+- **F6 — recreate-empty requires exclusive ownership.** The command
+  requires: both `maez.service` and `maez-web.service` quiescent
+  (same checks the ceremony CLI uses), an exclusive `flock` on the
+  DB, no `-wal`/`-shm` sidecars, and no other open file handles on
+  the inode (`fuser`); it builds the new DB at a temp path and
+  atomically renames over the old — an open stale handle is
+  impossible to write through undetected because the flock and
+  handle check precede the swap, and the daemon's writer re-resolves
+  the path per call. Refused outright on any ledger with a birth
+  anchor or any non-genesis row.
+- **F7 — one canonicalization, domain-owned.** `chain.py` owns
+  `CANONICAL_V2_COLUMNS` (ordered) plus an explicit default map; the
+  writer, the genesis seeder, and the verifier all project through
+  the same function; genesis is written fully populated;
+  `lifecycle_stage` resolves before hashing. No caller-dependent key
+  sets remain.
+- **ND1/B1 — the inventory is closed in this document.** The registry
+  ships seeded with exactly the doors named in §2's table plus the
+  outbound producers: follow-up reports (`maez_daemon` follow-up
+  queue), proactive opinions, dream/evolution notices — each with a
+  durable producer identity (queue item id / cycle id). The AST
+  sweep's primitive set is defined: Flask `route`/`add_url_rule`
+  registrations, Telegram handler registrations, and the transport
+  send primitive list; every occurrence must be reachable from a
+  registered construct or carry an explicit allowlist justification.
+  Adding a door without a registry entry fails the sweep; activating
+  a parked endpoint without one refuses at runtime.
+- **B10 — the contention protocol's values are frozen now**: two
+  writer processes (daemon-sim, web-sim) against one born fixture;
+  arrivals Poisson at 1 exchange/s each for 500 s (N=1000); each
+  exchange = admission tx + reply tx + closure tx; measurement =
+  per-transaction wall-clock wait recorded inside the rail; kill
+  rule: any refusal, or p99 wait > 250 ms; positive control: a
+  deliberate 6 s lock-hold run must trip the kill rule. The S6
+  protocol may tighten but not loosen these.
