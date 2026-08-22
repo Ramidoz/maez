@@ -49,6 +49,8 @@ def honest_run(fixture: str) -> dict:
         "ledger_post_replay_file_set": ["ledger.db", "ledger.db-shm",
                                         "ledger.db-wal"],
         "stray_stores_outside_projected_tree": [],
+        "latch_artifacts_in_store_tree": [],
+        "interaction_count": 20,
     }
 
 
@@ -63,28 +65,47 @@ def forced_on_run() -> dict:
     return r
 
 
+_CASE = [0]
+
+
 def run_gate(tmp: Path, a: dict, p: dict, *, baseline=None, forced=None) -> dict:
-    (tmp / "a.json").write_text(json.dumps(a))
-    (tmp / "p.json").write_text(json.dumps(p))
-    cmd = [sys.executable, str(GATE), "--run-a", str(tmp / "a.json"),
-           "--run-p", str(tmp / "p.json"), "--out", str(tmp / "v.json")]
+    """Gate round 19: the first version reused one verdict path and ignored
+    the return code, so a crash on an expected-FAIL case could inherit a
+    stale FAIL and look correct. Each case gets its own directory, and the
+    exit status must agree with the written verdict."""
+    _CASE[0] += 1
+    d = tmp / f"case{_CASE[0]:02d}"
+    d.mkdir()
+    (d / "a.json").write_text(json.dumps(a))
+    (d / "p.json").write_text(json.dumps(p))
+    cmd = [sys.executable, str(GATE), "--run-a", str(d / "a.json"),
+           "--run-p", str(d / "p.json"), "--out", str(d / "v.json")]
     if baseline is not None:
-        (tmp / "b.json").write_text(json.dumps(baseline))
-        cmd += ["--baseline-census", str(tmp / "b.json")]
+        (d / "b.json").write_text(json.dumps(baseline))
+        cmd += ["--baseline-census", str(d / "b.json")]
     if forced is not None:
-        (tmp / "f.json").write_text(json.dumps(forced))
-        cmd += ["--forced-on", str(tmp / "f.json")]
-    subprocess.run(cmd, capture_output=True, text=True)
-    return json.loads((tmp / "v.json").read_text())
+        (d / "f.json").write_text(json.dumps(forced))
+        cmd += ["--forced-on", str(d / "f.json")]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if not (d / "v.json").exists():
+        return {"verdict": "CRASH", "failures": {"stderr": proc.stderr[-400:]}}
+    v = json.loads((d / "v.json").read_text())
+    expected_rc = 0 if v["verdict"] == "PASS" else 1
+    if proc.returncode != expected_rc:
+        return {"verdict": "RC-MISMATCH",
+                "failures": {"rc": proc.returncode, "verdict": v["verdict"]}}
+    return v
 
 
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="t5gate_"))
     ok = True
     A, P = honest_run("healthy"), honest_run("partial")
-    pinned = {"per_fixture": {
-        "healthy": {"current_phase": "gestation", EXERCISED: {"gestation": 20}},
-        "partial": {"current_phase": "gestation", EXERCISED: {"gestation": 20}}}}
+    def cen(fx):
+        r = honest_run(fx)
+        return {"current_phase": "gestation", "stamp_census": r["stamp_census"]}
+    pinned = {"per_fixture": {"healthy": cen("healthy"),
+                              "partial": cen("partial")}}
 
     def case(label, want, a=None, p=None, **kw):
         nonlocal ok
@@ -101,7 +122,7 @@ def main() -> int:
     case("honest run against its own pinned baseline", "PASS", baseline=pinned)
 
     bad_pin = copy.deepcopy(pinned)
-    bad_pin["per_fixture"]["partial"][EXERCISED] = {"gestation": 19}
+    bad_pin["per_fixture"]["partial"]["stamp_census"][EXERCISED] = {"gestation": 19}
     case("census drifted from the pinned baseline", "FAIL", baseline=bad_pin)
 
     a = copy.deepcopy(A); a["ledger_post_replay_sha256"] = "b" * 64
@@ -110,8 +131,10 @@ def main() -> int:
     case("K1 digest key missing", "FAIL", a=a)
 
     p = copy.deepcopy(P)
-    p["ledger_post_replay_file_set"] += ["segment-000001.jsonl"]
-    case("K2 latch artifact on the partial fixture", "FAIL", p=p)
+    p["latch_artifacts_in_store_tree"] = ["birth_observed/segment-000001.jsonl"]
+    case("K2 real latch artifact in the store tree", "FAIL", p=p)
+    p = copy.deepcopy(P); del p["latch_artifacts_in_store_tree"]
+    case("K2 store-tree latch sweep missing", "FAIL", p=p)
 
     a = copy.deepcopy(A)
     a["positive_control"]["interactions_without_tail_passage"] = ["s1-replay-07"]
@@ -135,6 +158,22 @@ def main() -> int:
 
     p = copy.deepcopy(P); p["phase_probe"]["current_phase"] = "unknown"
     case("flags-off partial did not read gestation", "FAIL", p=p)
+    a = copy.deepcopy(A); a["phase_probe"]["current_phase"] = "unknown"
+    case("flags-off HEALTHY did not read gestation", "FAIL", a=a)
+
+    case("explicitly empty baseline must not bypass", "FAIL", baseline={})
+
+    a = copy.deepcopy(A); a["stamp_census"][EXERCISED] = {"gestation": 0}
+    case("zero-count census is not a census", "FAIL", a=a)
+
+    a = copy.deepcopy(A); a["positive_control"]["interactions_returned"] = 1
+    case("one interaction of twenty returned", "FAIL", a=a)
+    a = copy.deepcopy(A); a["positive_control"]["store_tail_invocations"] = 1
+    case("fewer tail passages than interactions", "FAIL", a=a)
+
+    a = copy.deepcopy(A)
+    a["stamp_census"]["chroma::daily"] = {"gestation": 1}
+    case("a new write to a store outside raw", "FAIL", a=a, baseline=pinned)
 
     p = copy.deepcopy(P); p["phase_probe"]["has_resolve_api"] = True
     case("resolve() exists but no forced-on run", "FAIL", p=p)
@@ -155,6 +194,12 @@ def main() -> int:
     f["phase_probe"]["resolve"] = {"phase": "gestation"}
     f["stamp_census"] = {EXERCISED: {"gestation": 20}}
     case("forced-on did not flip (guard absent)", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run(); f["stamp_census"] = {EXERCISED: {"unknown": 20}}
+    case("forced-on wrote unknown-stamped rows", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run(); f["consumer_refusals"] = [{"exception": "ValueError"}]
+    case("refusal evidence is the wrong exception", "FAIL",
          baseline=pinned, forced=f)
     f = {"fixture": "partial",
          "phase_probe": {"resolve": {"phase": "unknown"}}}

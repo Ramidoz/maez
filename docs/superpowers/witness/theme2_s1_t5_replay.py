@@ -427,10 +427,12 @@ def main() -> int:
     #
     # Sweep EVERY writable root, and detect SQLite by its 16-byte magic
     # header rather than by name.
+    # Gate round 19 Q4: the airlock puts a writable tmpfs over ALL of
+    # /home/rohit, so naming two subtrees under it left
+    # /home/rohit/.local/state/x.db free to escape. Sweep the home root.
     WRITABLE_ROOTS = (
-        LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit/.config/maez"),
-        Path("/home/rohit/.cache/chroma"), Path("/tmp"), Path("/run"),
-        Path("/var/tmp"),
+        LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit"),
+        Path("/tmp"), Path("/run"), Path("/var/tmp"),
     )
     SQLITE_MAGIC = b"SQLite format 3\x00"
 
@@ -447,10 +449,29 @@ def main() -> int:
             continue
         for q in root.rglob("*"):
             try:
-                if q.is_file() and looks_like_sqlite(q):
+                if not q.is_file():
+                    continue
+                if q.resolve().is_relative_to(STORE_TREE):
+                    continue          # inside the projected tree: expected
+                if looks_like_sqlite(q):
                     strays.append(str(q))
             except OSError:
                 continue
+    # Gate round 19 Q1.1: K2 read `ledger_post_replay_file_set`, which the
+    # driver populates only with names beginning `ledger.db` -- so a real
+    # memory/birth_observed/segment-000001.jsonl could exist while K2 passed.
+    # K2 was inert. Sweep the whole store tree for latch artifacts and give
+    # the gate something that can actually be false.
+    latch = []
+    for q in STORE_TREE.rglob("*"):
+        try:
+            if "birth_observed" in q.parts or q.name.startswith("segment-") \
+                    or q.name.endswith(".tmp"):
+                latch.append(str(q.relative_to(STORE_TREE)))
+        except OSError:
+            continue
+    report["latch_artifacts_in_store_tree"] = sorted(latch)
+
     report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
     report["stray_stores_outside_projected_tree"] = sorted(strays)
     if strays:

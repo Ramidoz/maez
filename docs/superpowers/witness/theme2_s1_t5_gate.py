@@ -47,6 +47,8 @@ REQUIRED_RUN_KEYS = (
     "fixture", "phase_probe", "stamp_census", "positive_control",
     "ledger_post_migration_sha256", "ledger_post_replay_sha256",
     "stray_stores_outside_projected_tree", "census_resolved_paths",
+    "latch_artifacts_in_store_tree", "ledger_post_replay_file_set",
+    "interaction_count",
 )
 
 
@@ -72,7 +74,10 @@ def schema_failures(runs: dict) -> list:
         if not isinstance(cen, dict) or EXERCISED_STORE not in cen:
             bad.append({"run": tag,
                         "detail": f"stamp_census missing {EXERCISED_STORE!r}"})
-        elif not isinstance(cen[EXERCISED_STORE], dict) or not cen[EXERCISED_STORE]:
+        elif not isinstance(cen[EXERCISED_STORE], dict) or not any(
+                isinstance(v, int) and v > 0
+                for v in cen[EXERCISED_STORE].values()):
+            # Round 19: {"gestation": 0} counted as a nonempty census.
             bad.append({"run": tag,
                         "detail": f"{EXERCISED_STORE} produced no stamps"})
     return bad
@@ -91,15 +96,22 @@ def k1_ledger_unchanged(runs: dict) -> list:
 
 
 def k2_no_latch(runs: dict) -> list:
+    """Gate round 19 Q1.1: reading the ledger file set made K2 inert, because
+    the driver fills it only with `ledger.db*` names. The driver now sweeps
+    the whole store tree, and K2 consumes that."""
     bad = []
     for tag, r in runs.items():
+        tree = r.get("latch_artifacts_in_store_tree")
+        if not isinstance(tree, list):
+            bad.append({"run": tag,
+                        "detail": "store-tree latch sweep missing"})
+        elif tree:
+            bad.append({"run": tag, "detail": tree})
         fs = r.get("ledger_post_replay_file_set")
-        if not isinstance(fs, list):
-            bad.append({"run": tag, "detail": "ledger file set missing"})
-            continue
-        for name in fs:
-            if any(m in name for m in LATCH_MARKERS):
-                bad.append({"run": tag, "detail": name})
+        if isinstance(fs, list):
+            for name in fs:
+                if any(m in name for m in LATCH_MARKERS):
+                    bad.append({"run": tag, "detail": name})
     return bad
 
 
@@ -121,9 +133,19 @@ def k3_positive_controls(runs: dict) -> list:
         if pc.get("interactions_without_tail_passage"):
             bad.append({"run": tag, "detail": "interactions never reached the tail",
                         "ids": pc["interactions_without_tail_passage"]})
-        if not isinstance(pc.get("interactions_returned"), int) \
-                or pc["interactions_returned"] < 1:
-            bad.append({"run": tag, "detail": "no interactions returned"})
+        # Round 19: one represented interaction out of the frozen 20 passed.
+        n = r.get("interaction_count")
+        if not isinstance(n, int) or n < 1:
+            bad.append({"run": tag, "detail": "interaction_count missing"})
+        elif pc.get("interactions_returned") != n:
+            bad.append({"run": tag,
+                        "detail": "not every manifest interaction returned",
+                        "returned": pc.get("interactions_returned"),
+                        "expected": n})
+        if pc.get("store_tail_invocations", 0) < (n if isinstance(n, int) else 1):
+            bad.append({"run": tag,
+                        "detail": "fewer tail passages than interactions",
+                        "invocations": pc.get("store_tail_invocations")})
         if not pc.get("collections_grew"):
             bad.append({"run": tag, "detail": "no collection grew"})
     return bad
@@ -141,12 +163,16 @@ def k4_no_stray_store(runs: dict) -> list:
 
 
 def census_of(r: dict) -> dict:
-    """The comparison basis: the resolver's answer plus the stamps of the one
-    store this path exercises. Narrow on purpose -- everything wider was
-    either honestly empty or T3's job."""
+    """The comparison basis: the resolver's answer plus the FULL stamp census.
+
+    Gate round 19 Q1.2: v7 compared only the exercised store, so a new
+    flags-off write to `daily` passed as preserved behavior. Honest empty
+    stores are exact baseline facts and belong in the comparison -- the
+    honest-empty allowance belongs in the *schema* check (only the exercised
+    store must be non-empty), not in what gets compared."""
     return {
         "current_phase": (r.get("phase_probe") or {}).get("current_phase"),
-        EXERCISED_STORE: (r.get("stamp_census") or {}).get(EXERCISED_STORE),
+        "stamp_census": r.get("stamp_census"),
     }
 
 
@@ -159,7 +185,8 @@ def discriminator(runs: dict, baseline: dict | None,
         return "FAIL", [{"detail": "both fixtures are required",
                          "observed": sorted(observed)}]
 
-    if baseline:
+    if baseline is not None:
+        # Round 19: an explicitly supplied `{}` bypassed comparison entirely.
         want = baseline.get("per_fixture")
         if not isinstance(want, dict) or set(want) != {"healthy", "partial"}:
             return "FAIL", [{"detail": "pinned baseline malformed"}]
@@ -169,6 +196,13 @@ def discriminator(runs: dict, baseline: dict | None,
                                                      "pinned pre-S1 baseline",
                             "expected": want[fx], "got": observed[fx]})
 
+    for fx in ("healthy", "partial"):
+        # Round 19: only the partial fixture was required to read gestation,
+        # so a healthy fixture reading `unknown` passed.
+        if observed[fx].get("current_phase") != "gestation":
+            bad.append({"fixture": fx,
+                        "detail": "flags-off did not read gestation",
+                        "got": observed[fx].get("current_phase")})
     probe_p = next((r.get("phase_probe") or {} for r in runs.values()
                     if r.get("fixture") == "partial"), {})
     if probe_p.get("current_phase") != "gestation":
@@ -177,6 +211,10 @@ def discriminator(runs: dict, baseline: dict | None,
                               "preserve is not present",
                     "got": probe_p.get("current_phase")})
 
+    if forced is not None:
+        for k in ("fixture", "phase_probe", "stamp_census"):
+            if k not in forced:
+                bad.append({"detail": f"forced-on report missing {k!r}"})
     if forced is None:
         if probe_p.get("has_resolve_api"):
             return "FAIL", bad + [{"detail": "birth_phase.resolve exists but "
@@ -207,10 +245,21 @@ def discriminator(runs: dict, baseline: dict | None,
     if fc == observed["partial"]:
         bad.append({"detail": "forced-on census is identical to the flags-off "
                               "census: the guard is not there"})
-    stamps = fc.get(EXERCISED_STORE)
-    if isinstance(stamps, dict) and stamps.get("gestation"):
-        bad.append({"detail": "forced-on run still stamped gestation",
-                    "stamps": stamps})
+    # Round 19: a forced-on run that still wrote 20 `unknown`-stamped rows
+    # passed, which contradicts "every consumer refuses on unknown". Refusal
+    # means no row at all.
+    fstamps = (forced.get("stamp_census") or {}).get(EXERCISED_STORE)
+    if isinstance(fstamps, dict) and any(
+            isinstance(v, int) and v > 0 for v in fstamps.values()):
+        bad.append({"detail": "forced-on run still wrote stamped rows; "
+                              "refusal means no row",
+                    "stamps": fstamps})
+    for entry in (refusals if isinstance(refusals, list) else []):
+        if not isinstance(entry, dict) or \
+                entry.get("exception") != "PhaseUnknownRefusal":
+            bad.append({"detail": "refusal evidence is not a "
+                                  "PhaseUnknownRefusal record",
+                        "entry": entry})
     return ("PASS" if not bad else "FAIL"), bad
 
 

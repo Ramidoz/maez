@@ -121,18 +121,36 @@ say "sqlite: $($PY -c 'import sqlite3;print(sqlite3.sqlite_version)')"
 say "--- gate self-test (the sole authority; 21 biting cases)"
 "$PY" "$GATE_SELFTEST" 2>&1 | tee -a "$LOG"
 
-say "--- projection self-test (forensic instrument)"
-"$PY" "$SELFTEST" 2>&1 | tee -a "$LOG"
+# FORENSIC instrument: its self-test is recorded, not gating (round 19 Q3).
+say "--- projection self-test (forensic instrument, recorded not gating)"
+set +e
+"$PY" "$SELFTEST" > "$W/projection-selftest.txt" 2>&1
+say "projection self-test rc=$? (see projection-selftest.txt)"
+set -e
 
 # Protocol §6 requires the frozen selector suite green, and gate round 18
 # found it required but absent from the orchestrator.
-say "--- frozen pytest selector suite (§6)"
+# §6 requires the frozen selector suite green, INSIDE the airlock -- round 19
+# found it running directly on the host, which is exactly scar rule 1.
+say "--- frozen pytest selector suite (§6), inside the airlock"
 SELECTORS=$(grep -v "^#" "$REPO/docs/superpowers/witness/theme2-s1-selectors.txt" \
             | grep -v "^$" | tr "\n" " ")
 say "selectors: $SELECTORS"
+PYTEST_AIRLOCK="$W/airlock-pytest"
+rm -rf "$PYTEST_AIRLOCK"
 # shellcheck disable=SC2086
-"$REPO/.venv/bin/python" -m pytest -q $SELECTORS 2>&1 | tail -20 | tee -a "$LOG"
+"$AIRLOCK" "$PYTEST_AIRLOCK" "$PY" -m pytest -q $SELECTORS 2>&1 \
+    | tail -25 | tee -a "$LOG"
 
+# Round 19 Q6.7: `is-active || true` turned an unavailable user bus into
+# "not active" and proceeded. Probe the bus first and refuse if it cannot
+# answer.
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+    say "REFUSED: the user systemd bus is unavailable; daemon state cannot "
+    say "         be established, and a baseline must not race a daemon "
+    say "         whose state is unknown"
+    exit 9
+fi
 PRE_ACTIVE=$(systemctl --user is-active "$UNIT" || true)
 say "pre-run $UNIT is-active: $PRE_ACTIVE"
 if [ "$PRE_ACTIVE" = "active" ]; then
@@ -141,7 +159,12 @@ if [ "$PRE_ACTIVE" = "active" ]; then
         say "stopping $UNIT (owner-authorized)"
         systemctl --user stop "$UNIT"
         sleep 3
-        say "post-stop is-active: $(systemctl --user is-active "$UNIT" || true)"
+        POST_STOP=$(systemctl --user is-active "$UNIT" || true)
+        say "post-stop is-active: $POST_STOP"
+        if [ "$POST_STOP" = "active" ]; then
+            say "REFUSED: $UNIT is still active after stop"
+            exit 9
+        fi
     else
         say "REFUSED: $UNIT is active and --stop-daemon was not given"
         exit 5
@@ -156,16 +179,34 @@ one_run() {
     T5_REUSE_AIRLOCK=1 T5_RUN_ID="$T5_RUN_ID" "$AIRLOCK" "$A" "$PY" "$REPLAY" \
         --manifest "$MANIFEST" --fixture "$fixture" \
         --report "$REPO/logs/t5_run.json" 2>&1 | tee -a "$LOG"
+    cp "$A/maez/logs/t5_run.json" "$W/run-$tag.json"
+    # Everything below is FORENSIC: the extract and the byte projection are
+    # evidence, and round 19 found they could still terminate the run under
+    # set -e. Their statuses are captured (round 19 Q3).
+    set +e
     T5_REUSE_AIRLOCK=1 T5_RUN_ID="$T5_RUN_ID" "$AIRLOCK" "$A" "$PY" "$EXTRACT" \
-        "$REPO/logs/t5_extract.json" 2>&1 | tee -a "$LOG"
-    cp "$A/maez/logs/t5_run.json"     "$W/run-$tag.json"
-    cp "$A/maez/logs/t5_extract.json" "$W/extract-$tag.json"
-    "$PY" "$PROJECT" project "$A/maez/memory" "$W/proj-$tag.json" \
-        --extract "$W/extract-$tag.json" 2>&1 | tee -a "$LOG"
+        "$REPO/logs/t5_extract.json" > "$W/extract-$tag.log" 2>&1
+    say "forensic extract ($tag) rc=$?"
+    cp "$A/maez/logs/t5_extract.json" "$W/extract-$tag.json" 2>/dev/null
+    if [ -f "$W/extract-$tag.json" ]; then
+        "$PY" "$PROJECT" project "$A/maez/memory" "$W/proj-$tag.json" \
+            --extract "$W/extract-$tag.json" > "$W/project-$tag.log" 2>&1
+    else
+        "$PY" "$PROJECT" project "$A/maez/memory" "$W/proj-$tag.json" \
+            > "$W/project-$tag.log" 2>&1
+    fi
+    say "forensic projection ($tag) rc=$?"
+    set -e
 }
 
 one_run a healthy
+# Run b is FORENSIC ONLY -- the gate consumes a and p. It is kept because
+# run-to-run repeatability is useful context for the archive, but round 19
+# was right that it must not be able to abort the run (Q3).
+set +e
 one_run b healthy
+say "forensic second healthy run rc=$?"
+set -e
 
 # Gate round 16 finding L: the healthy fixture is where legacy and S1 AGREE,
 # so a pair of healthy runs cannot prove the guard is dormant -- only that two
@@ -240,10 +281,13 @@ say "--- gate: G1..G7"
 
 if [ "$ARCHIVE" = "1" ]; then
     say "--- archive run a's store tree"
+    # Round 19 Q3: archive construction depended on proj-a.json, a forensic
+    # artifact. It now reads the seed manifest the wrapper wrote.
     SEEDED=$("$PY" -c "
-import json
-print('\n'.join(e['path'] for e in
-      json.load(open('$W/proj-a.json'))['seeded_sources']))")
+import sys
+print('\n'.join(l.split(None,1)[1].strip().split('/maez/memory/',1)[-1]
+      for l in open('$W/airlock-a/maez/logs/seeded-sources.txt')
+      if l.strip()))")
     EXCL="$W/archive-exclude.txt"
     printf '%s\n' "$SEEDED" > "$EXCL"
     tar --sort=name --numeric-owner --owner=0 --group=0 --mtime=@0 \
@@ -276,6 +320,12 @@ print('\n'.join(e['path'] for e in
         say "REFUSED: published copy digest differs from the built archive"
         exit 8
     fi
+    # Round 19 Q3: the archive was renamed first and the census only
+    # afterward, so an interrupt left a new archive beside an old census.
+    # Both temporaries are written and verified first; the census -- the
+    # smaller, gate-derived file -- is renamed last, so a half-landed pair
+    # is always "archive present, census absent", which the next run
+    # detects rather than trusting.
     mv -f "$ARCHIVE_PATH.tmp" "$ARCHIVE_PATH"
     # The pinned stamp census is the durable comparison basis (gate round 17,
     # M(iv)): without it, a later flags-off run has nothing exact to match and
