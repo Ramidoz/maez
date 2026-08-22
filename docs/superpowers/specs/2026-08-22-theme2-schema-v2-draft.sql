@@ -1,4 +1,13 @@
--- Theme 2 schema v2 DRAFT, revision 5 (gate round 7).
+-- Theme 2 schema v2 DRAFT, revision 6 (gate round 8).
+-- Revision 6 folds R7-01..R7-10: NULL-proof reservation eligibility;
+-- reservation/result chronology bound; reservations carry their own
+-- AUTHORIZING run (takeover retry path); correction turns host
+-- exactly one constituent symmetrically; closure evidence is
+-- EXHAUSTIVE (cites every current head; label derived from the full
+-- set; suppressed/unresolved_crash mapped); no new egress on a
+-- closed turn + closure_consistency_violations view; single-byte
+-- no-NUL nonempty id discipline; finite/causal time completed;
+-- reply parents are inbound, corrections descend from owner turns.
 -- Revision 5 folds gate-round-6's Q-stratum: finite/causal time
 -- everywhere; one transition record per run; correction ancestry
 -- bound; kind/ordinal shapes; acyclic edits; PRE-SEND per-attempt
@@ -76,6 +85,14 @@ BEGIN
         WHEN NEW.parent_kind = 'correction'
              AND NEW.turn_kind <> 'user_message'
             THEN RAISE(ABORT, 'corrections are owner-message turns')
+        WHEN NEW.parent_kind = 'reply'
+             AND (SELECT direction FROM turns WHERE turn_id = NEW.parent_turn_id)
+                 IS NOT 'in'
+            THEN RAISE(ABORT, 'a reply answers an inbound turn')          -- R7-10
+        WHEN NEW.parent_kind = 'correction'
+             AND (SELECT turn_kind FROM turns WHERE turn_id = NEW.parent_turn_id)
+                 IS NOT 'user_message'
+            THEN RAISE(ABORT, 'a correction descends from an owner message')
     END;
 END;
 
@@ -108,7 +125,7 @@ END;
 -- ===================================================================
 CREATE TABLE IF NOT EXISTS turn_seals (
     turn_id   TEXT PRIMARY KEY REFERENCES turns(turn_id),
-    sealed_at REAL NOT NULL
+    sealed_at REAL NOT NULL CHECK (sealed_at > 0 AND sealed_at < 1e11)
 ) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_turn_seals_no_update BEFORE UPDATE ON turn_seals
 BEGIN SELECT RAISE(ABORT, 'turn_seals is append-only'); END;
@@ -126,9 +143,10 @@ CREATE TABLE IF NOT EXISTS admission_events (
     event_identity TEXT NOT NULL,
     revision       INTEGER NOT NULL CHECK (revision >= 1),
     turn_id        TEXT NOT NULL,
-    occurred_at    REAL,
-    payload_hash   TEXT NOT NULL,
-    admitted_at    REAL NOT NULL,
+    occurred_at    REAL CHECK (occurred_at IS NULL OR (occurred_at > 0 AND occurred_at < 1e11)),
+    payload_hash   TEXT NOT NULL CHECK (length(payload_hash) > 0),
+    admitted_at    REAL NOT NULL CHECK (admitted_at > 0 AND admitted_at < 1e11),
+    CHECK (length(event_identity) > 0),
     PRIMARY KEY (tenant_id, event_identity, revision),
     FOREIGN KEY (tenant_id, turn_id) REFERENCES turns(tenant_id, turn_id)
 ) STRICT;
@@ -156,9 +174,10 @@ BEGIN
                        AND event_identity = NEW.event_identity
                        AND revision = NEW.revision - 1)
             THEN RAISE(ABORT, 'correction turn must descend from the prior revision turn')
-        WHEN NEW.revision > 1 AND EXISTS (
-                SELECT 1 FROM admission_events WHERE turn_id = NEW.turn_id)
-            THEN RAISE(ABORT, 'a correction turn hosts exactly one revision')
+        WHEN EXISTS (SELECT 1 FROM admission_events WHERE turn_id = NEW.turn_id)
+             AND (SELECT parent_kind FROM turns WHERE turn_id = NEW.turn_id)
+                 IS 'correction'
+            THEN RAISE(ABORT, 'a correction turn hosts exactly one constituent')
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_admission_events_no_update BEFORE UPDATE ON admission_events
@@ -181,7 +200,8 @@ CREATE TABLE IF NOT EXISTS runs (
     UNIQUE (turn_id, epoch),
     CHECK (attempt = epoch),                 -- Q30: one counter, defined
     CHECK (lease_until >= started_at),       -- Q23
-    CHECK (run_id NOT GLOB '*[^ -~]*')       -- Q18: ASCII id posture
+    CHECK (length(run_id) > 0 AND length(CAST(run_id AS BLOB)) = length(run_id)
+           AND run_id NOT GLOB '*[^ -~]*')   -- R7-08: nonempty, no NUL, ASCII
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run
     ON runs (turn_id) WHERE status = 'active';
@@ -268,7 +288,8 @@ CREATE TABLE IF NOT EXISTS effect_claims (
     effect_identity TEXT NOT NULL CHECK (length(effect_identity) > 0),
     claimed_at      REAL NOT NULL CHECK (claimed_at > 0 AND claimed_at < 1e11),
     UNIQUE (turn_id, effect_identity),
-    CHECK (claim_id NOT GLOB '*[^ -~]*')
+    CHECK (length(claim_id) > 0 AND length(CAST(claim_id AS BLOB)) = length(claim_id)
+           AND claim_id NOT GLOB '*[^ -~]*')
 ) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_effect_claims_fence
 BEFORE INSERT ON effect_claims
@@ -287,6 +308,8 @@ BEGIN
         WHEN NEW.claim_kind = 'cognition_commit'
              AND NOT EXISTS (SELECT 1 FROM admission_events WHERE turn_id = NEW.turn_id)
             THEN RAISE(ABORT, 'cognition requires admitted membership')   -- Q32
+        WHEN NEW.claimed_at < (SELECT started_at FROM runs WHERE run_id = NEW.run_id)
+            THEN RAISE(ABORT, 'claim precedes its run')                   -- R7-09
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_effect_claims_no_update BEFORE UPDATE ON effect_claims
@@ -312,7 +335,9 @@ CREATE TABLE IF NOT EXISTS egress_intents (
         OR (egress_kind <> 'edit' AND edits_intent IS NULL)),
     CHECK (edits_intent IS NULL OR edits_intent <> intent_id),          -- Q12
     CHECK ((egress_kind = 'part') = (part_ordinal IS NOT NULL)),        -- Q10/Q11
-    CHECK (intent_id NOT GLOB '*[^ -~]*')
+    CHECK (length(intent_id) > 0 AND length(CAST(intent_id AS BLOB)) = length(intent_id)
+           AND intent_id NOT GLOB '*[^ -~]*'),
+    CHECK (length(transport) > 0)
 ) STRICT;
 -- One logical send shape per TURN (not per run): takeover epochs
 -- cannot recreate the same send. progress is exempt (repeatable).
@@ -342,6 +367,8 @@ BEGIN
             THEN RAISE(ABORT, 'edit must reference an existing intent of the same turn')
         WHEN NEW.created_at < (SELECT started_at FROM runs WHERE run_id = NEW.run_id)
             THEN RAISE(ABORT, 'intent precedes its run')                 -- Q34
+        WHEN EXISTS (SELECT 1 FROM turn_closures WHERE turn_id = NEW.turn_id)
+            THEN RAISE(ABORT, 'no new intents on a closed turn')         -- R7-06
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_intents_no_update BEFORE UPDATE ON egress_intents
@@ -355,31 +382,56 @@ BEGIN SELECT RAISE(ABORT, 'egress_intents is append-only'); END;
 -- trigger keeps them as a backstop. A result row without its
 -- reservation is impossible.
 CREATE TABLE IF NOT EXISTS egress_reservations (
-    intent_id     TEXT NOT NULL REFERENCES egress_intents(intent_id),
-    retry_ordinal INTEGER NOT NULL CHECK (retry_ordinal >= 1),
-    reserved_at   REAL NOT NULL CHECK (reserved_at > 0 AND reserved_at < 1e11),
+    intent_id      TEXT NOT NULL REFERENCES egress_intents(intent_id),
+    retry_ordinal  INTEGER NOT NULL CHECK (retry_ordinal >= 1),
+    authorized_run TEXT NOT NULL REFERENCES runs(run_id),   -- R7-03: may differ
+    reserved_at    REAL NOT NULL CHECK (reserved_at > 0 AND reserved_at < 1e11),
     PRIMARY KEY (intent_id, retry_ordinal)
 ) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_egress_reservations_admission
 BEFORE INSERT ON egress_reservations
 BEGIN
     SELECT CASE
-        WHEN (SELECT status FROM runs WHERE run_id =
-                (SELECT run_id FROM egress_intents WHERE intent_id = NEW.intent_id))
-             <> 'active'
-            THEN RAISE(ABORT, 'reservation requires an active run')
+        -- R7-03: the AUTHORIZING run (not the intent's originating run)
+        -- must be the turn's current active max-epoch run.
+        WHEN (SELECT status FROM runs WHERE run_id = NEW.authorized_run) <> 'active'
+            THEN RAISE(ABORT, 'reservation requires an active authorizing run')
+        WHEN (SELECT turn_id FROM runs WHERE run_id = NEW.authorized_run)
+             IS NOT (SELECT turn_id FROM egress_intents WHERE intent_id = NEW.intent_id)
+            THEN RAISE(ABORT, 'authorizing run must belong to the intent turn')
+        WHEN (SELECT epoch FROM runs WHERE run_id = NEW.authorized_run)
+             <> (SELECT MAX(epoch) FROM runs WHERE turn_id =
+                    (SELECT turn_id FROM egress_intents WHERE intent_id = NEW.intent_id))
+            THEN RAISE(ABORT, 'authorizing run epoch is stale')
         WHEN NEW.retry_ordinal <> 1 + COALESCE(
                 (SELECT MAX(retry_ordinal) FROM egress_reservations
                  WHERE intent_id = NEW.intent_id), 0)
             THEN RAISE(ABORT, 'reservations are dense per intent')
-        WHEN NEW.retry_ordinal > 1 AND (
+        -- R7-01: NULL-proof — a missing prior result is NOT eligibility.
+        WHEN NEW.retry_ordinal > 1 AND COALESCE((
                 SELECT r.result FROM egress_results r
                 WHERE r.intent_id = NEW.intent_id
                   AND r.retry_ordinal = NEW.retry_ordinal - 1
                   AND NOT EXISTS (SELECT 1 FROM egress_results s
                                   WHERE s.supersedes_result = r.result_id)
-             ) NOT IN ('failed','suppressed')
+             ), 'missing') NOT IN ('failed','suppressed')
             THEN RAISE(ABORT, 'a new attempt requires the prior attempt resolved as non-delivered')
+        -- R7-02: chronology — reservation follows its intent and the
+        -- prior attempt's current observation.
+        WHEN NEW.reserved_at < (SELECT created_at FROM egress_intents
+                                WHERE intent_id = NEW.intent_id)
+            THEN RAISE(ABORT, 'reservation precedes its intent')
+        WHEN NEW.retry_ordinal > 1 AND NEW.reserved_at <= (
+                SELECT r.observed_at FROM egress_results r
+                WHERE r.intent_id = NEW.intent_id
+                  AND r.retry_ordinal = NEW.retry_ordinal - 1
+                  AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                  WHERE s.supersedes_result = r.result_id))
+            THEN RAISE(ABORT, 'retry reservation must follow the prior observation')
+        -- R7-06: no new physical activity on a closed turn.
+        WHEN EXISTS (SELECT 1 FROM turn_closures WHERE turn_id =
+                (SELECT turn_id FROM egress_intents WHERE intent_id = NEW.intent_id))
+            THEN RAISE(ABORT, 'no new attempts on a closed turn')
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_reservations_no_update BEFORE UPDATE ON egress_reservations
@@ -397,7 +449,8 @@ CREATE TABLE IF NOT EXISTS egress_results (
     supersedes_result TEXT REFERENCES egress_results(result_id),
     CHECK (supersedes_result IS NULL OR supersedes_result <> result_id),
     UNIQUE (intent_id, retry_ordinal, supersedes_result),
-    CHECK (result_id NOT GLOB '*[^ -~]*')
+    CHECK (length(result_id) > 0 AND length(CAST(result_id AS BLOB)) = length(result_id)
+           AND result_id NOT GLOB '*[^ -~]*')
 ) STRICT;
 -- No forked chains (unique successor) and no duplicate physical
 -- attempt rows: a late ack supersedes; it does not re-count.
@@ -438,6 +491,9 @@ BEGIN
         WHEN NOT EXISTS (SELECT 1 FROM egress_reservations
                 WHERE intent_id = NEW.intent_id AND retry_ordinal = NEW.retry_ordinal)
             THEN RAISE(ABORT, 'a result requires its pre-send reservation')
+        WHEN NEW.observed_at < (SELECT reserved_at FROM egress_reservations
+                WHERE intent_id = NEW.intent_id AND retry_ordinal = NEW.retry_ordinal)
+            THEN RAISE(ABORT, 'observation precedes its reservation')     -- R7-02
         WHEN NEW.retry_ordinal <> 1 + COALESCE(
                 (SELECT MAX(retry_ordinal) FROM egress_results
                  WHERE intent_id = NEW.intent_id AND supersedes_result IS NULL), 0)
@@ -484,7 +540,8 @@ CREATE TABLE IF NOT EXISTS turn_closures (
     discovered_at   REAL CHECK (discovered_at IS NULL
                                 OR (discovered_at > 0 AND discovered_at <= recorded_at)),  -- Q25
     UNIQUE (turn_id, closure_ordinal),
-    CHECK (closure_id NOT GLOB '*[^ -~]*')
+    CHECK (length(closure_id) > 0 AND length(CAST(closure_id AS BLOB)) = length(closure_id)
+           AND closure_id NOT GLOB '*[^ -~]*')
 ) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_turn_closures_topology
 BEFORE INSERT ON turn_closures
@@ -558,6 +615,37 @@ BEGIN
                 json_array_length(NEW.evidence_json) > 0
                 OR EXISTS (SELECT 1 FROM egress_intents WHERE turn_id = NEW.turn_id))
             THEN RAISE(ABORT, 'refused means nothing was ever handed to a transport')
+        -- R7-05: outcome closures cite EVERY current head of the turn.
+        WHEN NEW.closure IN ('delivered','partially_delivered','failed','suppressed')
+             AND (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
+                 <> (SELECT COUNT(*) FROM egress_results r
+                     JOIN egress_intents i ON i.intent_id = r.intent_id
+                     WHERE i.turn_id = NEW.turn_id
+                       AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                       WHERE s.supersedes_result = r.result_id))
+            THEN RAISE(ABORT, 'outcome closure must cite every current head of the turn')
+        -- R7-05: resolved outcome labels forbid result-less reservations.
+        WHEN NEW.closure IN ('delivered','partially_delivered','failed','suppressed')
+             AND EXISTS (SELECT 1 FROM egress_reservations v
+                     JOIN egress_intents i ON i.intent_id = v.intent_id
+                     WHERE i.turn_id = NEW.turn_id
+                       AND NOT EXISTS (SELECT 1 FROM egress_results r
+                                       WHERE r.intent_id = v.intent_id
+                                         AND r.retry_ordinal = v.retry_ordinal))
+            THEN RAISE(ABORT, 'a resolved closure forbids observation-less reservations')
+        -- R7-07: suppressed = every head suppressed.
+        WHEN NEW.closure = 'suppressed' AND EXISTS (
+                SELECT 1 FROM json_each(NEW.evidence_json) je
+                JOIN egress_results r ON r.result_id = je.value
+                WHERE r.result <> 'suppressed')
+            THEN RAISE(ABORT, 'suppressed closure cites only suppressed heads')
+        -- R7-07: unresolved_crash is reconciler-only and never contradicts delivery.
+        WHEN NEW.closure = 'unresolved_crash' AND (
+                NEW.recorded_by <> 'reconciler'
+                OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_json) je
+                           JOIN egress_results r ON r.result_id = je.value
+                           WHERE r.result = 'delivered'))
+            THEN RAISE(ABORT, 'unresolved_crash is a reconciler label without delivered evidence')
         -- evidence is a set of real result-ids of THIS turn
         WHEN (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
              <> (SELECT COUNT(DISTINCT value) FROM json_each(NEW.evidence_json))
@@ -608,12 +696,30 @@ CREATE TABLE IF NOT EXISTS journal_folds (
     entry_sha256     TEXT NOT NULL
         CHECK (length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
     folded_turn_id   TEXT NOT NULL REFERENCES turns(turn_id),
-    folded_at        REAL NOT NULL
+    folded_at        REAL NOT NULL CHECK (folded_at > 0 AND folded_at < 1e11),
+    CHECK (length(journal_entry_id) > 0
+           AND length(CAST(journal_entry_id AS BLOB)) = length(journal_entry_id)
+           AND journal_entry_id NOT GLOB '*[^ -~]*')
 ) STRICT;
 CREATE TRIGGER IF NOT EXISTS trg_journal_folds_no_update BEFORE UPDATE ON journal_folds
 BEGIN SELECT RAISE(ABORT, 'journal_folds is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trg_journal_folds_no_delete BEFORE DELETE ON journal_folds
 BEGIN SELECT RAISE(ABORT, 'journal_folds is append-only'); END;
+
+-- R7-06: committed-state consistency — a current closure whose label
+-- no longer matches the turn's full current-head set (because a late
+-- observation superseded cited evidence) must be superseded in the
+-- same transaction that adds the late knowledge. The reconciler and
+-- every witness assert this view is EMPTY:
+CREATE VIEW IF NOT EXISTS closure_consistency_violations AS
+SELECT cc.turn_id, cc.closure_id
+FROM current_closure cc
+WHERE cc.closure IN ('delivered','partially_delivered','failed',
+                     'suppressed','unknown_delivery')
+  AND EXISTS (
+      SELECT 1 FROM json_each(cc.evidence_json) je
+      WHERE EXISTS (SELECT 1 FROM egress_results s
+                    WHERE s.supersedes_result = je.value));
 
 -- meta (v2 init): chain_hash_domain = '2'.
 -- v2 canonicalization: chain.py owns CANONICAL_V2_COLUMNS + defaults;

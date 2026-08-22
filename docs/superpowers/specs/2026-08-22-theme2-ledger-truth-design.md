@@ -657,3 +657,40 @@ sidecar-free before the rename.
 **§2 edit rule**: formally amended to §12's lineage mechanism
 (`edits_intent`); the §2 sentence describing result-supersession for
 edits is void — DDL wins.
+
+## 15. Pass 8 — round-7 folds (DDL revision 6) and S1 authoring begins
+
+**In DDL rev 6** (15 new negative controls executed; all reject;
+lawful paths pass): R7-01 closed with `COALESCE(..., 'missing')` — a
+missing prior result now blocks the next reservation instead of
+slipping past SQL-NULL; R7-02 chronology bound (run ≤ intent ≤
+reservation ≤ observation, retry reservations after the prior
+observation); **R7-03 resolved by giving reservations their own
+`authorized_run`** — the intent's originating run is a historical
+fact, the authorizing run is the current active max-epoch run, so a
+takeover epoch has a lawful retry path (executed: superseded r1's
+intent retried under r2; stale authorizer rejected); R7-04 symmetric
+(a correction turn hosts exactly one constituent, from either
+direction); **R7-05 exhaustive evidence** — outcome closures must
+cite *every* current head of the turn and resolved labels forbid
+observation-less reservations; R7-06 split: new intents/reservations
+on a closed turn are trigger-refused, late observations remain
+lawful, and `closure_consistency_violations` (a view, asserted empty
+by the reconciler and every witness) detects a current closure
+invalidated by late knowledge — executed: the view flagged exactly
+the late-ack case; R7-07 mapped (`suppressed` = all heads suppressed;
+`unresolved_crash` = reconciler-only, never contradicting delivered
+evidence); R7-08 id discipline (`length>0`, byte-length equality
+kills embedded NUL and multibyte, printable-ASCII GLOB) on every id
+plus transport and event identity; R7-09 finite/causal time completed
+(admission, seals, folds, claims-vs-run); R7-10 reply parents must be
+inbound turns, corrections descend from owner messages, and the
+`turn_kind` CHECK domain is pinned in the v2 turns baseline.
+
+**S1 witness protocol committed** at
+`docs/superpowers/witness/theme2-s1-protocol.md` (v1): 24-cell
+resolution table, latch crash/advance/checkpoint/foreign cases,
+consumer-refusal outage test with exact-set zero-gestation-stamp SQL,
+AST census with seeded-consumer kill, flags-off invariance, and the
+six-mutation structural fingerprint test. Per §8 discipline it
+precedes any S1 code.
