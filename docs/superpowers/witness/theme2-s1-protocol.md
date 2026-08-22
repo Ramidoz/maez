@@ -289,3 +289,53 @@ outcome.
   (`lean_idle_heartbeat@295`) are readers of stored values, not
   stampers: censused (see census JSON `readers_of_memory_phase_values`)
   and exercised read-only in T3's positive control.
+
+## 10. v4 amendments — round-10's six literals, closed
+
+- **T1 reasons per cell** (phase, reason): 1 `gestation,absent` · 2
+  `unknown,latch_conflict` · 3 `gestation,uninitialized_empty` · 4
+  `unknown,latch_conflict` · 5 `unknown,structural` · 6
+  `unknown,structural` · 7 `unknown,structural` · 8
+  `unknown,structural` · 9 `unknown,corrupt` · 10 `unknown,corrupt` ·
+  11 `gestation,meta_absent` · 12 `unknown,latch_conflict` · 13
+  `lived,joined` · 14 `lived,joined` · 15 `unknown,join_failed` · 16
+  `unknown,join_failed`. Latch variants: torn `unknown,latch_torn`;
+  corrupt `unknown,latch_torn`; stale-ahead `unknown,rewind`;
+  foreign-a/b `unknown,latch_foreign`.
+- **T2 latch line schema, frozen**: each segment line is canonical
+  JSON (sorted keys, compact separators, UTF-8, trailing `\n`) with
+  exactly the keys `{"birth_turn_id","chain_head_hash",
+  "chain_position","kind","observed_at","pid"}`, `kind ∈
+  {"advancing","committed","observed"}`. The repaired mate line is
+  byte-identical to the `advancing` line except `kind:"committed"`
+  and its own `observed_at`; the report quotes both lines verbatim.
+- **T3 `_migration_null_normalize`**: invoked only via
+  `AuditLog.__init__` against a legacy fixture (audit DB with 3 rows,
+  `memory_phase NULL`). Ruling recorded: pre-S1 legacy rows are
+  gestation **by census fact** (all 506 live rows are gestation-era),
+  so normalization is historical annotation, not a fresh stamp — it
+  proceeds even when the resolver reads `unknown`, is idempotent
+  (second open changes zero rows), and never touches rows written
+  after the migration ran. Expected outcome: 3 rows → `gestation`,
+  rerun delta 0, and a post-migration insert during an `unknown`
+  window still refuses per §4.
+- **T4 census command, pinned**:
+  `python3 -m core.memory.s1_census --repo . --expected docs/superpowers/witness/theme2-s1-census.json`
+  — walks the §5 roots with `ast.parse` (interpreter-pinned),
+  normalizes each hit to `path::qualname` (falling back to
+  `path::@line` where the write is module-level), sorts, and diffs
+  exactly against the expected JSON. Exit 0 on equality; exit 1
+  naming every asymmetric difference.
+- **T5 baseline archive, pinned**: path
+  `docs/superpowers/witness/theme2-s1-baseline.tar.zst`; produced by
+  driving the replay manifest once against pre-S1 HEAD flags-off in
+  the airlock; its sha256 is added HERE by a protocol v5 amendment
+  committed **before** the first S1 code commit — the ordering, not
+  the timing, is the binding rule, and the S1 gate checks the
+  amendment predates the code in history.
+- **T6 mutation 6, executable form** (corruption does not respect
+  triggers): `DROP TRIGGER turns_no_update; UPDATE turns SET
+  raw_text = raw_text || 'x' WHERE chain_position = 0;` — two
+  statements, applied to the mutation copy only. The validator must
+  return `unknown` on BOTH counts: the genesis projection mismatch
+  and the now-missing trigger name (double-verified single mutation).
