@@ -493,6 +493,20 @@ def main() -> int:
                     continue
         return found
 
+    # Gate round 19 Q1.1: K2 read `ledger_post_replay_file_set`, which the
+    # driver fills only with `ledger.db*` names, so a real
+    # memory/birth_observed/segment-000001.jsonl could exist while K2 passed.
+    # Sweep the whole store tree and give K2 something that can be false.
+    latch = []
+    for q in STORE_TREE.rglob("*"):
+        try:
+            if "birth_observed" in q.parts or q.name.startswith("segment-") \
+                    or q.name.endswith(".tmp"):
+                latch.append(str(q.relative_to(STORE_TREE)))
+        except OSError:
+            continue
+    report["latch_artifacts_in_store_tree"] = sorted(latch)
+
     strays = sorted(sweep() - stray_inventory_before)
     report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
     report["stray_store_inventory_before"] = len(stray_inventory_before)
