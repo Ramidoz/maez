@@ -262,6 +262,15 @@ def main() -> int:
     # MaezDaemon builds MemoryManager, which mkdirs and opens Chroma at
     # memory_manager.BASE_DB -- the un-redirectable literal. Inside the
     # namespace that resolves into the airlock.
+    # Round 19 Q4: the airlock puts a writable tmpfs over ALL of /home/rohit,
+    # so naming two subtrees under it left /home/rohit/.local/state/x.db free
+    # to escape. Sweep the home root -- minus the read-only repo bind inside
+    # it -- and take the inventory BEFORE anything can create a store.
+    WRITABLE_ROOTS = (
+        LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit"),
+        Path("/tmp"), Path("/run"), Path("/var/tmp"),
+    )
+
     from daemon.maez_daemon import MaezDaemon
 
     # Gate round 16 item B: the daemon import calls the ordinary config
@@ -277,6 +286,29 @@ def main() -> int:
             f"REFUSED: flags-off violated after import: {set_flags_2}")
     report["effective_store_paths_after_import"] = assert_paths("post-import")
     report["flags_off_after_import"] = "PASS"
+
+    _MAGIC = b"SQLite format 3\x00"
+
+    def _pre_sweep() -> set[str]:
+        found: set[str] = set()
+        for root in WRITABLE_ROOTS:
+            if not root.exists():
+                continue
+            for q in root.rglob("*"):
+                try:
+                    if root == Path("/home/rohit") and MAEZ_TREE in q.parents:
+                        continue
+                    if not q.is_file():
+                        continue
+                    with q.open("rb") as fh:
+                        if fh.read(16) == _MAGIC:
+                            found.add(str(q))
+                except OSError:
+                    continue
+        return found
+
+    stray_inventory_before = _pre_sweep()
+    report["stray_store_inventory_before_count"] = len(stray_inventory_before)
 
     t0 = time.time()
     daemon = MaezDaemon()
@@ -418,22 +450,17 @@ def main() -> int:
     }
 
     # Gate round 17/18 item B: enumerating selectors one at a time will
-    # always miss one -- MAEZ_PRIVATE_THOUGHTS_PATH, the calendar and GitHub
-    # stores, and whatever lands next. This is the catch-all, and round 18
-    # showed the first version was too narrow twice over: it scanned three
-    # directories while the airlock also exposes /tmp, /run, /var/tmp and
-    # ~/.cache/chroma as writable, and it matched on file extension while an
-    # extensionless database escapes.
+    # always miss one, so this is the catch-all. Round 19 Q4 asked whether it
+    # would wrongly refuse anything legitimate, and the first live run
+    # answered yes: adding /home/rohit as a root made it walk the read-only
+    # repo mounted inside it and flag 68 pre-existing databases in backups/,
+    # .claude/worktrees/, local/quarantine/ and tmp/ -- none of which the run
+    # could possibly have created.
     #
-    # Sweep EVERY writable root, and detect SQLite by its 16-byte magic
-    # header rather than by name.
-    # Gate round 19 Q4: the airlock puts a writable tmpfs over ALL of
-    # /home/rohit, so naming two subtrees under it left
-    # /home/rohit/.local/state/x.db free to escape. Sweep the home root.
-    WRITABLE_ROOTS = (
-        LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit"),
-        Path("/tmp"), Path("/run"), Path("/var/tmp"),
-    )
+    # K4 is about stores the RUN CREATES outside the projected tree, so the
+    # honest test is a before/after difference, not an absolute census. The
+    # inventory is taken before the daemon is constructed; only paths that
+    # appear afterwards are strays.
     SQLITE_MAGIC = b"SQLite format 3\x00"
 
     def looks_like_sqlite(q: Path) -> bool:
@@ -443,40 +470,37 @@ def main() -> int:
         except OSError:
             return False
 
-    strays = []
-    for root in WRITABLE_ROOTS:
-        if not root.exists():
-            continue
-        for q in root.rglob("*"):
-            try:
-                if not q.is_file():
-                    continue
-                if q.resolve().is_relative_to(STORE_TREE):
-                    continue          # inside the projected tree: expected
-                if looks_like_sqlite(q):
-                    strays.append(str(q))
-            except OSError:
+    def sweep() -> set[str]:
+        found: set[str] = set()
+        for root in WRITABLE_ROOTS:
+            if not root.exists():
                 continue
-    # Gate round 19 Q1.1: K2 read `ledger_post_replay_file_set`, which the
-    # driver populates only with names beginning `ledger.db` -- so a real
-    # memory/birth_observed/segment-000001.jsonl could exist while K2 passed.
-    # K2 was inert. Sweep the whole store tree for latch artifacts and give
-    # the gate something that can actually be false.
-    latch = []
-    for q in STORE_TREE.rglob("*"):
-        try:
-            if "birth_observed" in q.parts or q.name.startswith("segment-") \
-                    or q.name.endswith(".tmp"):
-                latch.append(str(q.relative_to(STORE_TREE)))
-        except OSError:
-            continue
-    report["latch_artifacts_in_store_tree"] = sorted(latch)
+            for q in root.rglob("*"):
+                try:
+                    # The repo is --ro-bind mounted inside the home tmpfs;
+                    # nothing there can be written, and walking it costs
+                    # seconds. logs/ and .cache/ are swept as their own roots.
+                    if root == Path("/home/rohit") and \
+                            MAEZ_TREE in q.parents:
+                        continue
+                    if not q.is_file():
+                        continue
+                    if q.resolve().is_relative_to(STORE_TREE):
+                        continue          # inside the projected tree
+                    if looks_like_sqlite(q):
+                        found.add(str(q))
+                except OSError:
+                    continue
+        return found
 
+    strays = sorted(sweep() - stray_inventory_before)
     report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
-    report["stray_stores_outside_projected_tree"] = sorted(strays)
+    report["stray_store_inventory_before"] = len(stray_inventory_before)
+    report["stray_stores_outside_projected_tree"] = strays
     if strays:
         raise SystemExit(
-            f"REFUSED: stores landed outside the projected tree: {strays}")
+            f"REFUSED: the run created stores outside the projected tree: "
+            f"{strays}")
 
     report["reply_shapes"] = {
         r["id"]: {"chars": len(r.get("reply") or ""),
