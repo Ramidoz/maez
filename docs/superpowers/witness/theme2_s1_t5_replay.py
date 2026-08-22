@@ -388,10 +388,13 @@ def main() -> int:
                 out[f"chroma::{name}"] = dict(sorted(counts.items()))
             except Exception as e:                       # noqa: BLE001
                 out[f"chroma::{name}"] = f"error: {type(e).__name__}"
+        # Gate round 17 item B: censusing a reconstructed filename reads the
+        # wrong file when a selector moved the store. Ask each module where
+        # its store actually is.
+        from core.infra.private_thoughts import _default_private_thoughts_path
         for label, dbp in (("private_thoughts",
-                            MAEZ_TREE / "memory" / "private_thoughts.db"),
-                           ("audit_log",
-                            MAEZ_TREE / "memory" / "audit_log.db")):
+                            _default_private_thoughts_path()),
+                           ("audit_log", _paths.audit_log_db())):
             if not dbp.exists():
                 out[label] = "absent"
                 continue
@@ -407,6 +410,30 @@ def main() -> int:
         return out
 
     report["stamp_census"] = stamp_census()
+    report["census_resolved_paths"] = {
+        "private_thoughts": str(
+            __import__("core.infra.private_thoughts", fromlist=["x"])
+            ._default_private_thoughts_path()),
+        "audit_log": str(_paths.audit_log_db()),
+    }
+
+    # Gate round 17 item B: enumerating selectors one at a time will always
+    # miss one -- MAEZ_PRIVATE_THOUGHTS_PATH, the calendar and GitHub stores,
+    # and whatever lands next. This is the catch-all: after the run, no
+    # database may exist anywhere in the writable airlock EXCEPT inside the
+    # projected store tree. A store that escaped into logs/ or .cache/ is
+    # caught whatever selector produced it.
+    strays = []
+    for root in (LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit/.config/maez")):
+        if not root.exists():
+            continue
+        for q in root.rglob("*"):
+            if q.is_file() and q.suffix in (".db", ".sqlite3", ".sqlite"):
+                strays.append(str(q))
+    report["stray_stores_outside_projected_tree"] = sorted(strays)
+    if strays:
+        raise SystemExit(
+            f"REFUSED: stores landed outside the projected tree: {strays}")
 
     report["reply_shapes"] = {
         r["id"]: {"chars": len(r.get("reply") or ""),

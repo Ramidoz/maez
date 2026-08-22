@@ -25,12 +25,16 @@ W=""
 STOP_DAEMON=0
 ARCHIVE=1
 UNIT=maez.service
+BASELINE_CENSUS=""
+FORCED_ON=""
 ARCHIVE_PATH="$REPO/docs/superpowers/witness/theme2-s1-baseline.tar.zst"
 MAX_ARCHIVE_BYTES=$((25 * 1024 * 1024))
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --work) W="$2"; shift 2 ;;
+        --baseline-census) BASELINE_CENSUS="$2"; shift 2 ;;
+        --forced-on) FORCED_ON="$2"; shift 2 ;;
         --stop-daemon) STOP_DAEMON=1; shift ;;
         --no-archive) ARCHIVE=0; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -65,6 +69,7 @@ REPLAY="$REPO/docs/superpowers/witness/theme2_s1_t5_replay.py"
 EXTRACT="$REPO/docs/superpowers/witness/theme2_s1_t5_extract.py"
 PROJECT="$REPO/docs/superpowers/witness/theme2_s1_t5_projection.py"
 SELFTEST="$REPO/docs/superpowers/witness/theme2_s1_t5_projection_selftest.py"
+GATE="$REPO/docs/superpowers/witness/theme2_s1_t5_gate.py"
 MANIFEST="$REPO/docs/superpowers/witness/theme2-s1-replay.json"
 PY="$REPO/.venv/bin/python"
 
@@ -193,9 +198,25 @@ d=json.load(open('$W/run-a.json'))
 print(d['ledger_post_migration_sha256'])")
 say "ledger post-migration sha256: $LEDGER_SHA"
 
-say "--- compare run a against run b under the projection"
+# FORENSIC, not gating (gate round 17 item N): the byte projection is
+# recorded because it is useful evidence, but a physical-layout difference
+# must not block a baseline. Its verdict is captured; `|| true` is deliberate.
+say "--- forensic: byte projection, run a vs run b (recorded, not gating)"
+set +e
 "$PY" "$PROJECT" compare "$W/proj-a.json" "$W/proj-b.json" \
-    "$W/volatile.json" --ledger-sha "$LEDGER_SHA" 2>&1 | tee "$W/compare.json"
+    "$W/volatile.json" --ledger-sha "$LEDGER_SHA" > "$W/compare.json" 2>&1
+PROJ_RC=$?
+set -e
+say "forensic projection verdict rc=$PROJ_RC (recorded in compare.json)"
+
+# THE GATE. This is the only authority. G1-G7, fail-closed.
+say "--- gate: G1..G7"
+"$PY" "$GATE" \
+    --run-a "$W/run-a.json" --run-b "$W/run-b.json" --run-p "$W/run-p.json" \
+    --proj-a "$W/proj-a.json" --proj-b "$W/proj-b.json" \
+    ${BASELINE_CENSUS:+--baseline-census "$BASELINE_CENSUS"} \
+    ${FORCED_ON:+--forced-on "$FORCED_ON"} \
+    --out "$W/gate-verdict.json" 2>&1 | tee -a "$LOG"
 
 if [ "$ARCHIVE" = "1" ]; then
     say "--- archive run a's store tree"
@@ -236,6 +257,17 @@ print('\n'.join(e['path'] for e in
         exit 8
     fi
     mv -f "$ARCHIVE_PATH.tmp" "$ARCHIVE_PATH"
+    # The pinned stamp census is the durable comparison basis (gate round 17,
+    # M(iv)): without it, a later flags-off run has nothing exact to match and
+    # G3 degenerates to "some gestation stamp exists".
+    CENSUS_PATH="$REPO/docs/superpowers/witness/theme2-s1-baseline-census.json"
+    "$PY" -c "
+import json,sys
+v=json.load(open('$W/gate-verdict.json'))
+json.dump(v['pinned_census'], open('$CENSUS_PATH.tmp','w'), indent=1, sort_keys=True)
+" && mv -f "$CENSUS_PATH.tmp" "$CENSUS_PATH"
+    say "pinned census published: $CENSUS_PATH"
+    say "CENSUS SHA256: $(sha256sum "$CENSUS_PATH" | cut -d\  -f1)"
     say "archive published: $ARCHIVE_PATH"
     say "ARCHIVE SHA256: $ARCHIVE_SHA"
 else

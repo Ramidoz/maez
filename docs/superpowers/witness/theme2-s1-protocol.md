@@ -1,7 +1,7 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6.5
+# Theme 2 — S1 (phase truth) witness protocol, v6.6
 
 Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
-correction), §11 = v5, §12 = v6.5.
+correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
@@ -9,8 +9,10 @@ closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
 closed gate round 13's three reopened items (B, D, E — A, C, G passed)
 and its finding I; v6.3 closed gate round 14's B, D, E, I and its
 blocking finding J, and recorded finding K; v6.4 closed gate round 15's
-B, D, E and J (I passed); **v6.5 closes gate round 16's B, D and J and
-acts on its finding L, which changed what T5 measures.** The T5
+B, D, E and J (I passed); v6.5 closed gate round 16's B, D and J and
+acted on its finding L, which changed what T5 measures; **v6.6 closes
+gate round 17's B, M and N — D and J passed there — by making the gate
+executable and pinning the discriminator's activation.** The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -251,6 +253,17 @@ outcome.
   `<latch_dir>/.crash-<point>` touched immediately before the point.
   Health rows are `SELECT COUNT(*) FROM health_signals WHERE kind='phase_rewind'`
   in the S1 health store (airlock path; schema shipped with S1).
+- **S1 activation, pinned now** *(v6.6, gate round 17 M(iii))*: the S1
+  resolver is dormant unless `MAEZ_S1_PHASE_TRUTH=1`. With the flag
+  unset, `core.memory.birth_phase` keeps its pre-S1 behavior exactly —
+  `current_phase()` answers `gestation` for any ledger without a
+  readable birth anchor — and `resolve()` may exist but is consulted by
+  no consumer. With the flag set, `resolve()` governs and every census
+  consumer raises `PhaseUnknownRefusal` on `unknown`. Round 17 was
+  right that without a pinned activation mechanism G5 is unspecifiable
+  and unexecutable; this is that mechanism, fixed before the code that
+  implements it. The flag is already on T5's must-be-unset list, so a
+  flags-off run cannot set it by accident.
 - **Companion artifacts, committed literal** (digests frozen):
   - census `theme2-s1-census.json` =
     `85276709f632e0cdab98fa877a0ca8ff1a1e164c224d2fec68c2299a1f0a3dc6`
@@ -717,22 +730,58 @@ archived, never the authority.
 - **G2 — the ledger main file is unchanged**, per the digest the driver
   records post-migration and post-replay. (Formerly B1; the read-only
   opens and their `-wal`/`-shm` sidecars are expected — see B4.)
-- **G3 — the stamp census matches, on BOTH fixtures.** Per store, the
-  multiset of `memory_phase` values recorded by the driver's stamp
-  census must be identical between the baseline and the post-S1
-  flags-off run. On the healthy fixture that is `gestation`; on the
-  partial fixture it is *also* `gestation`, and that is the whole
-  point — it is where an always-on S1 would differ.
-- **G4 — record counts match** per store and per collection.
-- **G5 — the discriminator flips.** Once S1 exists, a run with the S1
-  guard forced on, against the **partial** fixture, must **not** match
-  the baseline: the resolver must read `unknown` and the census must
-  show refusals rather than `gestation` stamps. **A T5 in which G5 does
-  not flip is a failed T5**, however cleanly G1–G4 pass, because it
-  means the guard is not there. Pre-S1, G5 is recorded as
-  `not-applicable — no S1 code exists`, and the baseline it will be
-  measured against is pinned by this run.
-- **G6 — the positive controls of §12.11 pass** on every run.
+- **G3 — the stamp census matches, on BOTH fixtures**, and is
+  **fail-closed**: a store the census reports as `absent` or `error` is
+  a failure, not a fact. The two healthy runs must agree with each
+  other, and — once a baseline exists — each fixture's census must
+  equal the pinned baseline **exactly**. v6.5's shell check accepted
+  "any dictionary contains a gestation stamp", which raw Chroma alone
+  could satisfy while an expected SQLite store was missing *(gate round
+  17, M(ii))*.
+- **G4 — record counts match** per store and per collection, with a
+  non-integer count treated as a failure.
+- **G5 — the discriminator flips.** Once S1 exists, a run with
+  `MAEZ_S1_PHASE_TRUTH=1` against the **partial** fixture must **not**
+  match the baseline: `resolve()` must return `unknown`, the census
+  must differ from the flags-off census, and no store may carry a
+  `gestation` stamp. **A T5 in which G5 does not flip is a failed T5**,
+  however cleanly the rest passes, because it means the guard is not
+  there. Pre-S1, G5 is `not-applicable`, and the gate **refuses that
+  answer the moment `birth_phase.resolve` exists** — so the clause
+  cannot quietly stay dormant once there is something to test.
+
+  **The forced-on run has its own success contract, and G6 does not
+  apply to it** *(v6.6, gate round 17 M(iii))*: refusal *is* the
+  expected outcome there, so requiring every interaction to complete
+  and the storage tail to run — which is exactly what G6 demands of a
+  flags-off run — would make a correct forced-on run look like a
+  failure. Its contract is: the resolver reads `unknown`, every census
+  consumer raises `PhaseUnknownRefusal`, and zero `gestation` stamps
+  land in the window.
+- **G6 — the positive controls of §12.11 pass** on every flags-off run.
+- **G7 — logical store content matches** between the healthy runs:
+  collection sets, record counts, and the embedding-vector digest.
+  *(v6.6, gate round 17 finding N: documents, non-volatile metadata and
+  embeddings can regress recall while phase stamps and counts stay put,
+  so logical P2 belongs in the gate. Physical HNSW bytes stay
+  forensic.)*
+
+**The gate is executable, and it is the only authority.**
+`docs/superpowers/witness/theme2_s1_t5_gate.py` consumes the three run
+reports and the two projections, decides G1–G7, writes a verdict, and
+exits non-zero on any failure. Round 17 found the split declared in
+prose but absent from the executable — the orchestrator still let a
+physical projection difference block publication while the clauses that
+mattered decided nothing. The projection now runs with its status
+captured rather than propagated, and its verdict is recorded as
+evidence.
+
+**The pinned census.** The gate emits the census it observed, and the
+orchestrator publishes it to
+`docs/superpowers/witness/theme2-s1-baseline-census.json`, digest
+committed in v7 beside the archive's. Without a durable basis a later
+flags-off run has nothing exact to match and G3 decays into "some
+gestation stamp exists" *(gate round 17, M(iv))*.
 
 **Forensic clauses (recorded, not gating).** Any difference here is
 reported in the run report and ruled on; it does not by itself fail
