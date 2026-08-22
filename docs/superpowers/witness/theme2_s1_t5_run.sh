@@ -93,6 +93,11 @@ DAEMON_RESTORED=0
 restore_daemon_now() {
     [ "$DAEMON_WAS_ACTIVE" = "1" ] || { DAEMON_RESTORED=1; return 0; }
     say "restarting $UNIT"
+    # Six stop/start cycles across repeated attempts tripped systemd's
+    # start-rate limiter, and the unit entered `failed (start-limit-hit)` --
+    # so restoration failed for a reason that had nothing to do with Maez,
+    # and left it down. Clear the counter before every start attempt.
+    systemctl --user reset-failed "$UNIT" 2>/dev/null || true
     systemctl --user start "$UNIT" || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         if [ "$(systemctl --user is-active "$UNIT" || true)" = "active" ]; then
