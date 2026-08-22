@@ -1,0 +1,125 @@
+{
+ "_comment": "S1 T5 frozen replay manifest. Driven flags-off twice; store trees must be byte-identical between runs.",
+ "interactions": [
+  {
+   "at": 1787000000,
+   "id": "s1-replay-00",
+   "source": "UI",
+   "text": "hello maez, marker 00"
+  },
+  {
+   "at": 1787000060,
+   "id": "s1-replay-01",
+   "source": "UI",
+   "text": "what did we talk about earlier? marker 01"
+  },
+  {
+   "at": 1787000120,
+   "id": "s1-replay-02",
+   "source": "UI",
+   "text": "please remember the number 1002 for later"
+  },
+  {
+   "at": 1787000180,
+   "id": "s1-replay-03",
+   "source": "UI",
+   "text": "what day is it today? marker 03"
+  },
+  {
+   "at": 1787000240,
+   "id": "s1-replay-04",
+   "source": "UI",
+   "text": "the sky over the workshop is grey today, marker 04"
+  },
+  {
+   "at": 1787000300,
+   "id": "s1-replay-05",
+   "source": "UI",
+   "text": "hello maez, marker 05"
+  },
+  {
+   "at": 1787000360,
+   "id": "s1-replay-06",
+   "source": "UI",
+   "text": "what did we talk about earlier? marker 06"
+  },
+  {
+   "at": 1787000420,
+   "id": "s1-replay-07",
+   "source": "UI",
+   "text": "please remember the number 1007 for later"
+  },
+  {
+   "at": 1787000480,
+   "id": "s1-replay-08",
+   "source": "UI",
+   "text": "what day is it today? marker 08"
+  },
+  {
+   "at": 1787000540,
+   "id": "s1-replay-09",
+   "source": "UI",
+   "text": "the sky over the workshop is grey today, marker 09"
+  },
+  {
+   "at": 1787000600,
+   "id": "s1-replay-10",
+   "source": "UI",
+   "text": "hello maez, marker 10"
+  },
+  {
+   "at": 1787000660,
+   "id": "s1-replay-11",
+   "source": "UI",
+   "text": "what did we talk about earlier? marker 11"
+  },
+  {
+   "at": 1787000720,
+   "id": "s1-replay-12",
+   "source": "UI",
+   "text": "please remember the number 1012 for later"
+  },
+  {
+   "at": 1787000780,
+   "id": "s1-replay-13",
+   "source": "UI",
+   "text": "what day is it today? marker 13"
+  },
+  {
+   "at": 1787000840,
+   "id": "s1-replay-14",
+   "source": "UI",
+   "text": "the sky over the workshop is grey today, marker 14"
+  },
+  {
+   "at": 1787000900,
+   "id": "s1-replay-15",
+   "source": "UI",
+   "text": "hello maez, marker 15"
+  },
+  {
+   "at": 1787000960,
+   "id": "s1-replay-16",
+   "source": "UI",
+   "text": "what did we talk about earlier? marker 16"
+  },
+  {
+   "at": 1787001020,
+   "id": "s1-replay-17",
+   "source": "UI",
+   "text": "please remember the number 1017 for later"
+  },
+  {
+   "at": 1787001080,
+   "id": "s1-replay-18",
+   "source": "UI",
+   "text": "what day is it today? marker 18"
+  },
+  {
+   "at": 1787001140,
+   "id": "s1-replay-19",
+   "source": "UI",
+   "text": "the sky over the workshop is grey today, marker 19"
+  }
+ ]
+}

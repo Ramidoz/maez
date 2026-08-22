@@ -1,0 +1,7 @@
+# S1 T5 frozen pytest selector list (explicit files; never discovery — scar rule 1).
+# Run airlock-redirected. Frozen at bd083be; changing this list is a protocol revision.
+tests/test_birth_phase.py
+tests/test_birth_phase_migration.py
+tests/test_birth_readiness_projection.py
+tests/test_continuity_ledger.py
+tests/test_audit_trace_policy.py

@@ -224,3 +224,68 @@ Fixture digests (static verified, per-run recorded), resolver commit,
 every cell/test outcome verbatim before interpretation, wall-clock,
 deviations. The protocol is never edited retroactively to fit an
 outcome.
+
+## 9. v3 amendments — round-9 MUST-CLOSE items, closed
+
+- **Resolver API, pinned now**: `core.memory.birth_phase.resolve()`
+  → a `PhaseResult` namedtuple `(phase, reason)`; `phase ∈
+  {'gestation','lived','unknown'}`; `reason` is a machine string from
+  a frozen enum (`absent`, `uninitialized_empty`, `structural`,
+  `corrupt`, `meta_absent`, `joined`, `join_failed`, `latch_conflict`,
+  `latch_torn`, `latch_foreign`, `rewind`, `io_error`). T1 cells
+  assert BOTH fields; the exact command is
+  `python3 -c "from core.memory.birth_phase import resolve; r=resolve(); print(r.phase, r.reason)"`.
+- **Latch writer API, pinned now**: `core.memory.birth_latch.advance()`;
+  published segments are `<latch_dir>/segment-%06d.jsonl`; the temp
+  form is `<name>.tmp`; sentinel files for T2 crash points are
+  `<latch_dir>/.crash-<point>` touched immediately before the point.
+  Health rows are `SELECT COUNT(*) FROM health_signals WHERE kind='phase_rewind'`
+  in the S1 health store (airlock path; schema shipped with S1).
+- **Companion artifacts, committed literal** (digests frozen):
+  - census `theme2-s1-census.json` =
+    `85276709f632e0cdab98fa877a0ca8ff1a1e164c224d2fec68c2299a1f0a3dc6`
+  - replay `theme2-s1-replay.json` =
+    `2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420`
+  - selectors `theme2-s1-selectors.txt` =
+    `7759da99b4cbb500c53276d1b585c7738b3edb209fff94a5971a587ed706b6d4`
+- **T4 seeded file, literal bytes** (path `core/_s1_census_seed.py`):
+
+  ```python
+  import sqlite3
+  PHASE = {"memory_phase": "gestation"}
+  def probe(p):
+      return sqlite3.connect(p).execute(
+          "SELECT value FROM meta WHERE key='birth_event_turn_id'").fetchone()
+  ```
+
+- **T6 frozen lists, computed from the executed F-G fixture**:
+  - tables = audit_trace_lineage, claim_judgements, claims, meta,
+    model_swaps, schema_migrations, turns
+  - triggers = claim_judgements_no_delete, claim_judgements_no_update,
+    claims_no_delete, claims_no_update, turns_no_delete,
+    turns_no_update
+  - indexes = idx_claims_extracted_ts, idx_claims_tenant_turn,
+    idx_judgements_claim_ts, idx_judgements_provenance,
+    idx_judgements_tenant_ts, idx_swaps_tenant_ts,
+    idx_turns_audit_trace, idx_turns_chain_position,
+    idx_turns_kind_ts, idx_turns_lifecycle_ts, idx_turns_model,
+    idx_turns_parent, idx_turns_raw_surface_ts, idx_turns_surface_ts,
+    idx_turns_tenant_ts
+  - genesis anchor: `turn_id='genesis'`, `chain_position=0`,
+    `raw_text='{"event":"genesis","schema_version":1}'`, chain hash
+    `d313c6473ea19dbe038d3f2f1d714d1ce8c0a9b8e756ef0d4b1849f8eb09989d`
+    (deterministic — verified across independent builds).
+  - T6 mutation #9's named trigger: `claims_no_update`.
+- **T3 exact invocations**: each census construct is exercised through
+  its public entry — `memory_manager.store_telegram(...)` (reaches all
+  three stamp sites via the three storage tiers),
+  `PrivateThoughts.record_thought/record_secret/record_reflection`,
+  `AuditLog.record(...)`, `AuditLog.start_direct_edit_session(...)`,
+  `AuditLog.log_direct_edit(...)`, `source_awareness` path-gate
+  helper, `span_planner.plan(...)`, and a production-mode
+  `LedgerWriter.write_turn('system_event', ...)`; argument fixtures
+  are literal in the harness file committed with the S1 code, whose
+  digest is recorded in the run report. Heartbeat readers
+  (`lean_idle_heartbeat@295`) are readers of stored values, not
+  stampers: censused (see census JSON `readers_of_memory_phase_values`)
+  and exercised read-only in T3's positive control.

@@ -1,0 +1,25 @@
+{
+  "_comment": "S1 frozen expected census at bd083be. (a) memory_phase writers, (b) birth_event_turn_id readers. Sorted. T4 compares the AST walk to exactly this.",
+  "memory_phase_writers": [
+    "core/cognition/audit_log.py::AuditLog.log_direct_edit",
+    "core/cognition/audit_log.py::AuditLog.record",
+    "core/cognition/audit_log.py::AuditLog.start_direct_edit_session",
+    "core/cognition/audit_log.py::AuditLog._migration_null_normalize",
+    "core/infra/private_thoughts.py::PrivateThoughts@587",
+    "core/infra/private_thoughts.py::PrivateThoughts@627",
+    "core/infra/private_thoughts.py::PrivateThoughts@674",
+    "memory/memory_manager.py::@1506",
+    "memory/memory_manager.py::@1605",
+    "memory/memory_manager.py::@2073"
+  ],
+  "birth_meta_readers": [
+    "core/consolidation/span_planner.py::@241",
+    "core/ledger/writer.py::LedgerWriter.write_turn@450",
+    "core/memory/birth_phase.py::birth_event_turn_id",
+    "core/memory/source_awareness.py::@342"
+  ],
+  "readers_of_memory_phase_values": [
+    "core/cognition/lean_idle_heartbeat.py::@295"
+  ],
+  "_pin_note": "@NNN line anchors are re-derived to enclosing qualnames by the census test at S1-implementation commit; the COUNT and files are frozen here and may not change without a protocol revision."
+}

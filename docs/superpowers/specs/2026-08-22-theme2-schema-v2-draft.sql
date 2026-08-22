@@ -1,4 +1,10 @@
--- Theme 2 schema v2 DRAFT, revision 7 (gate round 9).
+-- Theme 2 schema v2 DRAFT, revision 8 (gate round 10).
+-- Revision 8 folds round-9 findings: folded rows BIND to a
+-- journal_folds row for their turn; supersession must change the
+-- result (no-op supersession cannot engineer a consistency flag);
+-- the consistency view also flags non-exhaustive evidence after
+-- folded heads arrive; tenant byte discipline pinned in the turns
+-- fragment.
 -- Revision 7 folds C8-01..C8-07: reservation follows its authorizing
 -- run; unknown_delivery exhaustive and lawful only with zero
 -- delivered heads turn-wide; reconciler may repair a transport
@@ -58,6 +64,8 @@
 -- CHECK (parent_turn_id IS NULL OR parent_turn_id <> turn_id);
 -- CHECK ((parent_turn_id IS NULL AND parent_kind IS NULL)
 --     OR (parent_turn_id IS NOT NULL AND parent_kind IS NOT NULL));  -- F10 two-way
+-- CHECK (length(tenant_id) > 0 AND length(CAST(tenant_id AS BLOB)) = length(tenant_id)
+--     AND tenant_id NOT GLOB '*[^ -~]*');   -- R9
 -- UNIQUE (tenant_id, turn_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_turns_parent_semantics
@@ -390,12 +398,15 @@ BEGIN
             THEN RAISE(ABORT, 'intent precedes its run')                 -- Q34
         -- R7-06/C8-04: no NEW activity on a closed turn; a journal fold
         -- may add HISTORICAL intents (folded=1, created strictly before
-        -- the current closure was recorded).
+        -- the current closure was recorded, and bound to a real fold).
         WHEN EXISTS (SELECT 1 FROM turn_closures WHERE turn_id = NEW.turn_id)
              AND (NEW.folded = 0
                   OR NEW.created_at >= (SELECT MAX(recorded_at) FROM turn_closures
                                         WHERE turn_id = NEW.turn_id))
             THEN RAISE(ABORT, 'no new intents on a closed turn')
+        WHEN NEW.folded = 1 AND NOT EXISTS (
+                SELECT 1 FROM journal_folds WHERE folded_turn_id = NEW.turn_id)
+            THEN RAISE(ABORT, 'folded rows require their journal fold')   -- R9
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_intents_no_update BEFORE UPDATE ON egress_intents
@@ -467,6 +478,10 @@ BEGIN
                         WHERE turn_id = (SELECT turn_id FROM egress_intents
                                          WHERE intent_id = NEW.intent_id)))
             THEN RAISE(ABORT, 'no new attempts on a closed turn')
+        WHEN NEW.folded = 1 AND NOT EXISTS (
+                SELECT 1 FROM journal_folds WHERE folded_turn_id =
+                    (SELECT turn_id FROM egress_intents WHERE intent_id = NEW.intent_id))
+            THEN RAISE(ABORT, 'folded rows require their journal fold')   -- R9
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_reservations_no_update BEFORE UPDATE ON egress_reservations
@@ -511,6 +526,9 @@ BEGIN
         WHEN (SELECT observed_at FROM egress_results WHERE result_id = NEW.supersedes_result)
              >= NEW.observed_at
             THEN RAISE(ABORT, 'a later observation carries a later time')   -- Q04
+        WHEN (SELECT result FROM egress_results WHERE result_id = NEW.supersedes_result)
+             = NEW.result
+            THEN RAISE(ABORT, 'supersession must change the observed result') -- R9
     END;
 END;
 -- Physical attempts are dense (P15) and eligible (P16): a new attempt
@@ -765,10 +783,18 @@ SELECT cc.turn_id, cc.closure_id
 FROM current_closure cc
 WHERE cc.closure IN ('delivered','partially_delivered','failed',
                      'suppressed','unknown_delivery')
-  AND EXISTS (
-      SELECT 1 FROM json_each(cc.evidence_json) je
-      WHERE EXISTS (SELECT 1 FROM egress_results s
-                    WHERE s.supersedes_result = je.value));
+  AND (EXISTS (
+          SELECT 1 FROM json_each(cc.evidence_json) je
+          WHERE EXISTS (SELECT 1 FROM egress_results s
+                        WHERE s.supersedes_result = je.value))
+       -- R9: or the evidence no longer covers every current head
+       -- (a folded head arrived after the closure)
+       OR (SELECT COUNT(*) FROM json_each(cc.evidence_json))
+          <> (SELECT COUNT(*) FROM egress_results r
+              JOIN egress_intents i ON i.intent_id = r.intent_id
+              WHERE i.turn_id = cc.turn_id
+                AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                WHERE s.supersedes_result = r.result_id)));
 
 -- meta (v2 init): chain_hash_domain = '2'.
 -- v2 canonicalization: chain.py owns CANONICAL_V2_COLUMNS + defaults;
