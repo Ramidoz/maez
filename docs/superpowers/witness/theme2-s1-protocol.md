@@ -1,14 +1,15 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6.3
+# Theme 2 — S1 (phase truth) witness protocol, v6.4
 
 Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
-correction), §11 = v5, §12 = v6.3.
+correction), §11 = v5, §12 = v6.4.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
 closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
 closed gate round 13's three reopened items (B, D, E — A, C, G passed)
-and its finding I; v6.3 closes gate round 14's B, D, E, I and its
-blocking finding J, and records finding K. The T5
+and its finding I; v6.3 closed gate round 14's B, D, E, I and its
+blocking finding J, and recorded finding K; v6.4 closes gate round 15's
+B, D, E and J (I passed). The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -674,6 +675,12 @@ at a real baseline.
   becomes `<uuid:N>`, N its ordinal in first-appearance order under a
   lexicographic walk (Chroma names segment directories with fresh
   UUIDs). A path whose name varies by anything else is fail-closed.
+  The mapping is **injective**: a literal component that could be
+  mistaken for a placeholder is escaped as `<lit:...>`, and
+  `uuid_map_size` is compared. *(v6.4, round 15 item D: a real UUID
+  directory and a directory literally named `<uuid:0>` both
+  canonicalized to `<uuid:0>`, so one could be substituted for the
+  other.)*
 - **B4** — `-wal` / `-shm` sidecars: **presence compared, bytes not.**
   They are checkpoint-timing artifacts, and their existence is expected
   per B1. Naming them explicitly is the point: v6 left them
@@ -790,8 +797,21 @@ It is then classified by **shape only** — no field-name rule, because a
 name-based rule is exactly the discretion round 12 objected to:
 
 - **uuid-shaped** iff it matches
-  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
-  or `^[0-9a-f]{12,64}$`, or `^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$`.
+  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` or
+  `^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$` — the two forms the codebase
+  actually mints — **and is not 64 hex characters**, which is exactly
+  sha256 and never an identifier.
+
+  *(v6.4, round 15 item D, and the most consequential fix of the
+  round.* v6.3 admitted any 12–64-character lowercase hex string, so a
+  **semantic digest was absorbed as an identifier**: executed control,
+  a `content_sha256` changing from `"a"*64` to `"b"*64` was classified
+  volatile, normalized to `<id:0>` on both sides, and read
+  `IDENTICAL-UNDER-PROJECTION` with `kills=[]`. A digest is not an
+  identifier. Bare hex is no longer a class at all; anything that
+  varies and is not one of the two minted forms surfaces as a FINDING,
+  which is the safe direction — fail toward reporting, never toward
+  absorbing.)*
 - **time-shaped** iff it is a non-boolean number in `[1600000000,
   2600000000]` (unix seconds, 2020-09-13 .. 2052-06-07) or in
   `[1600000000000, 2600000000000]` (the same window in milliseconds),
@@ -799,6 +819,13 @@ name-based rule is exactly the discretion round 12 objected to:
   `^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$`.
   A number outside those two windows is **not** time-shaped, whatever
   it is called.
+- **Classification covers the UNION of both sides' columns.** A column
+  present on only one side is a schema difference and is reported as a
+  FINDING, never skipped. v6.3 iterated only side A's columns, so a
+  B-only column was never visited — the comparator killed it later
+  through `P1.columns`, but the derivation has to agree with the frozen
+  contract rather than lean on a downstream clause. *(v6.4, round 15
+  item E.)*
 - **Classification looks at the values that actually DIFFER** — the
   symmetric difference of the two runs' value multisets — not at every
   value in the column. v6.2 classified the union, so a Chroma-style
@@ -917,6 +944,24 @@ to a commit — and it refuses to run at all if `maez.service` is active
 and `--stop-daemon` was not passed, rather than quietly racing the live
 daemon. It runs the comparator's own self-test **first**, because the
 comparator is the instrument the verdict rests on.
+
+Two v6.4 corrections, both round 15 item J:
+
+- **The workdir is claimed atomically and locked run-wide.** v6.3 gave
+  `--work` only a lexical `/tmp` check and `mkdir -p`, so a
+  pre-existing hardlink or symlink could alias `proj-a.json` to
+  `proj-b.json`: run B would overwrite run A's evidence, the derivation
+  and comparison would read B twice, and the archive would still come
+  from physical airlock A. The orchestrator now refuses a workdir that
+  already exists, refuses an unowned or symlinked parent, and holds
+  `flock` on the workdir for the whole run.
+- **Publication is contingent on the daemon coming back.** v6.3 copied
+  the archive into the repo and only then ran the trap, where a failed
+  `systemctl start` was a warning and `inactive` was ignored — so a
+  baseline could be published while Maez stayed down. Restoration now
+  runs **before** publication, polls until the unit reports `active`,
+  and a failure to restore both blocks the copy and sets a non-zero
+  exit.
 
 ### 12.13 Finding K — recorded here, ruled elsewhere
 

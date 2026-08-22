@@ -52,13 +52,15 @@ FLAGS_THAT_MUST_BE_UNSET = (
 # non-secret name after --clearenv, so an unset check at entry is not enough.
 # They are absent from this host's config/.env today; the run fails closed if
 # they appear and do not point inside the overlay.
-PATHS_THAT_MUST_STAY_IN_OVERLAY = (
-    "MAEZ_LEDGER_DB_PATH",
-    "MAEZ_HOME",
-    "MAEZ_DATA",
-    "MAEZ_CONFIG",
-    "MAEZ_CACHE",
-)
+# Gate round 15 item B: checking raw env values against "somewhere under the
+# repo" is not the same as checking where the stores actually land.
+# MAEZ_DATA=/home/rohit/maez/logs passes a raw under-repo test while moving
+# every store to logs/memory -- writable, but EXCLUDED from the projection
+# and the archive, so the baseline would silently capture nothing. The guard
+# therefore validates the EFFECTIVE resolved paths against the projected
+# store tree, and it runs before anything can open a store.
+STORE_TREE = MAEZ_TREE / "memory"
+LOGS_TREE = MAEZ_TREE / "logs"
 # Values safe to record verbatim. Everything else is recorded by NAME only:
 # config/.env carries credentials, and a witness report is a committed file.
 ENV_VALUES_SAFE_TO_RECORD = (
@@ -170,6 +172,47 @@ def main() -> int:
 
     report["sqlite_version"] = sqlite3.sqlite_version
 
+    # Gate round 15 item B: reproduce production's environment ordering
+    # OURSELVES, before importing the daemon -- importing it runs this same
+    # loader (maez_daemon.py:34) and then immediately opens stores
+    # (action_engine.py:51/73), so a guard placed after the import would run
+    # too late to prevent anything.
+    from core.infra.secrets import load_ordinary_config_for_process
+    loaded = load_ordinary_config_for_process()
+    report["ordinary_config_loaded_names"] = sorted(loaded)
+    report["env_after_config_load"] = env_snapshot()
+
+    set_flags = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
+    if set_flags:
+        raise SystemExit(f"REFUSED: flags-off violated: {set_flags}")
+
+    from core.infra import paths as _paths
+    from core.memory.birth_phase import default_ledger_path
+
+    effective = {
+        "home": _paths.home(),
+        "data_dir": _paths.data_dir(),
+        "memory_dir": _paths.memory_dir(),
+        "memory_db_dir": _paths.memory_db_dir(),
+        "audit_log_db": _paths.audit_log_db(),
+        "logs_dir": _paths.logs_dir(),
+        "ledger": default_ledger_path(),
+    }
+    report["effective_store_paths"] = {k: str(v) for k, v in effective.items()}
+    required = {
+        "home": MAEZ_TREE, "data_dir": MAEZ_TREE,
+        "memory_dir": STORE_TREE, "memory_db_dir": STORE_TREE / "db",
+        "logs_dir": LOGS_TREE, "ledger": STORE_TREE / "ledger.db",
+    }
+    wrong = {k: str(effective[k]) for k, want in required.items()
+             if Path(effective[k]).resolve() != want}
+    if not Path(effective["audit_log_db"]).resolve().is_relative_to(STORE_TREE):
+        wrong["audit_log_db"] = str(effective["audit_log_db"])
+    if wrong:
+        raise SystemExit(
+            f"REFUSED: effective store paths are not the projected tree: {wrong}")
+    report["effective_store_paths_verdict"] = "PASS"
+
     # Gate round 12, item B: the ledger is migrated INSIDE the namespace.
     # Doing it before namespace entry left a Python startup -- imports,
     # site/.pth, bytecode, inherited descriptors -- outside the boundary
@@ -189,31 +232,8 @@ def main() -> int:
     # namespace that resolves into the airlock.
     from daemon.maez_daemon import MaezDaemon
 
-    # Gate round 13 item B: prove, AFTER the import that reloads config/.env,
-    # that no phase/S1 flag is set. This is the environment that actually
-    # executes handle_message.
     report["env_after_import"] = env_snapshot()
-    set_flags = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
-    if set_flags:
-        raise SystemExit(f"REFUSED: flags-off violated after import: {set_flags}")
-    escaped = []
-    for name in PATHS_THAT_MUST_STAY_IN_OVERLAY:
-        val = os.environ.get(name)
-        if val and not Path(val).resolve().is_relative_to(MAEZ_TREE):
-            escaped.append(f"{name}={val}")
-    if escaped:
-        raise SystemExit(
-            f"REFUSED: store-selecting path escapes the overlay: {escaped}")
     report["flags_off_after_import"] = "PASS"
-    report["store_paths_in_overlay"] = "PASS"
-
-    # Prove where the resolver actually points, rather than inferring it.
-    from core.memory.birth_phase import default_ledger_path
-    report["resolved_ledger_path"] = str(default_ledger_path())
-    if not Path(report["resolved_ledger_path"]).resolve().is_relative_to(MAEZ_TREE):
-        raise SystemExit(
-            f"REFUSED: resolver points outside the overlay: "
-            f"{report['resolved_ledger_path']}")
 
     t0 = time.time()
     daemon = MaezDaemon()

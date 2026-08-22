@@ -49,6 +49,9 @@ fi
 if [ "$(readlink -f "$AIRLOCK_PARENT")" != "$AIRLOCK_PARENT" ]; then
     echo "REFUSED: a parent component is a symlink: $AIRLOCK_PARENT" >&2; exit 3
 fi
+if [ "$(stat -c %u "$AIRLOCK_PARENT")" != "$(id -u)" ]; then
+    echo "REFUSED: airlock parent not owned by this user" >&2; exit 3
+fi
 AIRLOCK="$AIRLOCK_RAW"
 
 # Gate round 13 item B: the wrapper previously accepted any directory and
@@ -61,17 +64,27 @@ AIRLOCK="$AIRLOCK_RAW"
 # which two concurrent invocations could both pass (gate round 14 item B).
 # --reuse is the explicit opt-in for the second and later commands of one
 # run; it requires the marker this invocation wrote.
+# Gate round 15 item B: reuse authenticated only "a marker exists", so a
+# second same-workdir invocation could remove and recreate the airlock
+# between commands and obtain a fresh lock inode. Reuse now requires the
+# caller to present the run id that created the claim, and the orchestrator
+# holds a run-wide lock on the workdir above it.
 CLAIM_MARKER="$AIRLOCK/.t5-airlock-claim"
 if [ "${T5_REUSE_AIRLOCK:-0}" = "1" ]; then
     if [ ! -f "$CLAIM_MARKER" ]; then
         echo "REFUSED: T5_REUSE_AIRLOCK set but no claim marker present" >&2
         exit 4
     fi
+    if [ -z "${T5_RUN_ID:-}" ] || \
+       ! grep -qx "run_id=$T5_RUN_ID" "$CLAIM_MARKER"; then
+        echo "REFUSED: reuse presented no matching run id" >&2; exit 4
+    fi
 elif ! mkdir "$AIRLOCK" 2>/dev/null; then
     echo "REFUSED: airlock already exists; it must be created by this run: $AIRLOCK" >&2
     exit 4
 else
-    printf 'claimed pid=%s\n' "$$" > "$CLAIM_MARKER"
+    { printf 'claimed pid=%s\n' "$$"
+      printf 'run_id=%s\n' "${T5_RUN_ID:-none}"; } > "$CLAIM_MARKER"
 fi
 if [ "$(stat -c %u "$AIRLOCK")" != "$(id -u)" ] || [ -L "$AIRLOCK" ]; then
     echo "REFUSED: airlock is not an owned real directory" >&2; exit 4

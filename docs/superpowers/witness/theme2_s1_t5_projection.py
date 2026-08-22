@@ -45,8 +45,21 @@ from pathlib import Path
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-BARE_HEX_RE = re.compile(r"^[0-9a-f]{12,64}$")
+# Gate round 15 item D: the previous grammar admitted ANY 12-64 character
+# lowercase hex string as uuid-shaped, so a semantic digest -- a
+# content_sha256, a prompt hash, a chain hash -- was absorbed as volatile and
+# normalized to <id:0> on both sides. Executed control: content_sha256
+# changing from "a"*64 to "b"*64 read IDENTICAL-UNDER-PROJECTION.
+#
+# A digest is not an identifier. The class now admits only the two forms the
+# codebase actually mints -- canonical uuid4, and a rail prefix plus a slice
+# of uuid4().hex (memory_manager.py:2066 `core-<12hex>`, :1660
+# `quiet-<8hex>`, :1842 `daily-<...>`) -- and 64-hex is excluded outright,
+# since that is exactly sha256 and never an id. Anything else that varies
+# between runs surfaces as a FINDING to be ruled on, which is the safe
+# direction: fail toward reporting, never toward absorbing.
 PREFIXED_HEX_RE = re.compile(r"^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ISO8601_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$")
 
@@ -62,8 +75,9 @@ MAX_ROWS_PER_TABLE = 200_000
 
 
 def is_uuid_shaped(v) -> bool:
-    return isinstance(v, str) and bool(
-        UUID_RE.match(v) or BARE_HEX_RE.match(v) or PREFIXED_HEX_RE.match(v))
+    if not isinstance(v, str) or SHA256_RE.match(v):
+        return False
+    return bool(UUID_RE.match(v) or PREFIXED_HEX_RE.match(v))
 
 
 def is_time_shaped(v) -> bool:
@@ -75,11 +89,26 @@ def is_time_shaped(v) -> bool:
     return isinstance(v, str) and bool(ISO8601_RE.match(v))
 
 
+PLACEHOLDER_RE = re.compile(r"^<(uuid|lit):.*>$")
+
+
 def canonical_path(rel: str, uuid_map: dict) -> str:
+    """Canonicalize UUID-named path components to ordinals, injectively.
+
+    Gate round 15 item D: a real UUID directory and a literal directory
+    actually named `<uuid:0>` both canonicalized to `<uuid:0>`, so one could
+    be substituted for the other. Any literal component that could be
+    mistaken for a placeholder is now escaped as `<lit:...>`, which makes
+    the mapping injective; `uuid_map_size` is compared too.
+    """
     parts = []
     for p in Path(rel).parts:
-        parts.append(uuid_map.setdefault(p, f"<uuid:{len(uuid_map)}>")
-                     if UUID_RE.match(p) else p)
+        if UUID_RE.match(p):
+            parts.append(uuid_map.setdefault(p, f"<uuid:{len(uuid_map)}>"))
+        elif PLACEHOLDER_RE.match(p):
+            parts.append(f"<lit:{p}>")
+        else:
+            parts.append(p)
     return "/".join(parts)
 
 
@@ -237,9 +266,20 @@ def derive_volatile(a: dict, b: dict) -> dict:
             A, B = ta[t], tb_[t]
             if "rows" not in A or "rows" not in B:
                 continue
-            for i, c in enumerate(A["columns"]):
-                if c not in B["columns"]:
+            # Gate round 15 item E: iterating only A's columns meant a
+            # B-only column was never visited. The comparator does kill it
+            # through P1.columns, but the derivation must agree with the
+            # frozen contract rather than rely on a later clause.
+            for c in sorted(set(A["columns"]) | set(B["columns"])):
+                if c not in A["columns"] or c not in B["columns"]:
+                    findings.append({
+                        "db": db, "table": t, "column": c,
+                        "reason": "column present on only one side; a "
+                                  "one-sided column is a schema difference, "
+                                  "never a volatile field",
+                        "sample": []})
                     continue
+                i = A["columns"].index(c)
                 j = B["columns"].index(c)
                 if _col_multiset(A, i) == _col_multiset(B, j):
                     continue
@@ -285,8 +325,8 @@ def derive_volatile(a: dict, b: dict) -> dict:
                     continue
                 volatile.setdefault(db, {}).setdefault(t, {})[c] = kind
     return {"volatile": volatile, "findings": findings,
-            "grammar": {"uuid": [UUID_RE.pattern, BARE_HEX_RE.pattern,
-                                 PREFIXED_HEX_RE.pattern],
+            "grammar": {"uuid": [UUID_RE.pattern, PREFIXED_HEX_RE.pattern],
+                        "uuid_excluded": [SHA256_RE.pattern],
                         "iso8601": ISO8601_RE.pattern,
                         "unix_seconds_window": [SEC_MIN, SEC_MAX],
                         "unix_millis_window": [MS_MIN, MS_MAX]}}
@@ -387,6 +427,10 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
         if proj.get("irregular"):
             res["kills"].append({"clause": "B3.irregular", "tree": name,
                                  "detail": proj["irregular"]})
+    if a.get("uuid_map_size") != b.get("uuid_map_size"):
+        res["kills"].append({"clause": "B3.uuidmap",
+                             "a": a.get("uuid_map_size"),
+                             "b": b.get("uuid_map_size")})
     for clause, key in (("B3.dirs", "dirs"), ("B3.modes", "modes"),
                         ("B3.sqlite", "sqlite_files"),
                         ("B3.blob", "blob_files"),

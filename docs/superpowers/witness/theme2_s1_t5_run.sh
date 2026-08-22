@@ -39,6 +39,27 @@ done
 [ -n "$W" ] || { echo "usage: $0 --work <dir> [--stop-daemon]" >&2; exit 2; }
 case "$W" in /tmp/*) ;; *) echo "REFUSED: --work must be under /tmp" >&2; exit 3 ;; esac
 
+# Gate round 15 item J: --work took only a lexical /tmp check and mkdir -p, so
+# a pre-existing hardlink or symlink could alias proj-a.json to proj-b.json --
+# run B would overwrite A's evidence, the comparison would read B twice, and
+# the archive would still come from physical airlock A. Claim the workdir
+# atomically, refuse anything that already exists, and hold a run-wide lock.
+WPARENT=$(dirname "$W")
+if [ ! -d "$WPARENT" ] || [ "$(readlink -f "$WPARENT")" != "$WPARENT" ] \
+   || [ "$(stat -c %u "$WPARENT")" != "$(id -u)" ]; then
+    echo "REFUSED: --work parent must be an owned, non-symlinked directory" >&2
+    exit 3
+fi
+if ! mkdir "$W" 2>/dev/null; then
+    echo "REFUSED: --work already exists; it must be created by this run" >&2
+    exit 3
+fi
+exec 8>"$W/.t5-run-lock"
+if ! flock -n 8; then echo "REFUSED: another run holds this workdir" >&2; exit 3; fi
+# One run id, presented by every airlock invocation so reuse proves identity
+# rather than merely finding a marker.
+export T5_RUN_ID="t5-$$-$(date +%s)"
+
 AIRLOCK="$REPO/docs/superpowers/witness/theme2_s1_airlock.sh"
 REPLAY="$REPO/docs/superpowers/witness/theme2_s1_t5_replay.py"
 EXTRACT="$REPO/docs/superpowers/witness/theme2_s1_t5_extract.py"
@@ -47,23 +68,40 @@ SELFTEST="$REPO/docs/superpowers/witness/theme2_s1_t5_projection_selftest.py"
 MANIFEST="$REPO/docs/superpowers/witness/theme2-s1-replay.json"
 PY="$REPO/.venv/bin/python"
 
-mkdir -p "$W"
 LOG="$W/orchestrator.log"
 say() { printf '%s | %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 
 DAEMON_WAS_ACTIVE=0
-restore_daemon() {
+DAEMON_RESTORED=0
+
+# Returns 0 only when the unit is genuinely active again.
+restore_daemon_now() {
+    [ "$DAEMON_WAS_ACTIVE" = "1" ] || { DAEMON_RESTORED=1; return 0; }
+    say "restarting $UNIT"
+    systemctl --user start "$UNIT" || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [ "$(systemctl --user is-active "$UNIT" || true)" = "active" ]; then
+            DAEMON_RESTORED=1
+            say "post-restart is-active: active"
+            return 0
+        fi
+        sleep 1
+    done
+    say "ERROR: $UNIT did not return to active"
+    return 1
+}
+
+on_exit() {
     rc=$?
-    if [ "$DAEMON_WAS_ACTIVE" = "1" ]; then
-        say "restarting $UNIT (exit rc=$rc)"
-        systemctl --user start "$UNIT" || say "WARNING: restart failed"
-        sleep 2
-        say "post-restart is-active: $(systemctl --user is-active "$UNIT" || true)"
+    if [ "$DAEMON_RESTORED" != "1" ]; then
+        # Reached on failure and on SIGINT. Restoration failing here is an
+        # error, not a warning (gate round 15 item J).
+        restore_daemon_now || rc=7
     fi
     say "orchestrator exiting rc=$rc"
     exit $rc
 }
-trap restore_daemon EXIT
+trap on_exit EXIT
 
 say "=== T5 baseline orchestrator ==="
 say "repo HEAD: $(cd "$REPO" && git rev-parse HEAD)"
@@ -97,9 +135,9 @@ one_run() {
     say "--- run $tag: airlock $A"
     rm -rf "$A"
     "$AIRLOCK" "$A" --self-test 2>&1 | tee "$W/selftest-$tag.txt" | tee -a "$LOG"
-    T5_REUSE_AIRLOCK=1 "$AIRLOCK" "$A" "$PY" "$REPLAY" \
+    T5_REUSE_AIRLOCK=1 T5_RUN_ID="$T5_RUN_ID" "$AIRLOCK" "$A" "$PY" "$REPLAY" \
         --manifest "$MANIFEST" --report "$REPO/logs/t5_run.json" 2>&1 | tee -a "$LOG"
-    T5_REUSE_AIRLOCK=1 "$AIRLOCK" "$A" "$PY" "$EXTRACT" \
+    T5_REUSE_AIRLOCK=1 T5_RUN_ID="$T5_RUN_ID" "$AIRLOCK" "$A" "$PY" "$EXTRACT" \
         "$REPO/logs/t5_extract.json" 2>&1 | tee -a "$LOG"
     cp "$A/maez/logs/t5_run.json"     "$W/run-$tag.json"
     cp "$A/maez/logs/t5_extract.json" "$W/extract-$tag.json"
@@ -142,9 +180,16 @@ print('\n'.join(e['path'] for e in
         say "REFUSED: archive exceeds 25 MB; owner rules on placement first"
         exit 6
     fi
+    # Gate round 15 item J: publication used to precede restoration, and a
+    # failed restart was only a warning -- so a baseline could be published
+    # into the repo while Maez stayed down. Restore first, verify, and make
+    # publication contingent on it.
+    restore_daemon_now
     cp "$W/baseline.tar.zst" "$ARCHIVE_PATH"
-    say "archive written: $ARCHIVE_PATH"
-    say "ARCHIVE SHA256: $(sha256sum "$ARCHIVE_PATH" | cut -d' ' -f1)"
+    say "archive published: $ARCHIVE_PATH"
+    say "ARCHIVE SHA256: $(sha256sum "$ARCHIVE_PATH" | cut -d\  -f1)"
+else
+    restore_daemon_now
 fi
 
 say "=== T5 baseline orchestration complete ==="

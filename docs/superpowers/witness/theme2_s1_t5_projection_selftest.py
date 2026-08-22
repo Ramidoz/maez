@@ -27,7 +27,8 @@ BASE = 1_700_000_000
 
 def build(d: Path, *, texts, ts, phase="gestation", blob=b"\x00" * 64, uv=0,
           solo=None, collide=False, wal_extra=False, nulls=False,
-          ledger=True):
+          ledger=True, digest="a" * 64, extra_col=False,
+          literal_token=False):
     d.mkdir(parents=True, exist_ok=True)
     name = "ledger.db" if ledger else "thoughts.db"
     c = sqlite3.connect(d / name)
@@ -39,6 +40,15 @@ def build(d: Path, *, texts, ts, phase="gestation", blob=b"\x00" * 64, uv=0,
     c.execute("CREATE TABLE solo (id TEXT, at REAL)")
     c.execute("INSERT INTO solo VALUES (?,?)",
               (str(uuid.uuid4()), BASE if solo is None else solo))
+    # A semantic digest must never be absorbed as an identifier.
+    c.execute("CREATE TABLE dg (id TEXT, content_sha256 TEXT)")
+    c.execute("INSERT INTO dg VALUES (?,?)", (str(uuid.uuid4()), digest))
+    if extra_col:
+        c.execute("CREATE TABLE oc (stable TEXT, added TEXT)")
+        c.execute("INSERT INTO oc VALUES (?,?)", ("same", str(uuid.uuid4())))
+    else:
+        c.execute("CREATE TABLE oc (stable TEXT)")
+        c.execute("INSERT INTO oc VALUES (?)", ("same",))
     c.execute("CREATE TABLE nn (id TEXT, maybe TEXT)")
     c.execute("INSERT INTO nn VALUES (?,?)",
               (str(uuid.uuid4()), str(uuid.uuid4()) if nulls else None))
@@ -61,6 +71,11 @@ def build(d: Path, *, texts, ts, phase="gestation", blob=b"\x00" * 64, uv=0,
     seg = d / str(uuid.uuid4())
     seg.mkdir()
     (seg / "data_level0.bin").write_bytes(blob)
+    if literal_token:
+        # A directory literally named like the canonicalization placeholder.
+        lit = d / "<uuid:0>"
+        lit.mkdir()
+        (lit / "data_level0.bin").write_bytes(blob)
 
 
 def extract(path: Path, *, doc="marker 0", md_ts=BASE, vec="a" * 64):
@@ -95,6 +110,9 @@ def main() -> int:
         "Nu":  dict(texts=texts, ts=good, nulls=True),
         "K1":  dict(texts=texts, ts=good, collide=True),
         "K2":  dict(texts=texts, ts=[t + 900 for t in good], collide=True),
+        "Dg":  dict(texts=texts, ts=good, digest="b" * 64),
+        "Lt":  dict(texts=texts, ts=good, literal_token=True),
+        "Oc":  dict(texts=texts, ts=[t + 900 for t in good], extra_col=True),
     }
     for name, kw in specs.items():
         build(root / name, **kw)
@@ -120,6 +138,20 @@ def main() -> int:
           f"{rn.stdout.strip().splitlines()[0]}")
     ok &= ok_n
 
+    ro = run("volatile", str(root / "A.json"), str(root / "Oc.json"),
+             str(root / "volo.json"))
+    ok_o = ro.returncode == 1 and "added" in ro.stdout
+    print(f"{'ok ' if ok_o else 'BAD'} one-sided column is a FINDING        "
+          f"{ro.stdout.strip().splitlines()[0] if ro.stdout.strip() else '(none)'}")
+    ok &= ok_o
+
+    rd = run("volatile", str(root / "A.json"), str(root / "Dg.json"),
+             str(root / "vold.json"))
+    ok_d = rd.returncode == 1 and "content_sha256" in rd.stdout
+    print(f"{'ok ' if ok_d else 'BAD'} sha256 is NOT uuid-shaped            "
+          f"{'reported as a finding' if ok_d else rd.stdout.strip()[:60]}")
+    ok &= ok_d
+
     led = json.loads((root / "A.json").read_text())["sqlite"]["ledger.db"]["file_sha256"]
     cases = [
         ("A",   "B",  "equivalent runs",            None),
@@ -131,6 +163,8 @@ def main() -> int:
         ("Up",  "A",  "pragma change",              "P1.pragma"),
         ("Wl",  "A",  "committed only in the WAL",  "P1.count"),
         ("K1",  "K2", "stable-key collision",       "P1.collision"),
+        ("Dg",  "A",  "semantic digest changed",    "P1.rows"),
+        ("Lt",  "A",  "literal <uuid:N> component", "B3.dirs"),
     ]
     for x, y, label, want in cases:
         volfile = "volk.json" if x == "K1" else "vol.json"
