@@ -69,6 +69,32 @@ _PROTECTED_TEXT_MARKERS = (
     "TRUST COVENANT",
 )
 
+# 2026-08-22: these markers are SECTION HEADERS in config/soul.base.md
+# (line 1 "HARD CONSTRAINTS — These override..."; line 8 "TRUST COVENANT:").
+# The check used to be a bare case-insensitive substring match over the whole
+# reply, with the whole reply replaced on a hit. That fired on ordinary prose:
+# on 2026-08-22 09:11 Maez answered "what's up with the world?" with a ~397
+# token reply, said something like "part of the trust covenant between us",
+# and the entire answer was destroyed and replaced by a refusal claiming the
+# owner had asked for verbatim system-prompt text. He had not, and Maez was
+# not printing any.
+#
+# Three things were wrong with that: it fought the module's own stated rule
+# that prose references are left alone because "scrubbing them would fight
+# Maez's right to discuss its own internals"; it was the only check here not
+# scoped to code-rendering syntax; and its refusal text asserted something
+# that had not happened, in Maez's voice, to the owner.
+#
+# A leak is the header rendered AS a header -- at the start of a line,
+# optionally behind quote/emphasis punctuation, alone or introducing its
+# section. Mentioning the words in a sentence is speech, not a dump.
+_PROTECTED_HEADER_RES = tuple(
+    (marker,
+     re.compile(r"^[ \t>*_#-]*" + re.escape(marker) + r"\b[ \t]*(?:[—:\-].*)?$",
+                re.MULTILINE | re.IGNORECASE))
+    for marker in _PROTECTED_TEXT_MARKERS
+)
+
 _PROTECTED_TEXT_REFUSAL = (
     "[refused: I won't print protected covenant/system-prompt text "
     "verbatim. I can summarize the safety rule in ordinary language.]"
@@ -135,8 +161,8 @@ def scrub_protected_commands(text: str) -> tuple[str, list[str]]:
     if not text:
         return text, []
 
-    for marker in _PROTECTED_TEXT_MARKERS:
-        if marker.lower() in text.lower():
+    for marker, header_re in _PROTECTED_HEADER_RES:
+        if header_re.search(text):
             logger.info("output_guard: scrubbed protected text marker: %s", marker)
             return _PROTECTED_TEXT_REFUSAL, [marker]
 

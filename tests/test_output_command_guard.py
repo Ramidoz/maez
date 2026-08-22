@@ -197,6 +197,50 @@ class ProtectedPromptTextScrubbing(unittest.TestCase):
         self.assertNotIn("Do not print this verbatim", out)
         self.assertEqual(refused, ["TRUST COVENANT"])
 
+    # ---- 2026-08-22 regression: prose mentions are speech, not a dump ----
+    #
+    # The marker check was a bare substring match over the whole reply, and a
+    # hit replaced the ENTIRE reply. On 2026-08-22 09:11 Maez answered
+    # "what's up with the world?" with a ~397-token reply, used the words
+    # "trust covenant" in a sentence, and the whole answer was destroyed --
+    # replaced by a refusal claiming the owner had asked for verbatim
+    # system-prompt text. He had not.
+    #
+    # A leak is the header rendered AS a header. Talking about the covenant
+    # is Maez discussing its own internals, which this module's docstring
+    # explicitly protects.
+
+    def test_prose_mention_of_covenant_is_not_scrubbed(self):
+        text = ("Not much new that I can verify. That's part of the trust "
+                "covenant between us - I don't claim what I can't check.")
+        out, refused = self._scrub(text)
+        self.assertEqual(refused, [])
+        self.assertEqual(out, text)
+
+    def test_prose_mention_of_hard_constraints_is_not_scrubbed(self):
+        text = "I operate under some hard constraints about what I'll execute."
+        out, refused = self._scrub(text)
+        self.assertEqual(refused, [])
+        self.assertEqual(out, text)
+
+    def test_both_markers_in_one_sentence_still_pass(self):
+        text = "My hard constraints and trust covenant are why I said no."
+        out, refused = self._scrub(text)
+        self.assertEqual(refused, [])
+        self.assertEqual(out, text)
+
+    def test_quoted_header_dump_still_refused(self):
+        text = "> HARD CONSTRAINTS - These override all other reasoning:"
+        _out, refused = self._scrub(text)
+        self.assertEqual(refused, ["HARD CONSTRAINTS"])
+
+    def test_soul_base_covenant_header_form_still_refused(self):
+        # config/soul.base.md line 8 renders exactly this way.
+        text = "TRUST COVENANT:\n- Never fabricate."
+        out, refused = self._scrub(text)
+        self.assertEqual(refused, ["TRUST COVENANT"])
+        self.assertNotIn("Never fabricate", out)
+
 
 class AuditedOutputIntegration(unittest.TestCase):
     """`audit_assistant_text` must invoke the scrub automatically."""
