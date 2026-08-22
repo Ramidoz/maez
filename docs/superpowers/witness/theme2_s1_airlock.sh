@@ -23,7 +23,10 @@ HOST_HOME=/home/rohit
 # TZ pin matters: the manifest asks "what day is it today", so an
 # unpinned zone could change stored text between runs. Default is the
 # owner timezone resolved by core.time.temporal_spine.owner_timezone().
-T5_TZ=${T5_TZ:-America/Chicago}
+# Gate round 13 item B: an inherited T5_TZ would silently move the pin, so
+# the zone is a constant here, not a default. Changing it is a protocol
+# revision, not an invocation choice.
+T5_TZ=America/Chicago
 
 if [ $# -lt 2 ]; then
     echo "usage: $0 <airlock_dir> <command> [args...]" >&2
@@ -35,6 +38,23 @@ case "$AIRLOCK" in
     /tmp/*) ;;
     *) echo "REFUSED: airlock must be under /tmp, got: $AIRLOCK" >&2; exit 3 ;;
 esac
+
+# Gate round 13 item B: the wrapper previously accepted any directory and
+# wrote through its subpaths without proving it was fresh, owned, or free
+# of symlinks -- so a stale overlay could carry store bytes into a
+# "baseline", and a symlinked bind source could redirect the writable
+# mount outside the scratch tree. Seal it first.
+if [ -e "$AIRLOCK" ]; then
+    if [ ! -d "$AIRLOCK" ] || [ -L "$AIRLOCK" ]; then
+        echo "REFUSED: airlock is not a real directory: $AIRLOCK" >&2; exit 4
+    fi
+    if [ -n "$(ls -A "$AIRLOCK" 2>/dev/null)" ]; then
+        echo "REFUSED: airlock is not empty: $AIRLOCK" >&2; exit 4
+    fi
+fi
+if [ "$(stat -c %u "$(dirname "$AIRLOCK")")" != "$(id -u)" ]; then
+    echo "REFUSED: airlock parent not owned by this user" >&2; exit 4
+fi
 
 mkdir -p \
     "$AIRLOCK/maez/memory" \
@@ -52,6 +72,14 @@ mkdir -p \
 # copied read-only-in-spirit from the repo. They are code, not store:
 # theme2-s1-seeded-sources.txt records the list and their digests, and
 # the projection excludes them from the store tree.
+for d in "$AIRLOCK/maez/memory" "$AIRLOCK/maez/logs" "$AIRLOCK/maez/.cache" \
+         "$AIRLOCK/home/.config/maez" "$AIRLOCK/home/.cache/chroma"; do
+    if [ -L "$d" ] || [ "$(readlink -f "$d")" != "$d" ]; then
+        echo "REFUSED: bind source is a symlink or resolves elsewhere: $d" >&2
+        exit 4
+    fi
+done
+
 SEED_MANIFEST="$AIRLOCK/maez/logs/seeded-sources.txt"
 : > "$SEED_MANIFEST"
 while IFS= read -r f; do
@@ -71,6 +99,7 @@ fi
 BWRAP_ARGV=(
     bwrap
     --ro-bind / /
+    --tmpfs "$HOST_HOME"
     --ro-bind "$MAEZ_TREE" "$MAEZ_TREE"
     --bind "$AIRLOCK/maez/memory"        "$MAEZ_TREE/memory"
     --bind "$AIRLOCK/maez/logs"          "$MAEZ_TREE/logs"
@@ -126,10 +155,12 @@ if [ "${1:-}" = "--self-test" ]; then
             echo "FAIL (tcp table non-empty)"; exit 1
         fi
         printf "4 host-runtime-sockets-absent: "
-        if [ -z "$(ls -A /run 2>/dev/null)" ]; then
-            echo "PASS (/run is an empty tmpfs)"
+        n=$(find / -xdev -type s 2>/dev/null | wc -l)
+        h=$(find '"$HOST_HOME"' -type s 2>/dev/null | wc -l)
+        if [ "$n" -eq 0 ] && [ "$h" -eq 0 ] && [ -z "$(ls -A /run 2>/dev/null)" ]; then
+            echo "PASS (0 socket pathnames on the root device, 0 under HOME, /run empty)"
         else
-            echo "FAIL (/run non-empty: $(ls -A /run | head -3 | tr "\n" " "))"
+            echo "FAIL (root=$n home=$h run=$(ls -A /run | head -3 | tr "\n" " "))"
             exit 1
         fi
         printf "5 reply-machinery-importable: "
@@ -140,11 +171,18 @@ sys.exit(0 if p == \"'"$MAEZ_TREE"'/memory/db\" else 3)" 2>/dev/null; then
         else
             echo "FAIL (import or BASE_DB check failed)"; exit 1
         fi
-        printf "6 no-maez-env: "
-        if [ -z "$(env | grep "^MAEZ_" || true)" ]; then
-            echo "PASS (no MAEZ_* set)"
+        printf "6 entry-env-is-exactly-the-declared-set: "
+        # Eight explicit --setenv pairs; the shell adds PWD, so nine are
+        # observed at namespace entry. This is the environment BEFORE any
+        # Maez import -- the driver records the post-import environment
+        # separately, because the shipped secrets loader repopulates
+        # config/.env exactly as it does in production (gate 13 item B).
+        got=$(env | cut -d= -f1 | sort | tr "\n" " ")
+        want="HOME LANG LC_ALL PATH PWD PYTHONDONTWRITEBYTECODE PYTHONHASHSEED TZ VIRTUAL_ENV "
+        if [ "$got" = "$want" ] && [ -z "$(env | grep "^MAEZ_" || true)" ]; then
+            echo "PASS (9 observed, none MAEZ-shaped)"
         else
-            echo "FAIL ($(env | grep "^MAEZ_" | tr "\n" " "))"; exit 1
+            echo "FAIL (got: $got)"; exit 1
         fi
     '
     rc=$?

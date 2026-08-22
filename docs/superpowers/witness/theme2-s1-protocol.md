@@ -1,11 +1,13 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6
+# Theme 2 — S1 (phase truth) witness protocol, v6.2
 
-Status: PROTOCOL v6.1. Body = v1; §9 = v3, §10 = v4 (one v6.1
-correction), §11 = v5, §12 = v6.1.
+Status: PROTOCOL v6.2. Body = v1; §9 = v3, §10 = v4 (one v6.1
+correction), §11 = v5, §12 = v6.2.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
-closes gate round 12's six items (A, B, C, D, E, G — F passed). The T5
+closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
+closes gate round 13's three reopened items (B, D, E — A, C, G passed)
+and its finding I. The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -363,7 +365,7 @@ content is therefore determined by the fixture plus the injected
 clocks; the report quotes all three verbatim and diffs mate-vs-
 advancing to show exactly the one differing key.
 
-## 12. v6/v6.1 amendment — T5's execution model, closed against the pre-execution audit and gate round 12
+## 12. v6 / v6.1 / v6.2 amendment — T5's execution model, closed against the pre-execution audit and gate rounds 12 and 13
 
 Round 10 pinned T5's *artifact* (path) and round 11 pinned its
 *ordering* (digest amendment precedes the first S1 code commit).
@@ -427,7 +429,9 @@ sha256 recorded in the run report; `theme2_s1_airlock.sh <dir> --argv`
 prints the frozen argv, which the report quotes verbatim. Its shape:
 
 ```
-bwrap --ro-bind / /  --ro-bind /home/rohit/maez /home/rohit/maez
+bwrap --ro-bind / /
+  --tmpfs /home/rohit
+  --ro-bind /home/rohit/maez /home/rohit/maez
   --bind <A>/maez/memory        /home/rohit/maez/memory
   --bind <A>/maez/logs          /home/rohit/maez/logs
   --bind <A>/maez/.cache        /home/rohit/maez/.cache
@@ -447,19 +451,54 @@ bwrap --ro-bind / /  --ro-bind /home/rohit/maez /home/rohit/maez
   --chdir /home/rohit/maez
 ```
 
-Three round-12 gaps, closed:
+Round-12 and round-13 gaps, closed:
 
-- **`--tmpfs /run` and `--tmpfs /var/tmp`.** `--unshare-net` does not
-  block filesystem Unix sockets; the host session D-Bus under `/run`
-  would have remained reachable, and read-only-mounting a socket
-  pathname does not stop an outside process from acting on it. `/run`
-  is now an empty tmpfs, asserted by the self-test.
-- **`--clearenv` plus an explicit nine-variable set.** §6 requires
-  "all `MAEZ_*` flags unset; full env recorded". Inheriting the
-  environment made that a claim to be inspected; clearing it makes it
-  true by construction, and the recorded environment is exactly nine
-  variables. `PYTHONHASHSEED=0` and a pinned `TZ` remove two
-  determinism axes the manifest exposes ("what day is it today").
+- **`--tmpfs /home/rohit` before the repo bind, plus `--tmpfs /run` and
+  `--tmpfs /var/tmp`.** `--unshare-net` does not block filesystem Unix
+  sockets, and read-only-mounting a socket pathname does not stop an
+  outside process from acting on it. `/run` alone was not enough: a
+  census found **142 socket pathnames under `/home/rohit`** — IBus,
+  the keyring, Codex — still reachable. A tmpfs over the home
+  directory, with the repo and the two airlock subpaths bound back on
+  top, takes the count to **zero on the whole root device**, verified
+  inside the namespace. *(v6.2, round 13 item B.)*
+
+- **The airlock is sealed before anything is written through it.** The
+  wrapper refuses unless the directory is absent or empty, refuses a
+  symlink, refuses if its parent is not owned by the invoking user, and
+  refuses if any of the five bind sources is a symlink or resolves
+  elsewhere. Without this a stale overlay could carry store bytes into
+  something called a baseline, and a symlinked bind source could
+  redirect the writable mount out of the scratch tree. *(v6.2, round 13
+  item B.)*
+
+- **`TZ` is a constant, not a default.** An inherited `T5_TZ` would
+  have silently moved the pin. Changing the zone is a protocol
+  revision, not an invocation choice. *(v6.2, round 13 item B.)*
+- **`--clearenv` plus eight explicit `--setenv` pairs** (nine variables
+  observed at entry — the shell adds `PWD`). `PYTHONHASHSEED=0` and the
+  pinned `TZ` remove two determinism axes the manifest exposes ("what
+  day is it today").
+
+  **But `--clearenv` does not survive the import, and the protocol now
+  says so.** Importing the daemon runs the shipped secrets loader
+  (`maez_daemon.py:34` → `secrets.load_ordinary_config_for_process`,
+  `secrets.py:150`), which repopulates `config/.env` into `os.environ`
+  exactly as it does in production — **10 `MAEZ_*` names** on this
+  host. That is correct behavior to exercise, not a leak to suppress,
+  and v6.1's "exactly nine variables, nothing MAEZ-shaped" was simply
+  false about the environment that executes `handle_message`. What T5
+  asserts is the narrower true thing §6 actually requires: **no
+  phase/S1 flag is set.** The frozen list is
+  `MAEZ_LEDGER_WRITES`, `MAEZ_BIRTH_PHASE`, `MAEZ_BIRTH_LATCH`,
+  `MAEZ_S1_PHASE_TRUTH`; S1's own flags join it when they exist.
+  Verified on this host: `MAEZ_LEDGER_WRITES` is **not** among the
+  `config/.env` names, so flags-off holds. The driver records the
+  environment **twice** — at entry and after the import — and refuses
+  to continue if any listed flag is set. Values are recorded only for
+  a declared non-secret allowlist; everything else is recorded by
+  **name only**, because `config/.env` carries credentials and a
+  witness report is a committed file. *(v6.2, round 13 item B.)*
 - **The `memory/` overlay must be seeded with the package sources.**
   The repo's `memory/` directory is **both a Python package and the
   data directory**: it holds `memory_manager.py`, which
@@ -489,10 +528,12 @@ the run stops. A read-only failure is never worked around by loosening
 quoted verbatim in the report.** Eight assertions, all currently
 passing on this host: (1) a write to `/home/rohit/maez` fails `EROFS`;
 (2) a write to `/home/rohit/maez/memory` succeeds; (3) the namespace's
-TCP table is empty; (4) `/run` is an empty tmpfs; (5)
+TCP table is empty; (4) **zero socket pathnames exist on the root
+device and under `/home/rohit`, and `/run` is empty**; (5)
 `import memory.memory_manager` succeeds **and** `BASE_DB` resolves to
-`/home/rohit/maez/memory/db`, i.e. into the overlay; (6) no `MAEZ_*`
-variable is set; (7) the probe exists in the airlock; (8) neither probe
+`/home/rohit/maez/memory/db`, i.e. into the overlay; (6) the entry
+environment is exactly the nine declared names and none is
+`MAEZ_`-shaped; (7) the probe exists in the airlock; (8) neither probe
 exists in the live tree afterwards. Any deviation kills the run before
 the manifest is touched.
 
@@ -548,6 +589,16 @@ order — the manifest's `source: "UI"` names that entry point. It sets
 no `MAEZ_*` flag. Its report goes to `logs/`, which §12.7 excludes from
 the store tree, so writing it cannot perturb what T5 compares.
 
+**The manifest's `at` field is ordinal, not a clock.** Its values
+advance by 60 s, but nothing on the `handle_message` path accepts an
+injected time — every store stamps `time.time()` directly — so the
+calls run back-to-back at real wall-clock time and `at` fixes only the
+order. v6.1 left this unstated, which would have let two baselines
+agree on a timing regime the manifest appears to describe (round 13,
+finding I.3). Declaring it is the honest closure: T5 is not a
+timing witness, and a future protocol revision that wants one has to
+add an injection point to the path first, not reinterpret this field.
+
 ### 12.7 The store tree, and what the archive contains
 
 **Store tree** = `<A>/maez/memory/**`, minus the seeded package sources
@@ -561,7 +612,7 @@ the store tree, `tar` with sorted member order, numeric owner, mtimes
 normalized to `0`, `zstd -19`. If it exceeds 25 MB the run stops and
 the owner rules on placement before anything is committed.
 
-### 12.8 The invariance projection (closes F-B and round-12 D and E)
+### 12.8 The invariance projection (closes F-B, round-12 D/E, round-13 D/E)
 
 Raw byte equality is replaced by a projection fixed **here**, before
 any S1 code exists, and implemented by
@@ -572,7 +623,10 @@ at a real baseline.
 **Byte-exact clauses. Any difference is a kill.**
 
 - **B1** — the ledger's **main file** sha256 after the replay equals its
-  post-migration sha256 from §12.4. *(v6.1 correction, round 12 item C:
+  post-migration sha256 from §12.4. The digest is read from the sqlite
+  projection's recorded `file_sha256`; `ledger.db` is a sqlite store,
+  not a blob, and v6.1's comparator looked it up in the blob table and
+  therefore always reported it absent *(v6.2, round 13 item D)*. *(v6.1 correction, round 12 item C:
   v6 justified this with "the ledger is never opened", which is false.
   `try_write_turn` does return `None` before constructing a writer
   (`writer.py:574`) and model-reply persistence returns before probing
@@ -596,6 +650,18 @@ at a real baseline.
   They are checkpoint-timing artifacts, and their existence is expected
   per B1. Naming them explicitly is the point: v6 left them
   unprojected, which is a hole, not a decision.
+
+  **This is not a licence to ignore WAL contents.** v6.1's comparator
+  opened each store with `immutable=1`, which tells SQLite to ignore
+  the write-ahead log — so a committed change living only in the WAL
+  was invisible while sidecar presence compared equal. Every store is
+  now copied **with its sidecars** to scratch and opened normally, so
+  the WAL is applied before anything is read. Verified: a row committed
+  only in the WAL now kills on `P1.count`. *(v6.2, round 13 item D.)*
+
+- **B5** — seeded package sources are compared **by digest**, not by
+  path name. v6.1 compared only the names, so a changed source file
+  inside the overlay would have passed. *(v6.2, round 13 item D.)*
 
 **Projected clauses. Ordinalization, never dropping.**
 
@@ -623,8 +689,34 @@ report equality. The fix is to normalize, not discard:
      database, not per column, so a scrambled foreign-key relationship
      shows up as an ordinal mismatch.
   A table the projection cannot normalize (row cap exceeded, read
-  error) is a kill, never a skip.
-- **P2** — Chroma collections: record count; the sorted multiset of
+  error) is a kill, never a skip; so is any store whose projection
+  recorded an `error` — v6.1 stored the error as data, and two matching
+  error objects compared equal and passed *(v6.2, round 13 item D)*.
+
+  Three further clauses close the false passes round 13 reproduced
+  *(all v6.2, item D)*:
+  - **P1.class** — every value of a volatile field is revalidated
+    against its **frozen class at compare time**. v6.1 trusted the
+    baseline classification blindly, so a single-row time column could
+    be rewritten to epoch zero and still normalize to `<t:0>`. Zero is
+    outside the frozen window, therefore not time-shaped, therefore a
+    kill.
+  - **P1.timewindow** — per time field, the multiset of unit domains
+    (`unix_s`, `unix_ms`, `iso8601`) is compared. A
+    seconds-to-milliseconds rewrite preserves rank and would otherwise
+    normalize identically.
+  - **Collision fail-closed** — if two rows in a table carrying
+    uuid-classified columns share a stable key, uuid ordinal assignment
+    is ambiguous: a genuine relationship scramble and a harmless
+    relabel look the same. The table is reported as a collision and
+    kills, rather than being ordered by whatever `SELECT *` happened to
+    return.
+  - **P1.nulls** — the per-column NULL count is compared and kills.
+- **P2** — computed from `theme2_s1_t5_extract.py`'s output, which is
+  folded into each side's projection with `project --extract` and
+  **compared as part of the verdict**. v6.1 specified P2 and shipped an
+  extractor, but nothing read it *(v6.2, round 13 item D)*. Per
+  collection: record count; the sorted multiset of
   `(document, metadata)` under the same normalization; and the
   embedding vectors compared **exactly**. `ONNXMiniLM_L6_V2` is
   deterministic, so a vector difference is a real finding and is
@@ -657,8 +749,16 @@ name-based rule is exactly the discretion round 12 objected to:
   `^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$`.
   A number outside those two windows is **not** time-shaped, whatever
   it is called.
-- Every differing value in the field must satisfy one class, and the
-  same class. A field that differs and satisfies neither is a
+- **NULL is class-neutral.** It belongs to no shape, it does not
+  disqualify a field, and classification is computed over the non-NULL
+  values only. What NULL must not do is disappear silently, so the
+  per-column NULL count is compared by P1.nulls and kills. A field
+  whose two runs differ **only** in their NULL pattern is a FINDING,
+  not a volatile field. v6.1's prose said "every value must satisfy the
+  class" while the tool stripped NULLs before classifying; the rule
+  above is what both now say *(v6.2, round 13 item E)*.
+- Every differing non-NULL value in the field must satisfy one class,
+  and the same class. A field that differs and satisfies neither is a
   **FINDING**, reported and ruled on, never absorbed. The derivation
   exits non-zero when any finding exists.
 
@@ -686,6 +786,15 @@ brain-unreachable evidence and one verbatim fallback reply; the archive
 digest and byte size; the derived volatile field list with each entry's
 class and the evidence for it; every finding from the derivation.
 
+Added in v6.2: the socket census inside the namespace; the airlock-seal
+refusals exercised; the environment recorded **twice** (at entry and
+after the import) with values only for the declared non-secret
+allowlist and everything else by name; the flags-off assertion result;
+the positive-control block of §12.11 — interactions returned, storage
+tail invocations, and collection counts before and after; and the
+statement that the manifest's `at` is ordinal, with the observed
+wall-clock span of the run beside it.
+
 ### 12.10 What this amendment does not change
 
 T1, T2, T3, T4, T6 are untouched. No storage layer is stubbed or
@@ -695,3 +804,29 @@ mocked — §12.3 is the absence of a network, not a fake brain.
 the one literal someone remembered, while containment covers all 54.
 Repairing production code so a witness can run inverts the discipline.
 The witness survives the code as shipped.
+
+### 12.11 Positive controls — the baseline must prove it happened
+
+Round 13's finding I is the one that could have wasted the whole
+exercise: **two equally empty store trees agree with each other and
+prove nothing.** Every `handle_message` call could raise, the driver
+would catch each one, exit 0, and produce a "baseline" that a later S1
+run would match perfectly — certifying invariance across a pair of runs
+in which the reply path never stored anything.
+
+The run is therefore not a baseline unless all three hold, and the
+driver exits non-zero if any fails:
+
+1. **Every interaction returned.** 20 of 20, no exception. Any raise is
+   listed by id in the report.
+2. **The storage tail executed.** `MemoryManager.store_telegram` is
+   wrapped in a counting proxy that calls through unchanged and is
+   removed before the tree is projected; the invocation count is
+   recorded and must be greater than zero. This is observation, not
+   substitution — declared here so the report is not read as an
+   untouched path.
+3. **The stores actually grew.** Chroma `raw`/`daily`/`core` counts are
+   recorded before and after; at least one must increase.
+
+Round 13's other two I-findings are closed elsewhere: the `config/.env`
+reload in §12.2, and the `at` semantics in §12.6.

@@ -31,6 +31,38 @@ EXPECTED_MANIFEST_SHA = (
     "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
 )
 
+# Gate round 13 item B: --clearenv fixes the environment at namespace ENTRY,
+# but importing the daemon runs the shipped secrets loader, which repopulates
+# config/.env into os.environ exactly as it does in production
+# (maez_daemon.py:34 -> secrets.load_ordinary_config_for_process). That is
+# correct behavior to exercise, not a leak to suppress -- but it makes
+# "nothing MAEZ-shaped" false, so what T5 asserts is the narrower, true
+# thing: no PHASE/S1 flag is set. The list is frozen; S1's own flags join it
+# when they exist.
+FLAGS_THAT_MUST_BE_UNSET = (
+    "MAEZ_LEDGER_WRITES",
+    "MAEZ_BIRTH_PHASE",
+    "MAEZ_BIRTH_LATCH",
+    "MAEZ_S1_PHASE_TRUTH",
+)
+# Values safe to record verbatim. Everything else is recorded by NAME only:
+# config/.env carries credentials, and a witness report is a committed file.
+ENV_VALUES_SAFE_TO_RECORD = (
+    "HOME", "LANG", "LC_ALL", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED", "TZ", "VIRTUAL_ENV", "MAEZ_LLM_BACKEND",
+    "MAEZ_LIVE_FAST_LANE_ENABLED", "MAEZ_WORKING_SELF",
+)
+
+
+def env_snapshot() -> dict:
+    return {
+        "names": sorted(os.environ),
+        "count": len(os.environ),
+        "values": {k: os.environ[k] for k in sorted(os.environ)
+                   if k in ENV_VALUES_SAFE_TO_RECORD},
+        "maez_names": sorted(k for k in os.environ if k.startswith("MAEZ_")),
+    }
+
 
 class ContainmentRefusal(RuntimeError):
     """The driver is not inside the airlock namespace. It will not run."""
@@ -86,8 +118,8 @@ def assert_contained() -> dict:
     leaked = sorted(k for k in os.environ if k.startswith("MAEZ_"))
     if leaked:
         raise ContainmentRefusal(f"MAEZ_* set in the namespace: {leaked}")
-    evidence["no_maez_env"] = "PASS"
-    evidence["env"] = dict(sorted(os.environ.items()))
+    evidence["no_maez_env_at_entry"] = "PASS"
+    evidence["env_at_entry"] = env_snapshot()
     return evidence
 
 
@@ -143,9 +175,45 @@ def main() -> int:
     # namespace that resolves into the airlock.
     from daemon.maez_daemon import MaezDaemon
 
+    # Gate round 13 item B: prove, AFTER the import that reloads config/.env,
+    # that no phase/S1 flag is set. This is the environment that actually
+    # executes handle_message.
+    report["env_after_import"] = env_snapshot()
+    set_flags = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
+    if set_flags:
+        raise SystemExit(f"REFUSED: flags-off violated after import: {set_flags}")
+    report["flags_off_after_import"] = "PASS"
+
     t0 = time.time()
     daemon = MaezDaemon()
     report["daemon_construct_seconds"] = round(time.time() - t0, 3)
+
+    # Gate round 13 finding I: two equally EMPTY store trees agree with each
+    # other and prove nothing. Without a positive control, a run in which
+    # every handle_message raised would still exit 0 and still produce a
+    # "baseline". So: count the store tail's invocations and its observable
+    # effect, and fail the run if the tail never executed.
+    tail_calls = {"store_telegram": 0}
+    _orig_store = daemon.memory.store_telegram
+
+    def _counting_store(*a, **kw):
+        tail_calls["store_telegram"] += 1
+        return _orig_store(*a, **kw)
+
+    # Observation only: the proxy calls through unchanged and is removed
+    # before the store tree is projected.
+    daemon.memory.store_telegram = _counting_store
+
+    def collection_counts() -> dict:
+        out = {}
+        for name in ("raw", "daily", "core"):
+            try:
+                out[name] = getattr(daemon.memory, name).count()
+            except Exception as e:                       # noqa: BLE001
+                out[name] = f"error: {type(e).__name__}"
+        return out
+
+    report["collection_counts_before"] = collection_counts()
 
     for item in interactions:
         rec = {"id": item["id"], "at": item["at"], "source": item["source"]}
@@ -160,6 +228,26 @@ def main() -> int:
             rec["traceback"] = traceback.format_exc()
         rec["seconds"] = round(time.time() - t, 3)
         report["interactions"].append(rec)
+
+    daemon.memory.store_telegram = _orig_store
+    report["collection_counts_after"] = collection_counts()
+    report["store_tail_invocations"] = tail_calls["store_telegram"]
+
+    returned = sum(1 for r in report["interactions"] if r["outcome"] == "returned")
+    raised = [r["id"] for r in report["interactions"] if r["outcome"] == "raised"]
+    before, after = (report["collection_counts_before"],
+                     report["collection_counts_after"])
+    grew = any(isinstance(after.get(k), int) and isinstance(before.get(k), int)
+               and after[k] > before[k] for k in ("raw", "daily", "core"))
+    report["positive_control"] = {
+        "interactions_returned": returned,
+        "interactions_raised": raised,
+        "store_tail_invocations": tail_calls["store_telegram"],
+        "collections_grew": grew,
+        "verdict": ("PASS" if (returned == len(interactions)
+                               and tail_calls["store_telegram"] > 0
+                               and grew) else "FAIL"),
+    }
 
     # Gate round 12, item C: flags off, the ledger is NOT "never opened" --
     # the evidence-envelope builder opens it read-only (envelope_builder.py:268,
@@ -179,8 +267,14 @@ def main() -> int:
     out = Path(args.report)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=1, default=str) + "\n")
-    print(f"t5 replay complete: {len(interactions)} interactions -> {out}")
-    return 0
+    pc = report["positive_control"]
+    print(f"t5 replay: {len(interactions)} interactions, "
+          f"{pc['interactions_returned']} returned, "
+          f"tail x{pc['store_tail_invocations']}, "
+          f"positive control {pc['verdict']} -> {out}")
+    # A run whose positive control failed is not a baseline. Exit non-zero so
+    # the orchestration cannot archive it.
+    return 0 if pc["verdict"] == "PASS" else 1
 
 
 if __name__ == "__main__":

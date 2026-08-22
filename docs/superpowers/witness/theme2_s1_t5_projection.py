@@ -33,8 +33,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 # ── frozen grammar (E1). Shape only — no field-name heuristics, because a
@@ -82,12 +84,53 @@ def canonical_path(rel: str, uuid_map: dict) -> str:
 
 # ── projection ────────────────────────────────────────────────────────────
 
+def time_window(v) -> str | None:
+    """Which frozen time domain a value inhabits. Comparing the multiset of
+    these catches a seconds-to-milliseconds rewrite, which preserves rank
+    and would otherwise normalize identically (gate round 13, item D)."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        if SEC_MIN <= f <= SEC_MAX:
+            return "unix_s"
+        if MS_MIN <= f <= MS_MAX:
+            return "unix_ms"
+        return None
+    if isinstance(v, str) and ISO8601_RE.match(v):
+        return "iso8601"
+    return None
+
+
 def project_sqlite(path: Path) -> dict:
+    """Project a SQLite store WAL-aware.
+
+    Gate round 13, item D: the first version opened with `immutable=1`,
+    which tells SQLite to ignore the write-ahead log -- so a committed
+    change living only in the WAL was invisible while sidecar presence
+    compared equal. The database and its sidecars are copied to scratch
+    and opened normally, so the WAL is applied before anything is read.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="t5proj_"))
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
-    except sqlite3.Error as e:
-        return {"error": f"{type(e).__name__}: {e}"}
-    out: dict = {"schema": [], "pragmas": {}, "tables": {}}
+        local = scratch / path.name
+        shutil.copy2(path, local)
+        for suffix in ("-wal", "-shm"):
+            side = path.with_name(path.name + suffix)
+            if side.exists():
+                shutil.copy2(side, scratch / side.name)
+        try:
+            conn = sqlite3.connect(str(local))
+        except sqlite3.Error as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+        return _project_open(conn, path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _project_open(conn, path: Path) -> dict:
+    out: dict = {"schema": [], "pragmas": {}, "tables": {},
+                 "file_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     try:
         out["schema"] = [list(r) for r in conn.execute(
             "SELECT name, type, sql FROM sqlite_master ORDER BY name, type")]
@@ -106,8 +149,18 @@ def project_sqlite(path: Path) -> dict:
             if len(rows) > MAX_ROWS_PER_TABLE:
                 out["tables"][t] = {"error": f"row cap exceeded: {len(rows)}"}
                 continue
-            out["tables"][t] = {"columns": cols, "count": len(rows),
-                                "rows": rows}
+            out["tables"][t] = {
+                "columns": cols, "count": len(rows), "rows": rows,
+                # E: NULLs are class-neutral, so classification skips them --
+                # but a change in how many there are is a real change, and is
+                # compared here rather than lost.
+                "null_counts": {c: sum(1 for r in rows if r[i] is None)
+                                for i, c in enumerate(cols)},
+                "time_windows": {
+                    c: sorted(w for w in (time_window(r[i]) for r in rows)
+                              if w is not None)
+                    for i, c in enumerate(cols)},
+            }
     finally:
         conn.close()
     return out
@@ -122,9 +175,12 @@ def project_tree(tree: Path, seeded: set[str]) -> dict:
         rel = str(p.relative_to(tree))
         cp = canonical_path(rel, uuid_map)
         if rel in seeded:
-            # Seeded package sources: code, not store. Copied read-only from
-            # the repo so the reply machinery can import at all.
-            seeded_seen.append(rel)
+            # Seeded package sources: code, not store. Copied from the repo so
+            # the reply machinery can import at all. Compared by DIGEST, not
+            # merely by name (gate round 13, item D).
+            seeded_seen.append(
+                {"path": rel,
+                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()})
             continue
         if SIDECAR_RE.match(rel):
             sidecars.append(cp)                      # D3: presence only
@@ -141,7 +197,8 @@ def project_tree(tree: Path, seeded: set[str]) -> dict:
                    or p.name.endswith(".tmp"))
     return {"sqlite_files": sorted(sqlites), "blob_files": sorted(blobs),
             "sidecar_files": sorted(sidecars),
-            "seeded_sources": sorted(seeded_seen),
+            "seeded_sources": sorted(seeded_seen,
+                                     key=lambda d: d["path"]),
             "sqlite": sqlites, "blobs": blobs,
             "latch_artifacts": latch, "uuid_map_size": len(uuid_map)}
 
@@ -168,11 +225,23 @@ def derive_volatile(a: dict, b: dict) -> dict:
                 j = B["columns"].index(c)
                 if _col_multiset(A, i) == _col_multiset(B, j):
                     continue
+                # E: NULL is class-neutral -- it belongs to no shape and does
+                # not disqualify a field. What it must not do is disappear
+                # silently, so null_counts is compared in P1 and a NULL->UUID
+                # change shows up there rather than being classified away.
                 vals = ([r[i] for r in A["rows"]] + [r[j] for r in B["rows"]])
                 diff = [v for v in vals if v is not None]
-                if diff and all(is_uuid_shaped(v) for v in diff):
+                if not diff:
+                    findings.append({
+                        "db": db, "table": t, "column": c,
+                        "reason": "differs between baseline runs only in its "
+                                  "NULL pattern; NULL is class-neutral and "
+                                  "cannot be absorbed as volatile",
+                        "sample": []})
+                    continue
+                if all(is_uuid_shaped(v) for v in diff):
                     kind = "uuid"
-                elif diff and all(is_time_shaped(v) for v in diff):
+                elif all(is_time_shaped(v) for v in diff):
                     kind = "time"
                 else:
                     findings.append({
@@ -222,6 +291,18 @@ def normalize_table(tb: dict, kinds: dict, uuid_ord: dict) -> list:
         return (json.dumps([r[i] for i in stable_idx], default=repr, sort_keys=True),
                 json.dumps([ranks[i].get(r[i]) for i in time_idx]))
 
+    if uuid_idx:
+        seen: dict = {}
+        for r in rows:
+            seen[stable_key(r)] = seen.get(stable_key(r), 0) + 1
+        collisions = {k: n for k, n in seen.items() if n > 1}
+        if collisions:
+            # Two rows sharing a stable key make uuid ordinal assignment
+            # ambiguous: a genuine relationship scramble and a harmless
+            # relabel look identical. Fail closed rather than guess
+            # (gate round 13, item D).
+            return [f"<COLLISION:{len(collisions)} stable keys are not unique "
+                    f"in a table carrying uuid-classified columns>"]
     out = []
     for r in sorted(rows, key=stable_key):
         row = list(r)
@@ -254,15 +335,18 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
                                  "only_b": sorted(set(b[key]) - set(a[key]))})
 
     if ledger_sha:
+        # B1 reads the sqlite projection's recorded file digest: ledger.db is
+        # classified as a sqlite store, not a blob, so the first version
+        # always reported it absent (gate round 13, item D).
         for name, proj in (("a", a), ("b", b)):
-            blob = proj["blobs"].get("ledger.db")
-            if blob is None:
+            entry = proj["sqlite"].get("ledger.db")
+            got = entry.get("file_sha256") if entry else None
+            if got is None:
                 res["kills"].append({"clause": "B1", "tree": name,
-                                     "detail": "ledger.db absent"})
-            elif blob["sha256"] != ledger_sha:
+                                     "detail": "ledger.db not projected"})
+            elif got != ledger_sha:
                 res["kills"].append({"clause": "B1", "tree": name,
-                                     "expected": ledger_sha,
-                                     "got": blob["sha256"]})
+                                     "expected": ledger_sha, "got": got})
 
     # D2 -- every non-database file byte-compared; a difference KILLS.
     for k in sorted(set(a["blobs"]) & set(b["blobs"])):
@@ -279,6 +363,12 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
             res["kills"].append({"clause": "P1", "db": db,
                                  "detail": "present in only one tree"})
             continue
+        # A projection error is not data. Two matching error objects
+        # previously compared equal and passed (gate round 13, item D).
+        for nm, pj in (("a", pa), ("b", pb)):
+            if "error" in pj:
+                res["kills"].append({"clause": "P1.error", "db": db,
+                                     "tree": nm, "detail": pj["error"]})
         if pa.get("schema") != pb.get("schema"):
             res["kills"].append({"clause": "P1.schema", "db": db})
         if pa.get("pragmas") != pb.get("pragmas"):
@@ -306,7 +396,38 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
                                      "table": t, "a": A["count"],
                                      "b": B["count"]})
                 continue
+            if A.get("null_counts") != B.get("null_counts"):
+                res["kills"].append({"clause": "P1.nulls", "db": db,
+                                     "table": t, "a": A.get("null_counts"),
+                                     "b": B.get("null_counts")})
             kinds = v.get(db, {}).get(t, {})
+            # Revalidate every volatile value against its FROZEN class at
+            # compare time. Without this, compare() blindly trusted the
+            # baseline classification, so a one-row time column could be
+            # rewritten to epoch zero -- outside the frozen window, therefore
+            # not time-shaped -- and still normalize to <t:0>.
+            for c, kind in kinds.items():
+                if c not in A["columns"]:
+                    continue
+                i = A["columns"].index(c)
+                check = is_uuid_shaped if kind == "uuid" else is_time_shaped
+                for nm, T in (("a", A), ("b", B)):
+                    bad = sorted({repr(r[i]) for r in T["rows"]
+                                  if r[i] is not None and not check(r[i])})
+                    if bad:
+                        res["kills"].append({
+                            "clause": "P1.class", "db": db, "table": t,
+                            "column": c, "tree": nm, "expected_class": kind,
+                            "offending": bad[:5]})
+                if kind == "time" and (A.get("time_windows", {}).get(c)
+                                       != B.get("time_windows", {}).get(c)):
+                    # Catches a seconds-to-milliseconds rewrite, which
+                    # preserves rank and would normalize identically.
+                    res["kills"].append({
+                        "clause": "P1.timewindow", "db": db, "table": t,
+                        "column": c,
+                        "a": A.get("time_windows", {}).get(c),
+                        "b": B.get("time_windows", {}).get(c)})
             na = normalize_table(A, kinds, ua)
             nb = normalize_table(B, kinds, ub)
             if na != nb:
@@ -328,6 +449,35 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
                         counts[repr(r[i])] = counts.get(repr(r[i]), 0) + 1
                     out[f"{db}::{t}"] = dict(sorted(counts.items()))
         return out
+
+    # P2 -- the Chroma record/vector extract, now part of the verdict rather
+    # than an artifact nothing read (gate round 13, item D).
+    xa, xb = a.get("extract"), b.get("extract")
+    if (xa is None) != (xb is None):
+        res["kills"].append({"clause": "P2", "detail": "extract present on "
+                                                       "only one side"})
+    elif xa is not None:
+        if set(xa.get("collections", {})) != set(xb.get("collections", {})):
+            res["kills"].append({
+                "clause": "P2.collections",
+                "only_a": sorted(set(xa["collections"]) - set(xb["collections"])),
+                "only_b": sorted(set(xb["collections"]) - set(xa["collections"]))})
+        for k in sorted(set(xa.get("collections", {}))
+                        & set(xb.get("collections", {}))):
+            ca, cb = xa["collections"][k], xb["collections"][k]
+            if "error" in ca or "error" in cb:
+                res["kills"].append({"clause": "P2.error", "collection": k,
+                                     "a": ca.get("error"), "b": cb.get("error")})
+                continue
+            if ca.get("count") != cb.get("count"):
+                res["kills"].append({"clause": "P2.count", "collection": k,
+                                     "a": ca.get("count"), "b": cb.get("count")})
+            if ca.get("records") != cb.get("records"):
+                res["kills"].append({"clause": "P2.records", "collection": k})
+            if ca.get("vector_sha256") != cb.get("vector_sha256"):
+                res["kills"].append({"clause": "P2.vectors", "collection": k,
+                                     "a": ca.get("vector_sha256"),
+                                     "b": cb.get("vector_sha256")})
 
     pa_, pb_ = phases(a), phases(b)
     res["phase_multisets"] = {"a": pa_, "b": pb_}
@@ -354,8 +504,11 @@ def main() -> int:
                 if len(sp) == 2:
                     seeded.add(sp[1].strip().split("/maez/", 1)[-1]
                                .removeprefix("memory/"))
-        out.write_text(json.dumps(project_tree(tree, seeded), indent=1,
-                                  default=repr) + "\n")
+        proj = project_tree(tree, seeded)
+        if "--extract" in sys.argv:
+            xp = Path(sys.argv[sys.argv.index("--extract") + 1])
+            proj["extract"] = json.loads(xp.read_text())
+        out.write_text(json.dumps(proj, indent=1, default=repr) + "\n")
         print(f"projected {tree} -> {out}")
     elif cmd == "volatile":
         a = json.loads(Path(sys.argv[2]).read_text())
