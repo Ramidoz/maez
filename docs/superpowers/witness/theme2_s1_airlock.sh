@@ -33,27 +33,55 @@ if [ $# -lt 2 ]; then
     exit 2
 fi
 
-AIRLOCK=$(readlink -f "$1"); shift
-case "$AIRLOCK" in
+# Gate round 14 item B: `readlink -f` canonicalizes before validation, which
+# erases the evidence that a leaf or parent component was a symlink. Keep the
+# literal path, require it to equal its own canonicalization, and only then
+# accept it.
+AIRLOCK_RAW="$1"; shift
+case "$AIRLOCK_RAW" in
     /tmp/*) ;;
-    *) echo "REFUSED: airlock must be under /tmp, got: $AIRLOCK" >&2; exit 3 ;;
+    *) echo "REFUSED: airlock must be under /tmp, got: $AIRLOCK_RAW" >&2; exit 3 ;;
 esac
+AIRLOCK_PARENT=$(dirname "$AIRLOCK_RAW")
+if [ ! -d "$AIRLOCK_PARENT" ]; then
+    echo "REFUSED: airlock parent does not exist: $AIRLOCK_PARENT" >&2; exit 3
+fi
+if [ "$(readlink -f "$AIRLOCK_PARENT")" != "$AIRLOCK_PARENT" ]; then
+    echo "REFUSED: a parent component is a symlink: $AIRLOCK_PARENT" >&2; exit 3
+fi
+AIRLOCK="$AIRLOCK_RAW"
 
 # Gate round 13 item B: the wrapper previously accepted any directory and
 # wrote through its subpaths without proving it was fresh, owned, or free
 # of symlinks -- so a stale overlay could carry store bytes into a
 # "baseline", and a symlinked bind source could redirect the writable
 # mount outside the scratch tree. Seal it first.
-if [ -e "$AIRLOCK" ]; then
-    if [ ! -d "$AIRLOCK" ] || [ -L "$AIRLOCK" ]; then
-        echo "REFUSED: airlock is not a real directory: $AIRLOCK" >&2; exit 4
+# Atomic acquisition. `mkdir` without -p fails if the path exists at all, so
+# create-and-claim is one syscall -- v6.2 checked emptiness and then created,
+# which two concurrent invocations could both pass (gate round 14 item B).
+# --reuse is the explicit opt-in for the second and later commands of one
+# run; it requires the marker this invocation wrote.
+CLAIM_MARKER="$AIRLOCK/.t5-airlock-claim"
+if [ "${T5_REUSE_AIRLOCK:-0}" = "1" ]; then
+    if [ ! -f "$CLAIM_MARKER" ]; then
+        echo "REFUSED: T5_REUSE_AIRLOCK set but no claim marker present" >&2
+        exit 4
     fi
-    if [ -n "$(ls -A "$AIRLOCK" 2>/dev/null)" ]; then
-        echo "REFUSED: airlock is not empty: $AIRLOCK" >&2; exit 4
-    fi
+elif ! mkdir "$AIRLOCK" 2>/dev/null; then
+    echo "REFUSED: airlock already exists; it must be created by this run: $AIRLOCK" >&2
+    exit 4
+else
+    printf 'claimed pid=%s\n' "$$" > "$CLAIM_MARKER"
 fi
-if [ "$(stat -c %u "$(dirname "$AIRLOCK")")" != "$(id -u)" ]; then
-    echo "REFUSED: airlock parent not owned by this user" >&2; exit 4
+if [ "$(stat -c %u "$AIRLOCK")" != "$(id -u)" ] || [ -L "$AIRLOCK" ]; then
+    echo "REFUSED: airlock is not an owned real directory" >&2; exit 4
+fi
+
+# An exclusive lock held for the life of this invocation. Without it two
+# runs could share one writable overlay and interleave their seed manifests.
+exec 9>"$AIRLOCK/.t5-airlock-lock"
+if ! flock -n 9; then
+    echo "REFUSED: another invocation holds this airlock" >&2; exit 4
 fi
 
 mkdir -p \

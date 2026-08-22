@@ -1,13 +1,14 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6.2
+# Theme 2 — S1 (phase truth) witness protocol, v6.3
 
-Status: PROTOCOL v6.2. Body = v1; §9 = v3, §10 = v4 (one v6.1
-correction), §11 = v5, §12 = v6.2.
+Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
+correction), §11 = v5, §12 = v6.3.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
 closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
-closes gate round 13's three reopened items (B, D, E — A, C, G passed)
-and its finding I. The T5
+closed gate round 13's three reopened items (B, D, E — A, C, G passed)
+and its finding I; v6.3 closes gate round 14's B, D, E, I and its
+blocking finding J, and records finding K. The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -365,7 +366,7 @@ content is therefore determined by the fixture plus the injected
 clocks; the report quotes all three verbatim and diffs mate-vs-
 advancing to show exactly the one differing key.
 
-## 12. v6 / v6.1 / v6.2 amendment — T5's execution model, closed against the pre-execution audit and gate rounds 12 and 13
+## 12. v6 → v6.3 amendment — T5's execution model, closed against the pre-execution audit and gate rounds 12, 13 and 14
 
 Round 10 pinned T5's *artifact* (path) and round 11 pinned its
 *ordering* (digest amendment precedes the first S1 code commit).
@@ -463,11 +464,20 @@ Round-12 and round-13 gaps, closed:
   top, takes the count to **zero on the whole root device**, verified
   inside the namespace. *(v6.2, round 13 item B.)*
 
-- **The airlock is sealed before anything is written through it.** The
-  wrapper refuses unless the directory is absent or empty, refuses a
-  symlink, refuses if its parent is not owned by the invoking user, and
-  refuses if any of the five bind sources is a symlink or resolves
-  elsewhere. Without this a stale overlay could carry store bytes into
+- **The airlock is acquired atomically and held under an exclusive
+  lock.** v6.2 checked emptiness and then created the directory, which
+  two concurrent invocations could both pass, and it canonicalized the
+  supplied path with `readlink -f` *before* validating — erasing the
+  evidence that a component was a symlink. v6.3: the literal path must
+  equal its own canonicalization and its parent must not be a symlink;
+  acquisition is a bare `mkdir` (one syscall, fails if the path exists
+  at all); the run then holds `flock` on a lock file inside the airlock
+  for its whole life; later commands of the same run opt in explicitly
+  with `T5_REUSE_AIRLOCK=1`, which requires the claim marker this run
+  wrote. Verified: a second invocation without the opt-in refuses, and
+  a symlinked parent refuses. *(v6.3, round 14 item B.)* The wrapper
+  also refuses a symlinked airlock, a parent it does not own, and any
+  of the five bind sources that resolves elsewhere. Without this a stale overlay could carry store bytes into
   something called a baseline, and a symlinked bind source could
   redirect the writable mount out of the scratch tree. *(v6.2, round 13
   item B.)*
@@ -493,7 +503,20 @@ Round-12 and round-13 gaps, closed:
   `MAEZ_LEDGER_WRITES`, `MAEZ_BIRTH_PHASE`, `MAEZ_BIRTH_LATCH`,
   `MAEZ_S1_PHASE_TRUTH`; S1's own flags join it when they exist.
   Verified on this host: `MAEZ_LEDGER_WRITES` is **not** among the
-  `config/.env` names, so flags-off holds. The driver records the
+  `config/.env` names, so flags-off holds.
+
+  **A second class of name matters just as much**: `MAEZ_LEDGER_DB_PATH`,
+  `MAEZ_HOME`, `MAEZ_DATA`, `MAEZ_CONFIG`, `MAEZ_CACHE` do not gate
+  writes — they select *which store* is read and written.
+  `core.memory.birth_phase.default_ledger_path()` honors
+  `MAEZ_LEDGER_DB_PATH` and then `core.infra.paths.memory_dir()`, which
+  honors `MAEZ_DATA`/`MAEZ_HOME`, and the ordinary config loader can
+  repopulate any non-secret name after `--clearenv`. They are absent
+  from this host's `config/.env` today, but absence is not a guarantee:
+  the driver now refuses unless each is either unset or resolves
+  **inside the overlay**, and it records
+  `default_ledger_path()`'s actual value rather than inferring it.
+  *(v6.3, round 14 item B.)* The driver records the
   environment **twice** — at entry and after the import — and refuses
   to continue if any listed flag is set. Values are recorded only for
   a declared non-secret allowlist; everything else is recorded by
@@ -512,7 +535,12 @@ Round-12 and round-13 gaps, closed:
   `<A>/maez/logs/seeded-sources.txt`. They are **code, not store**: the
   projection excludes them from the store tree by that manifest, and
   compares the manifest itself between runs.
-- **Nothing runs outside the namespace.** v6 migrated the ledger before
+- **No Maez code runs outside the namespace.** Host-side shell setup —
+  `mkdir`, `git ls-files`, copying and hashing the seed sources and the
+  model cache — necessarily runs outside, and v6.2's "nothing runs
+  outside" was the wrong word for it *(v6.3, round 14 item B)*. What is
+  true, and what matters, is that no Maez module is imported and no
+  store is opened outside the boundary. v6 migrated the ledger before
   namespace entry, which left a whole Python startup — imports,
   `site`/`.pth`, bytecode, inherited descriptors — outside the boundary
   the protocol claimed was total. The migration is now the driver's
@@ -612,7 +640,7 @@ the store tree, `tar` with sorted member order, numeric owner, mtimes
 normalized to `0`, `zstd -19`. If it exceeds 25 MB the run stops and
 the owner rules on placement before anything is committed.
 
-### 12.8 The invariance projection (closes F-B, round-12 D/E, round-13 D/E)
+### 12.8 The invariance projection (closes F-B and rounds 12/13/14 D and E)
 
 Raw byte equality is replaced by a projection fixed **here**, before
 any S1 code exists, and implemented by
@@ -658,6 +686,14 @@ at a real baseline.
   now copied **with its sidecars** to scratch and opened normally, so
   the WAL is applied before anything is read. Verified: a row committed
   only in the WAL now kills on `P1.count`. *(v6.2, round 13 item D.)*
+
+- **B3.dirs / B3.modes / B3.irregular** — the walk covers **every
+  entry**, not only regular files: the directory set and every entry's
+  mode are compared, and anything that is neither a regular file nor a
+  directory (symlink, fifo, socket, device) is reported and kills.
+  v6.2 walked `is_file()` only, so an empty directory, a mode change,
+  or a file replaced by a symlink was invisible. *(v6.3, round 14
+  item D.)*
 
 - **B5** — seeded package sources are compared **by digest**, not by
   path name. v6.1 compared only the names, so a changed source file
@@ -705,18 +741,32 @@ report equality. The fix is to normalize, not discard:
     (`unix_s`, `unix_ms`, `iso8601`) is compared. A
     seconds-to-milliseconds rewrite preserves rank and would otherwise
     normalize identically.
-  - **Collision fail-closed** — if two rows in a table carrying
+  - **P1.collision, fail-closed** — if two rows in a table carrying
     uuid-classified columns share a stable key, uuid ordinal assignment
     is ambiguous: a genuine relationship scramble and a harmless
-    relabel look the same. The table is reported as a collision and
-    kills, rather than being ordered by whatever `SELECT *` happened to
-    return.
+    relabel look the same, so the table kills rather than being ordered
+    by whatever `SELECT *` happened to return. *(v6.3, round 14 item D:
+    v6.2 returned a sentinel **string**, so when both sides collided the
+    two sentinels compared equal and the comparison passed with
+    `kills=[]` — the entire row relationship silently discarded. It now
+    raises, and the caller must record a kill. Reproduced and
+    re-tested.)*
+  - **P1.volatile_unresolved** — a frozen volatile entry naming a store,
+    table or column that no longer exists kills. v6.2 ignored it, so
+    the literal and the tree could drift apart unnoticed.
   - **P1.nulls** — the per-column NULL count is compared and kills.
-- **P2** — computed from `theme2_s1_t5_extract.py`'s output, which is
-  folded into each side's projection with `project --extract` and
-  **compared as part of the verdict**. v6.1 specified P2 and shipped an
-  extractor, but nothing read it *(v6.2, round 13 item D)*. Per
-  collection: record count; the sorted multiset of
+- **P2** — computed from `theme2_s1_t5_extract.py`'s output, folded
+  into each side's projection with `project --extract` and **compared
+  as part of the verdict**. v6.1 specified P2 and shipped an extractor,
+  but nothing read it *(round 13 item D)*; v6.2 then read it only when
+  present, so two projections that both omitted it compared equal and
+  passed. **P2 is mandatory**: a missing extract on either side kills
+  *(v6.3, round 14 item D)*. Metadata is **normalized with the same
+  grammar as P1** before comparison — uuid- and time-shaped values
+  become class placeholders, keys are never dropped — because comparing
+  it raw made an honest one-second difference between runs a spurious
+  `P2.records` kill *(v6.3, round 14 item D)*. Per collection: record
+  count; the sorted multiset of
   `(document, metadata)` under the same normalization; and the
   embedding vectors compared **exactly**. `ONNXMiniLM_L6_V2` is
   deterministic, so a vector difference is a real finding and is
@@ -749,14 +799,20 @@ name-based rule is exactly the discretion round 12 objected to:
   `^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$`.
   A number outside those two windows is **not** time-shaped, whatever
   it is called.
-- **NULL is class-neutral.** It belongs to no shape, it does not
-  disqualify a field, and classification is computed over the non-NULL
-  values only. What NULL must not do is disappear silently, so the
-  per-column NULL count is compared by P1.nulls and kills. A field
-  whose two runs differ **only** in their NULL pattern is a FINDING,
-  not a volatile field. v6.1's prose said "every value must satisfy the
-  class" while the tool stripped NULLs before classifying; the rule
-  above is what both now say *(v6.2, round 13 item E)*.
+- **Classification looks at the values that actually DIFFER** — the
+  symmetric difference of the two runs' value multisets — not at every
+  value in the column. v6.2 classified the union, so a Chroma-style
+  EAV column holding an unchanged `"gestation"` beside differing ISO
+  timestamps became a FINDING instead of a time-classified volatile
+  field. *(v6.3, round 14 item E; reproduced and re-tested.)*
+- **NULL is class-neutral**: it belongs to no shape and classification
+  runs over non-NULL values. But **any change in the NULL pattern is a
+  FINDING, never a volatile field** — if the differing set contains
+  NULL at all, the field is reported, not absorbed. v6.2 classified
+  `NULL → UUID` as a uuid volatile field with zero findings, which
+  contradicted this same paragraph; the derivation and the prose now
+  agree. `P1.nulls` compares the per-column NULL count and kills at
+  compare time as well. *(v6.3, round 14 item E.)*
 - Every differing non-NULL value in the field must satisfy one class,
   and the same class. A field that differs and satisfies neither is a
   **FINDING**, reported and ruled on, never absorbed. The derivation
@@ -795,15 +851,12 @@ tail invocations, and collection counts before and after; and the
 statement that the manifest's `at` is ordinal, with the observed
 wall-clock span of the run beside it.
 
-### 12.10 What this amendment does not change
-
-T1, T2, T3, T4, T6 are untouched. No storage layer is stubbed or
-mocked — §12.3 is the absence of a network, not a fake brain.
-`memory_manager.BASE_DB` is **not** made env-overridable, and T5 does
-**not** imitate the recall-eval sandbox's monkeypatch: a rebind covers
-the one literal someone remembered, while containment covers all 54.
-Repairing production code so a witness can run inverts the discipline.
-The witness survives the code as shipped.
+Added in v6.3: the orchestrator's full log; the comparator self-test's
+13-case output; the airlock claim marker and lock evidence; the
+resolved `default_ledger_path()` value and the store-path overlay
+assertion; **per-interaction** tail-passage counts; `brain_reachable:
+false` with the per-interaction reply shapes; and the archive exclusion
+list.
 
 ### 12.11 Positive controls — the baseline must prove it happened
 
@@ -819,14 +872,72 @@ driver exits non-zero if any fails:
 
 1. **Every interaction returned.** 20 of 20, no exception. Any raise is
    listed by id in the report.
-2. **The storage tail executed.** `MemoryManager.store_telegram` is
-   wrapped in a counting proxy that calls through unchanged and is
-   removed before the tree is projected; the invocation count is
-   recorded and must be greater than zero. This is observation, not
-   substitution — declared here so the report is not read as an
-   untouched path.
+2. **Every interaction reached the storage tail.**
+   `MemoryManager.store_telegram` is wrapped in a counting proxy that
+   calls through unchanged and is removed before the tree is projected;
+   the count is sampled **around each individual call**, and every
+   interaction must show at least one passage. *(v6.3, round 14 item I:
+   v6.2 required only an aggregate greater than zero, which 19
+   returned-before-tail interactions plus one stored one would satisfy
+   — and production has returned-before-tail paths at
+   `maez_daemon.py:7197`.)* This is observation, not substitution —
+   declared here so the report is not read as an untouched path.
 3. **The stores actually grew.** Chroma `raw`/`daily`/`core` counts are
    recorded before and after; at least one must increase.
 
+**What the controls deliberately do not assert.** T5 runs hermetic, so
+`BackendError` is converted to a returned fallback string and stored
+(`maez_daemon.py:8958`). Twenty returned fallbacks are the expected
+shape, not a failure — but they are **not healthy synthesis**, and the
+report must never present them as such. The driver records
+`brain_reachable: false` and the per-interaction reply shape (length,
+emptiness) so the reader can see exactly what was exercised.
+
 Round 13's other two I-findings are closed elsewhere: the `config/.env`
 reload in §12.2, and the `at` semantics in §12.6.
+
+### 12.12 The orchestrator (closes round-14 J)
+
+Round 14 ruled hand-driving unacceptable, and it was right: a report
+can record what a human did, but it cannot make a failed exit code
+bite, and it cannot guarantee the daemon comes back after an
+intermediate failure. `docs/superpowers/witness/theme2_s1_t5_run.sh` is
+the single committed authority for
+
+```
+preflight → stop daemon → (fresh airlock → self-test → replay →
+extract → project) ×2 → derive volatile → compare → archive → restart
+```
+
+with `set -euo pipefail`, every step's status consumed, the archive
+produced **only** after every prior step succeeded, and the daemon
+restarted from an `EXIT` trap so it returns even on failure or
+interrupt. It refuses a dirty working tree — a baseline must be pinned
+to a commit — and it refuses to run at all if `maez.service` is active
+and `--stop-daemon` was not passed, rather than quietly racing the live
+daemon. It runs the comparator's own self-test **first**, because the
+comparator is the instrument the verdict rests on.
+
+### 12.13 Finding K — recorded here, ruled elsewhere
+
+Round 14 upheld the S2 protocol's O-1 WAL finding and added a
+consequence for S1 that belongs in this file: design §5 requires latch
+publication around **every** lived commit, while T2 witnesses a single
+writer path (§3). Under the daemon-plus-web multi-writer topology the
+ordering of latch allocation and publication across processes is
+**unwitnessed**. That must close before S1 code lands; it is not a
+prerequisite for generating the pre-S1 baseline, and it is recorded as
+an open item rather than silently folded into T2.
+
+K has no direct T5 consequence: the airlock ledger has writes disabled
+and the replay is single-process.
+
+### 12.10 What this amendment does not change
+
+T1, T2, T3, T4, T6 are untouched. No storage layer is stubbed or
+mocked — §12.3 is the absence of a network, not a fake brain.
+`memory_manager.BASE_DB` is **not** made env-overridable, and T5 does
+**not** imitate the recall-eval sandbox's monkeypatch: a rebind covers
+the one literal someone remembered, while containment covers all 54.
+Repairing production code so a witness can run inverts the discipline.
+The witness survives the code as shipped.

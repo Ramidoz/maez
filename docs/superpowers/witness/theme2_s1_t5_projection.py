@@ -34,6 +34,7 @@ import hashlib
 import json
 import re
 import shutil
+from collections import Counter
 import sqlite3
 import sys
 import tempfile
@@ -169,9 +170,24 @@ def _project_open(conn, path: Path) -> dict:
 def project_tree(tree: Path, seeded: set[str]) -> dict:
     uuid_map: dict = {}
     sqlites, blobs, sidecars, seeded_seen = {}, {}, [], []
+    dirs, modes, irregular = [], {}, []
+    # Gate round 14 item D: v6.2 walked only regular files, so an empty
+    # directory, a mode change, or a file replaced by a fifo/symlink was
+    # invisible. Every entry is now accounted for by exactly one category,
+    # and anything that is neither a regular file nor a directory is a
+    # reported irregularity rather than a skip.
     for p in sorted(tree.rglob("*")):
-        if not p.is_file():
+        rel_any = str(p.relative_to(tree))
+        cp_any = canonical_path(rel_any, uuid_map)
+        if p.is_symlink() or (not p.is_file() and not p.is_dir()):
+            irregular.append({"path": cp_any, "kind":
+                              "symlink" if p.is_symlink() else "special"})
             continue
+        if p.is_dir():
+            dirs.append(cp_any)
+            modes[cp_any] = oct(p.stat().st_mode & 0o7777)
+            continue
+        modes[cp_any] = oct(p.stat().st_mode & 0o7777)
         rel = str(p.relative_to(tree))
         cp = canonical_path(rel, uuid_map)
         if rel in seeded:
@@ -195,7 +211,9 @@ def project_tree(tree: Path, seeded: set[str]) -> dict:
                    if "birth_observed" in p.parts
                    or p.name.startswith("segment-")
                    or p.name.endswith(".tmp"))
-    return {"sqlite_files": sorted(sqlites), "blob_files": sorted(blobs),
+    return {"dirs": sorted(dirs), "modes": dict(sorted(modes.items())),
+            "irregular": sorted(irregular, key=lambda d: d["path"]),
+            "sqlite_files": sorted(sqlites), "blob_files": sorted(blobs),
             "sidecar_files": sorted(sidecars),
             "seeded_sources": sorted(seeded_seen,
                                      key=lambda d: d["path"]),
@@ -225,19 +243,33 @@ def derive_volatile(a: dict, b: dict) -> dict:
                 j = B["columns"].index(c)
                 if _col_multiset(A, i) == _col_multiset(B, j):
                     continue
-                # E: NULL is class-neutral -- it belongs to no shape and does
-                # not disqualify a field. What it must not do is disappear
-                # silently, so null_counts is compared in P1 and a NULL->UUID
-                # change shows up there rather than being classified away.
-                vals = ([r[i] for r in A["rows"]] + [r[j] for r in B["rows"]])
-                diff = [v for v in vals if v is not None]
-                if not diff:
+                # Gate round 14 item E: classify only the values that ACTUALLY
+                # DIFFER between the runs -- the symmetric difference of the
+                # two value multisets -- not the union of every value in the
+                # column. v6.2 classified the union, so an EAV column holding
+                # an unchanged "gestation" beside differing ISO timestamps
+                # became a FINDING instead of a time-classified volatile
+                # field.
+                ka = Counter(repr(r[i]) for r in A["rows"])
+                kb = Counter(repr(r[j]) for r in B["rows"])
+                back = {repr(r[i]): r[i] for r in A["rows"]}
+                back.update({repr(r[j]): r[j] for r in B["rows"]})
+                differing = [back[k] for k in (set(ka) | set(kb))
+                             if ka[k] != kb[k]]
+                # NULL is class-neutral, and a change in the NULL pattern is a
+                # FINDING rather than a volatile field -- exactly what the
+                # protocol says. P1.nulls kills it at compare time too; this
+                # keeps the derivation from quietly recording it as volatile.
+                if any(v is None for v in differing):
                     findings.append({
                         "db": db, "table": t, "column": c,
-                        "reason": "differs between baseline runs only in its "
-                                  "NULL pattern; NULL is class-neutral and "
-                                  "cannot be absorbed as volatile",
-                        "sample": []})
+                        "reason": "the NULL pattern differs between baseline "
+                                  "runs; NULL is class-neutral and cannot be "
+                                  "absorbed as volatile",
+                        "sample": sorted({str(v) for v in differing})[:5]})
+                    continue
+                diff = differing
+                if not diff:
                     continue
                 if all(is_uuid_shaped(v) for v in diff):
                     kind = "uuid"
@@ -261,6 +293,10 @@ def derive_volatile(a: dict, b: dict) -> dict:
 
 
 # ── normalization (D1 + the row-alignment procedure) ──────────────────────
+
+class CollisionRefusal(RuntimeError):
+    """Stable keys are not unique where uuid ordinals must be assigned."""
+
 
 def normalize_table(tb: dict, kinds: dict, uuid_ord: dict) -> list:
     """Ordinalize, never drop.
@@ -299,10 +335,15 @@ def normalize_table(tb: dict, kinds: dict, uuid_ord: dict) -> list:
         if collisions:
             # Two rows sharing a stable key make uuid ordinal assignment
             # ambiguous: a genuine relationship scramble and a harmless
-            # relabel look identical. Fail closed rather than guess
-            # (gate round 13, item D).
-            return [f"<COLLISION:{len(collisions)} stable keys are not unique "
-                    f"in a table carrying uuid-classified columns>"]
+            # relabel look identical. Fail closed rather than guess.
+            #
+            # Gate round 14 item D: v6.2 returned a sentinel STRING, so when
+            # both sides collided the two sentinels compared equal and the
+            # comparison passed with kills=[] -- the whole row relationship
+            # silently discarded. Raise instead, so the caller must kill.
+            raise CollisionRefusal(
+                f"{len(collisions)} stable keys are not unique in a table "
+                f"carrying uuid-classified columns")
     out = []
     for r in sorted(rows, key=stable_key):
         row = list(r)
@@ -316,6 +357,23 @@ def normalize_table(tb: dict, kinds: dict, uuid_ord: dict) -> list:
     return out
 
 
+def _norm_record(rec: dict) -> dict:
+    """Normalize one Chroma record for P2: the document verbatim, metadata
+    with uuid- and time-shaped VALUES replaced by their class placeholder.
+    Keys are never dropped -- a key appearing or vanishing still differs."""
+    md = rec.get("metadata") or {}
+    out = {}
+    for k in sorted(md):
+        v = md[k]
+        if is_uuid_shaped(v):
+            out[k] = "<id>"
+        elif is_time_shaped(v):
+            out[k] = f"<t:{time_window(v)}>"
+        else:
+            out[k] = v
+    return {"document": rec.get("document"), "metadata": out}
+
+
 def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
     v = vol.get("volatile", {})
     res: dict = {"kills": [], "notes": []}
@@ -325,7 +383,12 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
             res["kills"].append({"clause": "B2", "tree": name,
                                  "detail": proj["latch_artifacts"]})
 
-    for clause, key in (("B3.sqlite", "sqlite_files"),
+    for name, proj in (("a", a), ("b", b)):
+        if proj.get("irregular"):
+            res["kills"].append({"clause": "B3.irregular", "tree": name,
+                                 "detail": proj["irregular"]})
+    for clause, key in (("B3.dirs", "dirs"), ("B3.modes", "modes"),
+                        ("B3.sqlite", "sqlite_files"),
                         ("B3.blob", "blob_files"),
                         ("B3.sidecar", "sidecar_files"),
                         ("B3.seeded", "seeded_sources")):
@@ -428,8 +491,13 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
                         "column": c,
                         "a": A.get("time_windows", {}).get(c),
                         "b": B.get("time_windows", {}).get(c)})
-            na = normalize_table(A, kinds, ua)
-            nb = normalize_table(B, kinds, ub)
+            try:
+                na = normalize_table(A, kinds, ua)
+                nb = normalize_table(B, kinds, ub)
+            except CollisionRefusal as e:
+                res["kills"].append({"clause": "P1.collision", "db": db,
+                                     "table": t, "detail": str(e)})
+                continue
             if na != nb:
                 first = next((i for i, (x, y) in enumerate(zip(na, nb))
                               if x != y), None)
@@ -453,10 +521,16 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
     # P2 -- the Chroma record/vector extract, now part of the verdict rather
     # than an artifact nothing read (gate round 13, item D).
     xa, xb = a.get("extract"), b.get("extract")
-    if (xa is None) != (xb is None):
-        res["kills"].append({"clause": "P2", "detail": "extract present on "
-                                                       "only one side"})
-    elif xa is not None:
+    if xa is None or xb is None:
+        # Gate round 14 item D: P2 was optional, so two projections that both
+        # omitted the extract compared equal and passed. A missing extract is
+        # now a kill on both sides, not a silent skip.
+        res["kills"].append({
+            "clause": "P2.missing",
+            "detail": "the Chroma extract is mandatory; fold it in with "
+                      "`project --extract`",
+            "a_present": xa is not None, "b_present": xb is not None})
+    else:
         if set(xa.get("collections", {})) != set(xb.get("collections", {})):
             res["kills"].append({
                 "clause": "P2.collections",
@@ -472,12 +546,33 @@ def compare(a: dict, b: dict, vol: dict, ledger_sha: str | None) -> dict:
             if ca.get("count") != cb.get("count"):
                 res["kills"].append({"clause": "P2.count", "collection": k,
                                      "a": ca.get("count"), "b": cb.get("count")})
-            if ca.get("records") != cb.get("records"):
+            # Metadata is normalized with the same grammar as P1 before
+            # comparison. v6.2 compared it raw, so an honest one-second
+            # difference between runs produced a spurious P2.records kill
+            # (gate round 14 item D). Volatile-shaped values become class
+            # placeholders; every other key is compared literally.
+            if ([_norm_record(r) for r in ca.get("records", [])]
+                    != [_norm_record(r) for r in cb.get("records", [])]):
                 res["kills"].append({"clause": "P2.records", "collection": k})
             if ca.get("vector_sha256") != cb.get("vector_sha256"):
                 res["kills"].append({"clause": "P2.vectors", "collection": k,
                                      "a": ca.get("vector_sha256"),
                                      "b": cb.get("vector_sha256")})
+
+    # A volatile literal naming a store/table/column that no longer exists
+    # was silently ignored; it now kills, because it means the frozen list
+    # and the tree have diverged (gate round 14 item D).
+    for db, tables in v.items():
+        for t, cols in tables.items():
+            pj = a["sqlite"].get(db, {}).get("tables", {}).get(t)
+            if pj is None:
+                res["kills"].append({"clause": "P1.volatile_unresolved",
+                                     "db": db, "table": t})
+                continue
+            for c in cols:
+                if c not in pj.get("columns", []):
+                    res["kills"].append({"clause": "P1.volatile_unresolved",
+                                         "db": db, "table": t, "column": c})
 
     pa_, pb_ = phases(a), phases(b)
     res["phase_multisets"] = {"a": pa_, "b": pb_}

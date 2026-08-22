@@ -305,8 +305,26 @@ row and the v2 tables are not created.
 
 ## 11. Open items — this protocol does not bind until these close
 
-- **O-1 (blocking, owner + gate).** The WAL constraint of §7. Options,
-  none chosen here: (a) the v2 ledger moves off WAL for the fenced
+- **O-1 (blocking, owner + gate).** The WAL constraint of §7.
+
+  **Gate round 14 upheld the finding and recommended an option.** Its
+  precision correction is worth keeping: U5 instantiates the affected
+  topology but freezes no checkpoint/reset schedule, so it does not
+  deterministically trigger the race — a green U5 would prove
+  *contention timing*, not corruption safety, and must not be read as
+  authorizing the production topology. Its recommendation is **(b),
+  strengthened**: one serialized ledger owner, not merely one process,
+  because the defect also covers concurrent connections in separate
+  threads. That has a consequence in shipped code — `core/ledger/
+  model_reply_persistence.py:73` opens a bare secondary writer
+  connection — which would have to join the ownership rail. Round 14
+  rates (a) the best narrow fallback if multi-process writing must be
+  preserved, (c) sound only once every production and witness
+  interpreter is proven to load a fixed library, and (d)
+  diagnostic-only. **The ruling is the owner's; this records the
+  recommendation, it does not adopt it.**
+
+  Options, none chosen here: (a) the v2 ledger moves off WAL for the fenced
   path so multi-process writing is lock-serialized and unexposed; (b)
   B10 is re-scoped to a single-writer topology and the fence is
   witnessed differently; (c) the runtime is upgraded or a backport is
@@ -324,6 +342,12 @@ row and the v2 tables are not created.
   re-frozen at the same commit.
 - **O-5.** Round 10 executed every suite in `:memory:`. Re-execution
   on disk is required by §2 and may itself produce findings.
+- **O-6 (new, gate round 14).** Design §5 requires latch publication
+  around **every** lived commit, but S1's T2 witnesses a single writer
+  path. Under the daemon-plus-web multi-writer topology the ordering of
+  latch allocation and publication across processes is unwitnessed.
+  Recorded in S1 protocol §12.13; it must close before S1 code lands.
+  It is not a prerequisite for the pre-S1 T5 baseline.
 
 ## 12. Report obligations
 

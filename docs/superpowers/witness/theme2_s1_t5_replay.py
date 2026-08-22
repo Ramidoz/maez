@@ -45,6 +45,20 @@ FLAGS_THAT_MUST_BE_UNSET = (
     "MAEZ_BIRTH_LATCH",
     "MAEZ_S1_PHASE_TRUTH",
 )
+# Gate round 14 item B: these do not gate writes, they select WHICH store is
+# read and written -- core.memory.birth_phase.default_ledger_path() honors
+# MAEZ_LEDGER_DB_PATH and then core.infra.paths.memory_dir(), which honors
+# MAEZ_DATA and MAEZ_HOME. The ordinary config loader can repopulate any
+# non-secret name after --clearenv, so an unset check at entry is not enough.
+# They are absent from this host's config/.env today; the run fails closed if
+# they appear and do not point inside the overlay.
+PATHS_THAT_MUST_STAY_IN_OVERLAY = (
+    "MAEZ_LEDGER_DB_PATH",
+    "MAEZ_HOME",
+    "MAEZ_DATA",
+    "MAEZ_CONFIG",
+    "MAEZ_CACHE",
+)
 # Values safe to record verbatim. Everything else is recorded by NAME only:
 # config/.env carries credentials, and a witness report is a committed file.
 ENV_VALUES_SAFE_TO_RECORD = (
@@ -182,7 +196,24 @@ def main() -> int:
     set_flags = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
     if set_flags:
         raise SystemExit(f"REFUSED: flags-off violated after import: {set_flags}")
+    escaped = []
+    for name in PATHS_THAT_MUST_STAY_IN_OVERLAY:
+        val = os.environ.get(name)
+        if val and not Path(val).resolve().is_relative_to(MAEZ_TREE):
+            escaped.append(f"{name}={val}")
+    if escaped:
+        raise SystemExit(
+            f"REFUSED: store-selecting path escapes the overlay: {escaped}")
     report["flags_off_after_import"] = "PASS"
+    report["store_paths_in_overlay"] = "PASS"
+
+    # Prove where the resolver actually points, rather than inferring it.
+    from core.memory.birth_phase import default_ledger_path
+    report["resolved_ledger_path"] = str(default_ledger_path())
+    if not Path(report["resolved_ledger_path"]).resolve().is_relative_to(MAEZ_TREE):
+        raise SystemExit(
+            f"REFUSED: resolver points outside the overlay: "
+            f"{report['resolved_ledger_path']}")
 
     t0 = time.time()
     daemon = MaezDaemon()
@@ -217,6 +248,12 @@ def main() -> int:
 
     for item in interactions:
         rec = {"id": item["id"], "at": item["at"], "source": item["source"]}
+        # Gate round 14 finding I: an aggregate "tail invoked at least once"
+        # passes on 19 returned-before-tail interactions plus one stored one,
+        # and production has returned-before-tail paths
+        # (maez_daemon.py:7197). Bind EVERY interaction to its own observed
+        # passage instead.
+        before = tail_calls["store_telegram"]
         t = time.time()
         try:
             reply = daemon.handle_message(item["text"], source=item["source"])
@@ -227,6 +264,7 @@ def main() -> int:
             rec["exception"] = f"{type(e).__name__}: {e}"
             rec["traceback"] = traceback.format_exc()
         rec["seconds"] = round(time.time() - t, 3)
+        rec["tail_passages"] = tail_calls["store_telegram"] - before
         report["interactions"].append(rec)
 
     daemon.memory.store_telegram = _orig_store
@@ -235,6 +273,8 @@ def main() -> int:
 
     returned = sum(1 for r in report["interactions"] if r["outcome"] == "returned")
     raised = [r["id"] for r in report["interactions"] if r["outcome"] == "raised"]
+    no_tail = [r["id"] for r in report["interactions"]
+               if r.get("tail_passages", 0) < 1]
     before, after = (report["collection_counts_before"],
                      report["collection_counts_after"])
     grew = any(isinstance(after.get(k), int) and isinstance(before.get(k), int)
@@ -242,12 +282,21 @@ def main() -> int:
     report["positive_control"] = {
         "interactions_returned": returned,
         "interactions_raised": raised,
+        "interactions_without_tail_passage": no_tail,
         "store_tail_invocations": tail_calls["store_telegram"],
         "collections_grew": grew,
         "verdict": ("PASS" if (returned == len(interactions)
-                               and tail_calls["store_telegram"] > 0
+                               and not no_tail
                                and grew) else "FAIL"),
     }
+    # T5 deliberately exercises the hermetic fallback, so a reply that is a
+    # degraded string is expected -- but it must never be reported as healthy
+    # synthesis. Label the shape; do not judge it here.
+    report["reply_shapes"] = {
+        r["id"]: {"chars": len(r.get("reply") or ""),
+                  "empty": not (r.get("reply") or "").strip()}
+        for r in report["interactions"]}
+    report["brain_reachable"] = False
 
     # Gate round 12, item C: flags off, the ledger is NOT "never opened" --
     # the evidence-envelope builder opens it read-only (envelope_builder.py:268,
