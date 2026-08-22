@@ -186,7 +186,12 @@ if [ "$PRE_ACTIVE" = "active" ]; then
 fi
 
 one_run() {
-    local tag="$1" fixture="${2:-healthy}" A="$W/airlock-$tag"
+    # Separate statements on purpose: bash 5.3 expands every word of a
+    # `local` before assigning any of them, so `A="$W/airlock-$tag"` in the
+    # same statement dies under `set -u` with "tag: unbound variable".
+    local tag="$1"
+    local fixture="${2:-healthy}"
+    local A="$W/airlock-$tag"
     say "--- run $tag: airlock $A"
     rm -rf "$A"
     "$AIRLOCK" "$A" --self-test 2>&1 | tee "$W/selftest-$tag.txt" | tee -a "$LOG"
