@@ -59,7 +59,7 @@ fi
 # ownership alone refused a plain /tmp workdir.
 WP_MODE=$(stat -c %a "$WPARENT")
 if [ "$(stat -c %u "$WPARENT")" != "$(id -u)" ] \
-   && [ "${WP_MODE%????}" != "1" ]; then
+   && [ "${WP_MODE%???}" != "1" ]; then
     echo "REFUSED: --work parent is neither owned by this user nor sticky" >&2
     exit 3
 fi
