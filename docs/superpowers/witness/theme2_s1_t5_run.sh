@@ -107,7 +107,12 @@ on_exit() {
     say "orchestrator exiting rc=$rc"
     exit $rc
 }
+# EXIT alone does not fire on a signal, and this script stops the owner's
+# daemon. Trap the signals too, so an interrupted run still brings Maez back.
 trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 131' HUP
 
 say "=== T5 baseline orchestrator ==="
 say "repo HEAD: $(cd "$REPO" && git rev-parse HEAD)"
