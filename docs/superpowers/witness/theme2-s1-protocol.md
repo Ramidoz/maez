@@ -1,4 +1,4 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6.6
+# Theme 2 — S1 (phase truth) witness protocol, v7
 
 Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
@@ -10,9 +10,11 @@ closed gate round 13's three reopened items (B, D, E — A, C, G passed)
 and its finding I; v6.3 closed gate round 14's B, D, E, I and its
 blocking finding J, and recorded finding K; v6.4 closed gate round 15's
 B, D, E and J (I passed); v6.5 closed gate round 16's B, D and J and
-acted on its finding L, which changed what T5 measures; **v6.6 closes
-gate round 17's B, M and N — D and J passed there — by making the gate
-executable and pinning the discriminator's activation.** The T5
+acted on its finding L, which changed what T5 measures; v6.6 made the
+gate executable and pinned the discriminator's activation. **v7 cuts
+T5 to the discriminator on the owner's ruling after gate round 18, and
+corrects §9's T3 contract.** The archive and census digests arrive in
+v7.1, which per gate round 11 must precede the first S1 code commit. The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -302,13 +304,32 @@ outcome.
 - **T3 exact invocations**: each census construct is exercised through
   its public entry — `memory_manager.store_telegram(...)` (reaches all
   three stamp sites via the three storage tiers),
-  `PrivateThoughts.record_thought/record_secret/record_reflection`,
+  `PrivateThoughts.record_thought(...)` and `record_signal(...)`
+  *(corrected in v7 — see the note below)*,
   `AuditLog.record(...)`, `AuditLog.start_direct_edit_session(...)`,
   `AuditLog.log_direct_edit(...)`, `source_awareness` path-gate
   helper, `span_planner.plan(...)`, and a production-mode
   `LedgerWriter.write_turn('system_event', ...)`; argument fixtures
   are literal in the harness file committed with the S1 code, whose
-  digest is recorded in the run report. Heartbeat readers
+  digest is recorded in the run report.
+
+  **v7 correction, gate round 18.** §9's T3 contract named
+  `PrivateThoughts.record_secret` and `record_reflection`. **Neither
+  method exists.** Verified: `core/infra/private_thoughts.py` defines
+  `record_thought` (`:571`), `record_signal` (`:604`) and
+  `insert_signal_in_transaction` (`:655`); the census JSON's
+  `PrivateThoughts@587/@627/@674` anchors fall inside those three, so
+  the *census* was right and only the prose was wrong. T3's invocation
+  contract is repointed at the surfaces that exist.
+
+  This is worth recording rather than quietly fixing: §9 was declared
+  **BINDING-READY at gate round 11**, and an unimplementable contract
+  passed. Review is not execution. It is the same lesson the T5 rounds
+  taught from the other direction — the defects that mattered were
+  found by *running* controls, not by reading — and it is why T3 must
+  be executed against the real APIs before it is called closed.
+
+  Heartbeat readers
   (`lean_idle_heartbeat@295`) are readers of stored values, not
   stampers: censused (see census JSON `readers_of_memory_phase_values`)
   and exercised read-only in T3's positive control.
@@ -721,60 +742,69 @@ any S1 code exists, and implemented by
 report), which is self-tested against each clause before it is pointed
 at a real baseline.
 
-**The gate, v6.5.** Only the clauses in this block decide the verdict.
-Everything after them is forensic evidence: computed, recorded and
-archived, never the authority.
+**The gate, v7 — cut to the discriminator.**
 
-- **G1 — no latch artifact.** No `birth_observed/`, `segment-*.jsonl`
-  or `*.tmp` under any latch path, on either fixture. (Formerly B2.)
-- **G2 — the ledger main file is unchanged**, per the digest the driver
-  records post-migration and post-replay. (Formerly B1; the read-only
-  opens and their `-wal`/`-shm` sidecars are expected — see B4.)
-- **G3 — the stamp census matches, on BOTH fixtures**, and is
-  **fail-closed**: a store the census reports as `absent` or `error` is
-  a failure, not a fact. The two healthy runs must agree with each
-  other, and — once a baseline exists — each fixture's census must
-  equal the pinned baseline **exactly**. v6.5's shell check accepted
-  "any dictionary contains a gestation stamp", which raw Chroma alone
-  could satisfy while an expected SQLite store was missing *(gate round
-  17, M(ii))*.
-- **G4 — record counts match** per store and per collection, with a
-  non-integer count treated as a failure.
-- **G5 — the discriminator flips.** Once S1 exists, a run with
-  `MAEZ_S1_PHASE_TRUTH=1` against the **partial** fixture must **not**
-  match the baseline: `resolve()` must return `unknown`, the census
-  must differ from the flags-off census, and no store may carry a
-  `gestation` stamp. **A T5 in which G5 does not flip is a failed T5**,
-  however cleanly the rest passes, because it means the guard is not
-  there. Pre-S1, G5 is `not-applicable`, and the gate **refuses that
-  answer the moment `birth_phase.resolve` exists** — so the clause
-  cannot quietly stay dormant once there is something to test.
+Gate round 18 executed synthetic controls against v6.6's gate and found
+it **failed an honest run**: G3 demanded stamps from stores this T5 path
+never writes. `MemoryManager.store_telegram` (`memory_manager.py:1576`)
+adds to `raw` and nothing else, and T5 reaches exactly one of the
+thirteen census consumers — so daily, core, `private_thoughts` and
+`audit_log` are *legitimately* empty, and a gate that rejects that is
+broken. It also passed a minimal forged forced-on report, a report with
+no phase probe, and a document-plus-metadata mutation.
 
-  **The forced-on run has its own success contract, and G6 does not
-  apply to it** *(v6.6, gate round 17 M(iii))*: refusal *is* the
-  expected outcome there, so requiring every interaction to complete
-  and the storage tail to run — which is exactly what G6 demands of a
-  flags-off run — would make a correct forced-on run look like a
-  failure. Its contract is: the resolver reads `unknown`, every census
-  consumer raises `PhaseUnknownRefusal`, and zero `gestation` stamps
-  land in the window.
-- **G6 — the positive controls of §12.11 pass** on every flags-off run.
-- **G7 — logical store content matches** between the healthy runs:
-  collection sets, record counts, and the embedding-vector digest.
-  *(v6.6, gate round 17 finding N: documents, non-volatile metadata and
-  embeddings can regress recall while phase stamps and counts stay put,
-  so logical P2 belongs in the gate. Physical HNSW bytes stay
-  forensic.)*
+On the owner's ruling the gate is now four kills plus the
+discriminator. Everything else — the byte projection, HNSW layout,
+embedding vectors, cross-store record counts, the volatile derivation —
+is **forensic**: computed, recorded, archived, and never deciding.
 
-**The gate is executable, and it is the only authority.**
-`docs/superpowers/witness/theme2_s1_t5_gate.py` consumes the three run
-reports and the two projections, decides G1–G7, writes a verdict, and
-exits non-zero on any failure. Round 17 found the split declared in
-prose but absent from the executable — the orchestrator still let a
-physical projection difference block publication while the clauses that
-mattered decided nothing. The projection now runs with its status
-captured rather than propagated, and its verdict is recorded as
-evidence.
+- **K1 — the ledger main file is unchanged**, per the digests the driver
+  records post-migration and post-replay. Read-only opens and their
+  `-wal`/`-shm` sidecars are expected (§12.8 B4).
+- **K2 — no latch artifact** anywhere on either fixture.
+- **K3 — the positive controls passed** on every flags-off run, with the
+  underlying numbers re-derived rather than the `PASS` label trusted:
+  no interaction raised, none missed the storage tail, at least one
+  returned, at least one collection grew.
+- **K4 — no store landed outside the projected tree.** The driver sweeps
+  every writable root — `logs/`, `.cache/`, `~/.config/maez`,
+  `~/.cache/chroma`, `/tmp`, `/run`, `/var/tmp` — and detects SQLite by
+  its 16-byte magic header, not by file extension, because a selector
+  can name an extensionless path.
+- **D — the discriminator.** Both fixtures are required. Flags-off must
+  read `gestation` on the **partial** fixture — the legacy behavior T5
+  exists to preserve — and, once a baseline is pinned, each fixture's
+  census must equal it **exactly**. The census is narrow on purpose:
+  the resolver's answer plus the stamps of the one store this path
+  writes.
+
+  Once S1 exists, a **forced-on** run is mandatory and must flip. It is
+  bound on four counts, because round 18 passed a forgery that was
+  bound on none: it must be against the **partial** fixture; its
+  recorded post-import environment must carry
+  `MAEZ_S1_PHASE_TRUTH=1`; `resolve()` must return `unknown`; and it
+  must carry `PhaseUnknownRefusal` evidence. Its census must differ
+  from the flags-off census and must contain no `gestation` stamp.
+  **A T5 whose discriminator does not flip is a failed T5**, however
+  cleanly K1–K4 pass, because it means the guard is not there. The gate
+  refuses a `not-applicable` answer the moment `birth_phase.resolve`
+  exists.
+
+**Schema is fail-closed.** A missing key, a malformed phase probe, an
+empty census, or an exercised store with no stamps fails before any
+clause is evaluated. Absent evidence is not evidence.
+
+**The gate has its own self-test**, `theme2_s1_t5_gate_selftest.py`, 21
+cases, run by the orchestrator *before* the daemon is touched. Round 18
+was right that a sole authority without one is a blocking gap — the
+first version of the gate would have failed every honest baseline while
+passing four forgeries, and nothing in the witness would have said so.
+Every case is a defect a gate round reproduced or a mutation the gate
+must bite on, and the honest-run case is first.
+
+**§6's frozen selector suite is restored to the orchestrator.** It was
+required by the protocol and absent from the executable *(gate round 18
+finding P)*.
 
 **The pinned census.** The gate emits the census it observed, and the
 orchestrator publishes it to

@@ -417,19 +417,41 @@ def main() -> int:
         "audit_log": str(_paths.audit_log_db()),
     }
 
-    # Gate round 17 item B: enumerating selectors one at a time will always
-    # miss one -- MAEZ_PRIVATE_THOUGHTS_PATH, the calendar and GitHub stores,
-    # and whatever lands next. This is the catch-all: after the run, no
-    # database may exist anywhere in the writable airlock EXCEPT inside the
-    # projected store tree. A store that escaped into logs/ or .cache/ is
-    # caught whatever selector produced it.
+    # Gate round 17/18 item B: enumerating selectors one at a time will
+    # always miss one -- MAEZ_PRIVATE_THOUGHTS_PATH, the calendar and GitHub
+    # stores, and whatever lands next. This is the catch-all, and round 18
+    # showed the first version was too narrow twice over: it scanned three
+    # directories while the airlock also exposes /tmp, /run, /var/tmp and
+    # ~/.cache/chroma as writable, and it matched on file extension while an
+    # extensionless database escapes.
+    #
+    # Sweep EVERY writable root, and detect SQLite by its 16-byte magic
+    # header rather than by name.
+    WRITABLE_ROOTS = (
+        LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit/.config/maez"),
+        Path("/home/rohit/.cache/chroma"), Path("/tmp"), Path("/run"),
+        Path("/var/tmp"),
+    )
+    SQLITE_MAGIC = b"SQLite format 3\x00"
+
+    def looks_like_sqlite(q: Path) -> bool:
+        try:
+            with q.open("rb") as fh:
+                return fh.read(16) == SQLITE_MAGIC
+        except OSError:
+            return False
+
     strays = []
-    for root in (LOGS_TREE, MAEZ_TREE / ".cache", Path("/home/rohit/.config/maez")):
+    for root in WRITABLE_ROOTS:
         if not root.exists():
             continue
         for q in root.rglob("*"):
-            if q.is_file() and q.suffix in (".db", ".sqlite3", ".sqlite"):
-                strays.append(str(q))
+            try:
+                if q.is_file() and looks_like_sqlite(q):
+                    strays.append(str(q))
+            except OSError:
+                continue
+    report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
     report["stray_stores_outside_projected_tree"] = sorted(strays)
     if strays:
         raise SystemExit(

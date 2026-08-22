@@ -70,6 +70,7 @@ EXTRACT="$REPO/docs/superpowers/witness/theme2_s1_t5_extract.py"
 PROJECT="$REPO/docs/superpowers/witness/theme2_s1_t5_projection.py"
 SELFTEST="$REPO/docs/superpowers/witness/theme2_s1_t5_projection_selftest.py"
 GATE="$REPO/docs/superpowers/witness/theme2_s1_t5_gate.py"
+GATE_SELFTEST="$REPO/docs/superpowers/witness/theme2_s1_t5_gate_selftest.py"
 MANIFEST="$REPO/docs/superpowers/witness/theme2-s1-replay.json"
 PY="$REPO/.venv/bin/python"
 
@@ -117,8 +118,20 @@ fi
 say "sqlite: $($PY -c 'import sqlite3;print(sqlite3.sqlite_version)')"
 
 # The comparator is the instrument the verdict rests on. Verify it first.
-say "--- projection self-test"
+say "--- gate self-test (the sole authority; 21 biting cases)"
+"$PY" "$GATE_SELFTEST" 2>&1 | tee -a "$LOG"
+
+say "--- projection self-test (forensic instrument)"
 "$PY" "$SELFTEST" 2>&1 | tee -a "$LOG"
+
+# Protocol §6 requires the frozen selector suite green, and gate round 18
+# found it required but absent from the orchestrator.
+say "--- frozen pytest selector suite (§6)"
+SELECTORS=$(grep -v "^#" "$REPO/docs/superpowers/witness/theme2-s1-selectors.txt" \
+            | grep -v "^$" | tr "\n" " ")
+say "selectors: $SELECTORS"
+# shellcheck disable=SC2086
+"$REPO/.venv/bin/python" -m pytest -q $SELECTORS 2>&1 | tail -20 | tee -a "$LOG"
 
 PRE_ACTIVE=$(systemctl --user is-active "$UNIT" || true)
 say "pre-run $UNIT is-active: $PRE_ACTIVE"
@@ -188,9 +201,17 @@ if not any("gestation" in v for v in stamped):
 print("discriminator baseline OK")
 PYEOF
 
-say "--- derive the volatile field list from the two baseline runs"
+# FORENSIC (gate round 18 finding P): the volatile derivation exits non-zero
+# on a finding, and under set -e that still gated the run through a demoted
+# instrument. Its status is captured, not propagated.
+say "--- forensic: volatile field derivation (recorded, not gating)"
+set +e
 "$PY" "$PROJECT" volatile "$W/proj-a.json" "$W/proj-b.json" \
-    "$W/volatile.json" 2>&1 | tee -a "$LOG"
+    "$W/volatile.json" > "$W/volatile-derivation.txt" 2>&1
+VOL_RC=$?
+set -e
+say "forensic volatile derivation rc=$VOL_RC"
+[ -f "$W/volatile.json" ] || echo '{"volatile":{},"findings":[]}' > "$W/volatile.json"
 
 LEDGER_SHA=$("$PY" -c "
 import json,sys
@@ -212,8 +233,7 @@ say "forensic projection verdict rc=$PROJ_RC (recorded in compare.json)"
 # THE GATE. This is the only authority. G1-G7, fail-closed.
 say "--- gate: G1..G7"
 "$PY" "$GATE" \
-    --run-a "$W/run-a.json" --run-b "$W/run-b.json" --run-p "$W/run-p.json" \
-    --proj-a "$W/proj-a.json" --proj-b "$W/proj-b.json" \
+    --run-a "$W/run-a.json" --run-p "$W/run-p.json" \
     ${BASELINE_CENSUS:+--baseline-census "$BASELINE_CENSUS"} \
     ${FORCED_ON:+--forced-on "$FORCED_ON"} \
     --out "$W/gate-verdict.json" 2>&1 | tee -a "$LOG"
@@ -260,14 +280,24 @@ print('\n'.join(e['path'] for e in
     # The pinned stamp census is the durable comparison basis (gate round 17,
     # M(iv)): without it, a later flags-off run has nothing exact to match and
     # G3 degenerates to "some gestation stamp exists".
+    # Gate round 18: census generation was the left side of `&&`, where bash
+    # suppresses errexit -- a failed write left the new archive beside an old
+    # or absent census and the run still claimed publication. It is now its
+    # own checked statement, and it carries the archive digest so the pair
+    # cannot drift apart.
     CENSUS_PATH="$REPO/docs/superpowers/witness/theme2-s1-baseline-census.json"
     "$PY" -c "
-import json,sys
-v=json.load(open('$W/gate-verdict.json'))
-json.dump(v['pinned_census'], open('$CENSUS_PATH.tmp','w'), indent=1, sort_keys=True)
-" && mv -f "$CENSUS_PATH.tmp" "$CENSUS_PATH"
+import json
+v = json.load(open('$W/gate-verdict.json'))
+out = dict(v['pinned_census'])
+out['bound_archive_sha256'] = '$ARCHIVE_SHA'
+json.dump(out, open('$CENSUS_PATH.tmp', 'w'), indent=1, sort_keys=True)
+"
+    CENSUS_SHA=$(sha256sum "$CENSUS_PATH.tmp" | cut -d\  -f1)
+    [ -n "$CENSUS_SHA" ] || { say "REFUSED: census hashing failed"; exit 8; }
+    mv -f "$CENSUS_PATH.tmp" "$CENSUS_PATH"
     say "pinned census published: $CENSUS_PATH"
-    say "CENSUS SHA256: $(sha256sum "$CENSUS_PATH" | cut -d\  -f1)"
+    say "CENSUS SHA256: $CENSUS_SHA (bound to archive $ARCHIVE_SHA)"
     say "archive published: $ARCHIVE_PATH"
     say "ARCHIVE SHA256: $ARCHIVE_SHA"
 else
