@@ -1,0 +1,1798 @@
+{
+ "_comment": "Theme 2 S2 invalid-row-rejection roster. VERBATIM RECORD ONLY — every table row the gate rounds ever wrote for each control id, in round order, with each source doc's sha256. `expected` is null on every entry by design: no expectation is inferred here. Literalizing all 100 expectations, and supplying executable SQL for each, is the S2 protocol's first obligation (protocol section 2). The roster does not bind until that amendment lands.",
+ "source_digests": {
+  "2026-08-22-theme2-gate-round1.md": "9456db460ce1d4722171873d5325b7728ac422ecc51c2a39fc883a917cfb2680",
+  "2026-08-22-theme2-gate-round2.md": "c4c3f3b234ce8e3354f27d5e8067d418f76749c2a7f97d6139e075e8ed156086",
+  "2026-08-22-theme2-gate-round3.md": "5ce3b587c1c0ca73ee490c7fe56aaa60b9f366a1f10209fc0b3b96f5dd754e58",
+  "2026-08-22-theme2-gate-round4.md": "fa405da4694d506f86953c59f4b2038c27d51a319ed89dba4de76f255c40831f",
+  "2026-08-22-theme2-gate-round5.md": "2752087eb40dd4842c7934ad7535ba8560451e803bf33de96c4678637787f630",
+  "2026-08-22-theme2-gate-round5b.md": "1cc75b317e2e7cbf70fa4765347c0ccbe6305248d08c65ccd98a5409abd3103f",
+  "2026-08-22-theme2-gate-round6.md": "54620a36a706e0d872237ed943f0cc73560c37f573ff0ac4641c30544bff61ca",
+  "2026-08-22-theme2-gate-round7.md": "093a32bc94e63f25020a09637485aa8b9884039dbbdc51f9884be0766abb5f92",
+  "2026-08-22-theme2-gate-round8.md": "5cb7e09ca99094595eb77a512dc573a6202217ed3d7352160c8478fd01cc6e93",
+  "2026-08-22-theme2-gate-round10.md": "93397e604a822ceebd160583cd7c219df388bc24ad614a34ce8390e6f5df2485",
+  "2026-08-22-theme2-gate-round11.md": "9c2968082d607094a8d8d9e4bb100765e1d6d6083f3b2f8efc2d63b08aa9f223"
+ },
+ "control_count": 100,
+ "controls": {
+  "C8-01": {
+   "family": "C8",
+   "statement_of_record": "| C8-01 | After `r1` failed and was superseded, create `r2(started_at=20)`, then `INSERT INTO egress_reservations VALUES ('i1',2,'r2',14)` | **ACCEPT**: reservation time `14` predates its authorizing run time `20`. The matching effect claim at time 14 correctly rejects. The reservation checks never compare `reserved_at` to `authorized_run.started_at`. [DDL:391](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:391), [claim comparison:311](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:311) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-01 | After `r1` failed and was superseded, create `r2(started_at=20)`, then `INSERT INTO egress_reservations VALUES ('i1',2,'r2',14)` | **ACCEPT**: reservation time `14` predates its authorizing run time `20`. The matching effect claim at time 14 correctly rejects. The reservation checks never compare `reserved_at` to `authorized_run.started_at`. [DDL:391](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:391), [claim comparison:311](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:311) |"
+    }
+   ]
+  },
+  "C8-02": {
+   "family": "C8",
+   "statement_of_record": "| C8-02 | Current heads: `e1=timeout_unknown`, `e2=delivered`; `INSERT ... closure='unknown_delivery', evidence_json='[\"e1\"]'` | **ACCEPT**, and `closure_consistency_violations=[]`. The intentionally non-exhaustive treatment is a gap: it permits an uncited delivery while rev 6 claims the label derives from the full set. [DDL:605](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:605), [pass 8:674](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:674) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-02 | Current heads: `e1=timeout_unknown`, `e2=delivered`; `INSERT ... closure='unknown_delivery', evidence_json='[\"e1\"]'` | **ACCEPT**, and `closure_consistency_violations=[]`. The intentionally non-exhaustive treatment is a gap: it permits an uncited delivery while rev 6 claims the label derives from the full set. [DDL:605](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:605), [pass 8:674](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:674) |"
+    }
+   ]
+  },
+  "C8-03": {
+   "family": "C8",
+   "statement_of_record": "| C8-03 | Cited timeout `e1`; insert late `e2(delivered)` superseding `e1`; query the view | Exact result was `[('t1','c1')]` and nothing else. But `INSERT ... closure='delivered', recorded_by='reconciler'` then **REJECTED**: `only transport may supersede transport closure`. A reconciler cannot restore schema conformance after late knowledge invalidates a transport closure. [DDL:546](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:546), [view:709](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:709) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-03 | Cited timeout `e1`; insert late `e2(delivered)` superseding `e1`; query the view | Exact result was `[('t1','c1')]` and nothing else. But `INSERT ... closure='delivered', recorded_by='reconciler'` then **REJECTED**: `only transport may supersede transport closure`. A reconciler cannot restore schema conformance after late knowledge invalidates a transport closure. [DDL:546](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:546), [view:709](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:709) |"
+    }
+   ]
+  },
+  "C8-04": {
+   "family": "C8",
+   "statement_of_record": "| C8-04 | Close as `refused`, then fold a historical intent with `created_at` before the closure | Intent **REJECTED**: `no new intents on a closed turn`. The same applies to historical reservations, leaving no reconciler path for late intent/reservation knowledge. [DDL:353](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:353), [design fold requirement:248](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:248) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-04 | Close as `refused`, then fold a historical intent with `created_at` before the closure | Intent **REJECTED**: `no new intents on a closed turn`. The same applies to historical reservations, leaving no reconciler path for late intent/reservation knowledge. [DDL:353](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:353), [design fold requirement:248](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:248) |"
+    }
+   ]
+  },
+  "C8-05": {
+   "family": "C8",
+   "statement_of_record": "| C8-05 | `suppressed` with `[]` and no egress; separately, `unresolved_crash []` while an uncited delivered head exists | Both **ACCEPT**; the consistency view remains empty. `suppressed` lacks a nonempty-evidence requirement, while `unresolved_crash` checks only cited rows. [DDL:574](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:574), [DDL:636](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:636) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-05 | `suppressed` with `[]` and no egress; separately, `unresolved_crash []` while an uncited delivered head exists | Both **ACCEPT**; the consistency view remains empty. `suppressed` lacks a nonempty-evidence requirement, while `unresolved_crash` checks only cited rows. [DDL:574](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:574), [DDL:636](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:636) |"
+    }
+   ]
+  },
+  "C8-06": {
+   "family": "C8",
+   "statement_of_record": "| C8-06 | Insert embedded-NUL and multibyte values into `event_identity` and `transport` | Both **ACCEPT**; examples stored as hex `780079` and `C3A9`. Empty values reject, but these columns have only `length(...)>0`. Empty/NUL/multibyte `tenant_id` also accepts. [DDL:141](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:141), [DDL:323](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:323), [pass-8 claim:683](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:683) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-06 | Insert embedded-NUL and multibyte values into `event_identity` and `transport` | Both **ACCEPT**; examples stored as hex `780079` and `C3A9`. Empty values reject, but these columns have only `length(...)>0`. Empty/NUL/multibyte `tenant_id` also accepts. [DDL:141](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:141), [DDL:323](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:323), [pass-8 claim:683](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:683) |"
+    }
+   ]
+  },
+  "C8-07": {
+   "family": "C8",
+   "statement_of_record": "| C8-07 | Literal rev-6 turns fragment: `INSERT ... occurred_at=1e999, admitted_at=1e999`; separately, seal time `20` followed by cognition claim time `12` | Both **ACCEPT**. The turns fragment still declares bare `REAL` columns, and cognition chronology compares against run start but not seal time. [DDL:41](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:41), [DDL:126](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:126), [design:105](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:105) |",
+   "statement_round": "8",
+   "statement_section": "1. New consistency findings",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "1. New consistency findings",
+     "row": "| C8-07 | Literal rev-6 turns fragment: `INSERT ... occurred_at=1e999, admitted_at=1e999`; separately, seal time `20` followed by cognition claim time `12` | Both **ACCEPT**. The turns fragment still declares bare `REAL` columns, and cognition chronology compares against run start but not seal time. [DDL:41](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:41), [DDL:126](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql:126), [design:105](/home/rohit/maez/docs/superpowers/specs/2026-08-22-theme2-ledger-truth-design.md:105) |"
+    }
+   ]
+  },
+  "N01": {
+   "family": "N",
+   "statement_of_record": "| N01 | Second active run | **PASS** — `one_active_run` rejected it. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N01 | Second active run | **PASS** — `one_active_run` rejected it. |"
+    }
+   ]
+  },
+  "N02": {
+   "family": "N",
+   "statement_of_record": "| N02 | Regressed epoch | **PASS** — `trg_runs_epoch_monotonic`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N02 | Regressed epoch | **PASS** — `trg_runs_epoch_monotonic`. |"
+    }
+   ]
+  },
+  "N03": {
+   "family": "N",
+   "statement_of_record": "| N03 | Self-parent reply | **PASS** — rejected by `trg_turns_parent_semantics`; diagnostic was misleading because the `BEFORE INSERT` trigger saw no existing parent before the self-check. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N03 | Self-parent reply | **PASS** — rejected by `trg_turns_parent_semantics`; diagnostic was misleading because the `BEFORE INSERT` trigger saw no existing parent before the self-check. |"
+    }
+   ]
+  },
+  "N04": {
+   "family": "N",
+   "statement_of_record": "| N04 | Reply with NULL parent | **PASS** — `trg_turns_reply_needs_parent`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N04 | Reply with NULL parent | **PASS** — `trg_turns_reply_needs_parent`. |"
+    }
+   ]
+  },
+  "N05": {
+   "family": "N",
+   "statement_of_record": "| N05 | Future parent | **PASS** — `trg_turns_parent_semantics` strictly-prior branch. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N05 | Future parent | **PASS** — `trg_turns_parent_semantics` strictly-prior branch. |"
+    }
+   ]
+  },
+  "N06": {
+   "family": "N",
+   "statement_of_record": "| N06 | Parent without `parent_kind` | **PASS** — `trg_turns_parent_semantics`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N06 | Parent without `parent_kind` | **PASS** — `trg_turns_parent_semantics`. |"
+    }
+   ]
+  },
+  "N07": {
+   "family": "N",
+   "statement_of_record": "| N07 | `is_birth_anchor=2` | **PASS** — boolean `CHECK` from the required `turns` baseline. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N07 | `is_birth_anchor=2` | **PASS** — boolean `CHECK` from the required `turns` baseline. |"
+    }
+   ]
+  },
+  "N08": {
+   "family": "N",
+   "statement_of_record": "| N08 | Second birth anchor | **PASS** — `trg_turns_single_birth_anchor`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N08 | Second birth anchor | **PASS** — `trg_turns_single_birth_anchor`. |"
+    }
+   ]
+  },
+  "N09": {
+   "family": "N",
+   "statement_of_record": "| N09 | Late constituent after seal | **PASS** — `trg_admission_no_late_constituent`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N09 | Late constituent after seal | **PASS** — `trg_admission_no_late_constituent`. |"
+    }
+   ]
+  },
+  "N10": {
+   "family": "N",
+   "statement_of_record": "| N10 | Update constituent onto sealed turn | **PASS** — `trg_admission_events_no_update`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N10 | Update constituent onto sealed turn | **PASS** — `trg_admission_events_no_update`. |"
+    }
+   ]
+  },
+  "N11": {
+   "family": "N",
+   "statement_of_record": "| N11 | Owner event pointing to public turn | **PASS** — composite tenant/turn FK. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N11 | Owner event pointing to public turn | **PASS** — composite tenant/turn FK. |"
+    }
+   ]
+  },
+  "N12": {
+   "family": "N",
+   "statement_of_record": "| N12 | Duplicate non-NULL intent shape | **PASS** — `uq_egress_intent_shape`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N12 | Duplicate non-NULL intent shape | **PASS** — `uq_egress_intent_shape`. |"
+    }
+   ]
+  },
+  "N13": {
+   "family": "N",
+   "statement_of_record": "| N13 | Self-superseding result | **PASS** — `egress_results` self `CHECK`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N13 | Self-superseding result | **PASS** — `egress_results` self `CHECK`. |"
+    }
+   ]
+  },
+  "N14": {
+   "family": "N",
+   "statement_of_record": "| N14 | Cross-intent result supersession | **PASS** — `trg_egress_results_supersede_same_intent`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N14 | Cross-intent result supersession | **PASS** — `trg_egress_results_supersede_same_intent`. |"
+    }
+   ]
+  },
+  "N15": {
+   "family": "N",
+   "statement_of_record": "| N15 | Evidence-less transport closure | **PASS** — `trg_turn_closures_topology`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N15 | Evidence-less transport closure | **PASS** — `trg_turn_closures_topology`. |"
+    }
+   ]
+  },
+  "N16": {
+   "family": "N",
+   "statement_of_record": "| N16 | Cross-turn closure evidence | **PASS** — same-turn join inside `trg_turn_closures_topology`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N16 | Cross-turn closure evidence | **PASS** — same-turn join inside `trg_turn_closures_topology`. |"
+    }
+   ]
+  },
+  "N17": {
+   "family": "N",
+   "statement_of_record": "| N17 | Second initial closure | **PASS** — dense ordinal branch. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N17 | Second initial closure | **PASS** — dense ordinal branch. |"
+    }
+   ]
+  },
+  "N18": {
+   "family": "N",
+   "statement_of_record": "| N18 | Gapped closure ordinal | **PASS** — dense ordinal branch. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N18 | Gapped closure ordinal | **PASS** — dense ordinal branch. |"
+    }
+   ]
+  },
+  "N19": {
+   "family": "N",
+   "statement_of_record": "| N19 | Reconciler over transport | **PASS** — precedence branch. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N19 | Reconciler over transport | **PASS** — precedence branch. |"
+    }
+   ]
+  },
+  "N20": {
+   "family": "N",
+   "statement_of_record": "| N20 | Closure mutation | **PASS** — `trg_turn_closures_append_only_u`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N20 | Closure mutation | **PASS** — `trg_turn_closures_append_only_u`. |"
+    }
+   ]
+  },
+  "N21": {
+   "family": "N",
+   "statement_of_record": "| N21 | Claim by superseded run | **PASS** — `trg_effect_claims_fence`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N21 | Claim by superseded run | **PASS** — `trg_effect_claims_fence`. |"
+    }
+   ]
+  },
+  "N22": {
+   "family": "N",
+   "statement_of_record": "| N22 | Intent from superseded run | **PASS** — `trg_egress_intents_fence`. |",
+   "statement_round": "4",
+   "statement_section": "Round-2/round-3 controls",
+   "expected": null,
+   "history": [
+    {
+     "round": "4",
+     "section": "Round-2/round-3 controls",
+     "row": "| N22 | Intent from superseded run | **PASS** — `trg_egress_intents_fence`. |"
+    }
+   ]
+  },
+  "P01": {
+   "family": "P",
+   "statement_of_record": "| P01 | `UPDATE runs SET status='completed' WHERE run_id='r1'` | Accepted; exactly one `active → completed` event |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P01 | **PASS** | Active→completed produced exactly `active → completed` in `run_events` through `trg_runs_journal_transition`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P01 | Accepted; exactly `active→completed` journaled | **PASS** — `trg_runs_journal_transition`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P01 | `UPDATE runs SET status='completed' WHERE run_id='r1'` | Accepted; exactly one `active → completed` event |"
+    }
+   ]
+  },
+  "P02": {
+   "family": "P",
+   "statement_of_record": "| P02 | `UPDATE runs SET lease_until=1000 WHERE run_id='r1'` | Accepted; lease `1000`, zero events |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P02 | **FAIL** | `UPDATE runs SET status='active'` on an active run was accepted and journaled `active → active`; `trg_runs_transitions` does not implement its stated active→terminal-only matrix. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P02 | Accepted; lease became `1000`, zero events | **PASS** — active→active journal noise removed. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P02 | `UPDATE runs SET lease_until=1000 WHERE run_id='r1'` | Accepted; lease `1000`, zero events |"
+    }
+   ]
+  },
+  "P03": {
+   "family": "P",
+   "statement_of_record": "| P03 | `INSERT INTO run_events ... ('r1','completed','completed',30)` | Rejected: `transitions only leave active` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P03 | **FAIL** | A direct `INSERT` of `completed → active` into `run_events` was accepted; only `trg_run_events_no_update/no_delete` exist, with no insert-validity trigger. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P03 | Rejected: `transitions only leave active` | **PASS** — `trg_run_events_valid_history`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P03 | `INSERT INTO run_events ... ('r1','completed','completed',30)` | Rejected: `transitions only leave active` |"
+    }
+   ]
+  },
+  "P04": {
+   "family": "P",
+   "statement_of_record": "| P04 | `UPDATE runs SET lease_until=20 WHERE run_id='r1'` | Rejected: `lease renewal must strictly advance` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P04 | **FAIL** | An active run’s `lease_until` regressed from 999 to 1; `trg_runs_transitions` checks active status but not that a lease “renewal” advances. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P04 | Rejected: `lease renewal must advance` | **PASS** — `trg_runs_transitions`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P04 | `UPDATE runs SET lease_until=20 WHERE run_id='r1'` | Rejected: `lease renewal must strictly advance` |"
+    }
+   ]
+  },
+  "P05": {
+   "family": "P",
+   "statement_of_record": "| P05 | Supersede r1, then `INSERT INTO runs VALUES ('r2','t1',2,2,'active',21,30)` | Accepted |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P05 | **PASS** | Within one `BEGIN IMMEDIATE`, superseding epoch 1 before inserting epoch 2 succeeded under `one_active_run`, `UNIQUE(turn_id,epoch)`, and `trg_runs_epoch_monotonic`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P05 | Update-then-insert takeover accepted | **PASS** — `one_active_run`, epoch trigger. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P05 | Supersede r1, then `INSERT INTO runs VALUES ('r2','t1',2,2,'active',21,30)` | Accepted |"
+    }
+   ]
+  },
+  "P06": {
+   "family": "P",
+   "statement_of_record": "| P06 | Same r2 insert before superseding r1 | Rejected: `UNIQUE constraint failed: runs.turn_id` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P06 | **PASS** | Inserting epoch 2 before superseding epoch 1 was rejected by `one_active_run`; takeover statement order therefore matters as specified by design §3.2. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P06 | Insert-before-update takeover rejected | **PASS** — `one_active_run`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P06 | Same r2 insert before superseding r1 | Rejected: `UNIQUE constraint failed: runs.turn_id` |"
+    }
+   ]
+  },
+  "P07": {
+   "family": "P",
+   "statement_of_record": "| P07 | Revision 2 on ordinary t1 | Rejected: `a correction revision must land on a correction turn` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P07 | **FAIL** | Revisions 1 and 2 for the same identity and different payloads were accepted on the same `turn_id`; `trg_admission_revision_rules` does not enforce design §3.1’s new correction turn or `parent_kind='correction'`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P07 | Same ordinary turn revision 2 rejected | **PASS narrowly** — correction branch of `trg_admission_revision_rules`; Q08–Q09 expose residuals. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P07 | Revision 2 on ordinary t1 | Rejected: `a correction revision must land on a correction turn` |"
+    }
+   ]
+  },
+  "P08": {
+   "family": "P",
+   "statement_of_record": "| P08 | Revision 3 immediately after revision 1 | Rejected: `revision must be dense per identity` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P08 | **PASS** | Revision 3 immediately after revision 1 was rejected by `trg_admission_revision_rules`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P08 | Revision 3 after revision 1 rejected | **PASS** — dense revision branch. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P08 | Revision 3 immediately after revision 1 | Rejected: `revision must be dense per identity` |"
+    }
+   ]
+  },
+  "P09": {
+   "family": "P",
+   "statement_of_record": "| P09 | Transport evidence `[\"e2\",\"e1\"]` | Rejected: `closure evidence must be sorted canonical form` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P09 | **FAIL** | Transport evidence `[\"e1\",\"e2\"]` was followed by `[\"e2\",\"e1\"]`; `trg_turn_closures_topology` compares raw JSON text, not set membership, so the same set counted as new evidence. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P09 | Reordered evidence rejected | **PASS** — sorted canonical branch of `trg_turn_closures_topology`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P09 | Transport evidence `[\"e2\",\"e1\"]` | Rejected: `closure evidence must be sorted canonical form` |"
+    }
+   ]
+  },
+  "P10": {
+   "family": "P",
+   "statement_of_record": "| P10 | Object evidence `{\"only\":\"e1\"}` | Rejected: `closure evidence must be a JSON array` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P10 | **FAIL** | A doorway closure accepted `{\"only\":\"e1\"}`; `trg_turn_closures_topology` requires an array only indirectly for transport rows and lacks `json_type(...)='array'`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P10 | Object evidence rejected | **PASS** — `json_type(...) IS 'array'`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P10 | Object evidence `{\"only\":\"e1\"}` | Rejected: `closure evidence must be a JSON array` |"
+    }
+   ]
+  },
+  "P11": {
+   "family": "P",
+   "statement_of_record": "| P11 | Closure cites superseded e1 | Rejected: `closure evidence must be current result heads` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P11 | **FAIL** | A failed closure cited `e1(failed)` after `e2(delivered)` superseded it; `trg_turn_closures_topology` joins `egress_results`, not `current_results`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P11 | Superseded evidence head rejected | **PASS** — current-head branch. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P11 | Closure cites superseded e1 | Rejected: `closure evidence must be current result heads` |"
+    }
+   ]
+  },
+  "P12": {
+   "family": "P",
+   "statement_of_record": "| P12 | Mixed current heads from attempts 1 and 2 | Accepted |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P12 | **FAIL** | A partial closure cited both timeout and delivered observations from one retry chain; the trigger counted two result IDs rather than one physical attempt head. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P12 | Mixed current heads from attempts 1 and 2 accepted | **PASS** — actual rows were `(attempt 1, failed)` and `(attempt 2, delivered)`. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P12 | Mixed current heads from attempts 1 and 2 | Accepted |"
+    }
+   ]
+  },
+  "P13": {
+   "family": "P",
+   "statement_of_record": "| P13 | Doorway delivered with `[]` | Rejected: `outcome closures require evidence` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P13 | **FAIL** | A doorway row recorded `closure='delivered'` with `evidence_json='[]'`; evidence is mandatory only when `recorded_by='transport'`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P13 | Doorway delivered with `[]` rejected | **PASS** — outcome-evidence branch. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P13 | Doorway delivered with `[]` | Rejected: `outcome closures require evidence` |"
+    }
+   ]
+  },
+  "P14": {
+   "family": "P",
+   "statement_of_record": "| P14 | Reconciler without `discovered_at` | Rejected: `reconciler closures carry discovered_at` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P14 | **FAIL** | A reconciler closure with `discovered_at=NULL` was accepted; `turn_closures` does not enforce design I8/§6’s late-knowledge label. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P14 | Reconciler without `discovered_at` rejected | **PASS** — reconciler label branch. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P14 | Reconciler without `discovered_at` | Rejected: `reconciler closures carry discovered_at` |"
+    }
+   ]
+  },
+  "P15": {
+   "family": "P",
+   "statement_of_record": "| P15 | First reservation at ordinal 2 | Rejected: `reservations are dense per intent` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P15 | **FAIL** | The first `egress_results` row used `retry_ordinal=2`; the table has `retry_ordinal>=1` and uniqueness but no dense-admission trigger. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P15 | First physical result at ordinal 2 rejected | **PASS** — dense-attempt branch. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P15 | First reservation at ordinal 2 | Rejected: `reservations are dense per intent` |"
+    }
+   ]
+  },
+  "P16": {
+   "family": "P",
+   "statement_of_record": "| P16 | Retry reservation after `timeout_unknown` | Rejected: prior attempt not resolved as non-delivered |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P16 | **FAIL** | A new ordinal-2 attempt followed an unresolved ordinal-1 `timeout_unknown`; `uq_result_attempt` prevents duplicates but does not enforce design I4’s no-blind-resend rule. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P16 | Retry after `timeout_unknown` rejected | **PASS as stored-row check** — eligibility branch; pre-send authority remains open. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P16 | Retry reservation after `timeout_unknown` | Rejected: prior attempt not resolved as non-delivered |"
+    }
+   ]
+  },
+  "P17": {
+   "family": "P",
+   "statement_of_record": "| P17 | Second final-text slot | Rejected by `UNIQUE(turn_id,egress_kind)` |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P17 | **FAIL** | Two `final_text` intents with different payload hashes were accepted for one turn; `uq_egress_intent_shape` includes `payload_hash`, so it does not reserve the logical final-text slot. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P17 | Payload-distinct second `final_text(NULL)` rejected | **PASS narrowly** — `uq_egress_intent_shape`; Q10 bypasses it with ordinal 0. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P17 | Second final-text slot | Rejected by `UNIQUE(turn_id,egress_kind)` |"
+    }
+   ]
+  },
+  "P18": {
+   "family": "P",
+   "statement_of_record": "| P18 | Parent moved after child rejected | **PASS** — `trg_turns_no_update`. |",
+   "statement_round": "6",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P18 | **FAIL** | Updating a parent’s `chain_position` placed it after its child; `trg_turns_parent_semantics` covers INSERT only. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P18 | Parent moved after child rejected | **PASS** — `trg_turns_no_update`. |"
+    }
+   ]
+  },
+  "P19": {
+   "family": "P",
+   "statement_of_record": "| P19 | Parent changed cross-tenant rejected | **PASS** — `trg_turns_no_update`. |",
+   "statement_round": "6",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P19 | **FAIL** | Updating a child’s parent from an owner turn to a public turn succeeded; the FK proves existence, while tenant equality is checked only by the INSERT trigger. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P19 | Parent changed cross-tenant rejected | **PASS** — `trg_turns_no_update`. |"
+    }
+   ]
+  },
+  "P20": {
+   "family": "P",
+   "statement_of_record": "| P20 | Second anchor by UPDATE rejected | **PASS** — `trg_turns_no_update`. |",
+   "statement_round": "6",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P20 | **FAIL** | Updating a second turn to `is_birth_anchor=1` produced two anchors; `trg_turns_single_birth_anchor` covers INSERT only. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P20 | Second anchor by UPDATE rejected | **PASS** — `trg_turns_no_update`. |"
+    }
+   ]
+  },
+  "P21": {
+   "family": "P",
+   "statement_of_record": "| P21 | Turn DELETE rejected | **PASS** — `trg_turns_no_delete`. |",
+   "statement_round": "6",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P21 | **FAIL** | An unreferenced turn was deleted; the DDL’s “turns itself never updates” statement has no `trg_turns_no_update` or `trg_turns_no_delete`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P21 | Turn DELETE rejected | **PASS** — `trg_turns_no_delete`. |"
+    }
+   ]
+  },
+  "P22": {
+   "family": "P",
+   "statement_of_record": "| P22 | `UPDATE table SET pk=pk` and `DELETE FROM table` on the eight retained append-only tables | 16/16 rejected |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P22 | **PASS** | UPDATE and DELETE were rejected for all eight declared append-only tables—16/16—by their `*_no_update`/`*_no_delete` triggers. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P22 | All 16 UPDATE/DELETE operations rejected | **PASS** — eight append-only tables, both operations each. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P22 | `UPDATE table SET pk=pk` and `DELETE FROM table` on the eight retained append-only tables | 16/16 rejected |"
+    }
+   ]
+  },
+  "P23": {
+   "family": "P",
+   "statement_of_record": "| P23 | Shared-memory connection B during A’s `BEGIN IMMEDIATE`; stale revision after A commit; next dense revision | Locked; then stale revision rejected; next dense revision accepted |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P23 | **PASS** | Two shared-memory connections serialized dense admission revisions: connection B was locked while A held `BEGIN IMMEDIATE`, then its stale revision 2 was rejected and revision 3 accepted by `trg_admission_revision_rules`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P23 | B locked during A; stale rev2 rejected; rev3 accepted | **PASS within shared in-memory/same-process scope**. Cross-process/WAL remains BUILD-UNVERIFIED. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P23 | Shared-memory connection B during A’s `BEGIN IMMEDIATE`; stale revision after A commit; next dense revision | Locked; then stale revision rejected; next dense revision accepted |"
+    }
+   ]
+  },
+  "P24": {
+   "family": "P",
+   "statement_of_record": "| P24 | NULL `journal_entry_id` | Rejected: NOT NULL |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P24 | **FAIL** | Two `journal_folds` rows with `journal_entry_id=NULL` were accepted; ordinary SQLite `TEXT PRIMARY KEY` left `notnull=0`, contradicting design §12’s non-null-bound claim. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P24 | NULL `journal_entry_id` rejected | **PASS** — STRICT/PK NOT NULL. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P24 | NULL `journal_entry_id` | Rejected: NOT NULL |"
+    }
+   ]
+  },
+  "P25": {
+   "family": "P",
+   "statement_of_record": "| P25 | NULL seal `turn_id` | Rejected: NOT NULL |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P25 | **FAIL** | Two anonymous `turn_seals` rows with `turn_id=NULL` were accepted for the same reason; `turn_id TEXT PRIMARY KEY REFERENCES turns` is not an effective non-null binding. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P25 | NULL `turn_seals.turn_id` rejected | **PASS** — STRICT/PK NOT NULL. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P25 | NULL seal `turn_id` | Rejected: NOT NULL |"
+    }
+   ]
+  },
+  "P26": {
+   "family": "P",
+   "statement_of_record": "| P26 | NULL run/claim/intent/result/closure IDs | 5/5 rejected: NOT NULL |",
+   "statement_round": "7",
+   "statement_section": "P01–P26",
+   "expected": null,
+   "history": [
+    {
+     "round": "5b",
+     "section": "2. Newly designed consistency findings",
+     "row": "| P26 | **FAIL** | Direct NULL identifiers were also accepted by `runs.run_id`, `effect_claims.claim_id`, `egress_intents.intent_id`, `egress_results.result_id`, and `turn_closures.closure_id`; all seven single-column text primary keys report `notnull=0`. |"
+    },
+    {
+     "round": "6",
+     "section": "P01–P26",
+     "row": "| P26 | NULL IDs rejected in all five remaining tables | **PASS — 5/5** through STRICT/PK NOT NULL. |"
+    },
+    {
+     "round": "7",
+     "section": "P01–P26",
+     "row": "| P26 | NULL run/claim/intent/result/closure IDs | 5/5 rejected: NOT NULL |"
+    }
+   ]
+  },
+  "Q01": {
+   "family": "Q",
+   "statement_of_record": "| Q01 | RETAINED PASS | Resolved failure permits retry; separately confirmed by requested lawful variant |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q01 | Attempt 1 `timeout_unknown` → superseded by `failed` → attempt 2 | **Accepted** | **Correct.** `trg_egress_results_attempt_admission` followed the current head. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q01 | RETAINED PASS | Resolved failure permits retry; separately confirmed by requested lawful variant |"
+    }
+   ]
+  },
+  "Q02": {
+   "family": "Q",
+   "statement_of_record": "| Q02 | RETAINED PASS | Delivered head forecloses retry; separately confirmed by reservation control |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q02 | Attempt 1 `timeout_unknown` → superseded by `delivered` → attempt 2 | **Rejected** | **Correct.** Delivered current head foreclosed retry. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q02 | RETAINED PASS | Delivered head forecloses retry; separately confirmed by reservation control |"
+    }
+   ]
+  },
+  "Q03": {
+   "family": "Q",
+   "statement_of_record": "| Q03 | **DISCHARGED — EXECUTED** | Retry at time 5 after prior observation 10 rejected: `retry chronology must advance` |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q03 | Attempt 1 resolved at `observed_at=10`; attempt 2 recorded at `5` | **Accepted** | **Incorrect:** retry chronology is backward. `egress_results.observed_at` is ignored by attempt admission. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q03 | **DISCHARGED — EXECUTED** | Retry at time 5 after prior observation 10 rejected: `retry chronology must advance` |"
+    }
+   ]
+  },
+  "Q04": {
+   "family": "Q",
+   "statement_of_record": "| Q04 | **DISCHARGED — EXECUTED** | Earlier superseding observation rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q04 | Superseding observation timestamp `5` supersedes observation timestamp `10` | **Accepted** | **Incorrect:** the observation chain is misdated. `trg_egress_results_supersede_same_attempt` does not enforce increasing time. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q04 | **DISCHARGED — EXECUTED** | Earlier superseding observation rejected |"
+    }
+   ]
+  },
+  "Q05": {
+   "family": "Q",
+   "statement_of_record": "| Q05 | **DISCHARGED — EXECUTED** | Duplicate run event rejected by `UNIQUE(run_id)` |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q05 | Auto-journaled `active→completed`, followed by direct duplicate matching event at `at=-100` | **Accepted** | **Incorrect:** `trg_run_events_valid_history` proves only compatibility with current state, not “just performed.” |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q05 | **DISCHARGED — EXECUTED** | Duplicate run event rejected by `UNIQUE(run_id)` |"
+    }
+   ]
+  },
+  "Q06": {
+   "family": "Q",
+   "statement_of_record": "| Q06 | **DISCHARGED — EXECUTED** | Equal lease renewal rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q06 | Active lease “renewed” from `9` to `9` | **Accepted** | **Incorrect against the stated “must advance” contract:** trigger rejects only `<`, not `<=`. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q06 | **DISCHARGED — EXECUTED** | Equal lease renewal rejected |"
+    }
+   ]
+  },
+  "Q07": {
+   "family": "Q",
+   "statement_of_record": "| Q07 | **DISCHARGED — EXECUTED** | Terminal transition changing lease rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q07 | `active→completed` while changing lease from `9` to `-100` | **Accepted** | **Incorrect:** terminal transition can rewrite/regress lease history. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q07 | **DISCHARGED — EXECUTED** | Terminal transition changing lease rejected |"
+    }
+   ]
+  },
+  "Q08": {
+   "family": "Q",
+   "statement_of_record": "| Q08 | **DISCHARGED narrowly — EXECUTED** | Same-turn revision 3 rejected; R7-04 finds the reverse insertion order remains open |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q08 | Revisions 2 and 3 both assigned to correction turn `t2` | **Accepted** | **Incorrect:** design §3.1 requires each changed payload to create a new correction turn. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q08 | **DISCHARGED narrowly — EXECUTED** | Same-turn revision 3 rejected; R7-04 finds the reverse insertion order remains open |"
+    }
+   ]
+  },
+  "Q09": {
+   "family": "Q",
+   "statement_of_record": "| Q09 | **DISCHARGED — EXECUTED** | Unrelated correction ancestry rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q09 | Revision 2 assigned to correction turn whose parent is unrelated to revision 1’s turn | **Accepted** | **Incorrect:** `parent_kind='correction'` is checked, actual correction ancestry is not. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q09 | **DISCHARGED — EXECUTED** | Unrelated correction ancestry rejected |"
+    }
+   ]
+  },
+  "Q10": {
+   "family": "Q",
+   "statement_of_record": "| Q10 | **DISCHARGED — EXECUTED** | `final_text` with ordinal rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q10 | `final_text(NULL)` then `final_text(part_ordinal=0)` for one turn | **Accepted** | **Incorrect:** violates rev4’s “one final_text slot per turn.” `uq_egress_intent_shape` treats them as different shapes. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q10 | **DISCHARGED — EXECUTED** | `final_text` with ordinal rejected |"
+    }
+   ]
+  },
+  "Q11": {
+   "family": "Q",
+   "statement_of_record": "| Q11 | **DISCHARGED — EXECUTED** | `part` without ordinal rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q11 | `egress_kind='part'`, `part_ordinal=NULL` | **Accepted** | **Incorrect/incomplete:** the part has no ordinal; no kind/ordinal shape CHECK exists. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q11 | **DISCHARGED — EXECUTED** | `part` without ordinal rejected |"
+    }
+   ]
+  },
+  "Q12": {
+   "family": "Q",
+   "statement_of_record": "| Q12 | **DISCHARGED — EXECUTED** | Self-edit rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q12 | Edit row with `intent_id=edits_intent='i1'` | **Accepted** | **Incorrect:** self-referential edit cycle. The same-turn subquery returns NULL before self-insertion and the self-FK succeeds. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q12 | **DISCHARGED — EXECUTED** | Self-edit rejected |"
+    }
+   ]
+  },
+  "Q13": {
+   "family": "Q",
+   "statement_of_record": "| Q13 | Literal Unicode evidence `[\"é\"]` | **Accepted** | **Correct** canonical form. |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q13 | Literal Unicode evidence `[\"é\"]` | **Accepted** | **Correct** canonical form. |"
+    }
+   ]
+  },
+  "Q14": {
+   "family": "Q",
+   "statement_of_record": "| Q14 | Escape-equivalent evidence `[\"\\u00e9\"]` | **Rejected** | **Correct:** canonical decoded spelling required. |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q14 | Escape-equivalent evidence `[\"\\u00e9\"]` | **Rejected** | **Correct:** canonical decoded spelling required. |"
+    }
+   ]
+  },
+  "Q15": {
+   "family": "Q",
+   "statement_of_record": "| Q15 | Escape-equivalent slash `[\"a\\/b\"]` | **Rejected** | **Correct:** noncanonical spelling. |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q15 | Escape-equivalent slash `[\"a\\/b\"]` | **Rejected** | **Correct:** noncanonical spelling. |"
+    }
+   ]
+  },
+  "Q16": {
+   "family": "Q",
+   "statement_of_record": "| Q16 | Binary-sorted Unicode evidence `[\"z\",\"é\"]` | **Accepted** | **Correct** under SQLite decoded-value/BINARY order. |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q16 | Binary-sorted Unicode evidence `[\"z\",\"é\"]` | **Accepted** | **Correct** under SQLite decoded-value/BINARY order. |"
+    }
+   ]
+  },
+  "Q17": {
+   "family": "Q",
+   "statement_of_record": "| Q17 | Reverse Unicode order `[\"é\",\"z\"]` | **Rejected** | **Correct.** |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q17 | Reverse Unicode order `[\"é\",\"z\"]` | **Rejected** | **Correct.** |"
+    }
+   ]
+  },
+  "Q18": {
+   "family": "Q",
+   "statement_of_record": "| Q18 | **PARTIAL** | Plain Unicode ID refused, but R7-08’s embedded-NUL value defeats the claimed ASCII-only carrier posture |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q18 | Distinct NFD `e◌́` and NFC `é` result IDs | **Accepted** | **Conditionally correct:** IDs are treated as opaque exact strings. Design §13 does not state a Unicode-normalization contract. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q18 | **PARTIAL** | Plain Unicode ID refused, but R7-08’s embedded-NUL value defeats the claimed ASCII-only carrier posture |"
+    }
+   ]
+  },
+  "Q19": {
+   "family": "Q",
+   "statement_of_record": "| Q19 | Integer ID, numeric-text attempt/time, integral REAL epoch | **Accepted and normalized** to TEXT/INTEGER/REAL storage | **Correct SQLite STRICT behavior:** STRICT permits lossless coercion. |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q19 | Integer ID, numeric-text attempt/time, integral REAL epoch | **Accepted and normalized** to TEXT/INTEGER/REAL storage | **Correct SQLite STRICT behavior:** STRICT permits lossless coercion. |"
+    }
+   ]
+  },
+  "Q20": {
+   "family": "Q",
+   "statement_of_record": "| Q20 | BLOB bound to TEXT `run_id` | **Rejected** | **Correct.** |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q20 | BLOB bound to TEXT `run_id` | **Rejected** | **Correct.** |"
+    }
+   ]
+  },
+  "Q21": {
+   "family": "Q",
+   "statement_of_record": "| Q21 | Fractional `1.5` bound to INTEGER `attempt` | **Rejected** | **Correct.** |",
+   "statement_round": "6",
+   "statement_section": "2. New consistency probes",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q21 | Fractional `1.5` bound to INTEGER `attempt` | **Rejected** | **Correct.** |"
+    }
+   ]
+  },
+  "Q22": {
+   "family": "Q",
+   "statement_of_record": "| Q22 | **DISCHARGED — EXECUTED** | `1e999` run time rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q22 | `started_at=+Inf`, `lease_until=+Inf` | **Accepted** | **Incorrect:** non-finite biography time remains lawful despite STRICT. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q22 | **DISCHARGED — EXECUTED** | `1e999` run time rejected |"
+    }
+   ]
+  },
+  "Q23": {
+   "family": "Q",
+   "statement_of_record": "| Q23 | **DISCHARGED — EXECUTED** | Lease before start rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q23 | Born-active run with `lease_until=5 < started_at=10` | **Accepted** | **Incorrect:** incoherent lease chronology. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q23 | **DISCHARGED — EXECUTED** | Lease before start rejected |"
+    }
+   ]
+  },
+  "Q24": {
+   "family": "Q",
+   "statement_of_record": "| Q24 | **DISCHARGED — EXECUTED** | Closure before evidence rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q24 | Closure recorded at `5` citing result observed at `10` | **Accepted** | **Incorrect:** closure predates its evidence. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q24 | **DISCHARGED — EXECUTED** | Closure before evidence rejected |"
+    }
+   ]
+  },
+  "Q25": {
+   "family": "Q",
+   "statement_of_record": "| Q25 | **DISCHARGED — EXECUTED** | Discovery after recording rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q25 | Reconciler recorded at `5`, `discovered_at=10` | **Accepted** | **Incorrect:** late-knowledge chronology is inverted. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q25 | **DISCHARGED — EXECUTED** | Discovery after recording rejected |"
+    }
+   ]
+  },
+  "Q26": {
+   "family": "Q",
+   "statement_of_record": "| Q26 | **DISCHARGED narrowly — EXECUTED** | Failed citing timeout rejected; evidence completeness remains open |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q26 | `closure='failed'` citing only `timeout_unknown` | **Accepted** | **Incorrect:** design I4 requires honest unknown, not false failure. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q26 | **DISCHARGED narrowly — EXECUTED** | Failed citing timeout rejected; evidence completeness remains open |"
+    }
+   ]
+  },
+  "Q27": {
+   "family": "Q",
+   "statement_of_record": "| Q27 | **DISCHARGED narrowly — EXECUTED** | Unknown citing delivered rejected; omitted delivery remains possible |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q27 | `unknown_delivery` citing a delivered result | **Accepted** | **Incorrect:** outcome/evidence mislabeled. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q27 | **DISCHARGED narrowly — EXECUTED** | Unknown citing delivered rejected; omitted delivery remains possible |"
+    }
+   ]
+  },
+  "Q28": {
+   "family": "Q",
+   "statement_of_record": "| Q28 | **DISCHARGED narrowly — EXECUTED** | Refused citing delivery rejected; later intent insertion remains possible |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q28 | Doorway `refused` closure citing a delivered result | **Accepted** | **Incorrect:** refusal contradicts the cited result. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q28 | **DISCHARGED narrowly — EXECUTED** | Refused citing delivery rejected; later intent insertion remains possible |"
+    }
+   ]
+  },
+  "Q29": {
+   "family": "Q",
+   "statement_of_record": "| Q29 | **DISCHARGED — EXECUTED** | Evidence-free unknown rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q29 | `unknown_delivery` with no intent and `[]` evidence | **Accepted** | **Incorrect/incomplete:** no handoff fact exists to be unknown. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q29 | **DISCHARGED — EXECUTED** | Evidence-free unknown rejected |"
+    }
+   ]
+  },
+  "Q30": {
+   "family": "Q",
+   "statement_of_record": "| Q30 | **DISCHARGED — EXECUTED** | `attempt=99, epoch=2` rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q30 | Epoch 2 run with `runs.attempt=99` after attempt 1 | **Accepted** | **DESIGN UNDEFINED:** `runs.attempt` has no density or relationship contract. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q30 | **DISCHARGED — EXECUTED** | `attempt=99, epoch=2` rejected |"
+    }
+   ]
+  },
+  "Q31": {
+   "family": "Q",
+   "statement_of_record": "| Q31 | **DISCHARGED narrowly — 2/2 EXECUTED** | Empty effect identity and egress payload hash rejected; other empty carriers remain |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q31 | Empty `effect_identity` and empty `payload_hash` | **Accepted** | **Incorrect:** identity/hash carriers do not identify or bind anything. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q31 | **DISCHARGED narrowly — 2/2 EXECUTED** | Empty effect identity and egress payload hash rejected; other empty carriers remain |"
+    }
+   ]
+  },
+  "Q32": {
+   "family": "Q",
+   "statement_of_record": "| Q32 | **DISCHARGED — EXECUTED** | Cognition without admission rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q32 | User-message turn sealed, run, cognition claim; zero `admission_events` | **Accepted** | **Incorrect:** contradicts I2 and design §3.1’s admission/turn/run membership transaction. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q32 | **DISCHARGED — EXECUTED** | Cognition without admission rejected |"
+    }
+   ]
+  },
+  "Q33": {
+   "family": "Q",
+   "statement_of_record": "| Q33 | **DISCHARGED narrowly — EXECUTED** | Exact model-reply/correction/inbound row rejected; complete kind/parent mapping remains open |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q33 | `model_reply`, `parent_kind='correction'`, `direction='in'` | **Accepted** | **DESIGN UNDEFINED/incorrectly labeled:** no turn-kind/parent-kind/direction mapping is specified or enforced. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q33 | **DISCHARGED narrowly — EXECUTED** | Exact model-reply/correction/inbound row rejected; complete kind/parent mapping remains open |"
+    }
+   ]
+  },
+  "Q34": {
+   "family": "Q",
+   "statement_of_record": "| Q34 | **DISCHARGED — EXECUTED** | Intent before run rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q34 | Egress intent created at `5` for run started at `10` | **Accepted** | **Incorrect:** causal timestamps are inverted. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q34 | **DISCHARGED — EXECUTED** | Intent before run rejected |"
+    }
+   ]
+  },
+  "Q35": {
+   "family": "Q",
+   "statement_of_record": "| Q35 | **DISCHARGED — EXECUTED** | Empty journal digest rejected |",
+   "statement_round": "7",
+   "statement_section": "Q01–Q35",
+   "expected": null,
+   "history": [
+    {
+     "round": "6",
+     "section": "2. New consistency probes",
+     "row": "| Q35 | `journal_folds.entry_sha256=''` | **Accepted** | **Incorrect:** design §§11 F5 and 12 call this a SHA-256 integrity carrier. |"
+    },
+    {
+     "round": "7",
+     "section": "Q01–Q35",
+     "row": "| Q35 | **DISCHARGED — EXECUTED** | Empty journal digest rejected |"
+    }
+   ]
+  },
+  "R7-01": {
+   "family": "R7",
+   "statement_of_record": "| R7-01 | **DISCHARGED** | A result-less prior reservation now rejects the next reservation through the NULL-proof `COALESCE(...,'missing')` check. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-01 | **DISCHARGED** | A result-less prior reservation now rejects the next reservation through the NULL-proof `COALESCE(...,'missing')` check. |"
+    }
+   ]
+  },
+  "R7-02": {
+   "family": "R7",
+   "statement_of_record": "| R7-02 | **PARTIAL** | Ordinary intent/reservation/result chronology rejects correctly, but C8-01 allows a reservation before its new `authorized_run` began. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-02 | **PARTIAL** | Ordinary intent/reservation/result chronology rejects correctly, but C8-01 allows a reservation before its new `authorized_run` began. |"
+    }
+   ]
+  },
+  "R7-03": {
+   "family": "R7",
+   "statement_of_record": "| R7-03 | **DISCHARGED** | Retry under current `r2` accepts; retry using terminal `r1` rejects; current/stale effect-claim checks also behaved correctly. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-03 | **DISCHARGED** | Retry under current `r2` accepts; retry using terminal `r1` rejects; current/stale effect-claim checks also behaved correctly. |"
+    }
+   ]
+  },
+  "R7-04": {
+   "family": "R7",
+   "statement_of_record": "| R7-04 | **DISCHARGED** | Both insertion orders for a second constituent on a correction turn reject with `a correction turn hosts exactly one constituent`. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-04 | **DISCHARGED** | Both insertion orders for a second constituent on a correction turn reject with `a correction turn hosts exactly one constituent`. |"
+    }
+   ]
+  },
+  "R7-05": {
+   "family": "R7",
+   "statement_of_record": "| R7-05 | **PARTIAL** | Resolved labels are exhaustive, but C8-02 confirms `unknown_delivery` may omit a delivered current head. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-05 | **PARTIAL** | Resolved labels are exhaustive, but C8-02 confirms `unknown_delivery` may omit a delivered current head. |"
+    }
+   ]
+  },
+  "R7-06": {
+   "family": "R7",
+   "statement_of_record": "| R7-06 | **PARTIAL** | Closed-turn invalid-row rejection and the exact late-ack view result work, but omitted new heads are invisible and a reconciler cannot replace a transport closure. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-06 | **PARTIAL** | Closed-turn invalid-row rejection and the exact late-ack view result work, but omitted new heads are invisible and a reconciler cannot replace a transport closure. |"
+    }
+   ]
+  },
+  "R7-07": {
+   "family": "R7",
+   "statement_of_record": "| R7-07 | **PARTIAL** | Mixed `suppressed` evidence and directly cited delivery under `unresolved_crash` reject, but the empty/omitted cases in C8-05 accept. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-07 | **PARTIAL** | Mixed `suppressed` evidence and directly cited delivery under `unresolved_crash` reject, but the empty/omitted cases in C8-05 accept. |"
+    }
+   ]
+  },
+  "R7-08": {
+   "family": "R7",
+   "statement_of_record": "| R7-08 | **PARTIAL** | Primary ID carriers rejected all 21 empty/NUL/multibyte probes, but `event_identity`, `transport`, and `tenant_id` remain incomplete. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-08 | **PARTIAL** | Primary ID carriers rejected all 21 empty/NUL/multibyte probes, but `event_identity`, `transport`, and `tenant_id` remain incomplete. |"
+    }
+   ]
+  },
+  "R7-09": {
+   "family": "R7",
+   "statement_of_record": "| R7-09 | **PARTIAL** | Named non-turn infinities and claim-before-run reject; the literal turns fragment and seal-to-claim chronology remain incomplete. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-09 | **PARTIAL** | Named non-turn infinities and claim-before-run reject; the literal turns fragment and seal-to-claim chronology remain incomplete. |"
+    }
+   ]
+  },
+  "R7-10": {
+   "family": "R7",
+   "statement_of_record": "| R7-10 | **DISCHARGED** | Under the requested reconstructed domain, invented kinds, outbound reply parents, and non-owner correction parents reject; lawful inbound-parent replies accept. |",
+   "statement_round": "8",
+   "statement_section": "2. R7-01–R7-10 discharge",
+   "expected": null,
+   "history": [
+    {
+     "round": "8",
+     "section": "2. R7-01–R7-10 discharge",
+     "row": "| R7-10 | **DISCHARGED** | Under the requested reconstructed domain, invented kinds, outbound reply parents, and non-owner correction parents reject; lawful inbound-parent replies accept. |"
+    }
+   ]
+  }
+ },
+ "named_without_per_id_statement": {
+  "R4-01..R4-21": "gate round 5b records '21/21 PASS' for the retained round-4 rejection tests; no per-id statement was ever written. These 21 must be re-derived from round 4's execution or re-authored and re-executed. They are NOT assumed subsumed by N01-N22.",
+  "R5-01..R5-02": "gate round 7 line 88 records both superseding-ordinal controls rejecting with the error 'supersession re-observes the same attempt: retry_ordinal must match'; no per-id statement exists."
+ }
+}
