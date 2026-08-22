@@ -694,3 +694,26 @@ consumer-refusal outage test with exact-set zero-gestation-stamp SQL,
 AST census with seeded-consumer kill, flags-off invariance, and the
 six-mutation structural fingerprint test. Per §8 discipline it
 precedes any S1 code.
+
+## 16. Pass 9 — round-8 folds (DDL revision 7)
+
+All seven C8 findings closed in the DDL, each with an executed
+negative control: reservations cannot predate their authorizing run
+(C8-01); `unknown_delivery` is exhaustive and lawful only with zero
+delivered heads turn-wide — any delivery forces `partially_delivered`
+(C8-02); the reconciler may supersede a transport closure **iff**
+`closure_consistency_violations` flags that turn — the repair path
+exists exactly when repair is needed, and only then (C8-03); journal
+folds use a marked historical lane (`folded=1`, strictly predating
+the current closure) through the closed-turn refusal (C8-04);
+`suppressed` requires evidence and `unresolved_crash` checks
+delivered heads turn-wide, not merely cited ones (C8-05); the
+byte-discipline (nonempty, no NUL, single-byte ASCII) extends to
+`event_identity`, `transport`, and `tenant_id` (C8-06); cognition
+claims must follow their seal, and the turns-fragment time bounds are
+pinned in the literal fragment (C8-07).
+
+S1 protocol v2 (literalization per round 8's six judgments — real
+fixture digests, frozen commands, per-consumer exact outcomes, the
+committed sorted census) is the next artifact; S1 code remains barred
+until the protocol passes its gate.

@@ -1,4 +1,12 @@
--- Theme 2 schema v2 DRAFT, revision 6 (gate round 8).
+-- Theme 2 schema v2 DRAFT, revision 7 (gate round 9).
+-- Revision 7 folds C8-01..C8-07: reservation follows its authorizing
+-- run; unknown_delivery exhaustive and lawful only with zero
+-- delivered heads turn-wide; reconciler may repair a transport
+-- closure the consistency view flags; journal folds use a marked
+-- historical lane past closed-turn refusal; suppressed requires
+-- evidence and crash checks turn-wide; byte discipline extended to
+-- event_identity/transport/tenant_id; cognition follows its seal;
+-- turns fragment time bounds pinned.
 -- Revision 6 folds R7-01..R7-10: NULL-proof reservation eligibility;
 -- reservation/result chronology bound; reservations carry their own
 -- AUTHORIZING run (takeover retry path); correction turns host
@@ -41,7 +49,8 @@
 -- ===================================================================
 -- turns: v2 column additions (folded into CREATE TABLE on recreation)
 -- ===================================================================
--- occurred_at REAL; admitted_at REAL;
+-- occurred_at REAL CHECK (occurred_at IS NULL OR (occurred_at > 0 AND occurred_at < 1e11));
+-- admitted_at REAL CHECK (admitted_at IS NULL OR (admitted_at > 0 AND admitted_at < 1e11));  -- C8-07
 -- direction TEXT NOT NULL DEFAULT 'in' CHECK (direction IN ('in','out'));
 -- parent_kind TEXT CHECK (parent_kind IN ('reply','continuation','correction'));
 -- is_birth_anchor INTEGER NOT NULL DEFAULT 0 CHECK (is_birth_anchor IN (0,1));
@@ -146,7 +155,12 @@ CREATE TABLE IF NOT EXISTS admission_events (
     occurred_at    REAL CHECK (occurred_at IS NULL OR (occurred_at > 0 AND occurred_at < 1e11)),
     payload_hash   TEXT NOT NULL CHECK (length(payload_hash) > 0),
     admitted_at    REAL NOT NULL CHECK (admitted_at > 0 AND admitted_at < 1e11),
-    CHECK (length(event_identity) > 0),
+    CHECK (length(event_identity) > 0
+           AND length(CAST(event_identity AS BLOB)) = length(event_identity)
+           AND event_identity NOT GLOB '*[^ -~]*'),
+    CHECK (length(tenant_id) > 0
+           AND length(CAST(tenant_id AS BLOB)) = length(tenant_id)
+           AND tenant_id NOT GLOB '*[^ -~]*'),
     PRIMARY KEY (tenant_id, event_identity, revision),
     FOREIGN KEY (tenant_id, turn_id) REFERENCES turns(tenant_id, turn_id)
 ) STRICT;
@@ -310,6 +324,10 @@ BEGIN
             THEN RAISE(ABORT, 'cognition requires admitted membership')   -- Q32
         WHEN NEW.claimed_at < (SELECT started_at FROM runs WHERE run_id = NEW.run_id)
             THEN RAISE(ABORT, 'claim precedes its run')                   -- R7-09
+        WHEN NEW.claim_kind = 'cognition_commit'
+             AND NEW.claimed_at < (SELECT sealed_at FROM turn_seals
+                                   WHERE turn_id = NEW.turn_id)
+            THEN RAISE(ABORT, 'cognition follows its seal')               -- C8-07
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_effect_claims_no_update BEFORE UPDATE ON effect_claims
@@ -330,6 +348,7 @@ CREATE TABLE IF NOT EXISTS egress_intents (
     transport    TEXT NOT NULL,
     payload_hash TEXT NOT NULL CHECK (length(payload_hash) > 0),
     edits_intent TEXT REFERENCES egress_intents(intent_id),
+    folded       INTEGER NOT NULL DEFAULT 0 CHECK (folded IN (0,1)),  -- C8-04
     created_at   REAL NOT NULL CHECK (created_at > 0 AND created_at < 1e11),
     CHECK ((egress_kind = 'edit' AND edits_intent IS NOT NULL)
         OR (egress_kind <> 'edit' AND edits_intent IS NULL)),
@@ -337,7 +356,9 @@ CREATE TABLE IF NOT EXISTS egress_intents (
     CHECK ((egress_kind = 'part') = (part_ordinal IS NOT NULL)),        -- Q10/Q11
     CHECK (length(intent_id) > 0 AND length(CAST(intent_id AS BLOB)) = length(intent_id)
            AND intent_id NOT GLOB '*[^ -~]*'),
-    CHECK (length(transport) > 0)
+    CHECK (length(transport) > 0
+           AND length(CAST(transport AS BLOB)) = length(transport)
+           AND transport NOT GLOB '*[^ -~]*')
 ) STRICT;
 -- One logical send shape per TURN (not per run): takeover epochs
 -- cannot recreate the same send. progress is exempt (repeatable).
@@ -367,8 +388,14 @@ BEGIN
             THEN RAISE(ABORT, 'edit must reference an existing intent of the same turn')
         WHEN NEW.created_at < (SELECT started_at FROM runs WHERE run_id = NEW.run_id)
             THEN RAISE(ABORT, 'intent precedes its run')                 -- Q34
+        -- R7-06/C8-04: no NEW activity on a closed turn; a journal fold
+        -- may add HISTORICAL intents (folded=1, created strictly before
+        -- the current closure was recorded).
         WHEN EXISTS (SELECT 1 FROM turn_closures WHERE turn_id = NEW.turn_id)
-            THEN RAISE(ABORT, 'no new intents on a closed turn')         -- R7-06
+             AND (NEW.folded = 0
+                  OR NEW.created_at >= (SELECT MAX(recorded_at) FROM turn_closures
+                                        WHERE turn_id = NEW.turn_id))
+            THEN RAISE(ABORT, 'no new intents on a closed turn')
     END;
 END;
 CREATE TRIGGER IF NOT EXISTS trg_egress_intents_no_update BEFORE UPDATE ON egress_intents
@@ -385,6 +412,7 @@ CREATE TABLE IF NOT EXISTS egress_reservations (
     intent_id      TEXT NOT NULL REFERENCES egress_intents(intent_id),
     retry_ordinal  INTEGER NOT NULL CHECK (retry_ordinal >= 1),
     authorized_run TEXT NOT NULL REFERENCES runs(run_id),   -- R7-03: may differ
+    folded         INTEGER NOT NULL DEFAULT 0 CHECK (folded IN (0,1)),  -- C8-04
     reserved_at    REAL NOT NULL CHECK (reserved_at > 0 AND reserved_at < 1e11),
     PRIMARY KEY (intent_id, retry_ordinal)
 ) STRICT;
@@ -421,6 +449,9 @@ BEGIN
         WHEN NEW.reserved_at < (SELECT created_at FROM egress_intents
                                 WHERE intent_id = NEW.intent_id)
             THEN RAISE(ABORT, 'reservation precedes its intent')
+        WHEN NEW.reserved_at < (SELECT started_at FROM runs
+                                WHERE run_id = NEW.authorized_run)
+            THEN RAISE(ABORT, 'reservation precedes its authorizing run')  -- C8-01
         WHEN NEW.retry_ordinal > 1 AND NEW.reserved_at <= (
                 SELECT r.observed_at FROM egress_results r
                 WHERE r.intent_id = NEW.intent_id
@@ -428,9 +459,13 @@ BEGIN
                   AND NOT EXISTS (SELECT 1 FROM egress_results s
                                   WHERE s.supersedes_result = r.result_id))
             THEN RAISE(ABORT, 'retry reservation must follow the prior observation')
-        -- R7-06: no new physical activity on a closed turn.
+        -- R7-06/C8-04: closed-turn refusal with the historical fold lane.
         WHEN EXISTS (SELECT 1 FROM turn_closures WHERE turn_id =
                 (SELECT turn_id FROM egress_intents WHERE intent_id = NEW.intent_id))
+             AND (NEW.folded = 0
+                  OR NEW.reserved_at >= (SELECT MAX(recorded_at) FROM turn_closures
+                        WHERE turn_id = (SELECT turn_id FROM egress_intents
+                                         WHERE intent_id = NEW.intent_id)))
             THEN RAISE(ABORT, 'no new attempts on a closed turn')
     END;
 END;
@@ -556,7 +591,9 @@ BEGIN
         WHEN EXISTS (SELECT 1 FROM turn_closures
                      WHERE turn_id = NEW.turn_id AND recorded_by = 'transport')
              AND NEW.recorded_by <> 'transport'
-            THEN RAISE(ABORT, 'only transport may supersede transport closure')
+             AND NOT EXISTS (SELECT 1 FROM closure_consistency_violations
+                             WHERE turn_id = NEW.turn_id)
+            THEN RAISE(ABORT, 'only transport may supersede transport closure')  -- C8-03
         WHEN NEW.recorded_by = 'transport'
              AND EXISTS (SELECT 1 FROM turn_closures
                          WHERE turn_id = NEW.turn_id AND recorded_by = 'transport'
@@ -573,9 +610,9 @@ BEGIN
             THEN RAISE(ABORT, 'closure evidence must be sorted canonical form')
         -- outcome classes that assert egress facts require evidence
         -- whoever records them (P13)
-        WHEN NEW.closure IN ('delivered','partially_delivered','failed')
+        WHEN NEW.closure IN ('delivered','partially_delivered','failed','suppressed')
              AND json_array_length(NEW.evidence_json) < 1
-            THEN RAISE(ABORT, 'outcome closures require evidence')
+            THEN RAISE(ABORT, 'outcome closures require evidence')        -- C8-05
         WHEN NEW.recorded_by = 'reconciler' AND NEW.discovered_at IS NULL
             THEN RAISE(ABORT, 'reconciler closures carry discovered_at')
         -- evidence must be current heads (P11), one per physical
@@ -604,13 +641,23 @@ BEGIN
             THEN RAISE(ABORT, 'failed closure cites only resolved non-delivery')
         WHEN NEW.closure = 'unknown_delivery' AND (
                 json_array_length(NEW.evidence_json) < 1
-                OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_json) je
-                           JOIN egress_results r ON r.result_id = je.value
-                           WHERE r.result = 'delivered')
                 OR NOT EXISTS (SELECT 1 FROM json_each(NEW.evidence_json) je
                                JOIN egress_results r ON r.result_id = je.value
-                               WHERE r.result = 'timeout_unknown'))
-            THEN RAISE(ABORT, 'unknown_delivery cites an unresolved handoff and no delivery')
+                               WHERE r.result = 'timeout_unknown')
+                -- C8-02: exhaustive, and lawful only with ZERO delivered
+                -- heads anywhere on the turn (any delivery => partial).
+                OR (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
+                   <> (SELECT COUNT(*) FROM egress_results r
+                       JOIN egress_intents i ON i.intent_id = r.intent_id
+                       WHERE i.turn_id = NEW.turn_id
+                         AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                         WHERE s.supersedes_result = r.result_id))
+                OR EXISTS (SELECT 1 FROM egress_results r
+                       JOIN egress_intents i ON i.intent_id = r.intent_id
+                       WHERE i.turn_id = NEW.turn_id AND r.result = 'delivered'
+                         AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                         WHERE s.supersedes_result = r.result_id)))
+            THEN RAISE(ABORT, 'unknown_delivery is exhaustive and forbids any delivered head')
         WHEN NEW.closure = 'refused' AND (
                 json_array_length(NEW.evidence_json) > 0
                 OR EXISTS (SELECT 1 FROM egress_intents WHERE turn_id = NEW.turn_id))
@@ -642,9 +689,11 @@ BEGIN
         -- R7-07: unresolved_crash is reconciler-only and never contradicts delivery.
         WHEN NEW.closure = 'unresolved_crash' AND (
                 NEW.recorded_by <> 'reconciler'
-                OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_json) je
-                           JOIN egress_results r ON r.result_id = je.value
-                           WHERE r.result = 'delivered'))
+                OR EXISTS (SELECT 1 FROM egress_results r          -- C8-05: turn-wide
+                           JOIN egress_intents i ON i.intent_id = r.intent_id
+                           WHERE i.turn_id = NEW.turn_id AND r.result = 'delivered'
+                             AND NOT EXISTS (SELECT 1 FROM egress_results s
+                                             WHERE s.supersedes_result = r.result_id)))
             THEN RAISE(ABORT, 'unresolved_crash is a reconciler label without delivered evidence')
         -- evidence is a set of real result-ids of THIS turn
         WHEN (SELECT COUNT(*) FROM json_each(NEW.evidence_json))
