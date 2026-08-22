@@ -1,0 +1,29 @@
+{
+ "bound_archive_sha256": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
+ "per_fixture": {
+  "healthy": {
+   "current_phase": "gestation",
+   "stamp_census": {
+    "audit_log": {},
+    "chroma::core": {},
+    "chroma::daily": {},
+    "chroma::raw": {
+     "gestation": 20
+    },
+    "private_thoughts": {}
+   }
+  },
+  "partial": {
+   "current_phase": "gestation",
+   "stamp_census": {
+    "audit_log": {},
+    "chroma::core": {},
+    "chroma::daily": {},
+    "chroma::raw": {
+     "gestation": 20
+    },
+    "private_thoughts": {}
+   }
+  }
+ }
+}
