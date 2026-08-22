@@ -49,9 +49,18 @@ case "$W" in /tmp/*) ;; *) echo "REFUSED: --work must be under /tmp" >&2; exit 3
 # the archive would still come from physical airlock A. Claim the workdir
 # atomically, refuse anything that already exists, and hold a run-wide lock.
 WPARENT=$(dirname "$W")
-if [ ! -d "$WPARENT" ] || [ "$(readlink -f "$WPARENT")" != "$WPARENT" ] \
-   || [ "$(stat -c %u "$WPARENT")" != "$(id -u)" ]; then
-    echo "REFUSED: --work parent must be an owned, non-symlinked directory" >&2
+if [ ! -d "$WPARENT" ] || [ "$(readlink -f "$WPARENT")" != "$WPARENT" ]; then
+    echo "REFUSED: --work parent must be an existing, non-symlinked directory" >&2
+    exit 3
+fi
+# The property that matters is that nobody else can rename or delete our
+# directory out from under us. Ownership gives that; so does the sticky bit
+# on a world-writable directory, which is exactly what /tmp is. Requiring
+# ownership alone refused a plain /tmp workdir.
+WP_MODE=$(stat -c %a "$WPARENT")
+if [ "$(stat -c %u "$WPARENT")" != "$(id -u)" ] \
+   && [ "${WP_MODE%????}" != "1" ]; then
+    echo "REFUSED: --work parent is neither owned by this user nor sticky" >&2
     exit 3
 fi
 if ! mkdir "$W" 2>/dev/null; then
