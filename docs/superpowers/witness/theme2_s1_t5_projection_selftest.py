@@ -28,7 +28,7 @@ BASE = 1_700_000_000
 def build(d: Path, *, texts, ts, phase="gestation", blob=b"\x00" * 64, uv=0,
           solo=None, collide=False, wal_extra=False, nulls=False,
           ledger=True, digest="a" * 64, extra_col=False,
-          literal_token=False):
+          literal_token=False, pdigest="digest-" + "a" * 32):
     d.mkdir(parents=True, exist_ok=True)
     name = "ledger.db" if ledger else "thoughts.db"
     c = sqlite3.connect(d / name)
@@ -41,8 +41,10 @@ def build(d: Path, *, texts, ts, phase="gestation", blob=b"\x00" * 64, uv=0,
     c.execute("INSERT INTO solo VALUES (?,?)",
               (str(uuid.uuid4()), BASE if solo is None else solo))
     # A semantic digest must never be absorbed as an identifier.
-    c.execute("CREATE TABLE dg (id TEXT, content_sha256 TEXT)")
-    c.execute("INSERT INTO dg VALUES (?,?)", (str(uuid.uuid4()), digest))
+    c.execute("CREATE TABLE dg (id TEXT, content_sha256 TEXT, "
+              "prefixed_digest TEXT)")
+    c.execute("INSERT INTO dg VALUES (?,?,?)",
+              (str(uuid.uuid4()), digest, pdigest))
     if extra_col:
         c.execute("CREATE TABLE oc (stable TEXT, added TEXT)")
         c.execute("INSERT INTO oc VALUES (?,?)", ("same", str(uuid.uuid4())))
@@ -112,6 +114,7 @@ def main() -> int:
         "K2":  dict(texts=texts, ts=[t + 900 for t in good], collide=True),
         "Dg":  dict(texts=texts, ts=good, digest="b" * 64),
         "Lt":  dict(texts=texts, ts=good, literal_token=True),
+        "Pd":  dict(texts=texts, ts=good, pdigest="digest-" + "b" * 32),
         "Oc":  dict(texts=texts, ts=[t + 900 for t in good], extra_col=True),
     }
     for name, kw in specs.items():
@@ -151,6 +154,13 @@ def main() -> int:
     print(f"{'ok ' if ok_d else 'BAD'} sha256 is NOT uuid-shaped            "
           f"{'reported as a finding' if ok_d else rd.stdout.strip()[:60]}")
     ok &= ok_d
+
+    rp = run("volatile", str(root / "A.json"), str(root / "Pd.json"),
+             str(root / "volp.json"))
+    ok_p = rp.returncode == 1 and "prefixed_digest" in rp.stdout
+    print(f"{'ok ' if ok_p else 'BAD'} prefixed digest is NOT uuid-shaped   "
+          f"{'reported as a finding' if ok_p else rp.stdout.strip()[:60]}")
+    ok &= ok_p
 
     led = json.loads((root / "A.json").read_text())["sqlite"]["ledger.db"]["file_sha256"]
     cases = [

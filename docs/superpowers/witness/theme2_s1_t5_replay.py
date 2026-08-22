@@ -153,6 +153,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--report", required=True)
+    # Gate round 16 finding L: the healthy fixture is exactly where the legacy
+    # resolver and S1 AGREE (both `gestation`), so a run against it cannot
+    # tell a dormant S1 from an accidentally always-on one. The `partial`
+    # fixture is where they must DIVERGE -- legacy says gestation for every
+    # unreadable or half-built ledger (birth_phase.py:38-66, verified on this
+    # host for absent / 0-byte / partial / corrupt), while S1 must say
+    # unknown and every consumer must refuse. That divergence is the dormancy
+    # proof; the healthy fixture alone is not one.
+    ap.add_argument("--fixture", choices=("healthy", "partial"),
+                    default="healthy")
     args = ap.parse_args()
 
     report: dict = {
@@ -189,29 +199,41 @@ def main() -> int:
     from core.infra import paths as _paths
     from core.memory.birth_phase import default_ledger_path
 
-    effective = {
-        "home": _paths.home(),
-        "data_dir": _paths.data_dir(),
-        "memory_dir": _paths.memory_dir(),
-        "memory_db_dir": _paths.memory_db_dir(),
-        "audit_log_db": _paths.audit_log_db(),
-        "logs_dir": _paths.logs_dir(),
-        "ledger": default_ledger_path(),
-    }
-    report["effective_store_paths"] = {k: str(v) for k, v in effective.items()}
-    required = {
+    def effective_paths() -> dict:
+        return {
+            "home": _paths.home(),
+            "data_dir": _paths.data_dir(),
+            "config_dir": _paths.config_dir(),
+            "cache_dir": _paths.cache_dir(),
+            "memory_dir": _paths.memory_dir(),
+            "memory_db_dir": _paths.memory_db_dir(),
+            "audit_log_db": _paths.audit_log_db(),
+            "logs_dir": _paths.logs_dir(),
+            "ledger": default_ledger_path(),
+        }
+
+    # Every path is pinned by EXACT equality. Gate round 16: config_dir and
+    # cache_dir were unchecked, and audit_log_db accepted any descendant of
+    # memory/ -- which would admit an alias to an unrelated database.
+    REQUIRED = {
         "home": MAEZ_TREE, "data_dir": MAEZ_TREE,
+        "config_dir": MAEZ_TREE / "config", "cache_dir": MAEZ_TREE / ".cache",
         "memory_dir": STORE_TREE, "memory_db_dir": STORE_TREE / "db",
+        "audit_log_db": STORE_TREE / "audit_log.db",
         "logs_dir": LOGS_TREE, "ledger": STORE_TREE / "ledger.db",
     }
-    wrong = {k: str(effective[k]) for k, want in required.items()
-             if Path(effective[k]).resolve() != want}
-    if not Path(effective["audit_log_db"]).resolve().is_relative_to(STORE_TREE):
-        wrong["audit_log_db"] = str(effective["audit_log_db"])
-    if wrong:
-        raise SystemExit(
-            f"REFUSED: effective store paths are not the projected tree: {wrong}")
-    report["effective_store_paths_verdict"] = "PASS"
+
+    def assert_paths(when: str) -> dict:
+        eff = effective_paths()
+        wrong = {k: str(eff[k]) for k, want in REQUIRED.items()
+                 if Path(eff[k]).resolve() != want}
+        if wrong:
+            raise SystemExit(
+                f"REFUSED ({when}): effective store paths are not the "
+                f"projected tree: {wrong}")
+        return {k: str(v) for k, v in eff.items()}
+
+    report["effective_store_paths_before_import"] = assert_paths("pre-import")
 
     # Gate round 12, item B: the ledger is migrated INSIDE the namespace.
     # Doing it before namespace entry left a Python startup -- imports,
@@ -220,7 +242,17 @@ def main() -> int:
     from core.ledger.migrate import run as migrate_run
 
     ledger = MAEZ_TREE / "memory" / "ledger.db"
-    migrate_run(str(ledger))
+    report["fixture"] = args.fixture
+    if args.fixture == "healthy":
+        migrate_run(str(ledger))
+    else:
+        # migrations 0001..0002 only: a structurally incomplete ledger.
+        mig = MAEZ_TREE / "core" / "ledger" / "migrations"
+        conn = sqlite3.connect(ledger)
+        for name in ("0001_init.sql", "0002_triggers.sql"):
+            conn.executescript((mig / name).read_text())
+        conn.commit()
+        conn.close()
     report["ledger_post_migration_sha256"] = hashlib.sha256(
         ledger.read_bytes()).hexdigest()
     report["ledger_post_migration_file_set"] = sorted(
@@ -232,7 +264,18 @@ def main() -> int:
     # namespace that resolves into the airlock.
     from daemon.maez_daemon import MaezDaemon
 
+    # Gate round 16 item B: the daemon import calls the ordinary config
+    # loader a SECOND time (maez_daemon.py:34), and a first .env can set
+    # MAEZ_CONFIG so the second call reads a different file. The environment
+    # checked before the import is therefore not necessarily the final one.
+    # Re-assert on the post-import state; this is the configuration that
+    # actually runs.
     report["env_after_import"] = env_snapshot()
+    set_flags_2 = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
+    if set_flags_2:
+        raise SystemExit(
+            f"REFUSED: flags-off violated after import: {set_flags_2}")
+    report["effective_store_paths_after_import"] = assert_paths("post-import")
     report["flags_off_after_import"] = "PASS"
 
     t0 = time.time()
@@ -265,6 +308,22 @@ def main() -> int:
         return out
 
     report["collection_counts_before"] = collection_counts()
+
+    # The phase probe: what the resolver answers on THIS fixture, recorded
+    # before the replay so the report states the behavior under test rather
+    # than leaving it to be inferred from stamps.
+    from core.memory import birth_phase as _bp
+    report["phase_probe"] = {
+        "resolver_module": _bp.__file__,
+        "current_phase": _bp.current_phase(str(ledger)),
+        "birth_event_turn_id": _bp.birth_event_turn_id(str(ledger)),
+        "has_resolve_api": hasattr(_bp, "resolve"),
+    }
+    if hasattr(_bp, "resolve"):
+        r = _bp.resolve()
+        report["phase_probe"]["resolve"] = {
+            "phase": getattr(r, "phase", None),
+            "reason": getattr(r, "reason", None)}
 
     for item in interactions:
         rec = {"id": item["id"], "at": item["at"], "source": item["source"]}
@@ -312,6 +371,43 @@ def main() -> int:
     # T5 deliberately exercises the hermetic fallback, so a reply that is a
     # degraded string is expected -- but it must never be reported as healthy
     # synthesis. Label the shape; do not judge it here.
+    # The stamp census: what memory_phase values actually landed, per store.
+    # This is the quantity the discriminator compares -- flags off must
+    # reproduce the legacy stamps on BOTH fixtures, and a forced-on S1 must
+    # change them on the partial fixture.
+    def stamp_census() -> dict:
+        out: dict = {}
+        for name in ("raw", "daily", "core"):
+            try:
+                col = getattr(daemon.memory, name)
+                got = col.get(include=["metadatas"])
+                counts: dict = {}
+                for md in (got.get("metadatas") or []):
+                    v = (md or {}).get("memory_phase")
+                    counts[str(v)] = counts.get(str(v), 0) + 1
+                out[f"chroma::{name}"] = dict(sorted(counts.items()))
+            except Exception as e:                       # noqa: BLE001
+                out[f"chroma::{name}"] = f"error: {type(e).__name__}"
+        for label, dbp in (("private_thoughts",
+                            MAEZ_TREE / "memory" / "private_thoughts.db"),
+                           ("audit_log",
+                            MAEZ_TREE / "memory" / "audit_log.db")):
+            if not dbp.exists():
+                out[label] = "absent"
+                continue
+            try:
+                c = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+                rows = c.execute(
+                    f"SELECT memory_phase, COUNT(*) FROM {label} "
+                    "GROUP BY memory_phase").fetchall()
+                c.close()
+                out[label] = {str(k): v for k, v in rows}
+            except Exception as e:                       # noqa: BLE001
+                out[label] = f"error: {type(e).__name__}"
+        return out
+
+    report["stamp_census"] = stamp_census()
+
     report["reply_shapes"] = {
         r["id"]: {"chars": len(r.get("reply") or ""),
                   "empty": not (r.get("reply") or "").strip()}

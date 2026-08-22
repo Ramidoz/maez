@@ -1,15 +1,16 @@
-# Theme 2 — S1 (phase truth) witness protocol, v6.4
+# Theme 2 — S1 (phase truth) witness protocol, v6.5
 
 Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
-correction), §11 = v5, §12 = v6.4.
+correction), §11 = v5, §12 = v6.5.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
 closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
 closed gate round 13's three reopened items (B, D, E — A, C, G passed)
 and its finding I; v6.3 closed gate round 14's B, D, E, I and its
-blocking finding J, and recorded finding K; v6.4 closes gate round 15's
-B, D, E and J (I passed). The T5
+blocking finding J, and recorded finding K; v6.4 closed gate round 15's
+B, D, E and J (I passed); **v6.5 closes gate round 16's B, D and J and
+acts on its finding L, which changed what T5 measures.** The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -384,6 +385,61 @@ daemon stopped for the run. Round 12 ruled **T5 must not run** until
 items A/B/C/D/E/G closed; v6.1 closes them, and the run remains barred
 until a further gate says otherwise.
 
+### 12.0 What T5 measures, and why v6.5 changed it (round-16 finding L)
+
+Five gate rounds hardened T5's comparator. Round 16 was asked whether
+the witness was worth its cost and whether it measured the right thing,
+and answered that it was **over-specified and under-discriminating**.
+That finding was verified on this host before it was acted on:
+
+```
+legacy current_phase() per fixture — the flags-off behavior T5 must preserve
+  F-G healthy    -> gestation
+  F-P partial    -> gestation      ← S1 must say unknown
+  F-E 0-byte     -> gestation
+  F-D2 corrupt   -> gestation      ← S1 must say unknown
+  F-A absent     -> gestation
+```
+
+`core/memory/birth_phase.py:38-66` returns `gestation` for **every**
+ledger that lacks a readable birth anchor — absent, empty, half-built,
+corrupt alike. That is precisely the defect S1 exists to fix (design §5,
+ND13). And T5's fixture was a **healthy** ledger, which is exactly where
+the legacy resolver and S1 **agree**: both answer `gestation`.
+
+So T5 as specified could not tell a dormant S1 from an accidentally
+always-enabled one. Two runs would match, the projection would report
+identity, and the witness would pass without ever proving the guard
+exists. Byte-level invariance of a store that looks the same either way
+is not a dormancy proof.
+
+**What v6.5 changes, on the owner's ruling:**
+
+1. **A discriminating fixture is added.** The replay also runs against a
+   `partial` ledger — migrations 0001–0002 only — where legacy and S1
+   must **diverge**: legacy stamps `gestation`, S1 must read `unknown`
+   and every consumer must refuse. Flags off must reproduce the legacy
+   stamps exactly; once S1 exists, a forced-on run must **not**. That
+   divergence is the dormancy proof.
+2. **The gate narrows to what S1 needs.** The kill clauses are: no latch
+   directory; the ledger main file unchanged; the `memory_phase` stamp
+   census identical per store on **both** fixtures; record counts
+   identical; and — once S1 exists — the forced-on run *must* differ.
+3. **The byte projection is demoted to forensic evidence.** It is still
+   computed, recorded and archived, and its self-test still runs; it is
+   no longer the gate's authority. It kept producing defects because it
+   was measuring physical layout, which is not the invariant of
+   interest.
+4. **The archive is still produced and its digest still committed in
+   v7, before the first S1 code commit.** Round 11's ordering rule is
+   honored exactly; only the archive's evidentiary weight changes, from
+   comparison basis to documentation of what the pre-S1 store tree was.
+
+What T5 keeps unchanged: the airlock and its self-test, the path
+checks, the live-tree probes, the hermetic ruling, the positive
+controls, and one real `handle_message` exchange through production
+code rather than a stub.
+
 ### 12.1 The findings, as binding constraints
 
 From the audit:
@@ -631,7 +687,10 @@ add an injection point to the path first, not reinterpret this field.
 ### 12.7 The store tree, and what the archive contains
 
 **Store tree** = `<A>/maez/memory/**`, minus the seeded package sources
-named in `logs/seeded-sources.txt`.
+named in `logs/seeded-sources.txt`. The archive is taken from the
+**healthy** fixture's run `a`; the partial fixture's tree is recorded in
+the run report but not archived, since its role is the discriminator's
+stamp census rather than a byte baseline.
 **Excluded**: `<A>/maez/logs`, `<A>/maez/.cache`, `<A>/home/**` (the
 167 MB `ONNXMiniLM_L6_V2` cache, a read-only asset the hermetic run
 cannot re-download), and the seeded sources.
@@ -649,7 +708,35 @@ any S1 code exists, and implemented by
 report), which is self-tested against each clause before it is pointed
 at a real baseline.
 
-**Byte-exact clauses. Any difference is a kill.**
+**The gate, v6.5.** Only the clauses in this block decide the verdict.
+Everything after them is forensic evidence: computed, recorded and
+archived, never the authority.
+
+- **G1 — no latch artifact.** No `birth_observed/`, `segment-*.jsonl`
+  or `*.tmp` under any latch path, on either fixture. (Formerly B2.)
+- **G2 — the ledger main file is unchanged**, per the digest the driver
+  records post-migration and post-replay. (Formerly B1; the read-only
+  opens and their `-wal`/`-shm` sidecars are expected — see B4.)
+- **G3 — the stamp census matches, on BOTH fixtures.** Per store, the
+  multiset of `memory_phase` values recorded by the driver's stamp
+  census must be identical between the baseline and the post-S1
+  flags-off run. On the healthy fixture that is `gestation`; on the
+  partial fixture it is *also* `gestation`, and that is the whole
+  point — it is where an always-on S1 would differ.
+- **G4 — record counts match** per store and per collection.
+- **G5 — the discriminator flips.** Once S1 exists, a run with the S1
+  guard forced on, against the **partial** fixture, must **not** match
+  the baseline: the resolver must read `unknown` and the census must
+  show refusals rather than `gestation` stamps. **A T5 in which G5 does
+  not flip is a failed T5**, however cleanly G1–G4 pass, because it
+  means the guard is not there. Pre-S1, G5 is recorded as
+  `not-applicable — no S1 code exists`, and the baseline it will be
+  measured against is pinned by this run.
+- **G6 — the positive controls of §12.11 pass** on every run.
+
+**Forensic clauses (recorded, not gating).** Any difference here is
+reported in the run report and ruled on; it does not by itself fail
+T5. This is the demotion round 16 recommended and the owner adopted.
 
 - **B1** — the ledger's **main file** sha256 after the replay equals its
   post-migration sha256 from §12.4. The digest is read from the sqlite
@@ -706,7 +793,7 @@ at a real baseline.
   path name. v6.1 compared only the names, so a changed source file
   inside the overlay would have passed. *(v6.2, round 13 item D.)*
 
-**Projected clauses. Ordinalization, never dropping.**
+**Forensic, continued. Ordinalization, never dropping.**
 
 Round 12's decisive objection: v6 *dropped* volatile columns, so any
 change inside one was invisible — flags-off S1 could replace every
@@ -799,8 +886,19 @@ name-based rule is exactly the discretion round 12 objected to:
 - **uuid-shaped** iff it matches
   `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` or
   `^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$` — the two forms the codebase
-  actually mints — **and is not 64 hex characters**, which is exactly
-  sha256 and never an identifier.
+  actually mints.
+
+  *(v6.5, round 16 item D:* v6.4 still admitted a generic prefix plus
+  8–32 hex, and round 16 executed `digest-<32a> → digest-<32b>` through
+  the real comparator: classified `uuid`, normalized to `<id:0>` on both
+  sides, `IDENTICAL-UNDER-PROJECTION`, `kills=[]`. Excluding bare 64-hex
+  protects nothing against prefixed, MD5-shaped or truncated digests.
+  The class is now an **exact allowlist** of the three forms the
+  codebase mints, each pinned to its construction site —
+  `core-<12hex>` (`memory_manager.py:2066`),
+  `quiet-<YYYY-MM-DD>-<8hex>` (`:1660`),
+  `daily-<YYYY-MM-DD>-<8hex>` (`:1842`) — plus canonical uuid4. Adding
+  a form means adding a line and re-freezing.*)
 
   *(v6.4, round 15 item D, and the most consequential fix of the
   round.* v6.3 admitted any 12–64-character lowercase hex string, so a
@@ -962,6 +1060,14 @@ Two v6.4 corrections, both round 15 item J:
   runs **before** publication, polls until the unit reports `active`,
   and a failure to restore both blocks the copy and sets a non-zero
   exit.
+- **The archive digest is computed as its own checked command, and
+  published atomically.** v6.4 hashed inside a command substitution
+  passed to `say`; `say` succeeded, so `set -e` never saw the failing
+  `sha256sum` and publication proceeded with an empty digest. The hash
+  is now its own statement with an emptiness check, the copy goes to a
+  `.tmp` destination, the digest is re-verified there, and only then is
+  it `mv`'d into place — so an interrupt during the copy cannot leave a
+  partial archive at the committed path. *(v6.5, round 16 item J.)*
 
 ### 12.13 Finding K — recorded here, ruled elsewhere
 

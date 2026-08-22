@@ -58,8 +58,22 @@ UUID_RE = re.compile(
 # since that is exactly sha256 and never an id. Anything else that varies
 # between runs surfaces as a FINDING to be ruled on, which is the safe
 # direction: fail toward reporting, never toward absorbing.
-PREFIXED_HEX_RE = re.compile(r"^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# Gate round 16 item D: a generic "prefix + 8-32 hex" class is still a digest
+# swallower -- `digest-<32hex>` matched it, was absorbed as an identifier, and
+# normalized to <id:0> on both sides (executed control). Excluding bare 64-hex
+# protects nothing against prefixed, MD5-shaped, or truncated hashes.
+#
+# The class is now an EXACT allowlist of the three prefixed forms the codebase
+# actually mints, each pinned to its construction site. Adding a form means
+# adding a line here, with its site, and re-freezing.
+MINTED_ID_RES = (
+    # memory_manager.py:2066  f"core-{uuid.uuid4().hex[:12]}"
+    re.compile(r"^core-[0-9a-f]{12}$"),
+    # memory_manager.py:1660  f"quiet-{today}-{uuid.uuid4().hex[:8]}"
+    re.compile(r"^quiet-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}$"),
+    # memory_manager.py:1842  f"daily-{today}-{uuid.uuid4().hex[:8]}"
+    re.compile(r"^daily-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}$"),
+)
 ISO8601_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$")
 
@@ -75,9 +89,17 @@ MAX_ROWS_PER_TABLE = 200_000
 
 
 def is_uuid_shaped(v) -> bool:
-    if not isinstance(v, str) or SHA256_RE.match(v):
+    """An identifier is one of the forms this codebase mints. Nothing else.
+
+    Anything that varies between runs and is not on the allowlist surfaces as
+    a FINDING to be ruled on. That is the safe direction: a digest wrongly
+    called an identifier is invisible, a digest wrongly called a finding is
+    merely noisy."""
+    if not isinstance(v, str):
         return False
-    return bool(UUID_RE.match(v) or PREFIXED_HEX_RE.match(v))
+    if UUID_RE.match(v):
+        return True
+    return any(r.match(v) for r in MINTED_ID_RES)
 
 
 def is_time_shaped(v) -> bool:
@@ -325,8 +347,8 @@ def derive_volatile(a: dict, b: dict) -> dict:
                     continue
                 volatile.setdefault(db, {}).setdefault(t, {})[c] = kind
     return {"volatile": volatile, "findings": findings,
-            "grammar": {"uuid": [UUID_RE.pattern, PREFIXED_HEX_RE.pattern],
-                        "uuid_excluded": [SHA256_RE.pattern],
+            "grammar": {"uuid": [UUID_RE.pattern]
+                                + [r.pattern for r in MINTED_ID_RES],
                         "iso8601": ISO8601_RE.pattern,
                         "unix_seconds_window": [SEC_MIN, SEC_MAX],
                         "unix_millis_window": [MS_MIN, MS_MAX]}}
