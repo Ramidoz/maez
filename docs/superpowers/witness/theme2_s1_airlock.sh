@@ -43,6 +43,22 @@ mkdir -p \
     "$AIRLOCK/home/.config/maez" \
     "$AIRLOCK/home/.cache/chroma"
 
+# The repo's memory/ directory is BOTH a Python package and the data
+# directory: it holds memory_manager.py, which daemon/maez_daemon.py:70
+# imports, alongside memory/db/ and the sqlite stores. Binding an empty
+# airlock directory over it hides the package and the driver cannot
+# import the reply machinery at all (verified: ModuleNotFoundError).
+# So the overlay is seeded with exactly the tracked files under memory/,
+# copied read-only-in-spirit from the repo. They are code, not store:
+# theme2-s1-seeded-sources.txt records the list and their digests, and
+# the projection excludes them from the store tree.
+SEED_MANIFEST="$AIRLOCK/maez/logs/seeded-sources.txt"
+: > "$SEED_MANIFEST"
+while IFS= read -r f; do
+    install -D -m 0644 "$MAEZ_TREE/$f" "$AIRLOCK/maez/$f"
+    sha256sum "$MAEZ_TREE/$f" >> "$SEED_MANIFEST"
+done < <(cd "$MAEZ_TREE" && git ls-files memory/)
+
 # The ONNX embedding model cache (ONNXMiniLM_L6_V2, per
 # memory/embedding_contract.json) is a read-only asset the hermetic run
 # cannot re-download. Seed it once; it is excluded from the store tree
@@ -62,6 +78,8 @@ BWRAP_ARGV=(
     --bind "$AIRLOCK/home/.config/maez"  "$HOST_HOME/.config/maez"
     --bind "$AIRLOCK/home/.cache/chroma" "$HOST_HOME/.cache/chroma"
     --tmpfs /tmp
+    --tmpfs /run
+    --tmpfs /var/tmp
     --proc /proc
     --dev /dev
     --unshare-net
@@ -107,15 +125,36 @@ if [ "${1:-}" = "--self-test" ]; then
         else
             echo "FAIL (tcp table non-empty)"; exit 1
         fi
+        printf "4 host-runtime-sockets-absent: "
+        if [ -z "$(ls -A /run 2>/dev/null)" ]; then
+            echo "PASS (/run is an empty tmpfs)"
+        else
+            echo "FAIL (/run non-empty: $(ls -A /run | head -3 | tr "\n" " "))"
+            exit 1
+        fi
+        printf "5 reply-machinery-importable: "
+        if python3 -c "import memory.memory_manager as m, sys;
+p = str(m.BASE_DB)
+sys.exit(0 if p == \"'"$MAEZ_TREE"'/memory/db\" else 3)" 2>/dev/null; then
+            echo "PASS (memory.memory_manager imports; BASE_DB resolves into the overlay)"
+        else
+            echo "FAIL (import or BASE_DB check failed)"; exit 1
+        fi
+        printf "6 no-maez-env: "
+        if [ -z "$(env | grep "^MAEZ_" || true)" ]; then
+            echo "PASS (no MAEZ_* set)"
+        else
+            echo "FAIL ($(env | grep "^MAEZ_" | tr "\n" " "))"; exit 1
+        fi
     '
     rc=$?
-    echo "4 probe-visible-in-airlock-only:"
+    echo "7 probe-visible-in-airlock-only:"
     if [ -f "$AIRLOCK/maez/memory/CONTAINMENT_PROBE" ]; then
         echo "   PASS (present at $AIRLOCK/maez/memory/CONTAINMENT_PROBE)"
     else
         echo "   FAIL (absent from airlock)"; exit 1
     fi
-    echo "5 live-tree-unmarked:"
+    echo "8 live-tree-unmarked:"
     if [ -e "$MAEZ_TREE/CONTAINMENT_PROBE" ] \
        || [ -e "$MAEZ_TREE/memory/CONTAINMENT_PROBE" ]; then
         echo "   FAIL (probe leaked into the live tree)"; exit 1

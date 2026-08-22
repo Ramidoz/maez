@@ -45,8 +45,10 @@ The reply machinery reaches `memory/memory_manager.py`, which pins:
 memory/memory_manager.py:45   BASE_DB = Path("/home/rohit/maez/memory/db")
 ```
 
-`BASE_DB` has **no environment override anywhere in the repo**. It is
-consumed at `memory_manager.py:597` inside `_make_client()`:
+`BASE_DB` has **no environment override in `memory_manager` and none on
+any production path** — see the correction in §6, which narrows an
+overbroad phrasing in the original text. It is consumed at
+`memory_manager.py:597` inside `_make_client()`:
 
 ```
 path = BASE_DB / subdir
@@ -57,8 +59,9 @@ return chromadb.PersistentClient(path=str(path), ...)
 Constructing a `MemoryManager` therefore **creates directories in and
 opens Chroma clients against the live store** at
 `/home/rohit/maez/memory/db/{raw,daily,core}` — before any probe logic
-runs, regardless of every `MAEZ_*` variable set. It is also consumed
-at `memory_manager.py:1435-1440` for the embedding-contract
+runs, regardless of every `MAEZ_*` variable set. `MemoryManager.__init__` invokes it for all three tiers at
+`memory_manager.py:1412` — raw `:1499`, daily `:1841`, core `:2066` —
+and it is consumed again at `:1435-1440` for the embedding-contract
 reconciliation.
 
 This is precisely the scar class recorded in
@@ -220,3 +223,37 @@ what round 10 left underdetermined.
   fixing production code to make a witness runnable inverts the
   discipline — the witness must survive the code as shipped.
 - No touch of `config/creation_manifest.md`. Owner-only.
+
+## 6. Corrections (gate round 12)
+
+Round 12 verified this audit's claims independently and upheld the
+operational finding while narrowing one phrasing and adding one
+citation. Both corrections are recorded here rather than silently
+edited away.
+
+1. **"No environment override anywhere in the repo" was overbroad.**
+   `scripts/recall_flip_eval/sandbox.py` monkeypatches the module
+   global — it saves the original at `:121`, rebinds to a sandbox root
+   at `:124`, refuses to proceed if the rebound value escapes the
+   sandbox at `:178`, and restores it at `:370`/`:386`. The accurate
+   claim is: **`memory_manager` exposes no intrinsic override and no
+   production path provides one; a specialized harness can rebind the
+   module global.**
+
+   This strengthens rather than weakens the conclusion. T5 deliberately
+   does not imitate that rebind: a monkeypatch covers the one literal
+   whoever wrote it remembered, and this audit found **54** module-global
+   absolute-path constants. Containment covers all 54 and every one not
+   yet written.
+
+2. **The `daily` writer was uncited.** §1's table named raw and core
+   stamp sites; the daily site is `memory_manager.py:1841`. The
+   nondeterminism finding is unchanged — all three tiers stamp
+   `uuid4()` and a wall clock.
+
+Round 12 confirmed every other claim: the `_make_client` behavior, the
+`MemoryManager.__init__` call site at `:1412`, all named
+nondeterminism sites, and the replay-harness incompatibility
+(`replay_harness.py:152` requires one JSON object per line with
+`id`/`category`/`purpose`; the manifest is a single object holding an
+`interactions` array).

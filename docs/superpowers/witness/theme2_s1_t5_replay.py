@@ -124,6 +124,19 @@ def main() -> int:
 
     report["sqlite_version"] = sqlite3.sqlite_version
 
+    # Gate round 12, item B: the ledger is migrated INSIDE the namespace.
+    # Doing it before namespace entry left a Python startup -- imports,
+    # site/.pth, bytecode, inherited descriptors -- outside the boundary
+    # the protocol claims to be total. Nothing runs outside now.
+    from core.ledger.migrate import run as migrate_run
+
+    ledger = MAEZ_TREE / "memory" / "ledger.db"
+    migrate_run(str(ledger))
+    report["ledger_post_migration_sha256"] = hashlib.sha256(
+        ledger.read_bytes()).hexdigest()
+    report["ledger_post_migration_file_set"] = sorted(
+        q.name for q in ledger.parent.iterdir() if q.name.startswith("ledger.db"))
+
     # Import and construct only after containment is proven. Constructing
     # MaezDaemon builds MemoryManager, which mkdirs and opens Chroma at
     # memory_manager.BASE_DB -- the un-redirectable literal. Inside the
@@ -147,6 +160,20 @@ def main() -> int:
             rec["traceback"] = traceback.format_exc()
         rec["seconds"] = round(time.time() - t, 3)
         report["interactions"].append(rec)
+
+    # Gate round 12, item C: flags off, the ledger is NOT "never opened" --
+    # the evidence-envelope builder opens it read-only (envelope_builder.py:268,
+    # recent_turns.py:97), and a read-only open of a WAL database creates the
+    # -shm/-wal sidecars. The main-file digest is what B1 asserts; record the
+    # sidecar reality rather than claim it away.
+    report["ledger_post_replay_sha256"] = hashlib.sha256(
+        (MAEZ_TREE / "memory" / "ledger.db").read_bytes()).hexdigest()
+    report["ledger_post_replay_file_set"] = sorted(
+        q.name for q in (MAEZ_TREE / "memory").iterdir()
+        if q.name.startswith("ledger.db"))
+    report["ledger_main_file_unchanged"] = (
+        report["ledger_post_replay_sha256"]
+        == report["ledger_post_migration_sha256"])
 
     report["finished_at"] = time.time()
     out = Path(args.report)

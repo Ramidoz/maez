@@ -1,11 +1,13 @@
 # Theme 2 — S1 (phase truth) witness protocol, v6
 
-Status: PROTOCOL v6. Body = v1; §9 = v3, §10 = v4, §11 = v5, §12 = v6.
+Status: PROTOCOL v6.1. Body = v1; §9 = v3, §10 = v4 (one v6.1
+correction), §11 = v5, §12 = v6.1.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
-v6 closes T5's execution model against the pre-execution audit; the
-T5 archive digest and the volatile-column literal arrive in v7, which
-per gate round 11 must precede the first S1 code commit.
+v6 closed T5's execution model against the pre-execution audit; v6.1
+closes gate round 12's six items (A, B, C, D, E, G — F passed). The T5
+archive digest and the volatile-field literal arrive in v7, which per
+gate round 11 must precede the first S1 code commit.
 
 ## 0. Ground rules (unchanged from v1, plus digests)
 
@@ -332,10 +334,13 @@ outcome.
 - **T5 baseline archive, pinned**: path
   `docs/superpowers/witness/theme2-s1-baseline.tar.zst`; produced by
   driving the replay manifest once against pre-S1 HEAD flags-off in
-  the airlock; its sha256 is added HERE by a protocol v5 amendment
+  the airlock; its sha256 is added HERE by a later protocol amendment
   committed **before** the first S1 code commit — the ordering, not
   the timing, is the binding rule, and the S1 gate checks the
-  amendment predates the code in history.
+  amendment predates the code in history. *(Corrected in v6.1 per gate
+  round 12 item G: this clause originally named "v5", but v5 was
+  consumed by T2's mate-line amendment at `64d4cbb`. The digest
+  amendment is **v7**.)*
 - **T6 mutation 6, executable form** (corruption does not respect
   triggers): `DROP TRIGGER turns_no_update; UPDATE turns SET
   raw_text = raw_text || 'x' WHERE chain_position = 0;` — two
@@ -358,198 +363,335 @@ content is therefore determined by the fixture plus the injected
 clocks; the report quotes all three verbatim and diffs mate-vs-
 advancing to show exactly the one differing key.
 
-## 12. v6 amendment — T5's execution model, closed against the pre-execution audit
+## 12. v6/v6.1 amendment — T5's execution model, closed against the pre-execution audit and gate round 12
 
 Round 10 pinned T5's *artifact* (path) and round 11 pinned its
 *ordering* (digest amendment precedes the first S1 code commit).
 Neither pinned how the run executes. The pre-execution audit
 (`docs/superpowers/specs/2026-08-22-theme2-t5-airlock-audit.md`) found
-three facts that make §6 unexecutable as written. This amendment
-closes them. It is authored **before any T5 run and before any S1
-code exists**, so nothing here is tuned to an outcome.
+three facts that make §6 unexecutable as written; **gate round 12**
+(`-gate-round12.md`) then found six defects in v6's answer. This
+section is the closed form. It is authored **before any T5 run and
+before any S1 code exists**, so nothing here is tuned to an outcome.
 
 Owner rulings taken at audit time: containment approved subject to a
 gate round; hermetic (no network); pre-registered projection; the live
-daemon stopped for the run.
+daemon stopped for the run. Round 12 ruled **T5 must not run** until
+items A/B/C/D/E/G closed; v6.1 closes them, and the run remains barred
+until a further gate says otherwise.
 
-### 12.1 The three findings, restated as binding constraints
+### 12.1 The findings, as binding constraints
+
+From the audit:
 
 - **F-A** `memory/memory_manager.py:45` pins
-  `BASE_DB = Path("/home/rohit/maez/memory/db")` with no environment
-  override; `_make_client()` (`:597`) `mkdir`s and opens Chroma there.
-  Environment redirection therefore cannot airlock this run. 54
-  module-global absolute-path constants exist repo-wide; 9 sit on or
-  beside the reply path.
+  `BASE_DB = Path("/home/rohit/maez/memory/db")`; `_make_client()`
+  (`:597`) `mkdir`s and opens Chroma there, and
+  `MemoryManager.__init__` invokes it for raw (`:1499`), daily
+  (`:1841`) and core (`:2066`) at `:1412`. **`memory_manager` itself
+  exposes no environment override for it**, and neither does any
+  production caller. *(v6.1 correction, round 12 item A: v6 said "no
+  environment override anywhere in the repo", which is false —
+  `scripts/recall_flip_eval/sandbox.py` monkeypatches the module
+  global at `:121`/`:124`, guards it at `:178`, and restores it at
+  `:370`/`:386`. The accurate claim is that the module and every
+  production path have no intrinsic override; a specialized harness can
+  rebind the global. That is why T5 uses containment rather than
+  imitating the sandbox's rebind: a monkeypatch covers the one literal
+  someone remembered, and the audit found 54 module-global absolute
+  paths.)*
 - **F-B** Every store on the path stamps `uuid4()` and a wall clock
-  (`memory_manager.py:1499`, `1598`, `2066`; `private_thoughts.py:1099`;
-  `audit_log.py:245/444/513/568`; `writer.py:353`). Raw byte equality
-  between two runs is impossible.
+  (`memory_manager.py:1499`, `1598`, `1841`, `2066`;
+  `private_thoughts.py:1099`; `audit_log.py:245/444/513/568`;
+  `writer.py:353`). Raw byte equality between two runs is impossible.
 - **F-C** The brain, the airlock's starting state, and the live
-  daemon's concurrency were all unspecified.
+  daemon's concurrency were unspecified.
 
-### 12.2 Containment replaces redirection (closes F-A)
+From round 12: the launch boundary was not total (B), B1's stated
+reason was false (C), the projection was not total and admitted real
+false passes (D), the volatility classifier was not deterministic (E),
+and §10 named the wrong amendment version (G). Round 12 item **F
+passed**: no census construct is reachable only on a successful-brain
+path, so the hermetic ruling costs no coverage.
+
+### 12.2 Containment replaces redirection (closes F-A and round-12 B)
 
 The run executes inside `bwrap` with the live tree **read-only** and
 airlock directories bound over exactly the writable targets. The live
 absolute path still resolves — so a module-global literal is caught by
 construction — and any path the bind set did not anticipate fails
-`EROFS`, loudly, instead of writing to the live tree.
+`EROFS`, loudly.
 
 The wrapper is `docs/superpowers/witness/theme2_s1_airlock.sh`,
-committed with its sha256 recorded in the run report. Its argv is:
+sha256 recorded in the run report; `theme2_s1_airlock.sh <dir> --argv`
+prints the frozen argv, which the report quotes verbatim. Its shape:
 
 ```
-bwrap \
-  --ro-bind / / \
-  --ro-bind /home/rohit/maez /home/rohit/maez \
-  --bind  <AIRLOCK>/maez/memory        /home/rohit/maez/memory \
-  --bind  <AIRLOCK>/maez/logs          /home/rohit/maez/logs \
-  --bind  <AIRLOCK>/maez/.cache        /home/rohit/maez/.cache \
-  --bind  <AIRLOCK>/home/.config/maez  /home/rohit/.config/maez \
-  --bind  <AIRLOCK>/home/.cache/chroma /home/rohit/.cache/chroma \
-  --tmpfs /tmp \
-  --proc /proc --dev /dev \
-  --unshare-net --unshare-pid --die-with-parent \
-  --setenv PYTHONDONTWRITEBYTECODE 1 \
-  --setenv HOME /home/rohit \
-  --chdir /home/rohit/maez \
-  <PYTHON> -m <DRIVER> ...
+bwrap --ro-bind / /  --ro-bind /home/rohit/maez /home/rohit/maez
+  --bind <A>/maez/memory        /home/rohit/maez/memory
+  --bind <A>/maez/logs          /home/rohit/maez/logs
+  --bind <A>/maez/.cache        /home/rohit/maez/.cache
+  --bind <A>/home/.config/maez  /home/rohit/.config/maez
+  --bind <A>/home/.cache/chroma /home/rohit/.cache/chroma
+  --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
+  --proc /proc --dev /dev
+  --unshare-net --unshare-pid --die-with-parent
+  --clearenv
+  --setenv HOME /home/rohit
+  --setenv PATH /home/rohit/maez/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  --setenv VIRTUAL_ENV /home/rohit/maez/.venv
+  --setenv PYTHONDONTWRITEBYTECODE 1
+  --setenv PYTHONHASHSEED 0
+  --setenv LANG C.UTF-8  --setenv LC_ALL C.UTF-8
+  --setenv TZ America/Chicago
+  --chdir /home/rohit/maez
 ```
 
-- `PYTHONDONTWRITEBYTECODE=1` is required: the repo is read-only and
-  `__pycache__` writes would otherwise fail mid-import.
-- `<AIRLOCK>/home/.cache/chroma` is seeded once by copying the host's
-  `~/.cache/chroma` (167 MB, `ONNXMiniLM_L6_V2` per
-  `memory/embedding_contract.json`). It is a read-only *asset* that
-  must be writable-bound because Chroma may touch it; it is **excluded
-  from the store tree and from the archive**.
-- **Bind-set discovery is iterative and recorded.** The set above is
-  the audit's prediction, not a proof. Any `EROFS` encountered during
-  the run is a *finding*: the run report lists every path that failed
-  read-only, and either the bind set grows (recorded, with the reason)
-  or the run stops. A read-only failure is never worked around by
-  loosening `--ro-bind /home/rohit/maez`.
-- **Containment self-test, run immediately before the replay and
-  recorded verbatim**: inside the same namespace, (1) a write to
-  `/home/rohit/maez/CONTAINMENT_PROBE` must fail `EROFS`; (2) a write
-  to `/home/rohit/maez/memory/CONTAINMENT_PROBE` must succeed and be
-  visible only at `<AIRLOCK>/maez/memory/`; (3) after the namespace
-  exits, neither probe exists in the live tree. Any deviation kills
-  the run before the manifest is touched.
+Three round-12 gaps, closed:
 
-### 12.3 Hermetic (closes F-C.1)
+- **`--tmpfs /run` and `--tmpfs /var/tmp`.** `--unshare-net` does not
+  block filesystem Unix sockets; the host session D-Bus under `/run`
+  would have remained reachable, and read-only-mounting a socket
+  pathname does not stop an outside process from acting on it. `/run`
+  is now an empty tmpfs, asserted by the self-test.
+- **`--clearenv` plus an explicit nine-variable set.** §6 requires
+  "all `MAEZ_*` flags unset; full env recorded". Inheriting the
+  environment made that a claim to be inspected; clearing it makes it
+  true by construction, and the recorded environment is exactly nine
+  variables. `PYTHONHASHSEED=0` and a pinned `TZ` remove two
+  determinism axes the manifest exposes ("what day is it today").
+- **The `memory/` overlay must be seeded with the package sources.**
+  The repo's `memory/` directory is **both a Python package and the
+  data directory**: it holds `memory_manager.py`, which
+  `daemon/maez_daemon.py:70` imports, alongside `memory/db/` and the
+  sqlite stores. Binding an empty airlock directory over it hides the
+  package and the driver cannot import the reply machinery at all —
+  verified: `ModuleNotFoundError: No module named
+  'memory.memory_manager'`. The wrapper therefore installs exactly the
+  files listed by `git ls-files memory/` (10 files at this commit) into
+  the overlay and records each one's sha256 in
+  `<A>/maez/logs/seeded-sources.txt`. They are **code, not store**: the
+  projection excludes them from the store tree by that manifest, and
+  compares the manifest itself between runs.
+- **Nothing runs outside the namespace.** v6 migrated the ledger before
+  namespace entry, which left a whole Python startup — imports,
+  `site`/`.pth`, bytecode, inherited descriptors — outside the boundary
+  the protocol claimed was total. The migration is now the driver's
+  first act *inside* the namespace, after the containment proof.
 
-`--unshare-net`. The LLM at `127.0.0.1:8080`, the judge at `:8081`,
-and `maez-searxng` are all unreachable; `llm_client.chat` raises
-`BackendError` and the reply path takes its fallback. This is
-deliberate: T5's subject is the **store tree under flags-off**, not
-reply quality, and it removes an entire non-determinism axis together
-with every egress risk. The run report records that the brain was
-unreachable and quotes one fallback reply verbatim so the shape of
-what was exercised is legible.
+**Bind-set discovery is iterative and recorded.** Any `EROFS`
+encountered is a *finding*: the report lists every path that failed
+read-only, and either the bind set grows (recorded, with the reason) or
+the run stops. A read-only failure is never worked around by loosening
+`--ro-bind /home/rohit/maez`.
+
+**Containment self-test, run immediately before the replay, output
+quoted verbatim in the report.** Eight assertions, all currently
+passing on this host: (1) a write to `/home/rohit/maez` fails `EROFS`;
+(2) a write to `/home/rohit/maez/memory` succeeds; (3) the namespace's
+TCP table is empty; (4) `/run` is an empty tmpfs; (5)
+`import memory.memory_manager` succeeds **and** `BASE_DB` resolves to
+`/home/rohit/maez/memory/db`, i.e. into the overlay; (6) no `MAEZ_*`
+variable is set; (7) the probe exists in the airlock; (8) neither probe
+exists in the live tree afterwards. Any deviation kills the run before
+the manifest is touched.
+
+The driver re-proves containment **from inside**, before importing a
+single Maez module, because constructing `MaezDaemon` builds
+`MemoryManager`: repo read-only, `memory/` writable and not the live
+579 MB store, `127.0.0.1:8080` unreachable, no `MAEZ_*` set. Verified
+to refuse outside the namespace, before any import, leaving no trace.
+
+### 12.3 Hermetic (closes F-C.1; round-12 F confirms the cost)
+
+`--unshare-net`. The LLM at `127.0.0.1:8080`, the judge at `:8081`, and
+`maez-searxng` are unreachable; `llm_client.chat` raises `BackendError`
+and the reply path takes its fallback. Round 12 verified that both the
+successful-synthesis branch (`maez_daemon.py:8937`) and the
+`BackendError` branch (`:8958`) rejoin before the common storage tail
+(`:9676`), so **no census construct is reachable only on a
+successful-brain path** and the hermetic ruling costs no coverage.
+
+Round 12 also established the honest scope of the replay: it exercises
+**1 of the 13 census constructs** (`MemoryManager.store_telegram`). The
+other 12 are T3's job, via the public entries §9 pins. T5 is a
+store-tree invariance witness, not a census witness, and the report
+says so rather than implying breadth it does not have.
+
+The report records that the brain was unreachable and quotes one
+fallback reply verbatim.
 
 ### 12.4 Starting state (closes F-C.2)
 
-The airlock starts **empty**. `<AIRLOCK>/maez/memory/ledger.db` is
-created by `core.ledger.migrate.run` before the namespace is entered,
-its sha256 recorded; every other store is created by the code under
-test on first write. No live store is copied — a baseline archive
-committed to git must never carry Maez's real memories.
+The airlock starts with **no store data**: only the seeded package
+sources of §12.2. `memory/ledger.db` is created by
+`core.ledger.migrate.run` as the driver's first in-namespace act, and
+its sha256 plus its `ledger.db*` file set are recorded before the
+replay. Every other store is created by the code under test on first
+write. No live store is copied — a baseline archive committed to git
+must never carry Maez's real memories.
 
 ### 12.5 The live daemon (closes F-C.3)
 
 `maez.service` is stopped for the duration of the run and restarted
 after, by the owner's ruling. The report records the stop time, the
 restart time, and `systemctl --user is-active maez.service` before and
-after. This is belt-and-braces on top of containment, not a substitute
-for it.
+after. Belt-and-braces on top of containment, not a substitute.
 
 ### 12.6 The driver
 
-`docs/superpowers/witness/theme2_s1_t5_replay.py`, committed with its
-sha256 recorded in the report. It constructs `MaezDaemon()` and calls
-`handle_message(text, source="UI")` once per manifest interaction in
-manifest order — the manifest's `source: "UI"` field names that entry
-point. It sets no `MAEZ_*` flag; the full environment is recorded.
+`docs/superpowers/witness/theme2_s1_t5_replay.py`, sha256 recorded in
+the report. It verifies the manifest digest
+(`2b9faf61…b420`), constructs `MaezDaemon()`, and calls
+`handle_message(text, source="UI")` once per interaction in manifest
+order — the manifest's `source: "UI"` names that entry point. It sets
+no `MAEZ_*` flag. Its report goes to `logs/`, which §12.7 excludes from
+the store tree, so writing it cannot perturb what T5 compares.
 
 ### 12.7 The store tree, and what the archive contains
 
-**Store tree** = `<AIRLOCK>/maez/memory/**`, in full.
-**Excluded**: `<AIRLOCK>/maez/logs`, `<AIRLOCK>/maez/.cache`, and
-`<AIRLOCK>/home/**` (the model cache). The archive
-`docs/superpowers/witness/theme2-s1-baseline.tar.zst` is the store
-tree, `tar` with sorted member order, numeric owner, and mtimes
-normalized to `0`, `zstd -19`. If the archive exceeds 25 MB the run
-stops and the owner rules on placement before anything is committed.
+**Store tree** = `<A>/maez/memory/**`, minus the seeded package sources
+named in `logs/seeded-sources.txt`.
+**Excluded**: `<A>/maez/logs`, `<A>/maez/.cache`, `<A>/home/**` (the
+167 MB `ONNXMiniLM_L6_V2` cache, a read-only asset the hermetic run
+cannot re-download), and the seeded sources.
 
-### 12.8 The invariance projection (closes F-B) — pre-registered
+The archive `docs/superpowers/witness/theme2-s1-baseline.tar.zst` is
+the store tree, `tar` with sorted member order, numeric owner, mtimes
+normalized to `0`, `zstd -19`. If it exceeds 25 MB the run stops and
+the owner rules on placement before anything is committed.
+
+### 12.8 The invariance projection (closes F-B and round-12 D and E)
 
 Raw byte equality is replaced by a projection fixed **here**, before
-any S1 code exists. It has two frozen parts and one deferred literal.
+any S1 code exists, and implemented by
+`docs/superpowers/witness/theme2_s1_t5_projection.py` (sha256 in the
+report), which is self-tested against each clause before it is pointed
+at a real baseline.
 
 **Byte-exact clauses. Any difference is a kill.**
 
-- **B1** `ledger.db` sha256 after the run equals its post-migration
-  sha256 recorded in §12.4. Flags off, `try_write_turn` returns `None`
-  from `ledger_writes_enabled()` *before* constructing a writer
-  (`writer.py:576-578`), so the ledger is never opened. This clause is
-  exact, not projected.
-- **B2** No `birth_observed/` directory, no `segment-*.jsonl`, and no
+- **B1** — the ledger's **main file** sha256 after the replay equals its
+  post-migration sha256 from §12.4. *(v6.1 correction, round 12 item C:
+  v6 justified this with "the ledger is never opened", which is false.
+  `try_write_turn` does return `None` before constructing a writer
+  (`writer.py:574`) and model-reply persistence returns before probing
+  (`model_reply_persistence.py:165`), so no **write** path runs — but a
+  tail-reaching `handle_message` calls the evidence-envelope builder
+  (`maez_daemon.py:7788`), which opens the ledger **read-only** at
+  `envelope_builder.py:268` and again at `recent_turns.py:97`.
+  Empirically verified on this host: those read-only opens create
+  `ledger.db-wal` and `ledger.db-shm` and leave the main-file digest
+  unchanged. B1 asserts the main file; the sidecars are named in B4.)*
+- **B2** — no `birth_observed/` directory, no `segment-*.jsonl`, no
   `*.tmp` under any latch path anywhere in the airlock.
-- **B3** The canonicalized relative path set of the store tree is
-  identical between runs and to the baseline. Canonicalization: any
-  path component matching
-  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` is
-  replaced by `<uuid:N>`, N being its ordinal in first-appearance
-  order under a lexicographic walk. Chroma names segment directories
-  with fresh UUIDs; nothing else in the tree may vary.
+- **B3** — four canonicalized path sets compared independently: sqlite
+  files, other files, sidecar files, seeded sources. Canonicalization:
+  a path component matching
+  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+  becomes `<uuid:N>`, N its ordinal in first-appearance order under a
+  lexicographic walk (Chroma names segment directories with fresh
+  UUIDs). A path whose name varies by anything else is fail-closed.
+- **B4** — `-wal` / `-shm` sidecars: **presence compared, bytes not.**
+  They are checkpoint-timing artifacts, and their existence is expected
+  per B1. Naming them explicitly is the point: v6 left them
+  unprojected, which is a hole, not a decision.
 
-**Projected clauses.**
+**Projected clauses. Ordinalization, never dropping.**
 
-- **P1 — SQLite stores** (every `*.db` and `chroma.sqlite3` in the
-  tree): `SELECT name, type, sql FROM sqlite_master ORDER BY name,
-  type` identical; per table, row count identical; per table, the rows
-  with the declared volatile columns dropped, sorted by the full
-  remaining tuple, identical.
-- **P2 — Chroma collections**: per collection, the record count; the
-  sorted multiset of `(document, metadata-with-volatile-keys-dropped)`;
-  and the sha256 over the embedding vectors sorted by their document
-  text, compared **exactly**. `ONNXMiniLM_L6_V2` is deterministic, so
-  a vector difference is a real finding and is reported, never
-  loosened to a tolerance.
-- **P3 — phase-exactness**: for every store carrying `memory_phase`,
-  the multiset of values, and per value the set of row identities
-  under P1's ordinalization.
+Round 12's decisive objection: v6 *dropped* volatile columns, so any
+change inside one was invisible — flags-off S1 could replace every
+timestamp in the tree with epoch zero and the comparison would still
+report equality. The fix is to normalize, not discard:
+
+- **P1** — per sqlite store: `sqlite_master` (name, type, sql) identical;
+  `user_version`, `application_id`, `page_size`, `journal_mode`,
+  `encoding` identical (an unprojected pragma change is a real
+  behavior change); per table, the column list and row count identical;
+  per table, the **normalized row multiset** identical, where
+  normalization is:
+  1. a **time**-classified column's value becomes its dense rank among
+     the column's sorted distinct values — preserving ordering,
+     uniqueness and monotonic structure, so a collapse to one value
+     changes the rank structure and is caught;
+  2. rows are sorted by their **stable key** = the non-volatile column
+     values plus the time ranks. This is the row-alignment procedure:
+     it needs no row identity and is identical in both runs whenever
+     the stable content is;
+  3. a **uuid**-classified column's value becomes a **per-database**
+     first-appearance ordinal assigned in that sorted order — per
+     database, not per column, so a scrambled foreign-key relationship
+     shows up as an ordinal mismatch.
+  A table the projection cannot normalize (row cap exceeded, read
+  error) is a kill, never a skip.
+- **P2** — Chroma collections: record count; the sorted multiset of
+  `(document, metadata)` under the same normalization; and the
+  embedding vectors compared **exactly**. `ONNXMiniLM_L6_V2` is
+  deterministic, so a vector difference is a real finding and is
+  reported, never loosened to a tolerance. Vector framing is frozen:
+  records ordered by `(document, canonical-JSON metadata, canonical-JSON
+  record)` — the third key breaks duplicate-document ties — and each
+  vector serialized as IEEE-754 little-endian doubles, concatenated,
+  sha256.
+- **P2b** — every non-database file in the tree compared by sha256, and
+  a difference is a **kill**. *(v6 made this a note. An HNSW graph
+  rebuilt with a different topology — `data_level0.bin`,
+  `link_lists.bin`, `length.bin`, `header.bin` — is a real behavior
+  change, and a note is how it would have slipped through.)*
+- **P3** — phase-exactness: per store carrying `memory_phase`, the
+  multiset of values, killing **independently of P1** so that an error
+  in the volatile list can never quietly swallow a phase change.
+
+**The volatility classifier, frozen (closes round-12 E).** A field is
+volatile iff its value multiset differs between the two baseline runs.
+It is then classified by **shape only** — no field-name rule, because a
+name-based rule is exactly the discretion round 12 objected to:
+
+- **uuid-shaped** iff it matches
+  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+  or `^[0-9a-f]{12,64}$`, or `^[a-z][a-z0-9_]*-[0-9a-f]{8,32}$`.
+- **time-shaped** iff it is a non-boolean number in `[1600000000,
+  2600000000]` (unix seconds, 2020-09-13 .. 2052-06-07) or in
+  `[1600000000000, 2600000000000]` (the same window in milliseconds),
+  or a string matching
+  `^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$`.
+  A number outside those two windows is **not** time-shaped, whatever
+  it is called.
+- Every differing value in the field must satisfy one class, and the
+  same class. A field that differs and satisfies neither is a
+  **FINDING**, reported and ruled on, never absorbed. The derivation
+  exits non-zero when any finding exists.
 
 **The deferred literal, and why deferring it is still
-pre-registration.** The *volatile column and metadata-key list* cannot
-be enumerated before the baseline run, because the set of tables the
-replay creates is not knowable by reading. The rule is frozen here —
-a column or key is volatile iff its values across the two baseline
-runs differ AND it is either UUID-shaped by B3's regex or a
-time-shaped numeric/ISO-8601 field. The **literal list** is computed
-from the two baseline runs and frozen in the v7 amendment, committed
-together with the archive digest and, per round 11, **before the first
-S1 code commit**. Pre-registration is preserved with respect to the
-thing under test: the projection is fixed before any S1 code exists.
-Any column whose values differ between the baseline runs and which is
-*not* UUID-shaped or time-shaped is a **finding, not a volatile
-column** — it is reported and ruled on, never absorbed.
+pre-registration.** The *field list* cannot be enumerated before the
+baseline run, because the set of tables the replay creates is not
+knowable by reading. The rule and the grammar are frozen here; the
+**literal list** is computed from the two baseline runs and frozen in
+the v7 amendment, committed with the archive digest and, per round 11,
+**before the first S1 code commit**. Round 12 accepted the timing and
+the finding-not-absorbed rule; what it rejected was the vagueness, and
+the grammar above removes it. Pre-registration is preserved with
+respect to the thing under test: the projection is fixed before any S1
+code exists.
 
 ### 12.9 Report obligations added to §8
 
-The `bwrap` argv verbatim; the containment self-test output; the
-wrapper and driver sha256; every `EROFS` path encountered; the
-daemon stop/restart timestamps and `is-active` output; the
-post-migration `ledger.db` digest; the brain-unreachable evidence and
-one verbatim fallback reply; the archive digest and byte size; the
-computed volatile list with the evidence for each entry.
+The `bwrap` argv verbatim (from `--argv`); the eight-assertion
+self-test output; the wrapper, driver and projection-tool sha256s; the
+seeded-sources manifest with digests; every `EROFS` path encountered;
+the daemon stop/restart timestamps and `is-active` output; the
+post-migration `ledger.db` digest and `ledger.db*` file set; the
+post-replay digest and file set and the B1 verdict; the
+brain-unreachable evidence and one verbatim fallback reply; the archive
+digest and byte size; the derived volatile field list with each entry's
+class and the evidence for it; every finding from the derivation.
 
 ### 12.10 What this amendment does not change
 
 T1, T2, T3, T4, T6 are untouched. No storage layer is stubbed or
 mocked — §12.3 is the absence of a network, not a fake brain.
-`memory_manager.BASE_DB` is **not** made env-overridable: that is a
-real defect deserving its own slice, but repairing production code so
-a witness can run inverts the discipline. The witness survives the
-code as shipped.
+`memory_manager.BASE_DB` is **not** made env-overridable, and T5 does
+**not** imitate the recall-eval sandbox's monkeypatch: a rebind covers
+the one literal someone remembered, while containment covers all 54.
+Repairing production code so a witness can run inverts the discipline.
+The witness survives the code as shipped.
