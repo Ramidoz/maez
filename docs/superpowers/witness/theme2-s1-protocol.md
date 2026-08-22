@@ -1,4 +1,4 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7
+# Theme 2 — S1 (phase truth) witness protocol, v7.1
 
 Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
@@ -11,10 +11,11 @@ and its finding I; v6.3 closed gate round 14's B, D, E, I and its
 blocking finding J, and recorded finding K; v6.4 closed gate round 15's
 B, D, E and J (I passed); v6.5 closed gate round 16's B, D and J and
 acted on its finding L, which changed what T5 measures; v6.6 made the
-gate executable and pinned the discriminator's activation. **v7 cuts
+gate executable and pinned the discriminator's activation. v7 cut
 T5 to the discriminator on the owner's ruling after gate round 18, and
-corrects §9's T3 contract.** The archive and census digests arrive in
-v7.1, which per gate round 11 must precede the first S1 code commit. The T5
+corrected §9's T3 contract. **v7.1 carries the executed baseline's
+digests — this is the amendment gate round 11 requires to precede the
+first S1 code commit.** The T5
 archive digest and the volatile-field literal arrive in v7, which per
 gate round 11 must precede the first S1 code commit.
 
@@ -806,10 +807,44 @@ must bite on, and the honest-run case is first.
 required by the protocol and absent from the executable *(gate round 18
 finding P)*.
 
+### The executed baseline (v7.1 — the digest amendment)
+
+T5 ran to completion at HEAD `db0d65e`, orchestrator exit **0**, gate
+verdict **PASS** (K1–K4 all PASS; `D_discriminator: NOT-APPLICABLE`,
+the correct pre-S1 answer). Full evidence:
+`docs/superpowers/witness/theme2-s1-t5-run-report.md`.
+
+| Artifact | sha256 |
+|---|---|
+| `theme2-s1-baseline.tar.zst` | `328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216` |
+| `theme2-s1-baseline-census.json` | `9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b` |
+
+The census carries `bound_archive_sha256` so the pair cannot drift.
+The pinned baseline, both fixtures, flags off:
+
+```
+current_phase: gestation
+chroma::raw {"gestation": 20}; daily, core, private_thoughts,
+audit_log all empty — honestly, since store_telegram writes raw only.
+```
+
+**Round 11's ordering rule is satisfied by this amendment**, and its
+weight is stated plainly: the archive is *forensic* — it documents what
+the pre-S1 store tree was. The gate's authority is the census and the
+four kills, not byte equality with the tarball. That is the owner's
+ruling after gate round 16.
+
+**What this baseline does not prove.** It does not show the S1 guard is
+dormant, because no S1 code exists: on a healthy ledger legacy and S1
+agree, and the partial fixture's `gestation` is what a *correct* S1
+must later refuse to say when forced on. Dormancy is proven by the
+forced-on run, which the gate makes mandatory the moment
+`birth_phase.resolve` exists.
+
 **The pinned census.** The gate emits the census it observed, and the
 orchestrator publishes it to
 `docs/superpowers/witness/theme2-s1-baseline-census.json`, digest
-committed in v7 beside the archive's. Without a durable basis a later
+committed here beside the archive's. Without a durable basis a later
 flags-off run has nothing exact to match and G3 decays into "some
 gestation stamp exists" *(gate round 17, M(iv))*.
 
