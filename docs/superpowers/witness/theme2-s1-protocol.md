@@ -339,3 +339,18 @@ outcome.
   statements, applied to the mutation copy only. The validator must
   return `unknown` on BOTH counts: the genesis projection mismatch
   and the now-missing trigger name (double-verified single mutation).
+
+## 11. v5 amendment — T2's mate-line bytes, exactly
+
+The repaired mate line is **byte-identical to the `advancing` line
+with exactly one difference**: the value of `"kind"` is `"committed"`
+instead of `"advancing"` — including the SAME `observed_at` (the
+commit's own time, which the advancing line already carries; the
+repair adds no new claim about when the commit happened). The
+*repair event itself* is recorded as a third line, `"kind":"observed"`,
+whose `observed_at` is the harness-injected repair clock (an integer
+named in the T2 run script) and whose other five keys are copied
+byte-identically from the mate line. All three lines' full byte
+content is therefore determined by the fixture plus the injected
+clocks; the report quotes all three verbatim and diffs mate-vs-
+advancing to show exactly the one differing key.
