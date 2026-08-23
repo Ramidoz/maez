@@ -1,7 +1,7 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "f323eb900c6c24bd81504e5e0b79e5bbde10f535",
+ "digests_computed_against_tree_at_commit": "175bf0fc7793687052c29eda34e0db3bb698ecfb",
  "provenance_note": "Every digest describes the file's bytes at the commit named above, which is this file's PARENT \u2014 an artifact cannot digest the commit it lands in. The evidence pack was committed by itself at that commit so its digest here is honest. Sections reporting an EXECUTION name their commit differently on purpose (the T6 receipt's field is `executed_against_tree_at_commit`): they record when something RAN, not when it was hashed.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
@@ -42,10 +42,10 @@
    "note": "retained from the original airlocked T3 run; that directory's DISCRIMINATOR records are superseded, this receipt is not"
   },
   "pinned_suite_run": {
-   "file": "evidence/discriminator-2026-08-23-r29/pinned-suite-stdout.txt",
-   "sha256": "e88b4ed7be819463462e4c568a6adcc540cbcacba4731a070dccbde0cc905fa2",
+   "file": "evidence/discriminator-2026-08-23-r31/pinned-suite-stdout.txt",
+   "sha256": "f3ca15ad1c2c384025c66b67d486b74bb8a61e36c32acd85c314acd278b95afd",
    "tail": [
-    "59 passed, 1 warning, 48 subtests passed in 42.03s",
+    "59 passed, 1 warning, 48 subtests passed in 41.63s",
     "exit=0"
    ]
   },
@@ -73,12 +73,12 @@
  "t5_baseline_and_discriminator": {
   "baseline_archive_sha256": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
-  "evidence_dir": "evidence/discriminator-2026-08-23-r29/",
+  "evidence_dir": "evidence/discriminator-2026-08-23-r31/",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "1f6c75babb1682e65b652d5e59c53cfac39f0d83547ee1ced83f3e9c46a40d42"
+   "sha256": "47e72678c6821a0a04ea43a00539514a58e22d9df18ea2f07b892805b5a4466c"
   },
-  "status": "all clauses PASS on the round-29 evidence under the round-30 judge. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27-30 found twelve, eleven, six and four.",
+  "status": "all clauses PASS on evidence re-executed at round 31. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27-31 found twelve, eleven, six, four and nine. What T5 witnesses is scoped: the flags-off invariant compared is {current_phase, stamp_census}, and the refusal is witnessed at ONE of the censused consumers (store_telegram) under a degraded reply path \u2014 the full consumer set is T3's claim, not T5's.",
   "replay_manifest_sha256": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "t6_structural": {
