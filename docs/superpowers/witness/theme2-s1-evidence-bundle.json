@@ -1,8 +1,8 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "10b2a4dd6cfc2ef9d68be92695039469802cfde0",
- "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Every OTHER file referenced here is unchanged between those two commits, which is checkable with `git diff --stat`.",
+ "digests_computed_against_tree_at_commit": "52ec3629527c114d1b9b291acfc979cb909f5cda",
+ "provenance_note": "Every digest here describes the file's bytes at the commit named above, which is this file's PARENT commit \u2014 an artifact cannot digest the commit it lands in. The evidence pack was therefore committed by itself first (round 26 item 10), so its digest below is honest. Sections that record an EXECUTION name the commit differently and deliberately: the T6 receipt's field is `executed_against_tree_at_commit`, because it reports when something ran, not when something was hashed (round 26 item 11).",
  "protocol": {
   "file": "theme2-s1-protocol.md",
   "version": "v7.8",
@@ -46,16 +46,17 @@
   },
   "pinned_suite_run": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/pinned-suite-stdout.txt",
-   "sha256": "29c346adc91c4dee72d61847ece646f6162875e00be258c277e459979a14dc09",
+   "sha256": "c7e356fd5b8b6bab879c2ddccffd06a80c77e179f6f377a3091084d327bd38c4",
    "tail": [
-    "59 passed, 1 warning, 48 subtests passed in 43.19s",
+    "59 passed, 1 warning, 48 subtests passed in 43.21s",
     "exit=0"
    ]
   },
   "witness_report": {
    "file": "theme2-s1-t3-witness-report.md",
    "sha256": "221e2a986dbf37b8109111a08d83f5209547f7036ca0b9617067e12541e3941e"
-  }
+  },
+  "gate_ruling": "round 26: T3 MAY be declared witnessed in topology-neutral scope, latch excluded per \u00a712.13"
  },
  "t4_census": {
   "artifact": {
@@ -80,12 +81,13 @@
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "1b1eb8b769057575e7b279b0ba70242544d04fa61e2fc70b69bb0e29ed044d67",
+   "sha256": "7151eb26d67d49ae1b38c36cb39337d1fb72d8ad9525ce867162866bc811cfe9",
    "verdict": {
     "verdict": "PASS",
     "D_discriminator": "PASS"
    }
-  }
+  },
+  "status": "NOT CLOSED \u2014 gate 26 ruled T5 open; ten forgeries closed, awaiting round 27"
  },
  "t6_structural": {
   "receipt": {
@@ -93,7 +95,8 @@
    "sha256": "77eecb9db59d8c96bee0d77c373c7599a8e427a36856f66b0c6066027ad3758b",
    "verdict": "ALL NINE FLIP + CONTROL HOLDS",
    "executed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
-   "uncommitted_files_at_execution": []
+   "uncommitted_files_at_execution": [],
+   "field_name_note": "this section reports an EXECUTION, so its commit field is `executed_against_tree_at_commit`"
   },
   "raw_log": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t6-log.txt",
@@ -115,5 +118,6 @@
   "file": "theme2-s1-final-report.md",
   "sha256": "37996922d331cae040419e32c5e4eb30a9f75b5622419b605d54ff709b59db29",
   "authority": "narrative only; this bundle is the authority"
- }
+ },
+ "verify_this_bundle": "git diff --stat <parent> HEAD should list only this bundle; every other referenced file is byte-identical at both commits, so the digests below verify at HEAD too."
 }
