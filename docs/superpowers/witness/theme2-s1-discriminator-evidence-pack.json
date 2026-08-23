@@ -1,17 +1,17 @@
 {
- "digests_computed_against_tree_at_commit": "7eb28b5ae0ffc4a760879a8b04b26746aebb7ad6",
+ "digests_computed_against_tree_at_commit": "2815fa83987d0d95fe2f4966f98f25674161f832",
  "provenance_note": "Digests describe the tree at the commit named above; this file's bytes land in the FOLLOWING commit, and the bundle is computed against that one so its digest of this pack is honest.",
- "evidence_generation": "Re-executed at round 29. The judge now hashes the replay manifest on disk (it previously trusted a producer-stamped field), and the records digest the resolver and the three stamping consumers, so the evidence is bound to the corpus AND to the code it is about.",
+ "evidence_generation": "Executed at round 29. The judge hashes the replay manifest, the pinned archive AND the four attested source files off disk, so the evidence is bound to the corpus and to the code it is about. (Round 30 corrected an earlier overclaim here: source digests had only been compared between records.)",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "62b87f2b76664ddf1eacda40b25c52779910a54baeff8e1ae1ba9359c723d6dc"
+  "sha256": "dd276270722d9cfd21f9217f43241271f8cf58ae53d8cd4209ceb6917b00ec2c"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "1dffd344476fac34268cea56a6d4248e26e687e764a1a9000ac21d6fb26c8742",
+  "sha256": "23637b165981da1fa2c228be7f025725d6751b8eb9a8ab38fe1317e26786e63e",
   "retained_receipt": {
    "file": "evidence/discriminator-2026-08-23-r29/selftest-stdout.txt",
-   "sha256": "372bbf5df5fe5d2780764dcb2bf4d2d040c1a35651d60ffb976143a6047743cc",
+   "sha256": "25af1a792c9cce7c0297af5e83dc7bb9bd7c56d5eccc786e7779e1c6373bcd6d",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -96,6 +96,13 @@
    "the two fixtures could be one execution (the clone test was negative and K7 freed two channels)",
    "path containment was type-gated, and an absent census-path map read as innocent",
    "nothing bound the evidence to the code under test"
+  ],
+  "round_30": [
+   "a flags-off census source could declare ITSELF forced-on and so be allowed the activation flag",
+   "source digests bound the records to each other, never to the code on disk",
+   "store paths were tested for containment where the producer pins them by exact equality",
+   "the clone check was defeated by wall-clock jitter in one interaction",
+   "round 29's findings had no regression cases; the pack's clause summary omitted K8; run-b was listed as a verdict input though the judge never reads it"
   ]
  },
  "not_a_verdict_input": {
