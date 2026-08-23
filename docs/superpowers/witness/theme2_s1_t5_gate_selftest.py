@@ -214,6 +214,8 @@ EXPECTED_CLAUSES = {
         ["D_discriminator"],
     "both fixtures required, not two partials":
         ["D_discriminator", "K7_fixture_label_backed"],
+    "council: a store redirector live at airlock entry":
+        ["K5_flags_were_off"],
     "explicitly empty baseline must not bypass":
         ["D_discriminator"],
     "fewer tail passages than interactions":
@@ -982,6 +984,10 @@ def main() -> int:
     f = forced_on_run(); f["forced_on"] = False
     case("round 30: forced record denies its own role", "FAIL",
          baseline=pinned, forced=f)
+    a = copy.deepcopy(A)
+    a["containment"]["env_at_entry"]["names"] = ["HOME", "MAEZ_LEDGER_DB_PATH"]
+    case("council: a store redirector live at airlock entry", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1

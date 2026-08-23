@@ -368,9 +368,19 @@ def k5_flags_were_actually_off(runs: dict) -> list:
         for flag in FLAGS_THAT_MUST_BE_UNSET + REDIRECTORS:
             if flag == ACTIVATION_FLAG:
                 continue
+            # Council, round 33: this swept two of the THREE recorded env
+            # views. `containment.env_at_entry` was checked for the
+            # activation flag only — and MAEZ_LEDGER_DB_PATH, one of the two
+            # redirectors, is a variable this project exports constantly.
+            # An operator with it live in their shell produces that state
+            # with nobody editing anything, which makes it the most
+            # plausible honest failure on this machine. It had been filed
+            # under "forgery-only".
             for _lbl, _v in (("env_after_import", r.get("env_after_import")),
                              ("env_after_config_load",
-                              r.get("env_after_config_load"))):
+                              r.get("env_after_config_load")),
+                             ("containment.env_at_entry",
+                              (r.get("containment") or {}).get("env_at_entry"))):
                 vv = (_v or {}).get("values") or {}
                 nn = (_v or {}).get("names") or []
                 if flag in vv or flag in nn:
