@@ -41,12 +41,18 @@ def honest_run(fixture: str) -> dict:
         # every real run carries the raw manifest-joined rows (round 24)
         "interactions": [
             {"id": f"s1-replay-{i:02d}", "outcome": "returned",
-             "tail_passages": 1} for i in range(20)],
+             "tail_passages": 1, "reply": "a reply"} for i in range(20)],
         "manifest_sha256": ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
                             "cc2b868f59109cb420"),
+        # Round 28 finding #21: this record said the S1 API was ABSENT, so all
+        # 68 cases mutated off a reference that proved a tautology — a pre-S1
+        # tree reproducing the pre-S1 baseline. Dormant means present and
+        # silent. The real runs always carried the resolver; the fixture did
+        # not, and only the real evidence happened to be the honest one.
         "phase_probe": {"current_phase": "gestation",
                         "birth_event_turn_id": None,
-                        "has_resolve_api": False},
+                        "has_resolve_api": True,
+                        "resolve": {"phase": "gestation", "reason": "dormant"}},
         # Round 25: the judge now pins the committed baseline's identity, so
         # the synthetic honest run must mirror that artifact rather than an
         # idealized census of its own invention.
@@ -66,6 +72,11 @@ def honest_run(fixture: str) -> dict:
         "started_at": 1000.0 + (0.0 if fixture == "healthy" else 100.0),
         "finished_at": 1030.0 + (0.0 if fixture == "healthy" else 100.0),
         "store_tail_invocations": 20,
+        "brain_reachable": False,
+        "daemon_construct_seconds": 2.5,
+        "python": "3.14.0", "sqlite_version": "3.53.4", "protocol": "t5.v7",
+        "effective_store_paths_after_import": {"memory_dir": "/home/rohit/maez/memory"},
+        "census_resolved_paths": {"private_thoughts": "/home/rohit/maez/memory/pt.db"},
         "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
         "collection_counts_after": {"raw": 20, "daily": 0, "core": 0},
         "positive_control": {"verdict": "PASS", "interactions_returned": 20,
@@ -91,6 +102,8 @@ def forced_on_run() -> dict:
     r["forced_on"] = True
     r["manifest_sha256"] = ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
                             "cc2b868f59109cb420")
+    r["store_tail_invocations"] = 20
+    r["positive_control_seed"] = None
     r["interactions"] = [
         {"id": f"s1-replay-{i:02d}", "outcome": "raised",
          "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: "
@@ -99,7 +112,10 @@ def forced_on_run() -> dict:
          "tail_passages": 1}
         for i in range(20)]
     r["positive_control"] = {"mode": "forced_on", "verdict": "PASS",
-                             "refusals_observed": 20}
+                             "refusals_observed": 20,
+                             "collections_grew": False,
+                             "all_refusals_typed": True,
+                             "stores_with_gestation_stamps": []}
     r["phase_probe"] = {"current_phase": "unknown", "has_resolve_api": True,
                         "resolve": {"phase": "unknown", "reason": "structural"}}
     r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
@@ -170,7 +186,7 @@ EXPECTED_CLAUSES = {
     "forgery: named exception, no message, wrong count":
         ["D_discriminator"],
     "forgery: one raw interaction returned, no tail":
-        ["D_discriminator"],
+        ["D_discriminator", "K8_record_coherence"],
     "forgery: producer control FAIL under clean aggregates":
         ["D_discriminator"],
     "forgery: raw list one short of declared count":
@@ -180,7 +196,7 @@ EXPECTED_CLAUSES = {
     "honest run, baseline omitted (now mandatory)":
         ["D_discriminator"],
     "minimal forged forced-on report":
-        ["D_discriminator", "K1_ledger_unchanged", "K2_no_latch_artifact", "K4_no_stray_store", "K5_flags_were_off", "K6_contained_and_distinct", "K7_fixture_label_backed"],
+        ["D_discriminator", "K1_ledger_unchanged", "K2_no_latch_artifact", "K4_no_stray_store", "K5_flags_were_off", "K6_contained_and_distinct", "K7_fixture_label_backed", "K8_record_coherence"],
     "one interaction of twenty returned":
         ["K3_positive_controls"],
     "refusal evidence is the wrong exception":
@@ -204,7 +220,7 @@ EXPECTED_CLAUSES = {
     "round 26: co-mutated to a different KNOWN consumer":
         ["D_discriminator"],
     "round 26: decoy key satisfies growth":
-        ["K3_positive_controls"],
+        ["K3_positive_controls", "K8_record_coherence"],
     "round 26: exact key set, impossible counts":
         ["D_discriminator"],
     "round 27: census does not reconcile with the delta":
@@ -243,6 +259,36 @@ EXPECTED_CLAUSES = {
         ["K6_contained_and_distinct"],
     "round 27: swept nothing, found nothing":
         ["K4_no_stray_store"],
+    "round 28: census paths resolve to /dev/null":
+        ["K8_record_coherence"],
+    "round 28: env values not a subset of env names":
+        ["K5_flags_were_off"],
+    "round 28: flags-off declares the S1 API absent":
+        ["schema"],
+    "round 28: flags-off run recorded refusals":
+        ["K8_record_coherence"],
+    "round 28: forced-on control declares stamps landed":
+        ["D_discriminator"],
+    "round 28: forced-on decoy collection":
+        ["D_discriminator", "K8_record_coherence"],
+    "round 28: forced-on tail count contradicts its raw rows":
+        ["D_discriminator"],
+    "round 28: latch marker in the ledger file set":
+        ["K2_no_latch_artifact"],
+    "round 28: reachable brain inside an isolated airlock":
+        ["K8_record_coherence"],
+    "round 28: records disagree on the interpreter":
+        ["K8_record_coherence"],
+    "round 28: refusal aggregate disagrees with the raw count":
+        ["D_discriminator"],
+    "round 28: resolver reading is not a reading":
+        ["schema"],
+    "round 28: run began in a store holding 1165 rows":
+        ["K3_positive_controls"],
+    "round 28: store paths outside the projected tree":
+        ["K8_record_coherence"],
+    "round 28: twenty empty replies as 'behavior identical'":
+        ["K8_record_coherence"],
     "run census drifted from the pinned baseline":
         ["D_discriminator", "K3_positive_controls"],
     "schema: empty census":
@@ -303,6 +349,11 @@ def main() -> int:
 
     def case(label, want, a=None, p=None, expect_only=None, **kw):
         nonlocal ok
+        # Round 28 #21: with the resolver required present on flags-off runs,
+        # a forced-on run is mandatory for every evidence set. Cases get one
+        # by default; the case that TESTS its absence passes forced=None.
+        if "forced" not in kw:
+            kw["forced"] = forced_on_run()
         v = run_gate(tmp, a or copy.deepcopy(A), p or copy.deepcopy(P), **kw)
         got = v["verdict"]
         good = got == want
@@ -334,7 +385,8 @@ def main() -> int:
     # This case asserted PASS until the baseline existed; the flip is the
     # transition happening, not a regression.
     case("honest run, baseline omitted (now mandatory)", "FAIL")
-    case("honest run against its own pinned baseline", "PASS", baseline=pinned)
+    case("honest run against its own pinned baseline", "PASS", baseline=pinned,
+         forced=forced_on_run())
 
     a = copy.deepcopy(A)
     a["stamp_census"][EXERCISED] = {"gestation": 19}
@@ -393,7 +445,7 @@ def main() -> int:
     a["collection_counts_before"]["decoy_not_a_store"] = 0
     a["collection_counts_after"]["decoy_not_a_store"] = 1
     case("round 26: decoy key satisfies growth", "FAIL", a=a,
-         baseline=pinned, expect_only="K3_positive_controls")
+         baseline=pinned)
     # Sweeping the class rather than the instance: the same count-domain
     # vectors on the flags-off side, where round 26 did not look.
     a = copy.deepcopy(A); a["stamp_census"][EXERCISED] = {"gestation": True}
@@ -439,8 +491,7 @@ def main() -> int:
     case("a new write to a store outside raw", "FAIL", a=a, baseline=pinned)
 
     p = copy.deepcopy(P); p["phase_probe"]["has_resolve_api"] = True
-    case("resolve() exists but no forced-on run", "FAIL", p=p)
-
+    case("resolve() exists but no forced-on run", "FAIL", forced=None, p=p)
     case("correct forced-on run flips", "PASS",
          baseline=pinned, forced=forced_on_run())
 
@@ -618,6 +669,106 @@ def main() -> int:
                                                           "reason": "structural"}
     case("round 27: flags-off resolver did not read dormant", "FAIL", a=a,
          baseline=pinned, expect_only="schema")
+
+    # Round 28. #21 is the sharpest of the arc: nothing required the
+    # flags-off runs to have CONTAINED the feature, so a pre-S1 tree
+    # reproducing the pre-S1 baseline — a tautology — was accepted as proof
+    # that a feature is dormant. Dormant means present and silent.
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P)
+    for r_ in (a, p_):
+        r_["phase_probe"]["has_resolve_api"] = False
+        r_["phase_probe"].pop("resolve", None)
+    case("round 28: flags-off declares the S1 API absent", "FAIL", a=a, p=p_,
+         baseline=pinned, expect_only="schema")
+    a = copy.deepcopy(A); a["phase_probe"]["resolve"] = "n/a"
+    case("round 28: resolver reading is not a reading", "FAIL", a=a,
+         baseline=pinned, expect_only="schema")
+    # #22: the forced-on half never received the flags-off half's
+    # rederivations — round 26's decoy forgery was still open on the side
+    # whose whole claim is that nothing was stored.
+    f = forced_on_run()
+    f["collection_counts_before"]["decoy"] = 0
+    f["collection_counts_after"]["decoy"] = 50
+    case("round 28: forced-on decoy collection", "FAIL", baseline=pinned, forced=f)
+    f = forced_on_run(); f["store_tail_invocations"] = 0
+    case("round 28: forced-on tail count contradicts its raw rows", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    f = forced_on_run()
+    f["positive_control"] = {"mode": "forced_on", "verdict": "PASS",
+                             "refusals_observed": 20, "collections_grew": True,
+                             "all_refusals_typed": False,
+                             "stores_with_gestation_stamps": ["chroma::raw"]}
+    case("round 28: forced-on control declares stamps landed", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    # #23: the reconciliation I added compared an ABSOLUTE census to a DELTA,
+    # which agree only if the store began empty — and nothing required that.
+    a = copy.deepcopy(A)
+    a["collection_counts_before"] = {"raw": 1000, "daily": 77, "core": 88}
+    a["collection_counts_after"] = {"raw": 1020, "daily": 77, "core": 88}
+    case("round 28: run began in a store holding 1165 rows", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
+    # K8: records that contradict their own containment story.
+    a = copy.deepcopy(A)
+    a["effective_store_paths_after_import"] = {"memory_dir": "/home/rohit/maez-live/memory"}
+    case("round 28: store paths outside the projected tree", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); a["census_resolved_paths"] = {"x": "/dev/null"}
+    case("round 28: census paths resolve to /dev/null", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A)
+    a["consumer_refusals"] = [{"consumer": "x", "exception": "y", "message": "z"}]
+    case("round 28: flags-off run recorded refusals", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); a["python"] = "1.0"
+    case("round 28: records disagree on the interpreter", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); a["brain_reachable"] = True
+    case("round 28: reachable brain inside an isolated airlock", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A)
+    for i in a["interactions"]:
+        i["reply"] = ""
+    case("round 28: twenty empty replies as 'behavior identical'", "FAIL",
+         a=a, baseline=pinned, expect_only="K8_record_coherence")
+    # #24: clauses that no case exercised. Deleting each from the judge left
+    # the suite green, which is the definition of uncovered.
+    f = forced_on_run(); f["positive_control"]["refusals_observed"] = 19
+    case("round 28: refusal aggregate disagrees with the raw count", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    a = copy.deepcopy(A)
+    a["env_after_import"]["values"]["SOMETHING_UNLISTED"] = "x"
+    case("round 28: env values not a subset of env names", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
+    a = copy.deepcopy(A)
+    a["ledger_post_replay_file_set"] = ["ledger.db", "birth_observed"]
+    case("round 28: latch marker in the ledger file set", "FAIL", a=a,
+         baseline=pinned, expect_only="K2_no_latch_artifact")
+
+    # Round 28 #24: the archive clause was unreachable in effect, and once
+    # made live it stayed UNCOVERED — no case could exercise it without
+    # swapping a committed artifact. So the judge is copied somewhere it
+    # resolves a DIFFERENT archive beside itself, which is the one honest way
+    # to test a check that reads a file relative to its own location.
+    import shutil
+    d = tmp / "archive_probe"; d.mkdir()
+    shutil.copy2(GATE, d / "theme2_s1_t5_gate.py")
+    shutil.copy2(GATE.parent / "theme2-s1-replay.json", d / "theme2-s1-replay.json")
+    (d / "theme2-s1-baseline.tar.zst").write_bytes(b"not the pinned archive")
+    (d / "a.json").write_text(json.dumps(A))
+    (d / "p.json").write_text(json.dumps(P))
+    (d / "b.json").write_text(json.dumps(pinned))
+    (d / "f.json").write_text(json.dumps(forced_on_run()))
+    proc = subprocess.run([sys.executable, str(d / "theme2_s1_t5_gate.py"),
+                           "--run-a", str(d / "a.json"), "--run-p", str(d / "p.json"),
+                           "--baseline-census", str(d / "b.json"),
+                           "--forced-on", str(d / "f.json"),
+                           "--out", str(d / "v.json")], capture_output=True, text=True)
+    got = json.loads((d / "v.json").read_text()) if (d / "v.json").exists() else {}
+    detail = json.dumps(got.get("failures", {}))
+    good = got.get("verdict") == "FAIL" and "archive on disk" in detail
+    ok &= good
+    print(f"{'ok ' if good else 'BAD'} {'round 28: the archive on disk is not the pinned archive':46s} "
+          f"{got.get('verdict', 'CRASH'):5s} (want FAIL)")
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1

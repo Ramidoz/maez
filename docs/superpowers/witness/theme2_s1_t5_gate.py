@@ -33,7 +33,7 @@ import argparse
 import hashlib
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 LATCH_MARKERS = ("birth_observed", "segment-", ".tmp")
 
@@ -100,6 +100,8 @@ F_PARTIAL_LEDGER_SHA = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
 
 # Round 27 finding #16: K4 accepted an empty stray list without asking what was
 # swept, so sweeping nothing satisfied it. The producer's frozen sweep scope.
+PROJECTED_TREE = "/home/rohit/maez"
+
 EXPECTED_SWEEP_ROOTS = frozenset({
     "/home/rohit/maez/logs", "/home/rohit/maez/.cache", "/home/rohit",
     "/tmp", "/run", "/var/tmp",
@@ -160,9 +162,24 @@ def schema_failures(runs: dict) -> list:
                         "detail": "flags-off run did not read gestation",
                         "got": probe.get("current_phase")})
         else:
+            # Round 28 finding #21, the sharpest of the arc: `has_resolve_api`
+            # was read in exactly ONE place — to require a forced-on run when
+            # it was true — and the dormant reading was constrained only IF
+            # present. So a flags-off pair could declare the S1 API absent
+            # entirely, and the evidence would prove "a pre-S1 tree reproduces
+            # the pre-S1 baseline": a tautology accepted as a dormancy proof.
+            # Dormant means PRESENT AND SILENT. Absent is a different claim.
+            if probe.get("has_resolve_api") is not True:
+                bad.append({"run": tag,
+                            "detail": "flags-off run does not carry the S1 "
+                                      "resolver at all; absence is not "
+                                      "dormancy"})
             res = probe.get("resolve")
-            if isinstance(res, dict) and (res.get("phase") != "gestation"
-                                          or res.get("reason") != "dormant"):
+            if not isinstance(res, dict):
+                bad.append({"run": tag,
+                            "detail": "flags-off run recorded no resolver "
+                                      "reading", "resolve": res})
+            elif res.get("phase") != "gestation" or res.get("reason") != "dormant":
                 bad.append({"run": tag,
                             "detail": "flags-off resolver did not read "
                                       "gestation/dormant", "resolve": res})
@@ -395,14 +412,26 @@ def k3_positive_controls(runs: dict) -> list:
                                 "detail": f"flags-off run changed the {other} "
                                           f"collection",
                                 "before": cb.get(other), "after": ca.get(other)})
-            cen_raw = (r.get("stamp_census") or {}).get(EXERCISED_STORE)
-            if isinstance(cen_raw, dict) and _plain_int(b_) and _plain_int(a_):
-                total = sum(v for v in cen_raw.values() if _plain_int(v))
-                if total != a_ - b_:
+            # Round 28 finding #23: this compared an ABSOLUTE census to a
+            # DELTA, which are equal only if the store began empty — and
+            # nothing required that. A run in a store already holding 1165
+            # rows validated beside a containment probe claiming the memory
+            # dir was empty. The airlock does guarantee an empty start, so
+            # that guarantee is now asserted rather than assumed.
+            for coll in COLLECTION_KEYS:
+                if cb.get(coll) != 0:
                     bad.append({"run": tag,
-                                "detail": "census total does not reconcile with "
-                                          "the collection delta",
-                                "census_total": total, "delta": a_ - b_})
+                                "detail": f"{coll} was not empty at the start "
+                                          f"of a contained run",
+                                "before": cb.get(coll)})
+            cen_raw = (r.get("stamp_census") or {}).get(EXERCISED_STORE)
+            if isinstance(cen_raw, dict) and _plain_int(a_):
+                total = sum(v for v in cen_raw.values() if _plain_int(v))
+                if total != a_:
+                    bad.append({"run": tag,
+                                "detail": "census total does not reconcile "
+                                          "with the collection contents",
+                                "census_total": total, "after": a_})
         # (a) the DERIVED facts must themselves describe a clean flags-off run
         if d_raised:
             bad.append({"run": tag, "detail": "raw rows raised",
@@ -456,6 +485,77 @@ def k3_positive_controls(runs: dict) -> list:
                         "invocations": pc.get("store_tail_invocations")})
         if not pc.get("collections_grew"):
             bad.append({"run": tag, "detail": "no collection grew"})
+    return bad
+
+
+def _under(path: str, root: str) -> bool:
+    """Component-wise, because "/home/rohit/maez-live" string-prefixes
+    "/home/rohit/maez" and a prefix test would have accepted the escape."""
+    try:
+        pp, rr = PurePosixPath(path).parts, PurePosixPath(root).parts
+    except TypeError:
+        return False
+    return pp[:len(rr)] == rr
+
+
+def k8_record_coherence(runs: dict) -> list:
+    """Round 28 self-sweep. The previous review listed fifteen accepted
+    mutations but ranked only eight; I closed the ranked ones and left the
+    rest. These are the rest — each one a field the record carries, that no
+    clause read, and that can contradict the run's own containment."""
+    bad = []
+    for tag, r in runs.items():
+        for field in ("effective_store_paths_after_import",
+                      "census_resolved_paths"):
+            paths = r.get(field)
+            if not isinstance(paths, dict):
+                continue
+            for name, path in paths.items():
+                if isinstance(path, str) and path and not _under(path, PROJECTED_TREE):
+                    bad.append({"run": tag,
+                                "detail": f"{field}.{name} resolves outside "
+                                          f"the projected tree",
+                                "path": path})
+        # A network-reachable brain contradicts `network_unreachable: PASS`.
+        if r.get("brain_reachable") is not False:
+            bad.append({"run": tag, "detail": "run claims a reachable brain "
+                                              "inside a network-isolated airlock"})
+        secs = r.get("daemon_construct_seconds")
+        if secs is not None and not (isinstance(secs, (int, float))
+                                     and not isinstance(secs, bool) and secs > 0):
+            bad.append({"run": tag, "detail": "daemon construct time is not a "
+                                              "positive duration", "got": secs})
+        # Flags-off means the guard never fires. A refusal recorded on a
+        # flags-off run is the dormancy claim contradicting itself.
+        if r.get("forced_on") is not True and r.get("consumer_refusals"):
+            bad.append({"run": tag,
+                        "detail": "flags-off run recorded consumer refusals; "
+                                  "dormant code does not refuse",
+                        "count": len(r["consumer_refusals"])})
+        # Every returned interaction produced a reply. "Behavior identical"
+        # is not evidenced by twenty empty strings.
+        for i in (r.get("interactions") or []):
+            if i.get("outcome") == "returned" and not str(i.get("reply", "")).strip():
+                bad.append({"run": tag, "detail": "returned interaction has an "
+                                                  "empty reply", "id": i.get("id")})
+                break
+        counts = set(r.get("collection_counts_before") or {}) \
+            | set(r.get("collection_counts_after") or {})
+        if counts and sorted(counts) != sorted(COLLECTION_KEYS):
+            bad.append({"run": tag,
+                        "detail": "collection counters are not exactly the "
+                                  "three real collections",
+                        "got": sorted(counts)})
+    # One orchestration produced all three records; the environment they
+    # report must agree, or they did not come from the same run.
+    for field in ("python", "sqlite_version", "protocol"):
+        seen = {r.get(field) for r in runs.values() if field in r}
+        if len(seen) > 1:
+            bad.append({"detail": f"records disagree on {field}; they are not "
+                                  f"one orchestration", "values": sorted(
+                                      str(x) for x in seen)})
+        if seen and not all(isinstance(x, str) and x for x in seen):
+            bad.append({"detail": f"{field} is not recorded"})
     return bad
 
 
@@ -533,6 +633,19 @@ def discriminator(runs: dict, baseline: dict | None,
         if baseline.get("bound_archive_sha256") != PINNED_ARCHIVE_SHA:
             return "FAIL", [{"detail": "baseline is not bound to the pinned "
                                        "T5 archive"}]
+        # Round 28 finding #24: the clause above is UNREACHABLE in effect —
+        # any baseline that survives the canonical-digest check necessarily
+        # carries the right value, so the archive was never actually verified
+        # and swapping it on disk changed no verdict. Hash the artifact.
+        arch = Path(__file__).resolve().parent / "theme2-s1-baseline.tar.zst"
+        try:
+            got = hashlib.sha256(arch.read_bytes()).hexdigest()
+        except OSError as exc:
+            return "FAIL", [{"detail": "pinned T5 archive unreadable",
+                             "error": str(exc)}]
+        if got != PINNED_ARCHIVE_SHA:
+            return "FAIL", [{"detail": "the archive on disk is not the pinned "
+                                       "T5 archive", "got": got}]
         # Round 19: an explicitly supplied `{}` bypassed comparison entirely.
         want = baseline.get("per_fixture")
         if not isinstance(want, dict) or set(want) != {"healthy", "partial"}:
@@ -651,6 +764,32 @@ def discriminator(runs: dict, baseline: dict | None,
                                 if isinstance(row, dict) else None})
                     break
     pc = forced.get("positive_control") or {}
+    # Round 28 finding #22(b,c): the forced-on control was read for `mode`,
+    # `verdict` and `refusals_observed` only, so a control declaring that
+    # gestation stamps LANDED and collections GREW still carried verdict PASS.
+    if isinstance(ints, list):
+        d_tail = sum(i.get("tail_passages", 0) for i in ints
+                     if _plain_int(i.get("tail_passages")))
+        if forced.get("store_tail_invocations") != d_tail:
+            bad.append({"detail": "forced-on store_tail_invocations disagrees "
+                                  "with its raw rows",
+                        "declared": forced.get("store_tail_invocations"),
+                        "derived": d_tail})
+    _cb = forced.get("collection_counts_before") or {}
+    _ca = forced.get("collection_counts_after") or {}
+    d_grew = any(_plain_int(_ca.get(k)) and _plain_int(_cb.get(k))
+                 and _ca[k] > _cb[k] for k in COLLECTION_KEYS)
+    if pc.get("collections_grew") is not d_grew or d_grew:
+        bad.append({"detail": "forced-on control's growth claim is false or "
+                              "disagrees with the raw counts",
+                    "claimed": pc.get("collections_grew"), "derived": d_grew})
+    if pc.get("all_refusals_typed") is not True:
+        bad.append({"detail": "forced-on control does not attest that every "
+                              "refusal was typed"})
+    if pc.get("stores_with_gestation_stamps"):
+        bad.append({"detail": "forced-on control reports stores that received "
+                              "gestation stamps",
+                    "stores": pc.get("stores_with_gestation_stamps")})
     if pc.get("mode") != "forced_on" or pc.get("verdict") != "PASS":
         bad.append({"detail": "producer positive control is not a forced-on "
                               "PASS", "positive_control": pc})
@@ -682,6 +821,18 @@ def discriminator(runs: dict, baseline: dict | None,
             break
     cb = forced.get("collection_counts_before") or {}
     ca = forced.get("collection_counts_after") or {}
+    # Round 28 finding #22: round 26's decoy-key forgery was closed on the
+    # flags-off side and left open on the side whose whole claim is "nothing
+    # was stored". Same predicate, same reason.
+    if sorted(set(cb) | set(ca)) != sorted(COLLECTION_KEYS):
+        bad.append({"detail": "forced-on collection counters are not exactly "
+                              "the three real collections",
+                    "got": sorted(set(cb) | set(ca))})
+    for kcol in COLLECTION_KEYS:
+        if cb.get(kcol) != 0:
+            bad.append({"detail": f"forced-on {kcol} was not empty at the "
+                                  f"start of a contained run",
+                        "before": cb.get(kcol)})
     for kcol in ("raw", "daily", "core"):
         b_, a_ = cb.get(kcol), ca.get(kcol)
         if not (isinstance(b_, int) and isinstance(a_, int) and a_ == b_):
@@ -774,6 +925,7 @@ def main() -> int:
         "K5_flags_were_off": k5_flags_were_actually_off(all_runs),
         "K6_contained_and_distinct": k6_contained_and_distinct(all_runs),
         "K7_fixture_label_backed": k7_fixture_label_is_backed(all_runs),
+        "K8_record_coherence": k8_record_coherence(all_runs),
     }
     failures = {k: v for k, v in clauses.items() if v}
     if dbad:

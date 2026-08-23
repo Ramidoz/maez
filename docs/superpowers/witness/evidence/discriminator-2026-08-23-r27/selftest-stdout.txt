@@ -1,4 +1,4 @@
-# gate selftest — executed at 30d9727eb2809733b4a9f81e65762f9b7c97a191 on 2026-08-23T13:57:38-05:00
+# gate selftest — executed pre-commit on 2026-08-23T14:18:59-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator', 'K3_positive_controls']
@@ -12,7 +12,7 @@ ok  K3 forged PASS over a missed tail              FAIL  (want FAIL) ['K3_positi
 ok  K3 label with no underlying numbers            FAIL  (want FAIL) ['K3_positive_controls']
 ok  round 25: raw row contradicts clean aggregate  FAIL  (want FAIL) ['K3_positive_controls']
 ok  round 25: nothing stored, aggregate says it grew FAIL  (want FAIL) ['K3_positive_controls']
-ok  round 26: decoy key satisfies growth           FAIL  (want FAIL) ['K3_positive_controls']
+ok  round 26: decoy key satisfies growth           FAIL  (want FAIL) ['K3_positive_controls', 'K8_record_coherence']
 ok  sweep: Boolean count, flags-off                FAIL  (want FAIL) ['schema']
 ok  sweep: negative count, flags-off               FAIL  (want FAIL) ['schema']
 ok  K4 store escaped the projected tree            FAIL  (want FAIL) ['K4_no_stray_store']
@@ -35,11 +35,11 @@ ok  forced-on bound to the wrong fixture           FAIL  (want FAIL) ['D_discrim
 ok  forced-on did not flip (guard absent)          FAIL  (want FAIL) ['D_discriminator']
 ok  forced-on wrote unknown-stamped rows           FAIL  (want FAIL) ['D_discriminator']
 ok  refusal evidence is the wrong exception        FAIL  (want FAIL) ['D_discriminator']
-ok  minimal forged forced-on report                FAIL  (want FAIL) ['D_discriminator', 'K1_ledger_unchanged', 'K2_no_latch_artifact', 'K4_no_stray_store', 'K5_flags_were_off', 'K6_contained_and_distinct', 'K7_fixture_label_backed']
+ok  minimal forged forced-on report                FAIL  (want FAIL) ['D_discriminator', 'K1_ledger_unchanged', 'K2_no_latch_artifact', 'K4_no_stray_store', 'K5_flags_were_off', 'K6_contained_and_distinct', 'K7_fixture_label_backed', 'K8_record_coherence']
 ok  forgery: growth hidden in raw counts           FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: named exception, no message, wrong count FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: interaction_count stripped            FAIL  (want FAIL) ['D_discriminator']
-ok  forgery: one raw interaction returned, no tail FAIL  (want FAIL) ['D_discriminator']
+ok  forgery: one raw interaction returned, no tail FAIL  (want FAIL) ['D_discriminator', 'K8_record_coherence']
 ok  forgery: producer control FAIL under clean aggregates FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: unbound manifest                      FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: raw list one short of declared count  FAIL  (want FAIL) ['D_discriminator']
@@ -67,6 +67,22 @@ ok  round 27: ledger digest is not lowercase hex   FAIL  (want FAIL) ['K1_ledger
 ok  round 27: producer boolean contradicts its digests FAIL  (want FAIL) ['K1_ledger_unchanged']
 ok  round 27: flags-off run not bound to the manifest FAIL  (want FAIL) ['schema']
 ok  round 27: flags-off resolver did not read dormant FAIL  (want FAIL) ['schema']
+ok  round 28: flags-off declares the S1 API absent FAIL  (want FAIL) ['schema']
+ok  round 28: resolver reading is not a reading    FAIL  (want FAIL) ['schema']
+ok  round 28: forced-on decoy collection           FAIL  (want FAIL) ['D_discriminator', 'K8_record_coherence']
+ok  round 28: forced-on tail count contradicts its raw rows FAIL  (want FAIL) ['D_discriminator']
+ok  round 28: forced-on control declares stamps landed FAIL  (want FAIL) ['D_discriminator']
+ok  round 28: run began in a store holding 1165 rows FAIL  (want FAIL) ['K3_positive_controls']
+ok  round 28: store paths outside the projected tree FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: census paths resolve to /dev/null    FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: flags-off run recorded refusals      FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: records disagree on the interpreter  FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: reachable brain inside an isolated airlock FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: twenty empty replies as 'behavior identical' FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 28: refusal aggregate disagrees with the raw count FAIL  (want FAIL) ['D_discriminator']
+ok  round 28: env values not a subset of env names FAIL  (want FAIL) ['K5_flags_were_off']
+ok  round 28: latch marker in the ledger file set  FAIL  (want FAIL) ['K2_no_latch_artifact']
+ok  round 28: the archive on disk is not the pinned archive FAIL  (want FAIL)
 
 ALL PASS
 exit=0
