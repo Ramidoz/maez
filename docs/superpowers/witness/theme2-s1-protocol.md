@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.5
+# Theme 2 — S1 (phase truth) witness protocol, v7.6
 
-Status: PROTOCOL v7.5. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.6. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
@@ -258,8 +258,8 @@ through the gate. Kept for the record of the decision as it stood:)*
    change to a live store with 506 rows, and it interacts with §10's ruling
    that pre-S1 legacy rows are gestation by census fact.
 
-This must be ruled before T3 can pass, and it is recorded rather than
-decided. Note the asymmetry it creates today: the direct-edit methods
+*(v7.6: RULED — the owner adopted closure 1 on 2026-08-23 and it is
+implemented and witnessed; this paragraph is historical.)* Note the asymmetry it creates today: the direct-edit methods
 default in *Python* (`memory_phase: str = MEMORY_PHASE_GESTATION`), which is
 refusable by changing the default; `record()` defaults in *SQL*, which is
 not.
@@ -281,7 +281,10 @@ positive control that writes nothing.
 ## 5. T4 — census conformance (both directions)
 
 The S1 census test walks `memory/`, `core/`, `daemon/`, `skills/`,
-`cli/` (excluding `tests/`, `docs/`, `logs/`) with Python `ast`
+`cli/`, `scripts/` *(v7.6: `scripts/` added when the census gained the
+birth ceremony's anchor read — v7.3 recorded this in §12 but this
+normative sentence was missed twice)* (excluding `tests/`, `docs/`,
+`logs/`) with Python `ast`
 (pinned: the venv interpreter's version recorded), collecting every
 (a) writer of a `memory_phase` key/column and (b) reader of
 `birth_event_turn_id`. Expected sorted census = the DERIVED artifact
@@ -318,7 +321,8 @@ Kill: any store diff, any latch file, any suite red.
 ## 7. T6 — structural fingerprint (literal mutations)
 
 Validator inputs frozen: migration names+digests (§0), table set (the
-15 v1 tables of 0001–0005 — enumerated in the validator source),
+v1 tables of 0001–0005 — enumerated in the validator source; the
+original "15" was never true, the executed inventory is seven — v7.6),
 trigger/index name sets read from `sqlite_master` and compared to the
 frozen lists committed beside the validator, genesis-row projection
 bytes, `meta.last_chain_hash` vs recomputed tip.
@@ -1333,7 +1337,7 @@ Build order, with the reason for each position:
    frozen reason vocabulary, the exception, the activation switch, and
    the absent/empty/structural/error classifications. Latch publication
    and repair stay behind a fail-closed seam.
-3. The 13 consumer refusals, flag-dormant — witnessable against
+3. The the consumer refusals (membership lives in the T3 map — v7.6), flag-dormant — witnessable against
    structural `unknown` and healthy `gestation` without claiming
    anything about lived multi-writer ordering.
 4. **After O-1 is ruled**: `birth_latch.advance()`, the commit hook, and

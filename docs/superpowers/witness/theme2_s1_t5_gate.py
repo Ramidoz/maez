@@ -263,10 +263,22 @@ def discriminator(runs: dict, baseline: dict | None,
                     "declared": n})
     else:
         ids = [i.get("id") for i in ints]
-        if len(set(ids)) != n or not all(
-                isinstance(x, str) and x.startswith("s1-replay-") for x in ids):
-            bad.append({"detail": "interaction ids do not join to the "
-                                  "manifest", "ids": ids[:3]})
+        # Gate round 23 forged `s1-replay-forged` past a SHAPE check. The
+        # join is against the frozen manifest's exact id set, parsed from
+        # the committed artifact — not a prefix, not a count.
+        manifest_path = (Path(__file__).resolve().parent
+                         / "theme2-s1-replay.json")
+        try:
+            manifest_ids = [x["id"] for x in json.loads(
+                manifest_path.read_text())["interactions"]]
+        except (OSError, KeyError, ValueError) as exc:
+            manifest_ids = None
+            bad.append({"detail": f"frozen manifest unreadable: {exc}"})
+        if manifest_ids is not None and sorted(ids) != sorted(manifest_ids):
+            bad.append({"detail": "interaction ids != the frozen manifest's "
+                                  "exact id set",
+                        "unexpected": sorted(set(ids) - set(manifest_ids))[:3],
+                        "missing": sorted(set(manifest_ids) - set(ids))[:3]})
         for i in ints:
             if i.get("outcome") != "raised" \
                     or "PhaseUnknownRefusal" not in str(i.get("exception", "")) \

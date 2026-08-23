@@ -427,23 +427,19 @@ class T3Positive(_Env):
 class T3Readers(_Env):
     """The reader rows, witnessed behaviourally."""
 
-    def test_source_awareness_keeps_gated_paths_closed_preborn(self):
-        """Behavioral (gate round 22): a gated directory is SKIPPED while
-        unborn — not merely 'the function exists'."""
-        self.ledger(healthy=True)          # healthy = unborn (no anchor)
+    def test_source_awareness_skips_the_real_birth_gated_path_preborn(self):
+        """Semantic (gate round 23): the ACTUAL gated path is
+        docs/birth_book (_BIRTH_GATED_PATHS). Pre-birth it must be SKIPPED
+        — True, not 'some boolean'."""
+        self.ledger(healthy=True)          # healthy = unborn, no anchor
         from core.memory import source_awareness as sa
-        gated = getattr(sa, "GATED_PATHS", None) or getattr(
-            sa, "_GATED_PATHS", None)
-        from core.infra import paths as _paths
-        candidate = _paths.memory_dir() / "private_thoughts_exports"
-        result = sa._should_skip_dir(candidate)
+        gated = next(iter(sa._BIRTH_GATED_PATHS))
         self.assertTrue(
-            result is True or result is False,
-            "behavioural probe returned a non-boolean")
-        # the load-bearing claim: with is_born()==False the gate must not
-        # OPEN a gated path; verify via is_born directly on this ledger
-        from core.memory.birth_phase import is_born
-        self.assertFalse(is_born(os.environ["MAEZ_LEDGER_DB_PATH"]))
+            sa._should_skip_dir(gated / "chapter-one"),
+            f"pre-birth, the gated path {gated} must be skipped")
+        # and a mundane, un-gated code dir must NOT be skipped, or the test
+        # would pass on a function that just returns True
+        self.assertFalse(sa._should_skip_dir(sa.MAEZ_ROOT / "core" / "memory"))
 
     def test_s7_fails_toward_born_on_unreadable(self):
         os.environ["MAEZ_LEDGER_DB_PATH"] = str(self.root)  # a DIRECTORY
@@ -470,28 +466,139 @@ class T3Readers(_Env):
         val = c.execute("SELECT memory_phase FROM audit_log").fetchone()[0]
         self.assertEqual(val, "gestation")
 
-    def test_heartbeat_reader_reads_values_without_stamping(self):
-        """Behavioral: the reader returns rows from a store that HAS phase
-        values, and the store's row count is unchanged by the read."""
+    def test_heartbeat_reader_surfaces_an_eligible_row_and_writes_nothing(self):
+        """Semantic (gate round 23): an ELIGIBLE row — full private-reader
+        envelope: source==version, owner_private, private_reader flow, a
+        life phase — must actually SURFACE, and a second, ineligible row
+        must not. An empty tuple is no longer a pass."""
         self.ledger(healthy=True)
-        from core.infra.private_thoughts import PrivateThoughts
-        pt = PrivateThoughts(db_path=self.root / "pt.db")
-        os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
-        pt.record_thought(content="heartbeat fixture")
-        os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
-        before = self.sqlite_rows("pt.db", "private_thoughts")
         from core.cognition import lean_idle_heartbeat as hb
-        # signature: (rows: list[dict], *, version, limit, clip) — a pure
-        # projection over rows already read; verify it renders phase-carrying
-        # rows without writing anywhere.
-        c = sqlite3.connect(self.root / "pt.db"); c.row_factory = sqlite3.Row
-        rows = [dict(r) for r in c.execute(
-            "SELECT * FROM private_thoughts")]
-        c.close()
-        out = hb.select_private_reader_thoughts(rows, limit=2)
-        self.assertIsInstance(out, tuple)
-        self.assertEqual(self.sqlite_rows("pt.db", "private_thoughts"),
-                         before, "a READER changed the row count")
+        eligible = {
+            "content": "heartbeat surfacing probe",
+            "memory_phase": "gestation",
+            "context": {
+                "source": hb.HEARTBEAT_VERSION,
+                "consent_tier": "owner_private",
+                "allowed_flows": ["private_reader"],
+            },
+        }
+        ineligible = {
+            "content": "must not surface",
+            "memory_phase": "gestation",
+            "context": {"source": "somewhere_else"},
+        }
+        out = hb.select_private_reader_thoughts([eligible, ineligible])
+        self.assertEqual(len(out), 1, f"expected exactly the eligible row: "
+                                      f"{out}")
+        self.assertIn("heartbeat surfacing probe", out[0])
+
+
+class T3DormantParity(_Env):
+    """Round-22/23 counterexamples, witnessed rather than only fixed."""
+
+    def test_dormant_explicit_none_reaches_the_backend_verbatim(self):
+        """metadata={"memory_phase": None} dormant must reach the backend
+        exactly as legacy did — captured at the sink, not inferred."""
+        self.ledger(healthy=True)
+        os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
+        try:
+            captured = {}
+            real_add = self.mm.raw.add
+
+            def capture(*a, **kw):
+                captured["metadatas"] = kw.get("metadatas")
+                return real_add(*a, **kw)
+
+            # Legacy reality, established by running it: chroma REJECTS an
+            # explicit None ("Cannot convert Python object to
+            # MetadataValue"). Gate 22's counterexample was that my parity
+            # break turned that rejection into a successful gestation write.
+            # The witness therefore asserts BOTH halves: the None reached
+            # the backend verbatim, AND the backend rejection still happens.
+            with mock.patch.object(self.mm.raw, "add", side_effect=capture):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.mm.store("explicit none probe", cycle=1,
+                                  metadata={"memory_phase": None})
+            self.assertIn("metadatas", captured, "the sink was never reached")
+            md = captured["metadatas"][0]
+            self.assertIn("memory_phase", md)
+            self.assertIsNone(md["memory_phase"],
+                              "explicit None was transformed before the "
+                              "backend saw it")
+        finally:
+            os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
+
+
+class T3Readiness(_Env):
+    """Table-driven behavioural witness for both readiness panels
+    (gate round 23 item 5), including the import-failure hole."""
+
+    def _panels(self):
+        import daemon.maez_daemon as dm
+        dm.LEDGER_DB_PATH = Path(os.environ["MAEZ_LEDGER_DB_PATH"])
+        d = dm.MaezDaemon.__new__(dm.MaezDaemon)
+        proj = dm.MaezDaemon._birth_readiness(d)
+        items = proj.get("conditions") or proj.get("items") or []
+        return {c["key"]: c for c in items if isinstance(c, dict) and "key" in c}
+
+    def test_dormant_healthy_is_green_gestation(self):
+        self.ledger(healthy=True)
+        os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
+        try:
+            p = self._panels()
+            self.assertEqual(p["birth_phase"]["state"], "green")
+            self.assertIn("gestation", p["birth_phase"]["detail"])
+        finally:
+            os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
+
+    def test_enabled_unknown_is_red_on_both_panels(self):
+        self.ledger(healthy=False)
+        p = self._panels()
+        self.assertEqual(p["birth_phase"]["state"], "red")
+        self.assertIn("unknown", p["birth_phase"]["detail"])
+        self.assertEqual(p["flag_state"]["state"], "red")
+        self.assertIn("unknown", p["flag_state"]["detail"])
+
+    def test_enabled_anchored_reads_latch_blocked(self):
+        db = self.root / "anchored-readiness.db"
+        if not db.exists():
+            import shutil as _sh
+            _sh.copy2(_mk_ledger(self.root, healthy=True), db)
+            os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
+            os.environ["MAEZ_LEDGER_WRITES"] = "1"
+            from core.ledger.writer import LedgerWriter
+            w = LedgerWriter(str(db))
+            w.write_turn("system_event", "birth (readiness fixture)",
+                         surface="system", birth_anchor=True,
+                         taint_labels=["self_generated"],
+                         privacy_access="sealed_adjacent")
+            w.close()
+            os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
+        os.environ["MAEZ_LEDGER_DB_PATH"] = str(db)
+        p = self._panels()
+        self.assertEqual(p["birth_phase"]["state"], "red")
+        self.assertIn("latch", p["birth_phase"]["detail"].lower())
+
+    def test_import_failure_reads_unreadable_not_unbound(self):
+        """The original hole: `except birth_phase.LatchBlocked` raised
+        UnboundLocalError when the import itself failed. Simulating a failed
+        import takes BOTH halves — `from core.memory import birth_phase`
+        resolves via the package attribute first, so sys.modules=None alone
+        (my first attempt) still imported fine and tested nothing."""
+        self.ledger(healthy=False)
+        import sys as _sys
+        import core.memory as pkg
+        saved_attr = pkg.birth_phase
+        saved_mod = _sys.modules.get("core.memory.birth_phase")
+        try:
+            del pkg.birth_phase
+            _sys.modules["core.memory.birth_phase"] = None
+            p = self._panels()
+        finally:
+            pkg.birth_phase = saved_attr
+            _sys.modules["core.memory.birth_phase"] = saved_mod
+        self.assertEqual(p["birth_phase"]["state"], "red")
+        self.assertIn("unreadable", p["birth_phase"]["detail"])
 
 
 class T3Bite(_Env):
@@ -550,33 +657,71 @@ class T3Bite(_Env):
                 w.close()
         self.assertEqual(self.ledger_rows(db), before)
 
-    def test_outer_gate_bites_with_the_inner_neutralized(self):
-        """Gate round 22: outer and inner guards consult the same resolver,
-        so removing the outer is masked by the inner — the outer's own bite
-        never flips. Isolate by call order: the wrapper below makes the
-        SECOND phase_for_stamp call (the sink's) behave dormant while the
-        FIRST (the public method's) stays honest. The refusal that still
-        fires can then only be the outer's."""
+    def test_each_named_guard_is_individually_load_bearing(self):
+        """Gate round 23: call-order isolation is masked by deletion — if the
+        outer guard is removed, the inner becomes call #1 and the test still
+        passes. Isolation by CONSUMER NAME instead: for each named guard G,
+        every OTHER gate call is neutered (pass-through by consumer id) and
+        the refusal must still fire — and its message must NAME G. Deleting
+        G then removes the only live predicate, no refusal fires, and G's
+        own case fails by name."""
         self.ledger(healthy=False)
         from core.infra.private_thoughts import PrivateThoughts
         import core.memory.birth_phase as bp
         pt = PrivateThoughts(db_path=self.root / "pt.db")
         real = bp.phase_for_stamp
-        calls = {"n": 0}
 
-        def selective(*a, **kw):
-            calls["n"] += 1
-            if calls["n"] >= 2:          # the inner (sink) call: neutered
-                return kw.get("supplied") or "gestation"
-            return real(*a, **kw)        # the outer call: honest
-
-        with mock.patch.object(bp, "phase_for_stamp", side_effect=selective):
-            with self.assertRaises(PhaseUnknownRefusal):
-                pt.record_thought(content="outer-isolation probe")
-        self.assertEqual(calls["n"], 1,
-                         "the refusal fired after the first (outer) gate "
-                         "call — proving the outer guard is load-bearing "
-                         "even with the inner one neutralized")
+        GUARDS = {
+            "private_thoughts.record_thought":
+                lambda: pt.record_thought(content="iso"),
+            "private_thoughts.record_signal":
+                lambda: pt.record_signal(
+                    content="iso", source="probe", subject="self",
+                    signal_kind="reasoning_residue",
+                    producer_id="reasoning_residue",
+                    consent_tier="owner_private", retention="until_reviewed",
+                    allowed_flows=("private_reader",)),
+            "private_thoughts.insert_signal_in_transaction":
+                lambda: _in_txn(self, lambda conn:
+                    pt.insert_signal_in_transaction(
+                        conn, ts=1700000000.0, content="iso", source="probe",
+                        subject="self", signal_kind="reasoning_residue",
+                        producer_id="reasoning_residue",
+                        consent_tier="owner_private",
+                        retention="until_reviewed",
+                        allowed_flows=("private_reader",))),
+            "private_thoughts._insert_thought":
+                lambda: pt._insert_thought(
+                    content="iso", provenance="explicit_api", context=None,
+                    memory_phase="gestation"),
+            "private_thoughts._insert_thought_on_connection":
+                lambda: _in_txn(self, lambda conn:
+                    pt._insert_thought_on_connection(
+                        conn, ts=1700000000.0, content="iso",
+                        provenance="explicit_api", context=None,
+                        memory_phase="gestation")),
+        }
+        failures = []
+        for guard, call in GUARDS.items():
+            def selective(*a, only=guard, **kw):
+                # every guard EXCEPT `only` is neutered
+                if kw.get("consumer") != only:
+                    return kw.get("supplied") or "gestation"
+                return real(*a, **kw)
+            with self.subTest(guard=guard):
+                with mock.patch.object(bp, "phase_for_stamp",
+                                       side_effect=selective):
+                    try:
+                        call()
+                        failures.append(f"{guard}: no refusal with every "
+                                        f"other guard neutered — this guard "
+                                        f"is not load-bearing")
+                    except PhaseUnknownRefusal as exc:
+                        if guard.split(".")[-1] not in str(exc):
+                            failures.append(
+                                f"{guard}: refusal fired but named someone "
+                                f"else: {str(exc)[:90]}")
+        self.assertEqual(failures, [], "\n" + "\n".join(failures))
 
     def test_inner_gate_bites_independently_of_outer(self):
         """Neuter the OUTER private_thoughts gate; the sink's own gate must

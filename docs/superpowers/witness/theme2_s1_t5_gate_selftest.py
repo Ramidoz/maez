@@ -264,6 +264,12 @@ def main() -> int:
     case("forgery: raw list one short of declared count", "FAIL",
          baseline=pinned, forced=f)
 
+    # Gate round 23's executed forgery: a well-shaped alien id.
+    f = forced_on_run()
+    f["interactions"][3]["id"] = "s1-replay-forged"
+    case("forgery: alien id passing the shape check", "FAIL",
+         baseline=pinned, forced=f)
+
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1
 
