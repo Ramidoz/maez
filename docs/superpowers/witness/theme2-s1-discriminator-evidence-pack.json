@@ -1,6 +1,6 @@
 {
- "judged_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257",
- "worktree_dirty_at_judgment": true,
+ "judged_at_commit": "3b733d9362473bf5d4a3817080165ac2623ef6f7",
+ "uncommitted_at_judgment": [],
  "judge": {
   "file": "theme2_s1_t5_gate.py",
   "sha256": "27b057b6cb09ac346771112dde035781805d3dec3f6c170638c45b53f9282509"
@@ -30,9 +30,9 @@
   "file": "evidence/discriminator-2026-08-23/verdict.json",
   "sha256": "c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc"
  },
- "note": "Raw runs are repo-resident; the /tmp originals are non-authoritative copies. Verdict was produced by THIS pack's judge against THIS pack's inputs; judge hash and judged_at_commit refer to the same tree.",
  "verdict_summary": {
   "verdict": "PASS",
   "D_discriminator": "PASS"
- }
+ },
+ "note": "Every judge input was committed at judged_at_commit; the only files uncommitted at judgment are the verdict and this pack \u2014 the judgment's own outputs."
 }

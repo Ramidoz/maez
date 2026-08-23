@@ -1,0 +1,101 @@
+{
+ "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
+ "slice": "S1 (topology-neutral portion; latch blocked by \u00a712.13 pending O-1)",
+ "assembled_at_commit": "3b733d9362473bf5d4a3817080165ac2623ef6f7",
+ "protocol": {
+  "file": "theme2-s1-protocol.md",
+  "version": "v7.7",
+  "sha256": "0a34fd88326aa2f5524f70fbcc6f5f267436fa4146857a2c036f655fa8b1d7db"
+ },
+ "t1_resolver": {
+  "status": "7 latch-independent cells witnessed",
+  "test": {
+   "file": "tests/test_birth_phase_resolve.py",
+   "sha256": "61f05fdffc5a9669e105afe6488d235724c962a6324c02e7d11a602d4be4e9cc"
+  },
+  "production": {
+   "file": "core/memory/birth_phase.py",
+   "sha256": "d4ac5b09446e73d28311f66b272f81fec23dd00832cb832bf22c314bdd1199a8"
+  }
+ },
+ "t3_consumers": {
+  "map": {
+   "file": "theme2-s1-t3-map.json",
+   "sha256": "e84f7eea44a3264de2b345025afe4cc1ac5bfbb1411c6568cd8edb6343ace4fc"
+  },
+  "harness": {
+   "file": "tests/test_t3_consumer_refusal.py",
+   "sha256": "79696b10e4221c3f064c690b60abf17a3e783328e55e0040f8b6dd17e23fd698"
+  },
+  "map_join": {
+   "file": "tests/test_t3_map_join.py",
+   "sha256": "d198d35f8e2e2aac0eeb0c94ea97ca746dd4ff4729806f163dd46828fae623ab"
+  },
+  "retained_run": {
+   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t3-stdout.txt",
+   "sha256": "8fc01bd58483a63ac9236c97048aa7fddabd94c28ae21beb732881514437f6ac",
+   "tail": [
+    "40 passed, 1 skipped, 1 warning, 48 subtests passed in 38.45s",
+    "exit=0"
+   ]
+  },
+  "witness_report": {
+   "file": "theme2-s1-t3-witness-report.md",
+   "sha256": "221e2a986dbf37b8109111a08d83f5209547f7036ca0b9617067e12541e3941e"
+  }
+ },
+ "t4_census": {
+  "artifact": {
+   "file": "theme2-s1-census.json",
+   "sha256": "5c444463583d06c90b35d396d93ba876851aa216bc31776381402e80f707e3f2"
+  },
+  "tool": {
+   "file": "core/memory/s1_census.py",
+   "sha256": "12c71c24d20611f5561aa053d1b10a8f711f6ad0e4603b0483356a58467d119b"
+  },
+  "retained_run": {
+   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t4-stdout.txt",
+   "sha256": "424b6a7058ae91a22863ede28537de6e7b9769ff7e358f8b9b3e73b6c5690c1c",
+   "tail": [
+    "census CLEAN \u2014 66 constructs match /home/rohit/maez/docs/superpowers/witness/theme2-s1-census.json",
+    "exit=0"
+   ]
+  }
+ },
+ "t5_baseline_and_discriminator": {
+  "baseline_archive_sha256": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
+  "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
+  "evidence_pack": {
+   "file": "theme2-s1-discriminator-evidence-pack.json",
+   "sha256": "8b730ef8627911622d410b5ebd6843323ff17dc7102d62fb1c97b6d2f1c542d3",
+   "verdict": {
+    "verdict": "PASS",
+    "D_discriminator": "PASS"
+   },
+   "judged_at_commit": "3b733d9362473bf5d4a3817080165ac2623ef6f7"
+  }
+ },
+ "t6_structural": {
+  "receipt": {
+   "file": "theme2-s1-t6-execution.json",
+   "sha256": "6c77fd9d308795eef0da9396eb89dd47260d684b8490840b85d4d485f053294b",
+   "verdict": "ALL NINE FLIP + CONTROL HOLDS",
+   "executed_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257"
+  },
+  "raw_log": {
+   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t6-log.txt",
+   "sha256": "58fb21621eb93c7cdae6b0078e3d2af004253624b2bf5be0258eb6913d7c277b"
+  }
+ },
+ "environment": {
+  "python": "3.14.4",
+  "sqlite_stdlib": "3.46.1"
+ },
+ "blocked_by_design": [
+  "birth_latch.advance() and all lived-writer publication hooks (awaits O-1 topology in T2)",
+  "latch-dependent resolve() branches (LatchBlocked seam raises)",
+  "T1 cells 2/4/6/8/10/12/13/14/16 + torn/corrupt/stale/foreign variants",
+  "T2 crash/publication/checkpoint matrix",
+  "S1 enablement (MAEZ_S1_PHASE_TRUTH stays unset in production)"
+ ]
+}
