@@ -91,6 +91,41 @@ class CensusMapJoin(unittest.TestCase):
             self.EXPECTED_STAMPERS,
             "stamper membership changed — same rule")
 
+    # Gate round 24: labels were frozen but EDGES were not — swapping
+    # store/store_core targets, or inventing "SELF-FORGED", passed because
+    # the join proved only that some target existed. The full edge relations
+    # are digest-frozen; changing an edge is a deliberate two-file edit.
+    EDGE_DIGEST_WRITERS = "99e8432ea70f7fbf6945ea7622f5f31665458d378b9c35f8a55aa04ab7f0495b"
+    EDGE_DIGEST_READERS = "7837b81740bb1c410d142ea4c81612a963db88b7953f0c290114aa3f67768e6d"
+    ALLOWED_NON_ROW_TARGETS = (
+        "SELF (the resolver)",
+        "OWNER-ONLY (the birth transaction itself; never driven by a "
+        "witness)",
+    )
+
+    def test_edge_relations_are_digest_frozen(self):
+        import hashlib as h, json as j
+        w = j.dumps(MAP["census_join"]["writers"], sort_keys=True)
+        r = j.dumps(MAP["census_join"]["readers"], sort_keys=True)
+        self.assertEqual(h.sha256(w.encode()).hexdigest(),
+                         self.EDGE_DIGEST_WRITERS,
+                         "a writer EDGE changed — if deliberate, re-freeze "
+                         "both digests here")
+        self.assertEqual(h.sha256(r.encode()).hexdigest(),
+                         self.EDGE_DIGEST_READERS,
+                         "a reader EDGE changed — same rule")
+
+    def test_non_row_targets_are_a_closed_vocabulary(self):
+        rows = ({e["consumer"] for e in MAP["stampers"]}
+                | {x["consumer"] for x in MAP["readers_and_exemptions"]})
+        for w, t in MAP["census_join"]["readers"].items():
+            if t in rows:
+                continue
+            self.assertTrue(
+                t in self.ALLOWED_NON_ROW_TARGETS
+                or t.startswith("SELF-WITNESS-TOOLING"),
+                f"open-ended exemption target: {w} -> {t}")
+
     def test_reader_rows_carry_entry_and_dormant(self):
         for row in MAP["readers_and_exemptions"]:
             self.assertTrue(row.get("entry"), row["consumer"])

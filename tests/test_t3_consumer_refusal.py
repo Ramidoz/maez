@@ -478,31 +478,71 @@ class T3Readers(_Env):
         val = c.execute("SELECT memory_phase FROM audit_log").fetchone()[0]
         self.assertEqual(val, "gestation")
 
-    def test_heartbeat_reader_surfaces_an_eligible_row_and_writes_nothing(self):
-        """Semantic (gate round 23): an ELIGIBLE row — full private-reader
-        envelope: source==version, owner_private, private_reader flow, a
-        life phase — must actually SURFACE, and a second, ineligible row
-        must not. An empty tuple is no longer a pass."""
+    def test_heartbeat_envelope_predicates_each_bite_individually(self):
+        """Gate round 24: one all-wrong negative row cannot tell which
+        predicate rejected it, and a selector that returns the first row
+        passes. Per-predicate: one field invalid at a time, everything else
+        eligible; plus order and limit; plus an observed store no-write."""
         self.ledger(healthy=True)
         from core.cognition import lean_idle_heartbeat as hb
-        eligible = {
-            "content": "heartbeat surfacing probe",
-            "memory_phase": "gestation",
-            "context": {
-                "source": hb.HEARTBEAT_VERSION,
-                "consent_tier": "owner_private",
-                "allowed_flows": ["private_reader"],
-            },
+
+        def eligible(text):
+            return {
+                "content": text,
+                "memory_phase": "gestation",
+                "context": {
+                    "source": hb.HEARTBEAT_VERSION,
+                    "consent_tier": "owner_private",
+                    "allowed_flows": ["private_reader"],
+                },
+            }
+
+        base = eligible("baseline row")
+        self.assertEqual(hb.select_private_reader_thoughts([base]),
+                         ("baseline row",))
+
+        # each predicate invalid ALONE must exclude the row
+        import copy as _c
+        mutations = {
+            "source": lambda r: r["context"].__setitem__("source", "other"),
+            "consent_tier": lambda r: r["context"].__setitem__(
+                "consent_tier", "public"),
+            "allowed_flows": lambda r: r["context"].__setitem__(
+                "allowed_flows", ["audit_trace"]),
+            "memory_phase": lambda r: r.__setitem__(
+                "memory_phase", "benchmark"),
+            "content": lambda r: r.__setitem__("content", "   "),
         }
-        ineligible = {
-            "content": "must not surface",
-            "memory_phase": "gestation",
-            "context": {"source": "somewhere_else"},
-        }
-        out = hb.select_private_reader_thoughts([eligible, ineligible])
-        self.assertEqual(len(out), 1, f"expected exactly the eligible row: "
-                                      f"{out}")
-        self.assertIn("heartbeat surfacing probe", out[0])
+        for name, mutate in mutations.items():
+            with self.subTest(predicate=name):
+                row = _c.deepcopy(base)
+                mutate(row)
+                self.assertEqual(
+                    hb.select_private_reader_thoughts([row]), (),
+                    f"a row invalid ONLY in {name} was surfaced — that "
+                    f"predicate is not load-bearing")
+
+        # order and limit: first two eligible in order, third cut
+        rows = [eligible("one"), eligible("two"), eligible("three")]
+        self.assertEqual(hb.select_private_reader_thoughts(rows, limit=2),
+                         ("one", "two"))
+
+        # observed no-write, on the REAL store the daemon reads
+        from core.infra.private_thoughts import PrivateThoughts
+        pt = PrivateThoughts(db_path=self.root / "pt.db")
+        os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
+        pt.record_thought(content="store fixture")
+        os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
+        db = self.root / "pt.db"
+        import hashlib
+        before = hashlib.sha256(db.read_bytes()).hexdigest()
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        c.row_factory = sqlite3.Row
+        stored = [dict(r) for r in c.execute("SELECT * FROM private_thoughts")]
+        c.close()
+        hb.select_private_reader_thoughts(stored)
+        self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before,
+                         "the reader changed the store's BYTES")
 
 
 class T3DormantParity(_Env):
@@ -556,10 +596,15 @@ class T3Readiness(_Env):
     def test_dormant_healthy_is_green_gestation(self):
         self.ledger(healthy=True)
         os.environ.pop("MAEZ_S1_PHASE_TRUTH", None)
+        os.environ.pop("MAEZ_LEDGER_WRITES", None)
         try:
             p = self._panels()
             self.assertEqual(p["birth_phase"]["state"], "green")
             self.assertIn("gestation", p["birth_phase"]["detail"])
+            # BOTH panels, every state (gate round 24): dormant + unborn +
+            # writes off is the designed pre-birth green
+            self.assertEqual(p["flag_state"]["state"], "green")
+            self.assertIn("pre-birth", p["flag_state"]["detail"])
         finally:
             os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
 
@@ -587,9 +632,14 @@ class T3Readiness(_Env):
             w.close()
             os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
         os.environ["MAEZ_LEDGER_DB_PATH"] = str(db)
+        os.environ.pop("MAEZ_LEDGER_WRITES", None)
         p = self._panels()
         self.assertEqual(p["birth_phase"]["state"], "red")
         self.assertIn("latch", p["birth_phase"]["detail"].lower())
+        # flag_state under LatchBlocked: resolve() raises inside it, its
+        # own except turns that into red-unreadable rather than a crash or
+        # a false green (gate round 24: both panels, every state)
+        self.assertEqual(p["flag_state"]["state"], "red")
 
     def test_import_failure_reads_unreadable_not_unbound(self):
         """The original hole: `except birth_phase.LatchBlocked` raised
@@ -611,6 +661,9 @@ class T3Readiness(_Env):
             _sys.modules["core.memory.birth_phase"] = saved_mod
         self.assertEqual(p["birth_phase"]["state"], "red")
         self.assertIn("unreadable", p["birth_phase"]["detail"])
+        self.assertEqual(p["flag_state"]["state"], "red",
+                         "flag_state went green while birth_phase was "
+                         "unreadable — the round-22 contradiction again")
 
 
 class T3Bite(_Env):

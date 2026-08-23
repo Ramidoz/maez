@@ -1,9 +1,14 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.6
+# Theme 2 — S1 (phase truth) witness protocol, v7.7
 
-Status: PROTOCOL v7.6. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.7. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
-Binding once its gate passes; S1 code is barred until then. The S1
-implementation is judged against this file, not design prose.
+Binding once its gate passes. *(v7.7: the original blanket "S1 code is
+barred until then" is superseded by the §12.13 scope ruling — the
+topology-neutral census, resolver classification, and dormant consumer
+wiring were permitted to land and are MERGED-DORMANT; the latch and its
+dependent branches remain barred, and S1 may not be ENABLED or declared
+complete until the whole protocol closes.)* The S1 implementation is
+judged against this file, not design prose.
 v6 closed T5's execution model against the pre-execution audit; v6.1
 closed gate round 12's six items (A, B, C, D, E, G — F passed); v6.2
 closed gate round 13's three reopened items (B, D, E — A, C, G passed)
@@ -789,7 +794,7 @@ successful-synthesis branch (`maez_daemon.py:8937`) and the
 successful-brain path** and the hermetic ruling costs no coverage.
 
 Round 12 also established the honest scope of the replay: it exercises
-**1 of the 13 census constructs** (`MemoryManager.store_telegram`). The
+**one of the census constructs** *(membership lives in the T3 map — v7.7)* (`MemoryManager.store_telegram`). The
 other 12 are T3's job, via the public entries §9 pins. T5 is a
 store-tree invariance witness, not a census witness, and the report
 says so rather than implying breadth it does not have.

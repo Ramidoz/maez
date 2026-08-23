@@ -56,6 +56,19 @@ def load(p: str | None) -> dict | None:
     return json.loads(Path(p).read_text()) if p else None
 
 
+def _manifest_ids() -> list | None:
+    manifest_path = Path(__file__).resolve().parent / "theme2-s1-replay.json"
+    try:
+        return [x["id"] for x in json.loads(
+            manifest_path.read_text())["interactions"]]
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+EXPECTED_STORES = ("chroma::raw", "chroma::daily", "chroma::core",
+                   "private_thoughts", "audit_log")
+
+
 def schema_failures(runs: dict) -> list:
     """Fail closed on shape. Round 18 passed a report with a missing phase
     probe and empty structures; absent evidence is not evidence."""
@@ -67,13 +80,32 @@ def schema_failures(runs: dict) -> list:
         for k in REQUIRED_RUN_KEYS:
             if k not in r:
                 bad.append({"run": tag, "detail": f"missing key {k!r}"})
+        # Gate round 24: flags-off runs could declare one interaction and
+        # omit raw rows. Every run joins the frozen manifest, in ORDER.
+        mids = _manifest_ids()
+        ints_ = r.get("interactions")
+        if mids is None:
+            bad.append({"run": tag, "detail": "frozen manifest unreadable"})
+        elif not isinstance(ints_, list) \
+                or [i.get("id") for i in ints_] != mids:
+            bad.append({"run": tag,
+                        "detail": "raw interactions do not match the frozen "
+                                  "manifest id sequence"})
+        elif r.get("interaction_count") != len(mids):
+            bad.append({"run": tag,
+                        "detail": "interaction_count != manifest length"})
         probe = r.get("phase_probe")
         if not isinstance(probe, dict) or "current_phase" not in probe:
             bad.append({"run": tag, "detail": "phase_probe absent or malformed"})
         cen = r.get("stamp_census")
-        if not isinstance(cen, dict) or EXERCISED_STORE not in cen:
+        # Gate round 24: a census of {} slid through a vacuous loop. The KEY
+        # SET is the contract — all five stores, every run.
+        if not isinstance(cen, dict) or \
+                sorted(cen) != sorted(EXPECTED_STORES):
             bad.append({"run": tag,
-                        "detail": f"stamp_census missing {EXERCISED_STORE!r}"})
+                        "detail": "stamp_census does not cover exactly the "
+                                  "five expected stores",
+                        "got": sorted(cen) if isinstance(cen, dict) else cen})
         elif not isinstance(cen[EXERCISED_STORE], dict) or not any(
                 isinstance(v, int) and v > 0
                 for v in cen[EXERCISED_STORE].values()):
@@ -263,26 +295,22 @@ def discriminator(runs: dict, baseline: dict | None,
                     "declared": n})
     else:
         ids = [i.get("id") for i in ints]
-        # Gate round 23 forged `s1-replay-forged` past a SHAPE check. The
-        # join is against the frozen manifest's exact id set, parsed from
-        # the committed artifact — not a prefix, not a count.
-        manifest_path = (Path(__file__).resolve().parent
-                         / "theme2-s1-replay.json")
-        try:
-            manifest_ids = [x["id"] for x in json.loads(
-                manifest_path.read_text())["interactions"]]
-        except (OSError, KeyError, ValueError) as exc:
-            manifest_ids = None
-            bad.append({"detail": f"frozen manifest unreadable: {exc}"})
-        if manifest_ids is not None and sorted(ids) != sorted(manifest_ids):
-            bad.append({"detail": "interaction ids != the frozen manifest's "
-                                  "exact id set",
-                        "unexpected": sorted(set(ids) - set(manifest_ids))[:3],
-                        "missing": sorted(set(manifest_ids) - set(ids))[:3]})
+        # Round 23: exact set. Round 24: exact SEQUENCE — order-sensitive.
+        manifest_ids = _manifest_ids()
+        if manifest_ids is None:
+            bad.append({"detail": "frozen manifest unreadable"})
+        elif ids != manifest_ids:
+            bad.append({"detail": "interaction ids != the frozen manifest "
+                                  "sequence (order-sensitive)"})
         for i in ints:
+            exc_text = str(i.get("exception", ""))
+            # Round 24 forged "NotPhaseUnknownRefusal: refusing to stamp" —
+            # substring is not type. The field is "TypeName: message"; the
+            # TYPE is compared exactly.
+            exc_type = exc_text.split(":", 1)[0].strip()
             if i.get("outcome") != "raised" \
-                    or "PhaseUnknownRefusal" not in str(i.get("exception", "")) \
-                    or "refusing to stamp" not in str(i.get("exception", "")) \
+                    or exc_type != "PhaseUnknownRefusal" \
+                    or "refusing to stamp" not in exc_text \
                     or i.get("tail_passages") != 1:
                 bad.append({"detail": "interaction did not raise the typed "
                                       "refusal at exactly one tail passage",
@@ -306,12 +334,22 @@ def discriminator(runs: dict, baseline: dict | None,
             and len(refusals_list) != n:
         bad.append({"detail": "refusal count != interaction count",
                     "refusals": len(refusals_list), "interactions": n})
+    KNOWN_CONSUMERS = {
+        "memory_manager.store", "memory_manager.store_telegram",
+        "memory_manager.store_core",
+    }
     for r in (refusals_list or []):
+        # Round 24 forged 20 rows under "alien.consumer". A refusal is
+        # evidence only when its consumer is a censused reply-path stamper
+        # and its message names that same consumer.
         if not isinstance(r, dict) \
                 or r.get("exception") != "PhaseUnknownRefusal" \
-                or "refusing to stamp" not in str(r.get("message", "")):
-            bad.append({"detail": "refusal evidence lacks the typed "
-                                  "exception AND its message", "entry": r})
+                or "refusing to stamp" not in str(r.get("message", "")) \
+                or r.get("consumer") not in KNOWN_CONSUMERS \
+                or r.get("consumer", " ") not in str(r.get("message", "")):
+            bad.append({"detail": "refusal evidence is not a typed refusal "
+                                  "from a known reply-path consumer naming "
+                                  "itself", "entry": r})
             break
     cb = forced.get("collection_counts_before") or {}
     ca = forced.get("collection_counts_after") or {}

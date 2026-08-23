@@ -31,6 +31,12 @@ def honest_run(fixture: str) -> dict:
     only and T5 reaches one of thirteen consumers."""
     return {
         "fixture": fixture,
+        # every real run carries the raw manifest-joined rows (round 24)
+        "interactions": [
+            {"id": f"s1-replay-{i:02d}", "outcome": "returned",
+             "tail_passages": 1} for i in range(20)],
+        "manifest_sha256": ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
+                            "cc2b868f59109cb420"),
         "phase_probe": {"current_phase": "gestation",
                         "birth_event_turn_id": None,
                         "has_resolve_api": False},
@@ -126,11 +132,18 @@ def main() -> int:
     pinned = {"per_fixture": {"healthy": cen("healthy"),
                               "partial": cen("partial")}}
 
-    def case(label, want, a=None, p=None, **kw):
+    def case(label, want, a=None, p=None, expect_only=None, **kw):
         nonlocal ok
         v = run_gate(tmp, a or copy.deepcopy(A), p or copy.deepcopy(P), **kw)
         got = v["verdict"]
         good = got == want
+        if good and expect_only is not None:
+            # Gate round 24: a K-case that also trips clause D proves
+            # nothing about K. With the baseline supplied, the failure set
+            # must be EXACTLY the named clause.
+            fails = sorted(v.get("failures", {}))
+            if fails != [expect_only]:
+                good = False
         ok &= good
         extra = sorted(v.get("failures", {}))
         print(f"{'ok ' if good else 'BAD'} {label:46s} {got:5s} "
@@ -150,26 +163,30 @@ def main() -> int:
     case("census drifted from the pinned baseline", "FAIL", baseline=bad_pin)
 
     a = copy.deepcopy(A); a["ledger_post_replay_sha256"] = "b" * 64
-    case("K1 ledger main file changed", "FAIL", a=a)
+    case("K1 ledger main file changed", "FAIL", a=a, baseline=pinned,
+         expect_only="K1_ledger_unchanged")
     a = copy.deepcopy(A); del a["ledger_post_replay_sha256"]
     case("K1 digest key missing", "FAIL", a=a)
 
     p = copy.deepcopy(P)
     p["latch_artifacts_in_store_tree"] = ["birth_observed/segment-000001.jsonl"]
-    case("K2 real latch artifact in the store tree", "FAIL", p=p)
+    case("K2 real latch artifact in the store tree", "FAIL", p=p,
+         baseline=pinned, expect_only="K2_no_latch_artifact")
     p = copy.deepcopy(P); del p["latch_artifacts_in_store_tree"]
     case("K2 store-tree latch sweep missing", "FAIL", p=p)
 
     a = copy.deepcopy(A)
     a["positive_control"]["interactions_without_tail_passage"] = ["s1-replay-07"]
-    case("K3 forged PASS over a missed tail", "FAIL", a=a)
+    case("K3 forged PASS over a missed tail", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
     a = copy.deepcopy(A)
     a["positive_control"] = {"verdict": "PASS"}
     case("K3 label with no underlying numbers", "FAIL", a=a)
 
     a = copy.deepcopy(A)
     a["stray_stores_outside_projected_tree"] = ["/tmp/escaped.db"]
-    case("K4 store escaped the projected tree", "FAIL", a=a)
+    case("K4 store escaped the projected tree", "FAIL", a=a,
+         baseline=pinned, expect_only="K4_no_stray_store")
 
     a = copy.deepcopy(A); del a["phase_probe"]
     case("schema: phase probe missing", "FAIL", a=a)
