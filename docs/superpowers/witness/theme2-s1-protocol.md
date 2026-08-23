@@ -1190,9 +1190,42 @@ consequence for S1 that belongs in this file: design §5 requires latch
 publication around **every** lived commit, while T2 witnesses a single
 writer path (§3). Under the daemon-plus-web multi-writer topology the
 ordering of latch allocation and publication across processes is
-**unwitnessed**. That must close before S1 code lands; it is not a
-prerequisite for generating the pre-S1 baseline, and it is recorded as
-an open item rather than silently folded into T2.
+**unwitnessed**. It is not a prerequisite for generating the
+pre-S1 baseline, and it is recorded as an open item rather than
+silently folded into T2.
+
+**Scope, ruled by Codex 2026-08-22 and adopted.** The original wording —
+"that must close before S1 code lands" — read strictly blocks the whole
+slice, which is broader than the actual dependency. The ruling:
+
+> This blocks `core.memory.birth_latch.advance()`, every lived-writer
+> latch-publication hook, and the latch-dependent publication/repair
+> branches of `birth_phase.resolve()` until the production writer
+> topology is ruled and T2 witnesses that topology. It does not block
+> `core.memory.s1_census`, the pinned `PhaseResult`/reason contract,
+> latch-independent resolver classification, or flag-dormant consumer
+> refusal wiring. **S1 must not be enabled or declared complete until
+> this closes.**
+
+Build order, with the reason for each position:
+
+1. `s1_census.py` — static AST enumeration; it neither allocates latch
+   positions nor interprets their ordering, and it fixes the
+   implementation boundary before any runtime change.
+2. The topology-neutral part of `birth_phase.py` — the namedtuple, the
+   frozen reason vocabulary, the exception, the activation switch, and
+   the absent/empty/structural/error classifications. Latch publication
+   and repair stay behind a fail-closed seam.
+3. The 13 consumer refusals, flag-dormant — witnessable against
+   structural `unknown` and healthy `gestation` without claiming
+   anything about lived multi-writer ordering.
+4. **After O-1 is ruled**: `birth_latch.advance()`, the commit hook, and
+   the latch-dependent resolver branches, together, with T2 amended for
+   the chosen topology.
+
+"Full resolver first" is explicitly *not* safe: its first-lived and
+repair behavior would already encode assumptions about latch allocation
+that O-1 may invalidate.
 
 K has no direct T5 consequence: the airlock ledger has writes disabled
 and the replay is single-process.
