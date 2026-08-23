@@ -1,12 +1,12 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "175bf0fc7793687052c29eda34e0db3bb698ecfb",
+ "digests_computed_against_tree_at_commit": "7697bd58d0b691958cd9386e82b0e03ce89c1a02",
  "provenance_note": "Every digest describes the file's bytes at the commit named above, which is this file's PARENT \u2014 an artifact cannot digest the commit it lands in. The evidence pack was committed by itself at that commit so its digest here is honest. Sections reporting an EXECUTION name their commit differently on purpose (the T6 receipt's field is `executed_against_tree_at_commit`): they record when something RAN, not when it was hashed.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
-  "version": "v7.9",
-  "sha256": "9381bcdc74b6bf35c11a230ef08fbb240b8ab709f355cc29169f8001ad099e62"
+  "version": "v7.10",
+  "sha256": "34f61ca8ad6349ea71bcb8e089d20c418d030bfbde6c46d45473bbe7b361124a"
  },
  "s2_protocol": {
   "file": "theme2-s2-protocol.md",
@@ -42,10 +42,10 @@
    "note": "retained from the original airlocked T3 run; that directory's DISCRIMINATOR records are superseded, this receipt is not"
   },
   "pinned_suite_run": {
-   "file": "evidence/discriminator-2026-08-23-r31/pinned-suite-stdout.txt",
-   "sha256": "f3ca15ad1c2c384025c66b67d486b74bb8a61e36c32acd85c314acd278b95afd",
+   "file": "evidence/discriminator-2026-08-23-r32/pinned-suite-stdout.txt",
+   "sha256": "6e8a5e4a3e371f59397da9cccce66216b2aebdf049a43c77bea1b6381ff31cca",
    "tail": [
-    "59 passed, 1 warning, 48 subtests passed in 41.63s",
+    "59 passed, 1 warning, 48 subtests passed in 41.86s",
     "exit=0"
    ]
   },
@@ -73,12 +73,12 @@
  "t5_baseline_and_discriminator": {
   "baseline_archive_sha256": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
-  "evidence_dir": "evidence/discriminator-2026-08-23-r31/",
+  "evidence_dir": "evidence/discriminator-2026-08-23-r32/",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "47e72678c6821a0a04ea43a00539514a58e22d9df18ea2f07b892805b5a4466c"
+   "sha256": "84f7b83522d0befeefd495664a447adbf46f74b437c6135ab7493891f1545e5a"
   },
-  "status": "all clauses PASS on evidence re-executed at round 31. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27-31 found twelve, eleven, six, four and nine. What T5 witnesses is scoped: the flags-off invariant compared is {current_phase, stamp_census}, and the refusal is witnessed at ONE of the censused consumers (store_telegram) under a degraded reply path \u2014 the full consumer set is T3's claim, not T5's.",
+  "status": "all clauses PASS on evidence executed at round 32. NOT CLOSED. Rounds 27-32 found 12, 11, 6, 4, 9 and 10 defects. Round 32 judged only two of its ten honest-reachable and argued \u00a70.1 is unreachable by construction; protocol \u00a70.2 records the proposed closure condition as an OWNER DECISION, unadopted.",
   "replay_manifest_sha256": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "t6_structural": {
