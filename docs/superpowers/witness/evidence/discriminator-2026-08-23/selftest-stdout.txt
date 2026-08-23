@@ -1,5 +1,4 @@
-# gate selftest — executed at f79ac2ac2a03cb493655d28458c35c499e224249 on 2026-08-23T12:01:06-05:00
-# command: .venv/bin/python docs/superpowers/witness/theme2_s1_t5_gate_selftest.py
+# gate selftest — executed at da893aa3a09f32b87640149b80171cf7b492b4a9 on 2026-08-23T12:03:56-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator']

@@ -1,4 +1,4 @@
-# pinned T3/T4 suite — executed at f79ac2ac2a03cb493655d28458c35c499e224249 on 2026-08-23T12:00:24-05:00
+# pinned T3/T4 suite — executed at da893aa3a09f32b87640149b80171cf7b492b4a9 on 2026-08-23T12:03:12-05:00
 # command: .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_t3_map_join.py tests/test_s1_census.py tests/test_t3_consumer_refusal.py tests/test_birth_phase_resolve.py tests/test_phase_stamp_gate.py
 ...........................................................                                      [100%]
 =============================== warnings summary ===============================
@@ -7,5 +7,5 @@ tests/test_t3_consumer_refusal.py::T3Refusal::test_exact_map_coverage_and_refusa
     if asyncio.iscoroutinefunction(f):
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-59 passed, 1 warning, 48 subtests passed in 41.78s
+59 passed, 1 warning, 48 subtests passed in 43.19s
 exit=0
