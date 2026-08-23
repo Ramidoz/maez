@@ -147,9 +147,11 @@ consumer call. Frozen census and per-consumer expected outcome:
 | `core/infra/private_thoughts.py` default @627 | same |
 | `core/infra/private_thoughts.py` default @674 | same |
 | `private_thoughts` caller-supplied `memory_phase='lived'` while gate says otherwise | raises `ValueError` (revalidation); no row |
-| `core/cognition/audit_log.py:AuditLog.record` @233 | writes with `memory_phase=NULL`-refusal path: raises `PhaseUnknownRefusal`; no row |
-| `AuditLog.start_direct_edit_session` @405 | same |
-| `AuditLog.log_direct_edit` @480 | same |
+| `core/cognition/audit_log.py:AuditLog.record` | **see the v7.2 correction below — this row is wrong** |
+| `AuditLog.start_direct_edit_session` | raises `PhaseUnknownRefusal`; no row |
+| `AuditLog.log_direct_edit` | same |
+| `AuditLog.end_direct_edit_session` | same *(added v7.2: a real writer the frozen census omitted)* |
+| `AuditLog._initialize` | the inline NULL normalization; §10's ruling applies here, not to a `_migration_null_normalize` method *(v7.2)* |
 | `core/memory/source_awareness.py:is_born` @342 | returns False (gate closed); writes nothing |
 | `core/consolidation/span_planner.py` meta read @241 | typed refusal of the span plan; no plan rows |
 | `core/ledger/writer.py` stage resolution @450 | write refused (post-birth mode); pre-birth shadow path unchanged |
@@ -157,6 +159,48 @@ consumer call. Frozen census and per-consumer expected outcome:
 (The exact exception type `PhaseUnknownRefusal` is the S1 API
 contract; a different spelling with identical semantics is recorded,
 not failed — but "silent success" or a `gestation` stamp is a kill.)
+
+### v7.2 correction — the census was derived, and this table inherited its errors
+
+`core/memory/s1_census.py` now derives the census by execution
+(`docs/superpowers/specs/2026-08-22-theme2-census-correction.md`). Eight of
+the frozen census's ten writer entries did not resolve to a real construct,
+and this table was built from the same authoring. Corrected above:
+`_migration_null_normalize` does not exist — the behaviour §10 literalizes
+is inline in `AuditLog._initialize`; `end_direct_edit_session` is a real
+writer that was omitted; the `@line` suffixes are dropped in favour of
+qualnames, which is what T4 actually compares.
+
+**`AuditLog.record` is not a phase writer, and that is a hole in the design
+rather than a typo in the table.** It never names the column
+(`audit_log.py:233-341`). Its rows are stamped `'gestation'` by the SQL
+column default at `audit_log.py:113`:
+
+```sql
+memory_phase         TEXT    DEFAULT 'gestation',
+```
+
+**A stamp supplied by the database cannot be refused by application code.**
+With the resolver reading `unknown`, `record()` still writes a row asserting
+`gestation`, because SQLite fills it in. That is precisely the A6 defect
+Theme 2 exists to close — phase degrading to `gestation` — sitting inside
+the audit store's own schema, and no consumer-refusal wiring in Python can
+reach it.
+
+The two candidate closures, neither adopted here:
+
+1. Make `record()` name the column explicitly and gate it like its
+   siblings. Cheapest; leaves the default in place for any other writer.
+2. Drop the column default in a migration so an unstamped insert is a NULL
+   the resolver can distinguish from a claim. Correct, but it is a schema
+   change to a live store with 506 rows, and it interacts with §10's ruling
+   that pre-S1 legacy rows are gestation by census fact.
+
+This must be ruled before T3 can pass, and it is recorded rather than
+decided. Note the asymmetry it creates today: the direct-edit methods
+default in *Python* (`memory_phase: str = MEMORY_PHASE_GESTATION`), which is
+refusable by changing the default; `record()` defaults in *SQL*, which is
+not.
 
 Exact-set assertions after the outage window, literal SQL/queries:
 - Chroma stores: for every collection in the frozen store inventory
