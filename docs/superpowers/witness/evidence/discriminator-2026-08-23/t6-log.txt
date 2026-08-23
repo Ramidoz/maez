@@ -1,0 +1,11 @@
+mutation 1: unknown structural
+mutation 2: unknown structural
+mutation 3: unknown structural
+mutation 4: unknown structural
+mutation 5: unknown structural
+mutation 6: unknown structural
+mutation 7: unknown structural
+mutation 8: unknown structural
+mutation 9: unknown structural
+control: gestation meta_absent
+verdict: ALL NINE FLIP + CONTROL HOLDS (0.29s)

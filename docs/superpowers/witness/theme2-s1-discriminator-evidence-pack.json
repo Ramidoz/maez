@@ -1,15 +1,38 @@
 {
- "_comment": "Digest-bound evidence pack for the S1 forced-on discriminator run of 2026-08-23. Regenerated (gate 23: the earlier pack's judged_at_commit predated the judge it hashed). The judge hashed HERE is the exact-manifest-join generation that produced gate-verdict-v4; retained raw artifacts unchanged, digests below prove it.",
- "judged_at_commit": "7df6ac8e4295e1e5888de669547b35fa240c8899",
- "artifacts": {
+ "judged_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257",
+ "worktree_dirty_at_judgment": true,
+ "judge": {
+  "file": "theme2_s1_t5_gate.py",
+  "sha256": "27b057b6cb09ac346771112dde035781805d3dec3f6c170638c45b53f9282509"
+ },
+ "judge_selftest": {
+  "file": "theme2_s1_t5_gate_selftest.py",
+  "sha256": "0d320886cd78ea33ce10bd827bbb68b7972756aef65279f690317fae7522bf3c"
+ },
+ "producer": {
+  "file": "theme2_s1_t5_replay.py",
+  "sha256": "34d8d048c4e449e6e6a243fb6535f7a2fc0e45faa4772cfc70d83a8acf0afa36"
+ },
+ "airlock": {
+  "file": "theme2_s1_airlock.sh",
+  "sha256": "9a1207b569fdefc35d7e6133e5da4850f3edd18e85150d43b6dff8c50caa0c0e"
+ },
+ "verdict_inputs_sha256": {
   "run-a.json": "7c3e19e54ec4de650dcfecae698e54bc3a0e3f1da877f4b99c4e80be4cafb10f",
   "run-b.json": "f12a3e204037158208b44df23a28142c5002c144d40bfe0275b7e69a3771bd36",
   "run-p.json": "43ce41d2867a3e8d1e7a65f2cc6a917c10552fa908f0840ffd446ae1308e1fcc",
   "run-f.json": "372af095723076e974e03ad001da340635c28f816ef8fb7d2fa5979d297ff1af",
-  "gate-verdict-v4.json": "c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc",
-  "theme2_s1_t5_gate.py": "76ede91a32599984315a24d5c75b366ffc49c890888c03dd2a574f18807a7aac",
-  "theme2_s1_t5_replay.py": "34d8d048c4e449e6e6a243fb6535f7a2fc0e45faa4772cfc70d83a8acf0afa36",
-  "theme2_s1_t5_gate_selftest.py": "16be864c316278fd8c5cac13d9322f1b1a5d588ba1316f199697e7a9ad659046",
-  "theme2-s1-replay.json": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
+  "baseline-census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
+  "baseline-archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
+  "replay-manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
+ },
+ "verdict": {
+  "file": "evidence/discriminator-2026-08-23/verdict.json",
+  "sha256": "c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc"
+ },
+ "note": "Raw runs are repo-resident; the /tmp originals are non-authoritative copies. Verdict was produced by THIS pack's judge against THIS pack's inputs; judge hash and judged_at_commit refer to the same tree.",
+ "verdict_summary": {
+  "verdict": "PASS",
+  "D_discriminator": "PASS"
  }
 }

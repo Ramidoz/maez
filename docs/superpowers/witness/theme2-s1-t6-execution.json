@@ -1,69 +1,67 @@
 {
- "_comment": "T6 structural-fingerprint mutations, RETAINED execution (gate rounds 22/23: the gate-20 ad hoc run was not retained).",
- "executed_at_commit": "4b2e4747b479937d7fe79c6b160fa8478f1886bc",
+ "executed_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257",
+ "runner": "inline (this receipt's generating script, retained as t6-log)",
+ "command_shape": "python -c resolve() per fixture, fresh process each",
+ "interpreter": "3.14.4",
  "sqlite_version": "3.46.1",
- "resolver_sha256": "d4ac5b09446e73d28311f66b272f81fec23dd00832cb832bf22c314bdd1199a8",
+ "fixture_post_migration_sha256": "e8fe948ba2d753f0020bfd223d9b875046df6890be79890d3e9264ab11ded07e",
+ "elapsed_seconds": 0.29,
  "results": [
   {
-   "mutation": "1 DROP INDEX idx_turns_tenant_ts",
+   "mutation": "1",
    "sql": "DROP INDEX idx_turns_tenant_ts",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "2 CREATE INDEX extra_idx",
+   "mutation": "2",
    "sql": "CREATE INDEX extra_idx ON turns(surface)",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "3 rename 0005 migration",
+   "mutation": "3",
    "sql": "UPDATE schema_migrations SET name='0005_tampered' WHERE name LIKE '0005%'",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "4 DELETE 0002 migration row",
+   "mutation": "4",
    "sql": "DELETE FROM schema_migrations WHERE name LIKE '0002%'",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "5 INSERT phantom migration",
+   "mutation": "5",
    "sql": "INSERT INTO schema_migrations VALUES ('0099_phantom', 0)",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "6 genesis byte flip (triggers off)",
+   "mutation": "6",
    "sql": "DROP TRIGGER turns_no_update; UPDATE turns SET raw_text=raw_text||'x' WHERE chain_position=0",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "7 stale last_chain_hash",
+   "mutation": "7",
    "sql": "UPDATE meta SET value='stale' WHERE key='last_chain_hash'",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "8 DROP TABLE claims",
+   "mutation": "8",
    "sql": "PRAGMA foreign_keys=OFF; DROP TABLE claims",
    "result": "unknown structural",
    "flipped": true
   },
   {
-   "mutation": "9 DROP TRIGGER claims_no_update",
+   "mutation": "9",
    "sql": "DROP TRIGGER claims_no_update",
    "result": "unknown structural",
    "flipped": true
-  },
-  {
-   "mutation": "0 unmutated control",
-   "sql": null,
-   "result": "gestation meta_absent",
-   "flipped": null
   }
  ],
+ "control": "gestation meta_absent",
  "verdict": "ALL NINE FLIP + CONTROL HOLDS"
 }
