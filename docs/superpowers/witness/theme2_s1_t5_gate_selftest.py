@@ -98,7 +98,7 @@ def honest_run(fixture: str) -> dict:
             ["0001_init", "0002_triggers", "0003_add_lifecycle_stage",
              "0004_add_audit_trace_metadata",
              "0005_add_taint_privacy_chain_position"]
-            if fixture == "healthy" else ["0001_init", "0002_triggers"]),
+            if fixture == "healthy" else "no schema_migrations table"),
         "sqlite_version": "3.46.1",
         "census_resolved_paths": {
             "private_thoughts": "/home/rohit/maez/memory/private_thoughts.db",

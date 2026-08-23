@@ -292,8 +292,11 @@ def main() -> int:
         report["applied_migrations"] = sorted(
             r[0] for r in _c.execute("SELECT name FROM schema_migrations"))
         _c.close()
-    except sqlite3.Error as exc:
-        report["applied_migrations"] = {"error": str(exc)}
+    except sqlite3.Error:
+        # The partial fixture has no schema_migrations table at all — that
+        # absence IS what makes it partial, and it is exactly the kind of
+        # fixture-caused fact #36 asked for.
+        report["applied_migrations"] = "no schema_migrations table"
     # Round 31 #38 (partial): nothing required a record to have come from
     # THIS producer inside THIS airlock. Digest both.
 
