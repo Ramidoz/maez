@@ -40,8 +40,11 @@ def honest_run(fixture: str) -> dict:
         "fixture": fixture,
         # every real run carries the raw manifest-joined rows (round 24)
         "interactions": [
+            # Round 29 #28: two fixtures must differ in what they OBSERVED,
+            # so the reference records differ the way real ones do.
             {"id": f"s1-replay-{i:02d}", "outcome": "returned",
-             "tail_passages": 1, "reply": "a reply"} for i in range(20)],
+             "tail_passages": 1,
+             "reply": f"a reply on the {fixture} fixture"} for i in range(20)],
         "manifest_sha256": ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
                             "cc2b868f59109cb420"),
         # Round 28 finding #21: this record said the S1 API was ABSENT, so all
@@ -75,6 +78,9 @@ def honest_run(fixture: str) -> dict:
         "brain_reachable": False,
         "daemon_construct_seconds": 2.5,
         "python": "3.14.0", "sqlite_version": "3.53.4", "protocol": "t5.v7",
+        # Round 29 #30: the evidence must name the code it is about.
+        "source_digests": {"core/memory/birth_phase.py": "c" * 64,
+                           "memory/memory_manager.py": "d" * 64},
         "effective_store_paths_after_import": {"memory_dir": "/home/rohit/maez/memory"},
         "census_resolved_paths": {"private_thoughts": "/home/rohit/maez/memory/pt.db"},
         "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
@@ -226,7 +232,7 @@ EXPECTED_CLAUSES = {
     "round 27: census does not reconcile with the delta":
         ["K3_positive_controls"],
     "round 27: clone with the clock nudged":
-        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+        ["K6_contained_and_distinct", "K7_fixture_label_backed", "K8_record_coherence"],
     "round 27: containment probe did not pass":
         ["K6_contained_and_distinct"],
     "round 27: flag hidden in the config-load env":
@@ -250,9 +256,9 @@ EXPECTED_CLAUSES = {
     "round 27: no containment proof at all":
         ["K6_contained_and_distinct"],
     "round 27: partial label, wrong ledger":
-        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+        ["K7_fixture_label_backed"],
     "round 27: partial run is a clone of the healthy run":
-        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+        ["K6_contained_and_distinct", "K7_fixture_label_backed", "K8_record_coherence"],
     "round 27: producer boolean contradicts its digests":
         ["K1_ledger_unchanged"],
     "round 27: run finished before it started":
