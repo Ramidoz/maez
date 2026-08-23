@@ -1,7 +1,7 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "984c1e379130b829161ee0533cde9453b811b2d0",
+ "digests_computed_against_tree_at_commit": "97bd3c4667477dc190eb5e011b520e04e7283423",
  "provenance_note": "Every digest describes the file's bytes at the commit named above, which is this file's PARENT \u2014 an artifact cannot digest the commit it lands in. The evidence pack was committed by itself at that commit so its digest here is honest. Sections reporting an EXECUTION name their commit differently on purpose (the T6 receipt's field is `executed_against_tree_at_commit`): they record when something RAN, not when it was hashed.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
@@ -82,9 +82,9 @@
   "evidence_dir": "evidence/discriminator-2026-08-23-r27/",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "509e71720947f139864468e669a6b99f78510712e0b988d2ede920496deb16b8"
+   "sha256": "c8e6e4644f386ceadaae2dc97cf98ffad4f5a6044154ede97a43586e0126f864"
   },
-  "status": "re-produced at round 27 after the producer was repaired; all seven clauses PASS. T5 is NOT declared closed \u2014 v7.9 \u00a70.1 requires two consecutive rounds with zero new findings, and round 27 found twelve."
+  "status": "all clauses PASS on re-produced evidence. NOT CLOSED: v7.9 \u00a70.1 requires two consecutive rounds with zero new findings; round 27 found twelve and round 28 found four more classes plus seven I had left unranked."
  },
  "t6_structural": {
   "receipt": {
