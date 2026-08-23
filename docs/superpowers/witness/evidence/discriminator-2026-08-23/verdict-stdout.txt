@@ -1,0 +1,12 @@
+{
+ "clauses": {
+  "K1_ledger_unchanged": "PASS",
+  "K2_no_latch_artifact": "PASS",
+  "K3_positive_controls": "PASS",
+  "K4_no_stray_store": "PASS"
+ },
+ "D_discriminator": "PASS",
+ "failures": {},
+ "verdict": "PASS"
+}
+exit=0
