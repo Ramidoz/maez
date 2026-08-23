@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parent / "theme2_s1_t5_gate.py"
+MANIFEST = json.loads(
+    (Path(__file__).resolve().parent / "theme2-s1-replay.json").read_text())["interactions"]
 PINNED_BASELINE = json.loads(
     (Path(__file__).resolve().parent / "theme2-s1-baseline-census.json").read_text())
 SHA_A = "a" * 64
@@ -29,6 +31,10 @@ EXERCISED = "chroma::raw"
 # Round 27 #13/#16: the constants the judge now pins.
 F_PARTIAL = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
              "cef39472a4c2d5a2")
+REAL_INSTRUMENT_DIGESTS = {
+    rel: hashlib.sha256(
+        (Path("/home/rohit/maez/docs/superpowers/witness") / rel).read_bytes()).hexdigest()
+    for rel in ("theme2_s1_t5_replay.py", "theme2_s1_airlock.sh")}
 REAL_SOURCE_DIGESTS = {
     rel: hashlib.sha256((Path("/home/rohit/maez") / rel).read_bytes()).hexdigest()
     for rel in ("core/memory/birth_phase.py", "memory/memory_manager.py",
@@ -47,7 +53,8 @@ def honest_run(fixture: str) -> dict:
         "interactions": [
             # Round 29 #28: two fixtures must differ in what they OBSERVED,
             # so the reference records differ the way real ones do.
-            {"id": f"s1-replay-{i:02d}", "outcome": "returned",
+            {"id": MANIFEST[i]["id"], "at": MANIFEST[i]["at"],
+             "source": MANIFEST[i]["source"], "outcome": "returned",
              "tail_passages": 1,
              "reply": f"a reply on the {fixture} fixture"} for i in range(20)],
         "manifest_sha256": ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
@@ -86,6 +93,17 @@ def honest_run(fixture: str) -> dict:
         # Round 30 #32: these are hashed off disk now, so the fixture must
         # carry the real digests of the real files.
         "source_digests": REAL_SOURCE_DIGESTS,
+        "instrument_digests": REAL_INSTRUMENT_DIGESTS,
+        "applied_migrations": (
+            ["0001_init", "0002_triggers", "0003_add_lifecycle_stage",
+             "0004_add_audit_trace_metadata",
+             "0005_add_taint_privacy_chain_position"]
+            if fixture == "healthy" else ["0001_init", "0002_triggers"]),
+        "sqlite_version": "3.46.1",
+        "census_resolved_paths": {
+            "private_thoughts": "/home/rohit/maez/memory/private_thoughts.db",
+            "audit_log": "/home/rohit/maez/memory/audit_log.db"},
+        "stray_store_inventory_before": 0,
         # Round 30 #33: the judge pins this map by exact equality now, the
         # way the producer always did.
         "effective_store_paths_after_import": {
@@ -97,9 +115,7 @@ def honest_run(fixture: str) -> dict:
             "audit_log_db": "/home/rohit/maez/memory/audit_log.db",
             "logs_dir": "/home/rohit/maez/logs",
             "ledger": "/home/rohit/maez/memory/ledger.db"},
-        "census_resolved_paths": {
-            "private_thoughts": "/home/rohit/maez/memory/pt.db",
-            "audit_log": "/home/rohit/maez/memory/audit_log.db"},
+
         "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
         "collection_counts_after": {"raw": 20, "daily": 0, "core": 0},
         "positive_control": {"verdict": "PASS", "interactions_returned": 20,
@@ -132,10 +148,12 @@ def forced_on_run() -> dict:
     r["store_tail_invocations"] = 20
     r["positive_control_seed"] = None
     r["interactions"] = [
-        {"id": f"s1-replay-{i:02d}", "outcome": "raised",
+        {"id": MANIFEST[i]["id"], "at": MANIFEST[i]["at"],
+         "source": MANIFEST[i]["source"], "outcome": "raised",
          "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: "
                       "refusing to stamp a phase — the resolver reads "
                       "unknown (structural).",
+         "traceback": "core/memory/birth_phase.py, line 435",
          "tail_passages": 1}
         for i in range(20)]
     r["positive_control"] = {"mode": "forced_on", "verdict": "PASS",
@@ -143,7 +161,7 @@ def forced_on_run() -> dict:
                              "collections_grew": False,
                              "all_refusals_typed": True,
                              "stores_with_gestation_stamps": []}
-    r["phase_probe"] = {"current_phase": "unknown", "has_resolve_api": True,
+    r["phase_probe"] = {"current_phase": "gestation", "has_resolve_api": True,
                         "resolve": {"phase": "unknown", "reason": "structural"}}
     r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
                          "chroma::core": {}, "private_thoughts": {},
@@ -199,31 +217,31 @@ EXPECTED_CLAUSES = {
     "forced-on carries no refusal evidence":
         ["D_discriminator"],
     "forced-on did not flip (guard absent)":
-        ["D_discriminator"],
+        ["schema"],
     "forced-on lacks the activation flag":
         ["D_discriminator", "K5_flags_were_off"],
     "forced-on wrote unknown-stamped rows":
-        ["D_discriminator"],
+        ["schema"],
     "forgery: alien id passing the shape check":
-        ["D_discriminator"],
+        ["schema"],
     "forgery: growth hidden in raw counts":
         ["D_discriminator"],
     "forgery: interaction_count stripped":
-        ["D_discriminator"],
+        ["schema"],
     "forgery: named exception, no message, wrong count":
         ["D_discriminator"],
     "forgery: one raw interaction returned, no tail":
-        ["D_discriminator", "K8_record_coherence"],
+        ["schema"],
     "forgery: producer control FAIL under clean aggregates":
         ["D_discriminator"],
     "forgery: raw list one short of declared count":
-        ["D_discriminator"],
+        ["schema"],
     "forgery: unbound manifest":
-        ["D_discriminator"],
+        ["schema"],
     "honest run, baseline omitted (now mandatory)":
         ["D_discriminator"],
     "minimal forged forced-on report":
-        ["D_discriminator", "K1_ledger_unchanged", "K2_no_latch_artifact", "K4_no_stray_store", "K5_flags_were_off", "K6_contained_and_distinct", "K7_fixture_label_backed", "K8_record_coherence"],
+        ["schema"],
     "one interaction of twenty returned":
         ["K3_positive_controls"],
     "refusal evidence is the wrong exception":
@@ -237,7 +255,7 @@ EXPECTED_CLAUSES = {
     "round 25: doctored baseline supplied":
         ["D_discriminator"],
     "round 25: forced-on census emptied":
-        ["D_discriminator"],
+        ["schema"],
     "round 25: nothing stored, aggregate says it grew":
         ["K3_positive_controls"],
     "round 25: raw row contradicts clean aggregate":
@@ -249,7 +267,7 @@ EXPECTED_CLAUSES = {
     "round 26: decoy key satisfies growth":
         ["K3_positive_controls", "K8_record_coherence"],
     "round 26: exact key set, impossible counts":
-        ["D_discriminator"],
+        ["schema"],
     "round 27: census does not reconcile with the delta":
         ["K3_positive_controls"],
     "round 27: clone with the clock nudged":
@@ -315,6 +333,26 @@ EXPECTED_CLAUSES = {
     "round 28: store paths outside the projected tree":
         ["K8_record_coherence"],
     "round 28: twenty empty replies as 'behavior identical'":
+        ["K8_record_coherence"],
+    "round 29: a path that is not a string skips the check":
+        ["K8_record_coherence"],
+    "round 29: environment field deleted rather than forged":
+        ["K8_record_coherence"],
+    "round 29: no source digests at all":
+        ["K8_record_coherence"],
+    "round 29: record not bound to the manifest":
+        ["schema"],
+    "round 29: runs overlap in wall-clock time":
+        ["K8_record_coherence"],
+    "round 30: a census source declares ITSELF forced-on":
+        ["K5_flags_were_off"],
+    "round 30: a clone distinguished only by timing jitter":
+        ["K7_fixture_label_backed", "K8_record_coherence"],
+    "round 30: a store redirector openly in the environment":
+        ["K5_flags_were_off"],
+    "round 30: agreed source digests that match no code":
+        ["K8_record_coherence"],
+    "round 30: stores moved into a directory the archive excludes":
         ["K8_record_coherence"],
     "run census drifted from the pinned baseline":
         ["D_discriminator", "K3_positive_controls"],
@@ -596,7 +634,7 @@ def main() -> int:
          baseline=pinned, forced=f, expect_only="D_discriminator")
     f = forced_on_run(); f["stamp_census"] = {}
     case("round 25: forced-on census emptied", "FAIL", baseline=pinned,
-         forced=f, expect_only="D_discriminator")
+         forced=f)
     f = forced_on_run()
     f["interactions"][7]["exception"] = f["interactions"][7]["exception"].replace(
         "store_telegram", "store_core")
@@ -609,7 +647,7 @@ def main() -> int:
     f = forced_on_run()
     f["stamp_census"] = {k: {"unknown": -1} for k in f["stamp_census"]}
     case("round 26: exact key set, impossible counts", "FAIL",
-         baseline=pinned, forced=f, expect_only="D_discriminator")
+         baseline=pinned, forced=f)
     f = forced_on_run()
     for i in f["interactions"]:
         i["tail_passages"] = True
@@ -819,7 +857,7 @@ def main() -> int:
     p_["interactions"] = copy.deepcopy(p_["interactions"])
     p_["interactions"][0]["seconds"] = 1.4499
     case("round 30: a clone distinguished only by timing jitter", "FAIL",
-         p=p_, baseline=pinned, expect_only="K8_record_coherence")
+         p=p_, baseline=pinned)
 
     # Round 28 #24: the archive clause was unreachable in effect, and once
     # made live it stayed UNCOVERED — no case could exercise it without

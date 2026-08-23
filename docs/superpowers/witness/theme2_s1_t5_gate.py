@@ -221,11 +221,16 @@ def schema_failures(runs: dict, *, forced_role: bool = False) -> list:
         if not isinstance(probe, dict) or "current_phase" not in probe:
             bad.append({"run": tag, "detail": "phase_probe absent or malformed"})
         elif forced_role:
-            # The forced-on record must NOT read gestation; that is the flip.
-            if probe.get("current_phase") == "gestation" \
+            # Executing this corrected me. The LEGACY accessor still reads
+            # gestation with the flag on — that is the "legacy surface
+            # untouched" guarantee, and the flip lives in resolve(), which the
+            # discriminator checks. So what the forced-on record must show
+            # here is that legacy did NOT move and the resolver is present.
+            if probe.get("current_phase") != "gestation" \
                     or probe.get("has_resolve_api") is not True:
                 bad.append({"run": tag,
-                            "detail": "forced-on probe does not show the flip",
+                            "detail": "forced-on probe does not show legacy "
+                                      "unchanged with the resolver present",
                             "probe": probe})
         elif probe.get("current_phase") != "gestation":
             bad.append({"run": tag,
@@ -289,10 +294,16 @@ def schema_failures(runs: dict, *, forced_role: bool = False) -> list:
                     bad.append({"run": tag,
                                 "detail": f"{store} census holds a value that "
                                           f"is not a count", "got": counts})
-            if not isinstance(cen[EXERCISED_STORE], dict) or not any(
-                    _plain_int(v) and v > 0
-                    for v in cen[EXERCISED_STORE].values()):
-                # Round 19: {"gestation": 0} counted as a nonempty census.
+            has_stamps = isinstance(cen[EXERCISED_STORE], dict) and any(
+                _plain_int(v) and v > 0 for v in cen[EXERCISED_STORE].values())
+            # Round 19: {"gestation": 0} counted as a nonempty census. The
+            # forced-on record is the mirror image: it must have NO stamps,
+            # because refusal means no row.
+            if forced_role and has_stamps:
+                bad.append({"run": tag,
+                            "detail": f"{EXERCISED_STORE} was stamped under a "
+                                      f"refusal"})
+            elif not forced_role and not has_stamps:
                 bad.append({"run": tag,
                             "detail": f"{EXERCISED_STORE} produced no stamps"})
     return bad
@@ -677,8 +688,10 @@ def k8_record_coherence(runs: dict) -> list:
                 "theme2_s1_airlock.sh", "theme2_s1_t5_replay.py"]:
             bad.append({"run": tag, "detail": "record does not attest which "
                                               "instrument produced it"})
+    # `applied_migrations` deliberately DIFFERS between the fixtures — that is
+    # the whole point of #36 — so it is checked per-fixture in K7, not here.
     for field in ("python", "sqlite_version", "protocol", "source_digests",
-                  "instrument_digests", "applied_migrations"):
+                  "instrument_digests"):
         vals = [r.get(field) for r in runs.values()]
         if any(v is None for v in vals):
             bad.append({"detail": f"{field} missing from at least one record; "
@@ -713,6 +726,13 @@ def k8_record_coherence(runs: dict) -> list:
                 if not isinstance(v, dict) or not v or not all(
                         isinstance(x, str) and len(x) == 64 for x in v.values()):
                     bad.append({"detail": "source digests missing or malformed"})
+                    break
+        elif field == "instrument_digests":
+            for v in vals:
+                if not isinstance(v, dict) or sorted(v) != [
+                        "theme2_s1_airlock.sh", "theme2_s1_t5_replay.py"]:
+                    bad.append({"detail": "instrument digests do not name the "
+                                          "producer and the airlock"})
                     break
         elif not all(isinstance(v, str) and v for v in vals):
             bad.append({"detail": f"{field} is not recorded"})
@@ -919,7 +939,7 @@ def discriminator(runs: dict, baseline: dict | None,
                     "have": len(ints) if isinstance(ints, list) else None,
                     "declared": n})
     else:
-        ids = [i.get("id") for i in ints]
+        ids = [(i.get("id"), i.get("at"), i.get("source")) for i in ints]
         # Round 23: exact set. Round 24: exact SEQUENCE — order-sensitive.
         manifest_ids = _manifest_ids()
         if manifest_ids is None:
@@ -1112,6 +1132,7 @@ def main() -> int:
     a = ap.parse_args()
 
     runs = {"a": load(a.run_a), "p": load(a.run_p)}
+    forced_report = load(a.forced_on)
     # Round 31 #41: the schema stage ran over {a, p} only, so round 28's
     # "absence is not dormancy" closure and the count domain never reached
     # the forced-on record. It is graded too — with the dormant-resolver
@@ -1125,7 +1146,6 @@ def main() -> int:
         print(json.dumps(verdict, indent=1))
         return 1
 
-    forced_report = load(a.forced_on)
     dv, dbad = discriminator(runs, load(a.baseline_census), forced_report)
     # Round 27 finding #14: every kill iterated {a, p} only, so the forced-on
     # report — the half that claims NOTHING was stored — was exempt from the
