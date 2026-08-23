@@ -441,6 +441,18 @@ class T3Readers(_Env):
         # would pass on a function that just returns True
         self.assertFalse(sa._should_skip_dir(sa.MAEZ_ROOT / "core" / "memory"))
 
+    def test_source_awareness_fails_toward_privacy_on_resolver_error(self):
+        """Gate round 24's executed defect: an OSError from is_born ESCAPED
+        and the gated directory was never skipped. Unreadable ⇒ closed."""
+        from core.memory import source_awareness as sa
+        import core.memory.birth_phase as bp
+        gated = next(iter(sa._BIRTH_GATED_PATHS))
+        with mock.patch.object(bp, "is_born",
+                               side_effect=OSError("disk gone")):
+            self.assertTrue(
+                sa._should_skip_dir(gated / "chapter-one"),
+                "a resolver failure must keep the birth-gated path CLOSED")
+
     def test_s7_fails_toward_born_on_unreadable(self):
         os.environ["MAEZ_LEDGER_DB_PATH"] = str(self.root)  # a DIRECTORY
         os.environ.pop("MAEZ_LEDGER_WRITES", None)

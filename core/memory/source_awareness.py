@@ -338,12 +338,22 @@ def _should_skip_dir(dirpath: Path) -> bool:
     for gated_path in _BIRTH_GATED_PATHS:
         try:
             dirpath.relative_to(gated_path)
+        except ValueError:
+            continue
+        # Inside a birth-gated path. The question "is Maez born?" decides
+        # whether this directory OPENS — and gate round 24 executed the
+        # fail-open: only ValueError was caught, so a resolver OSError
+        # (unreadable ledger, dead import, I/O failure) ESCAPED and the
+        # caller never skipped the gated directory. For a privacy gate the
+        # failure direction is not negotiable: if born-ness cannot be
+        # established, the door stays CLOSED.
+        try:
             from core.memory.birth_phase import is_born as _is_born
             if not _is_born():
                 return True
-            break
-        except ValueError:
-            pass
+        except Exception:
+            return True      # unreadable ⇒ unborn ⇒ gated ⇒ skip
+        break
     return False
 
 
