@@ -838,6 +838,23 @@ def run_consolidation_pass(
     ):
         return _result("not_idle")
 
+    # S1 §4: with phase truth enabled, a ledger the resolver cannot vouch
+    # for gets a TYPED refusal of the whole span plan — the same shape as
+    # the existing anchor-missing deferral, with its own code so a report
+    # can tell "cleanly unborn" from "unreadable". Dormant behaviour is
+    # untouched, including its failure modes: a broken ledger crashed the
+    # pass before S1 and still does with the flag off, because preserving
+    # legacy behaviour is what T5's dormancy proof measures.
+    from core.memory import birth_phase as _bp
+    if _bp.s1_enabled():
+        _pr = _bp.resolve(run_paths.ledger_db_path)
+        if _pr.phase == "unknown":
+            return _result(
+                "deferred",
+                refusals=({"episode_key": "",
+                           "refusal_code": f"phase_unknown_{_pr.reason}"},),
+            )
+
     anchor = _birth_anchor_chain_position(run_paths.ledger_db_path)
     if anchor is None:
         return _result(

@@ -276,6 +276,26 @@ class LedgerWriter:
         taint_labels: list[str] | tuple[str, ...] | set[str],
         privacy_access: str,
     ) -> str | None:
+        # S1 §4: "write refused (post-birth mode); pre-birth shadow path
+        # unchanged". lifecycle_stage is decided from the raw anchor further
+        # down — on a ledger the resolver reads as unknown, neither 'lived'
+        # nor the gestation default is a claim this writer can stand behind,
+        # and a wrong stage is a misdated life. The check sits FIRST: the
+        # legacy path already dies on a broken ledger, but with an untyped
+        # RuntimeError from the chain-head read, and §4's contract is a
+        # TYPED refusal — the reply path is unaffected either way because
+        # try_write_turn converts any raise into its shadow no-op. It also
+        # keeps the resolver's read outside the write transaction. Dormant:
+        # byte-identical behaviour, untyped RuntimeError included.
+        from core.memory import birth_phase as _bp
+        if _bp.s1_enabled() and lifecycle_stage != "rehearsal":
+            _pr = _bp.resolve(self._db_path)
+            if _pr.phase == "unknown":
+                raise _bp.PhaseUnknownRefusal(
+                    f"ledger_writer.write_turn: refusing the write — the "
+                    f"resolver reads unknown ({_pr.reason}); lifecycle_stage "
+                    f"cannot be stamped truthfully")
+
         if self._rehearsal_mode and lifecycle_stage != "rehearsal":
             raise ValueError("rehearsal ledger writer requires lifecycle_stage='rehearsal'")
         if lifecycle_stage == "rehearsal" and not self._rehearsal_mode:

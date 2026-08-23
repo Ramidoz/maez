@@ -49,8 +49,15 @@ fi
 if [ "$(readlink -f "$AIRLOCK_PARENT")" != "$AIRLOCK_PARENT" ]; then
     echo "REFUSED: a parent component is a symlink: $AIRLOCK_PARENT" >&2; exit 3
 fi
-if [ "$(stat -c %u "$AIRLOCK_PARENT")" != "$(id -u)" ]; then
-    echo "REFUSED: airlock parent not owned by this user" >&2; exit 3
+# Ownership or a sticky world-writable parent (i.e. /tmp itself) both give
+# the property that matters: nobody else can rename or delete the airlock
+# out from under us. The orchestrator's workdir check learned this on
+# 2026-08-22; this is the same fix for the same reason.
+AP_MODE=$(stat -c %a "$AIRLOCK_PARENT")
+if [ "$(stat -c %u "$AIRLOCK_PARENT")" != "$(id -u)" ] \
+   && [ "${AP_MODE%???}" != "1" ]; then
+    echo "REFUSED: airlock parent neither owned by this user nor sticky" >&2
+    exit 3
 fi
 AIRLOCK="$AIRLOCK_RAW"
 

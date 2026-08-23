@@ -32,6 +32,7 @@
   "core/cognition/audit_log.py::AuditLog.record",
   "core/cognition/audit_log.py::AuditLog.start_direct_edit_session",
   "core/consolidation/span_planner.py::_birth_anchor_chain_position",
+  "core/consolidation/span_planner.py::run_consolidation_pass",
   "core/governance/s7_consultation_exemption.py::born_by_any_signal",
   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought",
   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought_on_connection",

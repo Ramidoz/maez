@@ -1,0 +1,111 @@
+{
+ "_comment": "T3 authoritative consumer map — DERIVED from the executed census (theme2-s1-census.json) and the code as shipped, superseding §4's hand-authored table (protocol v7.4). Every entry names the PUBLIC entry the harness drives, what dormant must do (T5's parity), and what enabled-against-unknown must do (§4's kill: silent success or a gestation stamp).",
+ "stampers": [
+  {
+   "consumer": "memory_manager.store",
+   "entry": "MemoryManager.store",
+   "store": "chroma::raw",
+   "enabled_unknown": "PhaseUnknownRefusal; no record"
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "entry": "MemoryManager.store_telegram",
+   "store": "chroma::raw",
+   "enabled_unknown": "PhaseUnknownRefusal; no record"
+  },
+  {
+   "consumer": "memory_manager.store_core",
+   "entry": "MemoryManager.store_core",
+   "store": "chroma::core",
+   "enabled_unknown": "PhaseUnknownRefusal; no record"
+  },
+  {
+   "consumer": "private_thoughts.record_thought",
+   "entry": "PrivateThoughts.record_thought",
+   "store": "private_thoughts",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "private_thoughts.record_signal",
+   "entry": "PrivateThoughts.record_signal",
+   "store": "private_thoughts",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "private_thoughts.insert_signal_in_transaction",
+   "entry": "PrivateThoughts.insert_signal_in_transaction",
+   "store": "private_thoughts",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "private_thoughts._insert_thought (direct sink)",
+   "entry": "PrivateThoughts._insert_thought",
+   "store": "private_thoughts",
+   "enabled_unknown": "PhaseUnknownRefusal; no row (gate 20: sink authority)"
+  },
+  {
+   "consumer": "audit_log.record",
+   "entry": "AuditLog.record",
+   "store": "audit_log",
+   "enabled_unknown": "PhaseUnknownRefusal; no row",
+   "note": "owner-ruled explicit stamp; dormant default is the LITERAL gestation (SQL-default parity), not current_phase()"
+  },
+  {
+   "consumer": "audit_log.start_direct_edit_session",
+   "entry": "AuditLog.start_direct_edit_session",
+   "store": "audit_log",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "audit_log.log_direct_edit",
+   "entry": "AuditLog.log_direct_edit",
+   "store": "audit_log",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "audit_log.end_direct_edit_session",
+   "entry": "AuditLog.end_direct_edit_session",
+   "store": "audit_log",
+   "enabled_unknown": "PhaseUnknownRefusal; no row"
+  },
+  {
+   "consumer": "ledger_writer.write_turn",
+   "entry": "LedgerWriter.write_turn (MAEZ_LEDGER_WRITES=1)",
+   "store": "ledger.turns",
+   "enabled_unknown": "PhaseUnknownRefusal; no row; try_write_turn converts it to the shadow no-op on the reply path"
+  },
+  {
+   "consumer": "span_planner.run_consolidation_pass",
+   "entry": "run_consolidation_pass",
+   "store": "spine",
+   "enabled_unknown": "typed refusal refusal_code=phase_unknown_<reason>; no plan rows"
+  }
+ ],
+ "readers_and_exemptions": [
+  {
+   "consumer": "source_awareness._should_skip_dir",
+   "kind": "reader",
+   "semantics": "is_born()==False keeps gated paths closed; unreadable counts as unborn — fail toward privacy"
+  },
+  {
+   "consumer": "s7_consultation_exemption.born_by_any_signal",
+   "kind": "reader",
+   "semantics": "DELIBERATE opposite sign: an unreadable ledger counts as BORN so the R11 exemption stays expired. Refusing is the safe direction for an exemption; do not 'fix' this to match the stampers."
+  },
+  {
+   "consumer": "lean_idle_heartbeat.select_private_reader_thoughts",
+   "kind": "reader",
+   "semantics": "reads stored values only; exercised read-only in the positive control"
+  },
+  {
+   "consumer": "audit_log._initialize",
+   "kind": "normalizer",
+   "semantics": "§10: NULL→gestation on every open, idempotent, historical annotation not a fresh stamp; proceeds even on unknown"
+  },
+  {
+   "consumer": "eval.longmemeval.ingest_haystack",
+   "kind": "exemption",
+   "semantics": "writes the sentinel 'benchmark' directly into isolated benchmark collections, bypassing store(); it can never write gestation/lived, so it cannot misdate a life. ADJUDICATED EXEMPT pending gate review; the harness pins the sentinel so drift into a real phase is caught."
+  }
+ ]
+}
