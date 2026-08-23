@@ -855,7 +855,11 @@ is **forensic**: computed, recorded, archived, and never deciding.
   `~/.cache/chroma`, `/tmp`, `/run`, `/var/tmp` — and detects SQLite by
   its 16-byte magic header, not by file extension, because a selector
   can name an extensionless path.
-- **D — the discriminator.** Both fixtures are required. Flags-off must
+- **D — the discriminator.** *(EXECUTED 2026-08-23: **PASS** — see
+  `theme2-s1-discriminator-report.md` and the committed verdict JSON.
+  Flags-off matched the pinned census on both fixtures; forced-on read
+  `unknown, structural`, refused 20/20 with typed, named refusals, grew
+  nothing, stamped nothing.)* Both fixtures are required. Flags-off must
   read `gestation` on the **partial** fixture — the legacy behavior T5
   exists to preserve — and, once a baseline is pinned, each fixture's
   census must equal it **exactly**. The census is narrow on purpose:
