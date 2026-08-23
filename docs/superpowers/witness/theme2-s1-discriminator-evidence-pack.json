@@ -28,7 +28,6 @@
  },
  "verdict_inputs_sha256": {
   "run-a.json": "963f52979977aebdf897d56d04dd8aeed84521f866ee642aeb3c78c6a879a469",
-  "run-b.json": "46dd13d0e69201e51d3a0de77ee8589aba178824f64d39c7eccc83079b4715d8",
   "run-p.json": "97181b4b4e471cade31b9c1140b8261786f2e68b275dda5bb8e31b59fc65aa22",
   "run-f.json": "e069bc0782ef9f3a34d986ee11bbc8846fd5e1d8c4eee62e607bc7e0f46f85cd",
   "baseline-census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
@@ -48,7 +47,8 @@
    "K4_no_stray_store": "PASS",
    "K5_flags_were_off": "PASS",
    "K6_contained_and_distinct": "PASS",
-   "K7_fixture_label_backed": "PASS"
+   "K7_fixture_label_backed": "PASS",
+   "K8_record_coherence": "PASS"
   },
   "D_discriminator": "PASS"
  },
@@ -97,5 +97,10 @@
    "path containment was type-gated, and an absent census-path map read as innocent",
    "nothing bound the evidence to the code under test"
   ]
+ },
+ "not_a_verdict_input": {
+  "file": "evidence/discriminator-2026-08-23-r29/run-b.json",
+  "sha256": "46dd13d0e69201e51d3a0de77ee8589aba178824f64d39c7eccc83079b4715d8",
+  "note": "a second healthy replay retained for the forensic byte-projection only. The judge never reads it; round 30 caught it being listed as a verdict input."
  }
 }

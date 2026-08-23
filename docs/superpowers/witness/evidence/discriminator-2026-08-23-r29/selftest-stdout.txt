@@ -1,4 +1,4 @@
-# gate selftest — executed at 2aa2b7e82b60139917bf36eadbb6a72f25d81271 on 2026-08-23T14:49:45-05:00
+# gate selftest — executed pre-commit on 2026-08-23T15:10:26-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator', 'K3_positive_controls']
@@ -82,6 +82,16 @@ ok  round 28: twenty empty replies as 'behavior identical' FAIL  (want FAIL) ['K
 ok  round 28: refusal aggregate disagrees with the raw count FAIL  (want FAIL) ['D_discriminator']
 ok  round 28: env values not a subset of env names FAIL  (want FAIL) ['K5_flags_were_off']
 ok  round 28: latch marker in the ledger file set  FAIL  (want FAIL) ['K2_no_latch_artifact']
+ok  round 29: record not bound to the manifest     FAIL  (want FAIL) ['schema']
+ok  round 29: environment field deleted rather than forged FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 29: no source digests at all             FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 29: runs overlap in wall-clock time      FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 29: a path that is not a string skips the check FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 30: a census source declares ITSELF forced-on FAIL  (want FAIL) ['K5_flags_were_off']
+ok  round 30: a store redirector openly in the environment FAIL  (want FAIL) ['K5_flags_were_off']
+ok  round 30: agreed source digests that match no code FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 30: stores moved into a directory the archive excludes FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 30: a clone distinguished only by timing jitter FAIL  (want FAIL) ['K8_record_coherence']
 ok  round 28: the archive on disk is not the pinned archive FAIL  (want FAIL)
 
 ALL PASS

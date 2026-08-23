@@ -115,6 +115,33 @@ F_PARTIAL_LEDGER_SHA = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
 # swept, so sweeping nothing satisfied it. The producer's frozen sweep scope.
 PROJECTED_TREE = "/home/rohit/maez"
 
+# Round 30 finding #33: the judge tested store paths for CONTAINMENT while
+# the producer pins them by EXACT equality — and the producer explains why
+# (MAEZ_DATA=/home/rohit/maez/logs passes an under-repo test while moving
+# every store into a directory the archive excludes). The judge was using the
+# weaker predicate the producer had already rejected.
+REQUIRED_STORE_PATHS = {
+    "home": "/home/rohit/maez", "data_dir": "/home/rohit/maez",
+    "config_dir": "/home/rohit/maez/config",
+    "cache_dir": "/home/rohit/maez/.cache",
+    "memory_dir": "/home/rohit/maez/memory",
+    "memory_db_dir": "/home/rohit/maez/memory/db",
+    "audit_log_db": "/home/rohit/maez/memory/audit_log.db",
+    "logs_dir": "/home/rohit/maez/logs",
+    "ledger": "/home/rohit/maez/memory/ledger.db",
+}
+# The producer refuses to start if any of these is set; the judge only ever
+# looked for the activation flag, so the redirectors could sit in the record.
+FLAGS_THAT_MUST_BE_UNSET = ("MAEZ_LEDGER_WRITES", "MAEZ_BIRTH_PHASE",
+                            "MAEZ_BIRTH_LATCH", "MAEZ_S1_PHASE_TRUTH")
+REDIRECTORS = ("MAEZ_DATA", "MAEZ_LEDGER_DB_PATH")
+
+# Round 30 finding #32: `source_digests` bound the three records to EACH
+# OTHER and never to the code. Pin the paths and hash them, exactly as the
+# manifest and the archive are hashed.
+ATTESTED_SOURCES = ("core/memory/birth_phase.py", "memory/memory_manager.py",
+                    "core/infra/private_thoughts.py", "core/ledger/writer.py")
+
 EXPECTED_SWEEP_ROOTS = frozenset({
     "/home/rohit/maez/logs", "/home/rohit/maez/.cache", "/home/rohit",
     "/tmp", "/run", "/var/tmp",
@@ -256,7 +283,29 @@ def k5_flags_were_actually_off(runs: dict) -> list:
         # the producer records it. All of them now, and the views must be
         # internally consistent — a flag hidden in `names` while `values`
         # stays clean is the same lie told one field over.
-        forced = r.get("forced_on") is True
+        # Round 30 finding #31: `forced` was read from the record's OWN
+        # claim, so a run supplied as a flags-off census source could
+        # declare itself forced-on and thereby earn permission to carry the
+        # activation flag — reopening round 27's closure one field over. The
+        # ROLE decides: only the record passed via --forced-on is forced.
+        forced = tag == "f"
+        if (r.get("forced_on") is True) != forced:
+            bad.append({"run": tag,
+                        "detail": "record's forced_on claim disagrees with "
+                                  "the role it was supplied in",
+                        "claims": r.get("forced_on")})
+        for flag in FLAGS_THAT_MUST_BE_UNSET + REDIRECTORS:
+            if flag == ACTIVATION_FLAG:
+                continue
+            for _lbl, _v in (("env_after_import", r.get("env_after_import")),
+                             ("env_after_config_load",
+                              r.get("env_after_config_load"))):
+                vv = (_v or {}).get("values") or {}
+                nn = (_v or {}).get("names") or []
+                if flag in vv or flag in nn:
+                    bad.append({"run": tag,
+                                "detail": f"{flag} present in {_lbl}; the "
+                                          f"producer refuses to run with it set"})
         views = {
             "env_after_import": (r.get("env_after_import") or {}),
             "env_after_config_load": (r.get("env_after_config_load") or {}),
@@ -518,6 +567,12 @@ def k8_record_coherence(runs: dict) -> list:
     clause read, and that can contradict the run's own containment."""
     bad = []
     for tag, r in runs.items():
+        eff = r.get("effective_store_paths_after_import")
+        if not isinstance(eff, dict) or {k: str(v) for k, v in eff.items()} \
+                != REQUIRED_STORE_PATHS:
+            bad.append({"run": tag,
+                        "detail": "effective store paths are not exactly the "
+                                  "producer's pinned map", "got": eff})
         for field in ("effective_store_paths_after_import",
                       "census_resolved_paths"):
             paths = r.get(field)
@@ -547,7 +602,7 @@ def k8_record_coherence(runs: dict) -> list:
                                               "positive duration", "got": secs})
         # Flags-off means the guard never fires. A refusal recorded on a
         # flags-off run is the dormancy claim contradicting itself.
-        if r.get("forced_on") is not True and r.get("consumer_refusals"):
+        if tag != "f" and r.get("consumer_refusals"):
             bad.append({"run": tag,
                         "detail": "flags-off run recorded consumer refusals; "
                                   "dormant code does not refuse",
@@ -577,6 +632,27 @@ def k8_record_coherence(runs: dict) -> list:
                                   f"orchestration"})
             continue
         if field == "source_digests":
+            # Round 30 finding #32: agreement among the records is not a
+            # binding to the code. Hash the files.
+            for v in vals:
+                if not isinstance(v, dict) or sorted(v) != sorted(ATTESTED_SOURCES):
+                    bad.append({"detail": "source digests do not cover exactly "
+                                          "the attested sources",
+                                "got": sorted(v) if isinstance(v, dict) else v})
+                    break
+                wrong = []
+                for rel, dig in v.items():
+                    try:
+                        real = hashlib.sha256(
+                            (Path(PROJECTED_TREE) / rel).read_bytes()).hexdigest()
+                    except OSError:
+                        wrong.append({rel: "unreadable"}); continue
+                    if real != dig:
+                        wrong.append({rel: {"recorded": dig, "on_disk": real}})
+                if wrong:
+                    bad.append({"detail": "recorded source digests do not match "
+                                          "the code on disk", "mismatches": wrong})
+                    break
             # Round 29 finding #30: nothing bound the evidence to the CODE
             # under test. A record could name any resolver path it liked.
             for v in vals:
@@ -593,8 +669,22 @@ def k8_record_coherence(runs: dict) -> list:
     # ledger digests to differ — which handed a forger two free channels. Two
     # runs against different fixtures must differ in what they OBSERVED.
     a_, p_ = runs.get("a"), runs.get("p")
+    def _observed(rec):
+        # Round 30 finding #34: the clone test compared interaction lists
+        # byte-for-byte, and `seconds` is pure wall-clock noise — one
+        # +0.001 made a byte clone of the healthy run into "the partial
+        # fixture". Compare what the fixture CAUSED, not how long it took.
+        return [{k: v for k, v in i.items() if k not in ("seconds", "at")}
+                for i in (rec.get("interactions") or [])]
+    # The two fixtures must differ in at least one thing the FIXTURE caused.
+    # Executing this showed the honest runs produce identical replies (both
+    # reach the same degraded fallback), so the distinguishing observable is
+    # the ledger sidecar set: the healthy ledger is opened and gets -shm/-wal,
+    # the partial one does not. A clone shares BOTH, which is the failure.
     if isinstance(a_, dict) and isinstance(p_, dict) \
-            and a_.get("interactions") == p_.get("interactions"):
+            and _observed(a_) == _observed(p_) \
+            and a_.get("ledger_post_replay_file_set") \
+            == p_.get("ledger_post_replay_file_set"):
         bad.append({"detail": "the two fixtures produced identical "
                               "interaction records; that is one execution"})
     # Spans must be ordered and disjoint: one airlock, one run at a time.

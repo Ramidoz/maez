@@ -14,6 +14,7 @@ Exit 0 iff every case behaves as declared.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -28,6 +29,10 @@ EXERCISED = "chroma::raw"
 # Round 27 #13/#16: the constants the judge now pins.
 F_PARTIAL = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
              "cef39472a4c2d5a2")
+REAL_SOURCE_DIGESTS = {
+    rel: hashlib.sha256((Path("/home/rohit/maez") / rel).read_bytes()).hexdigest()
+    for rel in ("core/memory/birth_phase.py", "memory/memory_manager.py",
+                "core/infra/private_thoughts.py", "core/ledger/writer.py")}
 SWEEP_ROOTS = {"/home/rohit/maez/logs", "/home/rohit/maez/.cache",
                "/home/rohit", "/tmp", "/run", "/var/tmp"}
 
@@ -61,7 +66,6 @@ def honest_run(fixture: str) -> dict:
         # idealized census of its own invention.
         "stamp_census": copy.deepcopy(
             PINNED_BASELINE["per_fixture"][fixture]["stamp_census"]),
-        "census_resolved_paths": {"private_thoughts": "/x", "audit_log": "/y"},
         # Round 27 self-attack: the judge now READS the premises the producer
         # was already recording — flag off, run contained, coherent span.
         "flags_off_after_import": "PASS",
@@ -79,10 +83,23 @@ def honest_run(fixture: str) -> dict:
         "daemon_construct_seconds": 2.5,
         "python": "3.14.0", "sqlite_version": "3.53.4", "protocol": "t5.v7",
         # Round 29 #30: the evidence must name the code it is about.
-        "source_digests": {"core/memory/birth_phase.py": "c" * 64,
-                           "memory/memory_manager.py": "d" * 64},
-        "effective_store_paths_after_import": {"memory_dir": "/home/rohit/maez/memory"},
-        "census_resolved_paths": {"private_thoughts": "/home/rohit/maez/memory/pt.db"},
+        # Round 30 #32: these are hashed off disk now, so the fixture must
+        # carry the real digests of the real files.
+        "source_digests": REAL_SOURCE_DIGESTS,
+        # Round 30 #33: the judge pins this map by exact equality now, the
+        # way the producer always did.
+        "effective_store_paths_after_import": {
+            "home": "/home/rohit/maez", "data_dir": "/home/rohit/maez",
+            "config_dir": "/home/rohit/maez/config",
+            "cache_dir": "/home/rohit/maez/.cache",
+            "memory_dir": "/home/rohit/maez/memory",
+            "memory_db_dir": "/home/rohit/maez/memory/db",
+            "audit_log_db": "/home/rohit/maez/memory/audit_log.db",
+            "logs_dir": "/home/rohit/maez/logs",
+            "ledger": "/home/rohit/maez/memory/ledger.db"},
+        "census_resolved_paths": {
+            "private_thoughts": "/home/rohit/maez/memory/pt.db",
+            "audit_log": "/home/rohit/maez/memory/audit_log.db"},
         "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
         "collection_counts_after": {"raw": 20, "daily": 0, "core": 0},
         "positive_control": {"verdict": "PASS", "interactions_returned": 20,
@@ -94,8 +111,12 @@ def honest_run(fixture: str) -> dict:
                                          else SHA_A),
         "ledger_post_replay_sha256": (F_PARTIAL if fixture == "partial"
                                       else SHA_A),
-        "ledger_post_replay_file_set": ["ledger.db", "ledger.db-shm",
-                                        "ledger.db-wal"],
+        # Round 30 #34: the healthy ledger is opened and gains sidecars; the
+        # partial one is not. That is the fixture-caused difference the clone
+        # check looks for.
+        "ledger_post_replay_file_set": (
+            ["ledger.db", "ledger.db-shm", "ledger.db-wal"]
+            if fixture == "healthy" else ["ledger.db"]),
         "stray_stores_outside_projected_tree": [],
         "stray_store_sweep_roots": sorted(SWEEP_ROOTS),
         "latch_artifacts_in_store_tree": [],
@@ -749,6 +770,56 @@ def main() -> int:
     a["ledger_post_replay_file_set"] = ["ledger.db", "birth_observed"]
     case("round 28: latch marker in the ledger file set", "FAIL", a=a,
          baseline=pinned, expect_only="K2_no_latch_artifact")
+
+    # Round 29's five findings had NO regression cases — round 30 pointed
+    # that out, and it was right. Each of these fails only because of the
+    # clause its round added.
+    a = copy.deepcopy(A); a["manifest_sha256"] = "0" * 64
+    case("round 29: record not bound to the manifest", "FAIL", a=a,
+         baseline=pinned, expect_only="schema")
+    a = copy.deepcopy(A); del a["python"]
+    case("round 29: environment field deleted rather than forged", "FAIL",
+         a=a, baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); del a["source_digests"]
+    case("round 29: no source digests at all", "FAIL", a=a, baseline=pinned,
+         expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); a["started_at"] = 1120.0; a["finished_at"] = 1180.0
+    case("round 29: runs overlap in wall-clock time", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A)
+    a["census_resolved_paths"] = {"private_thoughts": ["/tmp/evil.db"],
+                                  "audit_log": "/home/rohit/maez/memory/a.db"}
+    case("round 29: a path that is not a string skips the check", "FAIL",
+         a=a, baseline=pinned, expect_only="K8_record_coherence")
+
+    # Round 30.
+    p_ = copy.deepcopy(P); p_["forced_on"] = True
+    p_["env_after_import"]["values"]["MAEZ_S1_PHASE_TRUTH"] = "1"
+    case("round 30: a census source declares ITSELF forced-on", "FAIL",
+         p=p_, baseline=pinned, expect_only="K5_flags_were_off")
+    a = copy.deepcopy(A)
+    a["env_after_import"]["names"].append("MAEZ_DATA")
+    a["env_after_import"]["values"]["MAEZ_DATA"] = "/home/rohit/maez/logs"
+    case("round 30: a store redirector openly in the environment", "FAIL",
+         a=a, baseline=pinned, expect_only="K5_flags_were_off")
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    zeros = {k: "0" * 64 for k in REAL_SOURCE_DIGESTS}
+    for r_ in (a, p_, f_):
+        r_["source_digests"] = zeros
+    case("round 30: agreed source digests that match no code", "FAIL", a=a,
+         p=p_, baseline=pinned, forced=f_, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A)
+    a["effective_store_paths_after_import"]["memory_dir"] = "/home/rohit/maez/logs/memory"
+    case("round 30: stores moved into a directory the archive excludes",
+         "FAIL", a=a, baseline=pinned, expect_only="K8_record_coherence")
+    p_ = copy.deepcopy(A); p_["fixture"] = "partial"
+    p_["ledger_post_migration_sha256"] = F_PARTIAL
+    p_["ledger_post_replay_sha256"] = F_PARTIAL
+    p_["started_at"] += 100.0; p_["finished_at"] += 100.0
+    p_["interactions"] = copy.deepcopy(p_["interactions"])
+    p_["interactions"][0]["seconds"] = 1.4499
+    case("round 30: a clone distinguished only by timing jitter", "FAIL",
+         p=p_, baseline=pinned, expect_only="K8_record_coherence")
 
     # Round 28 #24: the archive clause was unreachable in effect, and once
     # made live it stayed UNCOVERED — no case could exercise it without
