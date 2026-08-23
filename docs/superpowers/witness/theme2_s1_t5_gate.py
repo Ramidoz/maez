@@ -231,8 +231,43 @@ def discriminator(runs: dict, baseline: dict | None,
                                              "once S1 exists"}]
         return ("NOT-APPLICABLE" if not bad else "FAIL"), bad
 
-    # A forced-on run must be bound to the fixture and the flag, and must
-    # carry refusal evidence -- round 18 passed a minimal forged report.
+    # Gate round 21 forged a report that PASSED: resolve=unknown, empty
+    # census, one refusal merely NAMED PhaseUnknownRefusal, counts set to
+    # 999 -- because the gate read labels instead of rederiving facts. The
+    # same lesson as K3, applied here: every fact below is recomputed from
+    # raw fields, and a missing field is a failure, not a default.
+    for k in ("interaction_count", "collection_counts_before",
+              "collection_counts_after", "positive_control", "forced_on"):
+        if k not in forced:
+            bad.append({"detail": f"forced-on report missing {k!r}"})
+    if forced.get("forced_on") is not True:
+        bad.append({"detail": "report does not attest forced_on=true from "
+                              "the producer"})
+    n = forced.get("interaction_count")
+    refusals_list = forced.get("consumer_refusals")
+    if isinstance(n, int) and isinstance(refusals_list, list) \
+            and len(refusals_list) != n:
+        bad.append({"detail": "refusal count != interaction count",
+                    "refusals": len(refusals_list), "interactions": n})
+    for r in (refusals_list or []):
+        if not isinstance(r, dict) \
+                or r.get("exception") != "PhaseUnknownRefusal" \
+                or "refusing to stamp" not in str(r.get("message", "")):
+            bad.append({"detail": "refusal evidence lacks the typed "
+                                  "exception AND its message", "entry": r})
+            break
+    cb = forced.get("collection_counts_before") or {}
+    ca = forced.get("collection_counts_after") or {}
+    for kcol in ("raw", "daily", "core"):
+        b_, a_ = cb.get(kcol), ca.get(kcol)
+        if not (isinstance(b_, int) and isinstance(a_, int) and a_ == b_):
+            bad.append({"detail": f"collection {kcol} not proven flat by "
+                                  f"raw counts", "before": b_, "after": a_})
+    for store, v in (forced.get("stamp_census") or {}).items():
+        if not isinstance(v, dict) or any(
+                isinstance(c, int) and c > 0 for c in v.values()):
+            bad.append({"detail": f"store {store} census not empty", "got": v})
+
     if forced.get("fixture") != "partial":
         bad.append({"detail": "forced-on run is not against the partial fixture",
                     "got": forced.get("fixture")})

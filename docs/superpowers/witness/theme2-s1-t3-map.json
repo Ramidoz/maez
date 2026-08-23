@@ -79,33 +79,76 @@
    "entry": "run_consolidation_pass",
    "store": "spine",
    "enabled_unknown": "typed refusal refusal_code=phase_unknown_<reason>; no plan rows"
+  },
+  {
+   "consumer": "private_thoughts._insert_thought_on_connection (direct sink)",
+   "entry": "PrivateThoughts._insert_thought_on_connection",
+   "store": "private_thoughts",
+   "enabled_unknown": "PhaseUnknownRefusal; no row (gate 20/21: the actual SQL sink; authority at the sink)"
   }
  ],
  "readers_and_exemptions": [
   {
    "consumer": "source_awareness._should_skip_dir",
    "kind": "reader",
-   "semantics": "is_born()==False keeps gated paths closed; unreadable counts as unborn — fail toward privacy"
+   "semantics": "is_born()==False keeps gated paths closed; unreadable counts as unborn — fail toward privacy",
+   "entry": "core/memory/source_awareness.py::_should_skip_dir",
+   "dormant": "legacy is_born(); unreadable counts as unborn — paths stay closed"
   },
   {
    "consumer": "s7_consultation_exemption.born_by_any_signal",
    "kind": "reader",
-   "semantics": "DELIBERATE opposite sign: an unreadable ledger counts as BORN so the R11 exemption stays expired. Refusing is the safe direction for an exemption; do not 'fix' this to match the stampers."
+   "semantics": "DELIBERATE opposite sign: an unreadable ledger counts as BORN so the R11 exemption stays expired. Refusing is the safe direction for an exemption; do not 'fix' this to match the stampers.",
+   "entry": "core/governance/s7_consultation_exemption.py::born_by_any_signal",
+   "dormant": "legacy OR of signals; unreadable counts as BORN — exemption stays expired"
   },
   {
    "consumer": "lean_idle_heartbeat.select_private_reader_thoughts",
    "kind": "reader",
-   "semantics": "reads stored values only; exercised read-only in the positive control"
+   "semantics": "reads stored values only; exercised read-only in the positive control",
+   "entry": "core/cognition/lean_idle_heartbeat.py::select_private_reader_thoughts",
+   "dormant": "reads stored values; no phase logic of its own"
   },
   {
    "consumer": "audit_log._initialize",
    "kind": "normalizer",
-   "semantics": "§10: NULL→gestation on every open, idempotent, historical annotation not a fresh stamp; proceeds even on unknown"
+   "semantics": "§10: NULL→gestation on every open, idempotent, historical annotation not a fresh stamp; proceeds even on unknown",
+   "entry": "core/cognition/audit_log.py::AuditLog._initialize",
+   "dormant": "NULL→gestation normalization on every open, dormant and enabled alike (§10: historical annotation, not a fresh stamp)"
   },
   {
    "consumer": "eval.longmemeval.ingest_haystack",
    "kind": "exemption",
-   "semantics": "writes the sentinel 'benchmark' directly into isolated benchmark collections, bypassing store(); it can never write gestation/lived, so it cannot misdate a life. ADJUDICATED EXEMPT pending gate review; the harness pins the sentinel so drift into a real phase is caught."
+   "semantics": "writes the sentinel 'benchmark' directly into isolated benchmark collections, bypassing store(); it can never write gestation/lived, so it cannot misdate a life. ADJUDICATED EXEMPT pending gate review; the harness pins the sentinel so drift into a real phase is caught.",
+   "entry": "core/eval/longmemeval.py::ingest_haystack",
+   "dormant": "writes the 'benchmark' sentinel directly to mm.raw; dormant identical"
+  },
+  {
+   "consumer": "maez_daemon._birth_readiness (_birth_phase, _flag_state)",
+   "kind": "reader",
+   "entry": "daemon/maez_daemon.py::MaezDaemon._birth_readiness",
+   "dormant": "legacy is_born()/current_phase(); unchanged",
+   "semantics": "RULED + WIRED (gate 21): with S1 enabled, the readiness panel paints a resolver-unknown ledger RED with the reason, and LatchBlocked reads as 'joins but latch blocked'. A readiness display saying gestation about an unvouchable ledger is the A6 misreport in cockpit clothing."
   }
- ]
+ ],
+ "census_join": {
+  "_rule": "every memory_phase writer in the derived census either appears here mapped to its T3 row, is a module-level selftest site (::@N — ruled IN for T4, not independent T3 consumers, gate 20), or fails tests/test_t3_map_join.py",
+  "writers": {
+   "core/cognition/audit_log.py::AuditLog._initialize": "audit_log._initialize",
+   "core/cognition/audit_log.py::AuditLog.record": "audit_log.record",
+   "core/cognition/audit_log.py::AuditLog.start_direct_edit_session": "audit_log.start_direct_edit_session",
+   "core/cognition/audit_log.py::AuditLog.log_direct_edit": "audit_log.log_direct_edit",
+   "core/cognition/audit_log.py::AuditLog.end_direct_edit_session": "audit_log.end_direct_edit_session",
+   "core/eval/longmemeval.py::ingest_haystack": "eval.longmemeval.ingest_haystack",
+   "core/infra/private_thoughts.py::PrivateThoughts.record_thought": "private_thoughts.record_thought",
+   "core/infra/private_thoughts.py::PrivateThoughts.record_signal": "private_thoughts.record_signal",
+   "core/infra/private_thoughts.py::PrivateThoughts.insert_signal_in_transaction": "private_thoughts.insert_signal_in_transaction",
+   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought": "private_thoughts._insert_thought (direct sink)",
+   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought_on_connection": "private_thoughts._insert_thought_on_connection (direct sink)",
+   "memory/memory_manager.py::MemoryManager.store": "memory_manager.store",
+   "memory/memory_manager.py::MemoryManager.store_telegram": "memory_manager.store_telegram",
+   "memory/memory_manager.py::MemoryManager.store_core": "memory_manager.store_core"
+  },
+  "unmatched_at_freeze": []
+ }
 }

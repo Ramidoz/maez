@@ -1523,8 +1523,17 @@ class MemoryManager:
             supplied_phase = metadata.pop("memory_phase", None)
             doc_metadata.update(metadata)
             if supplied_phase is not None:
-                doc_metadata["memory_phase"] = _memory_phase_tag(
-                    supplied=supplied_phase, consumer="memory_manager.store")
+                from core.memory.birth_phase import s1_enabled as _s1_on
+                if _s1_on():
+                    doc_metadata["memory_phase"] = _memory_phase_tag(
+                        supplied=supplied_phase,
+                        consumer="memory_manager.store")
+                else:
+                    # Gate round 21, dormant-parity finding: legacy let a
+                    # caller's metadata land verbatim, sentinels included.
+                    # Dormant must reproduce that byte-for-byte -- the
+                    # vocabulary check belongs to the enabled world.
+                    doc_metadata["memory_phase"] = supplied_phase
         doc_metadata.update(provenance_extra)
         doc_metadata.update(egress_origin_extra)
 

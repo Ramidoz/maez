@@ -4623,7 +4623,30 @@ class MaezDaemon:
             try:
                 from core.memory import birth_phase
 
-                phase = birth_phase.current_phase(LEDGER_DB_PATH)
+                # S1 (gate round 21): with phase truth enabled, this panel
+                # must not paint a structurally-unknown ledger green — a
+                # readiness display saying "gestation" about a ledger the
+                # resolver cannot vouch for is the A6 misreport in cockpit
+                # clothing. Dormant keeps the legacy read exactly.
+                if birth_phase.s1_enabled():
+                    result = birth_phase.resolve(LEDGER_DB_PATH)
+                    if result.phase == "unknown":
+                        return _condition(
+                            "birth_phase",
+                            "birth phase",
+                            "red",
+                            f"unknown ({result.reason}) — resolver cannot "
+                            f"vouch for this ledger",
+                        )
+                    phase = result.phase
+                else:
+                    phase = birth_phase.current_phase(LEDGER_DB_PATH)
+            except birth_phase.LatchBlocked:
+                return _condition(
+                    "birth_phase", "birth phase", "red",
+                    "anchor joins but the latch subsystem is blocked "
+                    "(§12.13) — lived cannot be asserted yet",
+                )
             except Exception as exc:
                 return _condition(
                     "birth_phase",

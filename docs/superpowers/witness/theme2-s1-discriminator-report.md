@@ -47,3 +47,19 @@ First refusal, verbatim:
 Next per gate round 20's close-lists: the T3 harness (every actual sink,
 unknown no-write cases, healthy positive controls, per-site mutations),
 run T4 then T3; then the latch under the ruled topology.
+
+## Re-derivation under the hardened gate (2026-08-23, post gate round 21)
+
+Round 21 forged a verdict past the first gate — right names, wrong facts
+(counts set to 999, a refusal list one entry short and message-less) —
+because the gate read labels instead of rederiving. The gate now
+recomputes every fact from raw fields: refusal count == interaction
+count, each refusal carries the typed exception AND its message,
+collections proven flat by integer before/after, every store's census
+empty, `forced_on` attested by the producer. Three forgery mutations
+joined the self-test (34 cases).
+
+The RETAINED run evidence was re-judged under the hardened gate with no
+re-execution: **PASS on every clause.** The run was honest; the gate
+simply could not previously distinguish it from a forgery. Now it can,
+and the committed verdict JSON is the hardened one.

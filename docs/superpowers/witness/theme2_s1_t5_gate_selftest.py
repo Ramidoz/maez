@@ -56,12 +56,21 @@ def honest_run(fixture: str) -> dict:
 
 def forced_on_run() -> dict:
     r = honest_run("partial")
+    r["forced_on"] = True
     r["phase_probe"] = {"current_phase": "unknown", "has_resolve_api": True,
                         "resolve": {"phase": "unknown", "reason": "structural"}}
-    r["stamp_census"] = {EXERCISED: {"None": 0}}
+    r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
+                         "chroma::core": {}, "private_thoughts": {},
+                         "audit_log": {}}
     r["env_after_import"] = {"values": {"MAEZ_S1_PHASE_TRUTH": "1"}}
-    r["consumer_refusals"] = [{"consumer": "memory_manager@1506",
-                               "exception": "PhaseUnknownRefusal"}]
+    r["collection_counts_before"] = {"raw": 0, "daily": 0, "core": 0}
+    r["collection_counts_after"] = {"raw": 0, "daily": 0, "core": 0}
+    r["consumer_refusals"] = [
+        {"consumer": "memory_manager.store_telegram",
+         "exception": "PhaseUnknownRefusal",
+         "message": "memory_manager.store_telegram: refusing to stamp a "
+                    "phase — the resolver reads unknown (structural)."}
+        for _ in range(20)]
     return r
 
 
@@ -209,6 +218,20 @@ def main() -> int:
     f = {"fixture": "partial",
          "phase_probe": {"resolve": {"phase": "unknown"}}}
     case("minimal forged forced-on report", "FAIL",
+         baseline=pinned, forced=f)
+
+    # Gate round 21's executed forgery family: right names, wrong facts.
+    f = forced_on_run()
+    f["collection_counts_after"] = {"raw": 999, "daily": 0, "core": 0}
+    case("forgery: growth hidden in raw counts", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run()
+    f["consumer_refusals"] = [{"consumer": "x",
+                               "exception": "PhaseUnknownRefusal"}]
+    case("forgery: named exception, no message, wrong count", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run(); del f["interaction_count"]
+    case("forgery: interaction_count stripped", "FAIL",
          baseline=pinned, forced=f)
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")

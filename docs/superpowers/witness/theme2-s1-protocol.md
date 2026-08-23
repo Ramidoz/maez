@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.1
+# Theme 2 — S1 (phase truth) witness protocol, v7.4
 
-Status: PROTOCOL v6.3. Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.4. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
@@ -147,7 +147,7 @@ consumer call. Frozen census and per-consumer expected outcome:
 | `core/infra/private_thoughts.py` default @627 | same |
 | `core/infra/private_thoughts.py` default @674 | same |
 | `private_thoughts` caller-supplied `memory_phase='lived'` while gate says otherwise | raises `ValueError` (revalidation); no row |
-| `core/cognition/audit_log.py:AuditLog.record` | **see the v7.2 correction below — this row is wrong** |
+| `core/cognition/audit_log.py:AuditLog.record` | raises `PhaseUnknownRefusal`; no row *(v7.4: RESOLVED — owner ruled the explicit stamp; `record()` now names the column through the gate, and the SQL DEFAULT is a fallback only)* |
 | `AuditLog.start_direct_edit_session` | raises `PhaseUnknownRefusal`; no row |
 | `AuditLog.log_direct_edit` | same |
 | `AuditLog.end_direct_edit_session` | same *(added v7.2: a real writer the frozen census omitted)* |
@@ -159,6 +159,27 @@ consumer call. Frozen census and per-consumer expected outcome:
 (The exact exception type `PhaseUnknownRefusal` is the S1 API
 contract; a different spelling with identical semantics is recorded,
 not failed — but "silent success" or a `gestation` stamp is a kill.)
+
+### v7.4 — the T3 authority is the map, and the harness drives real sinks
+
+Gate round 21 rejected the first T3 harness (gate-level exercise where
+the map named store methods; one bite; no census→map join) and found two
+production regressions in my new wiring, both closed: the ledger
+writer's S1 check sits AFTER the disabled no-op (a disabled writer is a
+shadow no-op and must stay one; direct enabled callers seeing
+`PhaseUnknownRefusal` is ratified, not accidental), and dormant
+`store()` accepts caller metadata sentinels verbatim as legacy did.
+
+The authoritative T3 surface is now `theme2-s1-t3-map.json` (14
+stampers, 6 readers/exemptions, census→map join enforced by
+`tests/test_t3_map_join.py`) and `tests/test_t3_consumer_refusal.py`,
+which drives real disposable Chroma and real SQLite/ledger sinks,
+reads stamped phases back from every store, and bites per-site — with
+an inverse bite for the ledger writer, whose broken-fixture forward
+bite is physically impossible (the chain-head read dies before any
+stamp could land). The daemon's birth-readiness panel is wired: enabled
++ unknown paints RED with the reason; `LatchBlocked` reads as "joins
+but latch blocked".
 
 ### v7.3 — gate round 20's executed findings, closed
 
@@ -392,7 +413,8 @@ outcome.
   *(corrected in v7 — see the note below)*,
   `AuditLog.record(...)`, `AuditLog.start_direct_edit_session(...)`,
   `AuditLog.log_direct_edit(...)`, `source_awareness` path-gate
-  helper, `span_planner.plan(...)`, and a production-mode
+  helper, `span_planner.run_consolidation_pass(...)` *(v7.4: the
+  previously named `plan(...)` never existed)*, and a production-mode
   `LedgerWriter.write_turn('system_event', ...)`; argument fixtures
   are literal in the harness file committed with the S1 code, whose
   digest is recorded in the run report.
@@ -437,7 +459,10 @@ outcome.
   {"advancing","committed","observed"}`. The repaired mate line is
   byte-identical to the `advancing` line except `kind:"committed"`
   and its own `observed_at`; the report quotes both lines verbatim.
-- **T3 `_migration_null_normalize`**: invoked only via
+- **T3 `_migration_null_normalize`** *(v7.4: this method never existed —
+  the behaviour lives inline in `AuditLog._initialize`, which now
+  normalizes on every open; the ruling below stands, re-addressed to the
+  real construct)*: invoked only via
   `AuditLog.__init__` against a legacy fixture (audit DB with 3 rows,
   `memory_phase NULL`). Ruling recorded: pre-S1 legacy rows are
   gestation **by census fact** (all 506 live rows are gestation-era),
