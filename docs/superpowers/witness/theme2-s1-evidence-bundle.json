@@ -1,7 +1,7 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "97bd3c4667477dc190eb5e011b520e04e7283423",
+ "digests_computed_against_tree_at_commit": "e175cde554283777c56b0e8b632089414df17fe4",
  "provenance_note": "Every digest describes the file's bytes at the commit named above, which is this file's PARENT \u2014 an artifact cannot digest the commit it lands in. The evidence pack was committed by itself at that commit so its digest here is honest. Sections reporting an EXECUTION name their commit differently on purpose (the T6 receipt's field is `executed_against_tree_at_commit`): they record when something RAN, not when it was hashed.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
@@ -45,10 +45,10 @@
    ]
   },
   "pinned_suite_run": {
-   "file": "evidence/discriminator-2026-08-23-r27/pinned-suite-stdout.txt",
-   "sha256": "107111f35b15c86effc76641737833a7c56115a4acf0088afdc27fa4c058aa69",
+   "file": "evidence/discriminator-2026-08-23-r29/pinned-suite-stdout.txt",
+   "sha256": "e88b4ed7be819463462e4c568a6adcc540cbcacba4731a070dccbde0cc905fa2",
    "tail": [
-    "59 passed, 1 warning, 48 subtests passed in 41.92s",
+    "59 passed, 1 warning, 48 subtests passed in 42.03s",
     "exit=0"
    ]
   },
@@ -79,12 +79,13 @@
  "t5_baseline_and_discriminator": {
   "baseline_archive_sha256": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
-  "evidence_dir": "evidence/discriminator-2026-08-23-r27/",
+  "evidence_dir": "evidence/discriminator-2026-08-23-r29/",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "c8e6e4644f386ceadaae2dc97cf98ffad4f5a6044154ede97a43586e0126f864"
+   "sha256": "4619907780b83ab9b382d7bae90734d344798501f6e85746f47dcfaaa622a045"
   },
-  "status": "all clauses PASS on re-produced evidence. NOT CLOSED: v7.9 \u00a70.1 requires two consecutive rounds with zero new findings; round 27 found twelve and round 28 found four more classes plus seven I had left unranked."
+  "status": "all clauses PASS on evidence re-executed at round 29. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27/28/29 found twelve, eleven and six.",
+  "replay_manifest_sha256": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "t6_structural": {
   "receipt": {
