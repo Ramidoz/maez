@@ -237,9 +237,54 @@ def discriminator(runs: dict, baseline: dict | None,
     # same lesson as K3, applied here: every fact below is recomputed from
     # raw fields, and a missing field is a failure, not a default.
     for k in ("interaction_count", "collection_counts_before",
-              "collection_counts_after", "positive_control", "forced_on"):
+              "collection_counts_after", "positive_control", "forced_on",
+              "interactions", "manifest_sha256"):
         if k not in forced:
             bad.append({"detail": f"forced-on report missing {k!r}"})
+
+    # Gate round 22 forged past the aggregate checks: one invented refusal,
+    # a returned interaction with zero tail passages, positive_control FAIL —
+    # PASS, because the judge read producer-authored AGGREGATES. The join
+    # below is judge-owned, over the RAW per-interaction records, and the
+    # empirical shape it encodes is the retained real run's: forced-on, every
+    # interaction RAISES PhaseUnknownRefusal at the storage tail, exactly one
+    # tail passage each.
+    MANIFEST_SHA = ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f"
+                    "59109cb420")
+    if forced.get("manifest_sha256") != MANIFEST_SHA:
+        bad.append({"detail": "forced-on run not bound to the frozen "
+                              "manifest", "got": forced.get("manifest_sha256")})
+    ints = forced.get("interactions")
+    n = forced.get("interaction_count")
+    if not isinstance(ints, list) or not isinstance(n, int) \
+            or len(ints) != n or n < 1:
+        bad.append({"detail": "raw interactions absent or count mismatch",
+                    "have": len(ints) if isinstance(ints, list) else None,
+                    "declared": n})
+    else:
+        ids = [i.get("id") for i in ints]
+        if len(set(ids)) != n or not all(
+                isinstance(x, str) and x.startswith("s1-replay-") for x in ids):
+            bad.append({"detail": "interaction ids do not join to the "
+                                  "manifest", "ids": ids[:3]})
+        for i in ints:
+            if i.get("outcome") != "raised" \
+                    or "PhaseUnknownRefusal" not in str(i.get("exception", "")) \
+                    or "refusing to stamp" not in str(i.get("exception", "")) \
+                    or i.get("tail_passages") != 1:
+                bad.append({"detail": "interaction did not raise the typed "
+                                      "refusal at exactly one tail passage",
+                            "id": i.get("id"), "outcome": i.get("outcome"),
+                            "tail_passages": i.get("tail_passages")})
+                break
+    pc = forced.get("positive_control") or {}
+    if pc.get("mode") != "forced_on" or pc.get("verdict") != "PASS":
+        bad.append({"detail": "producer positive control is not a forced-on "
+                              "PASS", "positive_control": pc})
+    if isinstance(pc.get("refusals_observed"), int) and isinstance(n, int) \
+            and pc.get("refusals_observed") != n:
+        bad.append({"detail": "producer refusal aggregate disagrees with "
+                              "the raw interactions"})
     if forced.get("forced_on") is not True:
         bad.append({"detail": "report does not attest forced_on=true from "
                               "the producer"})

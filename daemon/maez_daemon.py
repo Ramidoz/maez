@@ -4594,6 +4594,20 @@ class MaezDaemon:
                 from core.memory import birth_phase
 
                 enabled = ledger_writes_enabled()
+                # Gate round 22: this panel used legacy is_born() even with
+                # S1 enabled, so a structurally-unknown ledger with writes
+                # off read green "off (pre-birth by design)" beside
+                # _birth_phase's RED — the two conditions contradicting each
+                # other about the same ledger. Enabled + unknown is RED here
+                # too; dormant unchanged.
+                if birth_phase.s1_enabled():
+                    _r = birth_phase.resolve(LEDGER_DB_PATH)
+                    if _r.phase == "unknown":
+                        return _condition(
+                            "flag_state", "ledger writes flag", "red",
+                            f"flag {'on' if enabled else 'off'} but the "
+                            f"resolver reads unknown ({_r.reason}) — "
+                            f"born/unborn cannot be asserted")
                 born = birth_phase.is_born(LEDGER_DB_PATH)
             except Exception as exc:
                 return _condition(
@@ -4641,13 +4655,19 @@ class MaezDaemon:
                     phase = result.phase
                 else:
                     phase = birth_phase.current_phase(LEDGER_DB_PATH)
-            except birth_phase.LatchBlocked:
-                return _condition(
-                    "birth_phase", "birth phase", "red",
-                    "anchor joins but the latch subsystem is blocked "
-                    "(§12.13) — lived cannot be asserted yet",
-                )
             except Exception as exc:
+                # ONE handler, ordered inside (gate round 22): naming
+                # birth_phase.LatchBlocked in an except clause raises
+                # UnboundLocalError when the import itself failed, and my
+                # first fix re-raised from inside the handler — which
+                # ESCAPES the try entirely; a sibling except never sees it.
+                # Match by name, then fall through to unreadable.
+                if type(exc).__name__ == "LatchBlocked":
+                    return _condition(
+                        "birth_phase", "birth phase", "red",
+                        "anchor joins but the latch subsystem is blocked "
+                        "(§12.13) — lived cannot be asserted yet",
+                    )
                 return _condition(
                     "birth_phase",
                     "birth phase",

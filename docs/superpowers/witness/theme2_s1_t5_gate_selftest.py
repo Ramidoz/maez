@@ -57,6 +57,16 @@ def honest_run(fixture: str) -> dict:
 def forced_on_run() -> dict:
     r = honest_run("partial")
     r["forced_on"] = True
+    r["manifest_sha256"] = ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021"
+                            "cc2b868f59109cb420")
+    r["interactions"] = [
+        {"id": f"s1-replay-{i:02d}", "outcome": "raised",
+         "exception": "PhaseUnknownRefusal: refusing to stamp a phase — "
+                      "the resolver reads unknown (structural).",
+         "tail_passages": 1}
+        for i in range(20)]
+    r["positive_control"] = {"mode": "forced_on", "verdict": "PASS",
+                             "refusals_observed": 20}
     r["phase_probe"] = {"current_phase": "unknown", "has_resolve_api": True,
                         "resolve": {"phase": "unknown", "reason": "structural"}}
     r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
@@ -232,6 +242,26 @@ def main() -> int:
          baseline=pinned, forced=f)
     f = forced_on_run(); del f["interaction_count"]
     case("forgery: interaction_count stripped", "FAIL",
+         baseline=pinned, forced=f)
+
+    # Gate round 22's executed forgery: coherent aggregates over rotten raw
+    # records — one returned interaction with zero tail passages, an FAIL
+    # positive control, a wrong manifest hash.
+    f = forced_on_run()
+    f["interactions"][7] = {"id": "s1-replay-07", "outcome": "returned",
+                            "tail_passages": 0}
+    case("forgery: one raw interaction returned, no tail", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run()
+    f["positive_control"]["verdict"] = "FAIL"
+    case("forgery: producer control FAIL under clean aggregates", "FAIL",
+         baseline=pinned, forced=f)
+    f = forced_on_run()
+    f["manifest_sha256"] = "0" * 64
+    case("forgery: unbound manifest", "FAIL", baseline=pinned, forced=f)
+    f = forced_on_run()
+    f["interactions"] = f["interactions"][:19]
+    case("forgery: raw list one short of declared count", "FAIL",
          baseline=pinned, forced=f)
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")

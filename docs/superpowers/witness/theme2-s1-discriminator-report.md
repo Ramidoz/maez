@@ -57,9 +57,28 @@ recomputes every fact from raw fields: refusal count == interaction
 count, each refusal carries the typed exception AND its message,
 collections proven flat by integer before/after, every store's census
 empty, `forced_on` attested by the producer. Three forgery mutations
-joined the self-test (34 cases).
+joined the self-test at that point. *(Correction: I wrote "34 cases"
+here; the actual count was 33 — I asserted a number without counting.
+Gate round 22 counted.)*
 
 The RETAINED run evidence was re-judged under the hardened gate with no
 re-execution: **PASS on every clause.** The run was honest; the gate
 simply could not previously distinguish it from a forgery. Now it can,
 and the committed verdict JSON is the hardened one.
+
+## Second re-derivation (gate round 22)
+
+Round 22 forged past the aggregate-level hardening: coherent aggregates
+over rotten raw records — one returned interaction with zero tail
+passages, a FAIL positive control, an unbound manifest — PASS. The judge
+now performs its own join over the RAW per-interaction records (all
+outcomes `raised` with the typed exception, exactly one tail passage
+each, ids joining the frozen manifest, aggregates required to agree with
+the raws), and the forgery family is in the self-test — 38 cases, and
+that number is `grep -c case(` on the file, not an assertion.
+
+The retained evidence passes the raw-join judge. It is now digest-bound
+in `theme2-s1-discriminator-evidence-pack.json`: sha256 of every
+retained artifact plus the judge and producer sources at the judging
+commit — closing round 22's mutable-/tmp objection while adopting its
+ruling that re-judging retained evidence is legitimate in principle.

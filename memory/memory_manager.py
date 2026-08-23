@@ -1520,9 +1520,19 @@ class MemoryManager:
             # (narrow yes, assert past the gate no), exactly as a
             # caller-supplied phase is treated everywhere else.
             metadata = dict(metadata)
-            supplied_phase = metadata.pop("memory_phase", None)
+            # Gate round 22: pop(..., None) conflated "key absent" with an
+            # explicitly supplied None — dormant {"memory_phase": None} became
+            # a resolver-derived gestation write where legacy handed None to
+            # the backend verbatim. A sentinel distinguishes the two; the
+            # explicit None flows through exactly as legacy did.
+            _ABSENT = object()
+            supplied_phase = metadata.pop("memory_phase", _ABSENT)
             doc_metadata.update(metadata)
-            if supplied_phase is not None:
+            if supplied_phase is _ABSENT:
+                pass
+            elif supplied_phase is None:
+                doc_metadata["memory_phase"] = None
+            elif True:
                 from core.memory.birth_phase import s1_enabled as _s1_on
                 if _s1_on():
                     doc_metadata["memory_phase"] = _memory_phase_tag(
