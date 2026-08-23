@@ -1,8 +1,24 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.8
+# Theme 2 — S1 (phase truth) witness protocol, v7.9
 
-Status: PROTOCOL v7.8. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.9. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
-Binding once its gate passes. *(v7.7: the original blanket "S1 code is
+Binding once its gate passes.
+
+**§0.1 — What closes T5 (registered 2026-08-23, before round 27's verdict
+was known).** T5 does not close on a round returning PASS; a PASS only
+means the current attack found nothing. **T5 closes when two CONSECUTIVE
+gate rounds each return zero NEW forgeries against the judge and zero new
+defects found by execution.** One clean round is a coincidence; two is
+evidence the well is dry. This is the loop-until-dry standard this project
+already applies to discovery, applied to its own judge.
+
+Rationale, recorded honestly: rounds 21 through 26 each found real defects
+by execution — round 25 forged three PASSes and round 26 forged four more,
+after each of which the judge had looked sound. "One more round" was
+therefore correct every time, and would stay correct indefinitely without a
+registered stopping rule. This clause is written BEFORE the next verdict
+precisely so the outcome cannot set the bar. Every round's findings are
+recorded whether or not they close anything. *(v7.7: the original blanket "S1 code is
 barred until then" is superseded by the §12.13 scope ruling — the
 topology-neutral census, resolver classification, and dormant consumer
 wiring were permitted to land and are MERGED-DORMANT; the latch and its
