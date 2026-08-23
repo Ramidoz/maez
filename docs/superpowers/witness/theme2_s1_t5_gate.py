@@ -58,11 +58,24 @@ def load(p: str | None) -> dict | None:
 
 
 def _manifest_ids() -> list | None:
+    # Round 29 finding #26: round 28 taught that a clause reading a file
+    # beside the judge must HASH that file — and I applied the lesson to the
+    # archive and not to the manifest, which is the more load-bearing of the
+    # two. The producer stamps `manifest_sha256` unconditionally, so that
+    # field carried no information; the judge took the ID list from whatever
+    # file happened to sit here. The committed evidence therefore validated
+    # against a manifest whose every prompt was different, and a PASS
+    # licensed only "twenty records bearing these twenty ID strings".
     manifest_path = Path(__file__).resolve().parent / "theme2-s1-replay.json"
     try:
-        return [x["id"] for x in json.loads(
-            manifest_path.read_text())["interactions"]]
-    except (OSError, KeyError, ValueError):
+        raw = manifest_path.read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(raw).hexdigest() != MANIFEST_SHA:
+        return None
+    try:
+        return [x["id"] for x in json.loads(raw)["interactions"]]
+    except (KeyError, ValueError):
         return None
 
 
@@ -508,13 +521,20 @@ def k8_record_coherence(runs: dict) -> list:
         for field in ("effective_store_paths_after_import",
                       "census_resolved_paths"):
             paths = r.get(field)
-            if not isinstance(paths, dict):
+            if not isinstance(paths, dict) or not paths:
+                # Absence is not innocence: the forced-on record carried no
+                # census paths at all, so its stores were unconstrained.
+                bad.append({"run": tag, "detail": f"{field} absent; the run's "
+                                                  f"stores are unconstrained"})
                 continue
             for name, path in paths.items():
-                if isinstance(path, str) and path and not _under(path, PROJECTED_TREE):
+                # Round 29 finding #29: this was type-gated, so a LIST or an
+                # empty string skipped the check entirely.
+                if not isinstance(path, str) or not path \
+                        or not _under(path, PROJECTED_TREE):
                     bad.append({"run": tag,
-                                "detail": f"{field}.{name} resolves outside "
-                                          f"the projected tree",
+                                "detail": f"{field}.{name} is not a path "
+                                          f"inside the projected tree",
                                 "path": path})
         # A network-reachable brain contradicts `network_unreachable: PASS`.
         if r.get("brain_reachable") is not False:
@@ -546,16 +566,45 @@ def k8_record_coherence(runs: dict) -> list:
                         "detail": "collection counters are not exactly the "
                                   "three real collections",
                         "got": sorted(counts)})
-    # One orchestration produced all three records; the environment they
-    # report must agree, or they did not come from the same run.
-    for field in ("python", "sqlite_version", "protocol"):
-        seen = {r.get(field) for r in runs.values() if field in r}
-        if len(seen) > 1:
-            bad.append({"detail": f"records disagree on {field}; they are not "
-                                  f"one orchestration", "values": sorted(
-                                      str(x) for x in seen)})
-        if seen and not all(isinstance(x, str) and x for x in seen):
+    # One orchestration produced all three records. Round 29 finding #27: this
+    # was gated on `if seen`, so DELETING the fields satisfied it — absence
+    # read as agreement. Presence is now required, from every run.
+    for field in ("python", "sqlite_version", "protocol", "source_digests"):
+        vals = [r.get(field) for r in runs.values()]
+        if any(v is None for v in vals):
+            bad.append({"detail": f"{field} missing from at least one record; "
+                                  f"they cannot be shown to be one "
+                                  f"orchestration"})
+            continue
+        if field == "source_digests":
+            # Round 29 finding #30: nothing bound the evidence to the CODE
+            # under test. A record could name any resolver path it liked.
+            for v in vals:
+                if not isinstance(v, dict) or not v or not all(
+                        isinstance(x, str) and len(x) == 64 for x in v.values()):
+                    bad.append({"detail": "source digests missing or malformed"})
+                    break
+        elif not all(isinstance(v, str) and v for v in vals):
             bad.append({"detail": f"{field} is not recorded"})
+        if len({json.dumps(v, sort_keys=True) for v in vals}) > 1:
+            bad.append({"detail": f"records disagree on {field}; they are not "
+                                  f"one orchestration"})
+    # Round 29 finding #28: the clone test is negative, and K7 forces the two
+    # ledger digests to differ — which handed a forger two free channels. Two
+    # runs against different fixtures must differ in what they OBSERVED.
+    a_, p_ = runs.get("a"), runs.get("p")
+    if isinstance(a_, dict) and isinstance(p_, dict) \
+            and a_.get("interactions") == p_.get("interactions"):
+        bad.append({"detail": "the two fixtures produced identical "
+                              "interaction records; that is one execution"})
+    # Spans must be ordered and disjoint: one airlock, one run at a time.
+    spans = sorted((r.get("started_at"), r.get("finished_at"), t)
+                   for t, r in runs.items()
+                   if isinstance(r.get("started_at"), (int, float)))
+    for (s1, f1, t1), (s2, f2, t2) in zip(spans, spans[1:]):
+        if isinstance(f1, (int, float)) and s2 < f1:
+            bad.append({"detail": f"runs {t1} and {t2} overlap in wall-clock "
+                                  f"time; the airlock runs one at a time"})
     return bad
 
 

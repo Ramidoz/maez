@@ -191,6 +191,18 @@ def main() -> int:
     import sqlite3
 
     report["sqlite_version"] = sqlite3.sqlite_version
+    # Round 29 finding #30: nothing in the evidence bound it to the CODE
+    # under test — `resolver_module` was an unverified path string, so a
+    # record could name any resolver it liked and a PASS was compatible with
+    # a different tree entirely. Digest the sources the claim is about.
+    report["source_digests"] = {}
+    for rel in ("core/memory/birth_phase.py", "memory/memory_manager.py",
+                "core/infra/private_thoughts.py", "core/ledger/writer.py"):
+        try:
+            report["source_digests"][rel] = hashlib.sha256(
+                (MAEZ_TREE / rel).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise SystemExit(f"REFUSED: cannot digest {rel}: {exc}")
 
     # Gate round 15 item B: reproduce production's environment ordering
     # OURSELVES, before importing the daemon -- importing it runs this same
