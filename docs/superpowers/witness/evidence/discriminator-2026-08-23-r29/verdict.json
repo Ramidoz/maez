@@ -1,0 +1,43 @@
+{
+ "D_discriminator": "PASS",
+ "clauses": {
+  "K1_ledger_unchanged": "PASS",
+  "K2_no_latch_artifact": "PASS",
+  "K3_positive_controls": "PASS",
+  "K4_no_stray_store": "PASS",
+  "K5_flags_were_off": "PASS",
+  "K6_contained_and_distinct": "PASS",
+  "K7_fixture_label_backed": "PASS",
+  "K8_record_coherence": "PASS"
+ },
+ "failures": {},
+ "pinned_census": {
+  "per_fixture": {
+   "healthy": {
+    "current_phase": "gestation",
+    "stamp_census": {
+     "audit_log": {},
+     "chroma::core": {},
+     "chroma::daily": {},
+     "chroma::raw": {
+      "gestation": 20
+     },
+     "private_thoughts": {}
+    }
+   },
+   "partial": {
+    "current_phase": "gestation",
+    "stamp_census": {
+     "audit_log": {},
+     "chroma::core": {},
+     "chroma::daily": {},
+     "chroma::raw": {
+      "gestation": 20
+     },
+     "private_thoughts": {}
+    }
+   }
+  }
+ },
+ "verdict": "PASS"
+}

@@ -1,0 +1,649 @@
+{
+ "protocol": "theme2-s1 protocol \u00a712.6",
+ "started_at": 1787514537.9839175,
+ "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]",
+ "interactions": [
+  {
+   "id": "s1-replay-00",
+   "at": 1787000000,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.146,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-01",
+   "at": 1787000060,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.112,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-02",
+   "at": 1787000120,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.118,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-03",
+   "at": 1787000180,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.135,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-04",
+   "at": 1787000240,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.099,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-05",
+   "at": 1787000300,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.098,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-06",
+   "at": 1787000360,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.111,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-07",
+   "at": 1787000420,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.104,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-08",
+   "at": 1787000480,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.125,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-09",
+   "at": 1787000540,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.112,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-10",
+   "at": 1787000600,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.098,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-11",
+   "at": 1787000660,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.101,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-12",
+   "at": 1787000720,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.123,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-13",
+   "at": 1787000780,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.104,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-14",
+   "at": 1787000840,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.103,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-15",
+   "at": 1787000900,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.125,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-16",
+   "at": 1787000960,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.116,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-17",
+   "at": 1787001020,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.126,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-18",
+   "at": 1787001080,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.105,
+   "tail_passages": 1
+  },
+  {
+   "id": "s1-replay-19",
+   "at": 1787001140,
+   "source": "UI",
+   "outcome": "raised",
+   "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.",
+   "traceback": "Traceback (most recent call last):\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 450, in main\n    reply = daemon.handle_message(item[\"text\"], source=item[\"source\"])\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 3350, in _wrapped\n    return fn(self, text, source, **kwargs)\n  File \"/home/rohit/maez/daemon/maez_daemon.py\", line 9725, in handle_message\n    _stored_id = self.memory.store_telegram(\n        _spec.content,\n    ...<4 lines>...\n        chat_id=chat_id,\n    )\n  File \"/home/rohit/maez/docs/superpowers/witness/theme2_s1_t5_replay.py\", line 358, in _counting_store\n    return _orig_store(*a, **kw)\n  File \"/home/rohit/maez/memory/memory_manager.py\", line 1642, in store_telegram\n    \"memory_phase\": _memory_phase_tag(consumer=\"memory_manager.store_telegram\"),\n                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/rohit/maez/core/memory/birth_phase.py\", line 434, in phase_for_stamp\n    raise PhaseUnknownRefusal(\n    ...<3 lines>...\n    )\ncore.memory.birth_phase.PhaseUnknownRefusal: memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger.\n",
+   "seconds": 1.11,
+   "tail_passages": 1
+  }
+ ],
+ "containment": {
+  "repo_readonly": "PASS (OSError: Read-only file system)",
+  "memory_writable_and_empty": "PASS",
+  "network_unreachable": "PASS (ConnectionRefusedError)",
+  "no_maez_env_at_entry": "PASS",
+  "env_at_entry": {
+   "names": [
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "PWD",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED",
+    "TZ",
+    "VIRTUAL_ENV"
+   ],
+   "count": 9,
+   "values": {
+    "HOME": "/home/rohit",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PATH": "/home/rohit/maez/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+    "PWD": "/home/rohit/maez",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONHASHSEED": "0",
+    "TZ": "America/Chicago",
+    "VIRTUAL_ENV": "/home/rohit/maez/.venv"
+   },
+   "maez_names": []
+  }
+ },
+ "manifest_sha256": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420",
+ "interaction_count": 20,
+ "sqlite_version": "3.46.1",
+ "source_digests": {
+  "core/memory/birth_phase.py": "d4ac5b09446e73d28311f66b272f81fec23dd00832cb832bf22c314bdd1199a8",
+  "memory/memory_manager.py": "516888e623f51bd2aefae1a6acda43dff3eb0929b0d14ebcf6881e9c4059044e",
+  "core/infra/private_thoughts.py": "17d0de908463f5871ff2916769d42214e46895a7476428b5be211dbc24daf811",
+  "core/ledger/writer.py": "f709a97f926665dda34017b52078689a8e91fd1677f925abbb478e2dc858b277"
+ },
+ "ordinary_config_loaded_names": [
+  "CLOUDFLARE_ZONE_ID",
+  "MAEZ_GITHUB_CLIENT_ID",
+  "MAEZ_GITHUB_USERNAME",
+  "MAEZ_HOME_LAT",
+  "MAEZ_HOME_LON",
+  "MAEZ_HOME_PLACE",
+  "MAEZ_LIVE_FAST_LANE_ENABLED",
+  "MAEZ_LLAMACPP_MODEL",
+  "MAEZ_LLM_BACKEND",
+  "MAEZ_M1_LIVED_EPISODE_PROMOTION",
+  "MAEZ_TELEGRAM_USER_ID",
+  "MAEZ_WORKING_SELF"
+ ],
+ "env_after_config_load": {
+  "names": [
+   "CLOUDFLARE_ZONE_ID",
+   "HOME",
+   "LANG",
+   "LC_ALL",
+   "MAEZ_GITHUB_CLIENT_ID",
+   "MAEZ_GITHUB_USERNAME",
+   "MAEZ_HOME_LAT",
+   "MAEZ_HOME_LON",
+   "MAEZ_HOME_PLACE",
+   "MAEZ_LIVE_FAST_LANE_ENABLED",
+   "MAEZ_LLAMACPP_MODEL",
+   "MAEZ_LLM_BACKEND",
+   "MAEZ_M1_LIVED_EPISODE_PROMOTION",
+   "MAEZ_TELEGRAM_USER_ID",
+   "MAEZ_WORKING_SELF",
+   "PATH",
+   "PWD",
+   "PYTHONDONTWRITEBYTECODE",
+   "PYTHONHASHSEED",
+   "TZ",
+   "VIRTUAL_ENV"
+  ],
+  "count": 21,
+  "values": {
+   "HOME": "/home/rohit",
+   "LANG": "C.UTF-8",
+   "LC_ALL": "C.UTF-8",
+   "MAEZ_LIVE_FAST_LANE_ENABLED": "1",
+   "MAEZ_LLM_BACKEND": "llamacpp",
+   "MAEZ_WORKING_SELF": "1",
+   "PATH": "/home/rohit/maez/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+   "PWD": "/home/rohit/maez",
+   "PYTHONDONTWRITEBYTECODE": "1",
+   "PYTHONHASHSEED": "0",
+   "TZ": "America/Chicago",
+   "VIRTUAL_ENV": "/home/rohit/maez/.venv"
+  },
+  "maez_names": [
+   "MAEZ_GITHUB_CLIENT_ID",
+   "MAEZ_GITHUB_USERNAME",
+   "MAEZ_HOME_LAT",
+   "MAEZ_HOME_LON",
+   "MAEZ_HOME_PLACE",
+   "MAEZ_LIVE_FAST_LANE_ENABLED",
+   "MAEZ_LLAMACPP_MODEL",
+   "MAEZ_LLM_BACKEND",
+   "MAEZ_M1_LIVED_EPISODE_PROMOTION",
+   "MAEZ_TELEGRAM_USER_ID",
+   "MAEZ_WORKING_SELF"
+  ]
+ },
+ "forced_on": true,
+ "effective_store_paths_before_import": {
+  "home": "/home/rohit/maez",
+  "data_dir": "/home/rohit/maez",
+  "config_dir": "/home/rohit/maez/config",
+  "cache_dir": "/home/rohit/maez/.cache",
+  "memory_dir": "/home/rohit/maez/memory",
+  "memory_db_dir": "/home/rohit/maez/memory/db",
+  "audit_log_db": "/home/rohit/maez/memory/audit_log.db",
+  "logs_dir": "/home/rohit/maez/logs",
+  "ledger": "/home/rohit/maez/memory/ledger.db"
+ },
+ "fixture": "partial",
+ "ledger_post_migration_sha256": "87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384cef39472a4c2d5a2",
+ "ledger_post_migration_file_set": [
+  "ledger.db"
+ ],
+ "env_after_import": {
+  "names": [
+   "CLOUDFLARE_ZONE_ID",
+   "HF_HUB_OFFLINE",
+   "HOME",
+   "LANG",
+   "LC_ALL",
+   "MAEZ_GITHUB_CLIENT_ID",
+   "MAEZ_GITHUB_TOKEN",
+   "MAEZ_GITHUB_USERNAME",
+   "MAEZ_HOME_LAT",
+   "MAEZ_HOME_LON",
+   "MAEZ_HOME_PLACE",
+   "MAEZ_LIVE_FAST_LANE_ENABLED",
+   "MAEZ_LLAMACPP_MODEL",
+   "MAEZ_LLM_BACKEND",
+   "MAEZ_M1_LIVED_EPISODE_PROMOTION",
+   "MAEZ_S1_PHASE_TRUTH",
+   "MAEZ_TELEGRAM_USER_ID",
+   "MAEZ_WORKING_SELF",
+   "PATH",
+   "PIPEWIRE_RUNTIME_DIR",
+   "PWD",
+   "PYTHONDONTWRITEBYTECODE",
+   "PYTHONHASHSEED",
+   "TZ",
+   "VIRTUAL_ENV",
+   "XDG_RUNTIME_DIR"
+  ],
+  "count": 26,
+  "values": {
+   "HOME": "/home/rohit",
+   "LANG": "C.UTF-8",
+   "LC_ALL": "C.UTF-8",
+   "MAEZ_LIVE_FAST_LANE_ENABLED": "1",
+   "MAEZ_LLM_BACKEND": "llamacpp",
+   "MAEZ_S1_PHASE_TRUTH": "1",
+   "MAEZ_WORKING_SELF": "1",
+   "PATH": "/home/rohit/maez/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+   "PWD": "/home/rohit/maez",
+   "PYTHONDONTWRITEBYTECODE": "1",
+   "PYTHONHASHSEED": "0",
+   "TZ": "America/Chicago",
+   "VIRTUAL_ENV": "/home/rohit/maez/.venv"
+  },
+  "maez_names": [
+   "MAEZ_GITHUB_CLIENT_ID",
+   "MAEZ_GITHUB_TOKEN",
+   "MAEZ_GITHUB_USERNAME",
+   "MAEZ_HOME_LAT",
+   "MAEZ_HOME_LON",
+   "MAEZ_HOME_PLACE",
+   "MAEZ_LIVE_FAST_LANE_ENABLED",
+   "MAEZ_LLAMACPP_MODEL",
+   "MAEZ_LLM_BACKEND",
+   "MAEZ_M1_LIVED_EPISODE_PROMOTION",
+   "MAEZ_S1_PHASE_TRUTH",
+   "MAEZ_TELEGRAM_USER_ID",
+   "MAEZ_WORKING_SELF"
+  ]
+ },
+ "effective_store_paths_after_import": {
+  "home": "/home/rohit/maez",
+  "data_dir": "/home/rohit/maez",
+  "config_dir": "/home/rohit/maez/config",
+  "cache_dir": "/home/rohit/maez/.cache",
+  "memory_dir": "/home/rohit/maez/memory",
+  "memory_db_dir": "/home/rohit/maez/memory/db",
+  "audit_log_db": "/home/rohit/maez/memory/audit_log.db",
+  "logs_dir": "/home/rohit/maez/logs",
+  "ledger": "/home/rohit/maez/memory/ledger.db"
+ },
+ "flags_off_after_import": "PASS",
+ "stray_store_inventory_before_count": 0,
+ "daemon_construct_seconds": 0.358,
+ "collection_counts_before": {
+  "raw": 0,
+  "daily": 0,
+  "core": 0
+ },
+ "phase_probe": {
+  "resolver_module": "/home/rohit/maez/core/memory/birth_phase.py",
+  "current_phase": "gestation",
+  "birth_event_turn_id": null,
+  "has_resolve_api": true,
+  "resolve": {
+   "phase": "unknown",
+   "reason": "structural"
+  }
+ },
+ "collection_counts_after": {
+  "raw": 0,
+  "daily": 0,
+  "core": 0
+ },
+ "store_tail_invocations": 20,
+ "stamp_census": {
+  "chroma::raw": {},
+  "chroma::daily": {},
+  "chroma::core": {},
+  "private_thoughts": {},
+  "audit_log": {}
+ },
+ "consumer_refusals": [
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  },
+  {
+   "consumer": "memory_manager.store_telegram",
+   "exception": "PhaseUnknownRefusal",
+   "message": "memory_manager.store_telegram: refusing to stamp a phase \u2014 the resolver reads unknown (structural). Writing 'gestation' here would assert something no longer true of this ledger."
+  }
+ ],
+ "positive_control": {
+  "mode": "forced_on",
+  "refusals_observed": 20,
+  "all_refusals_typed": true,
+  "collections_grew": false,
+  "stores_with_gestation_stamps": [],
+  "verdict": "PASS"
+ },
+ "census_resolved_paths": {
+  "private_thoughts": "/home/rohit/maez/memory/private_thoughts.db",
+  "audit_log": "/home/rohit/maez/memory/audit_log.db"
+ },
+ "latch_artifacts_in_store_tree": [],
+ "stray_store_sweep_roots": [
+  "/home/rohit/maez/logs",
+  "/home/rohit/maez/.cache",
+  "/home/rohit",
+  "/tmp",
+  "/run",
+  "/var/tmp"
+ ],
+ "stray_store_inventory_before": 0,
+ "stray_stores_outside_projected_tree": [],
+ "reply_shapes": {
+  "s1-replay-00": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-01": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-02": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-03": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-04": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-05": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-06": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-07": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-08": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-09": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-10": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-11": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-12": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-13": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-14": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-15": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-16": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-17": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-18": {
+   "chars": 0,
+   "empty": true
+  },
+  "s1-replay-19": {
+   "chars": 0,
+   "empty": true
+  }
+ },
+ "brain_reachable": false,
+ "ledger_post_replay_sha256": "87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384cef39472a4c2d5a2",
+ "ledger_post_replay_file_set": [
+  "ledger.db"
+ ],
+ "ledger_main_file_unchanged": true,
+ "finished_at": 1787514564.6685479
+}
