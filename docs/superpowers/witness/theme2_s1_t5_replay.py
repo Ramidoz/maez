@@ -460,6 +460,55 @@ def main() -> int:
                and after[k] > before[k] for k in ("raw", "daily", "core"))
     report["stamp_census"] = stamp_census()
     report["consumer_refusals"] = consumer_refusals
+    def collect_containment_evidence():
+        """Round 27 finding #14: the forced-on branch RETURNED before these
+        sweeps ran, so the report proving "nothing was stored" carried no
+        latch sweep, no escaped-store sweep, and no post-replay ledger
+        digest — the two halves of the discriminator were held to different
+        standards. Both paths call this now, before either writes."""
+        # Gate round 19 Q1.1: K2 read `ledger_post_replay_file_set`, which the
+        # driver fills only with `ledger.db*` names, so a real
+        # memory/birth_observed/segment-000001.jsonl could exist while K2 passed.
+        # Sweep the whole store tree and give K2 something that can be false.
+        latch = []
+        for q in STORE_TREE.rglob("*"):
+            try:
+                if "birth_observed" in q.parts or q.name.startswith("segment-") \
+                        or q.name.endswith(".tmp"):
+                    latch.append(str(q.relative_to(STORE_TREE)))
+            except OSError:
+                continue
+        report["latch_artifacts_in_store_tree"] = sorted(latch)
+
+        strays = sorted(sweep() - stray_inventory_before)
+        report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
+        report["stray_store_inventory_before"] = len(stray_inventory_before)
+        report["stray_stores_outside_projected_tree"] = strays
+        if strays:
+            raise SystemExit(
+                f"REFUSED: the run created stores outside the projected tree: "
+                f"{strays}")
+
+        report["reply_shapes"] = {
+            r["id"]: {"chars": len(r.get("reply") or ""),
+                      "empty": not (r.get("reply") or "").strip()}
+            for r in report["interactions"]}
+        report["brain_reachable"] = False
+
+        # Gate round 12, item C: flags off, the ledger is NOT "never opened" --
+        # the evidence-envelope builder opens it read-only (envelope_builder.py:268,
+        # recent_turns.py:97), and a read-only open of a WAL database creates the
+        # -shm/-wal sidecars. The main-file digest is what B1 asserts; record the
+        # sidecar reality rather than claim it away.
+        report["ledger_post_replay_sha256"] = hashlib.sha256(
+            (MAEZ_TREE / "memory" / "ledger.db").read_bytes()).hexdigest()
+        report["ledger_post_replay_file_set"] = sorted(
+            q.name for q in (MAEZ_TREE / "memory").iterdir()
+            if q.name.startswith("ledger.db"))
+        report["ledger_main_file_unchanged"] = (
+            report["ledger_post_replay_sha256"]
+            == report["ledger_post_migration_sha256"])
+
     if args.forced_on:
         # G5's contract (protocol §12.8 v7): resolve() reads unknown, every
         # reached consumer refuses with PhaseUnknownRefusal, no store grows,
@@ -485,6 +534,7 @@ def main() -> int:
             "verdict": ("PASS" if refused_ok and not grew_any and not gest
                         else "FAIL"),
         }
+        collect_containment_evidence()
         out = Path(args.report)
         out.parent.mkdir(parents=True, exist_ok=True)
         report["finished_at"] = time.time()
@@ -558,49 +608,8 @@ def main() -> int:
                     continue
         return found
 
-    # Gate round 19 Q1.1: K2 read `ledger_post_replay_file_set`, which the
-    # driver fills only with `ledger.db*` names, so a real
-    # memory/birth_observed/segment-000001.jsonl could exist while K2 passed.
-    # Sweep the whole store tree and give K2 something that can be false.
-    latch = []
-    for q in STORE_TREE.rglob("*"):
-        try:
-            if "birth_observed" in q.parts or q.name.startswith("segment-") \
-                    or q.name.endswith(".tmp"):
-                latch.append(str(q.relative_to(STORE_TREE)))
-        except OSError:
-            continue
-    report["latch_artifacts_in_store_tree"] = sorted(latch)
 
-    strays = sorted(sweep() - stray_inventory_before)
-    report["stray_store_sweep_roots"] = [str(r) for r in WRITABLE_ROOTS]
-    report["stray_store_inventory_before"] = len(stray_inventory_before)
-    report["stray_stores_outside_projected_tree"] = strays
-    if strays:
-        raise SystemExit(
-            f"REFUSED: the run created stores outside the projected tree: "
-            f"{strays}")
-
-    report["reply_shapes"] = {
-        r["id"]: {"chars": len(r.get("reply") or ""),
-                  "empty": not (r.get("reply") or "").strip()}
-        for r in report["interactions"]}
-    report["brain_reachable"] = False
-
-    # Gate round 12, item C: flags off, the ledger is NOT "never opened" --
-    # the evidence-envelope builder opens it read-only (envelope_builder.py:268,
-    # recent_turns.py:97), and a read-only open of a WAL database creates the
-    # -shm/-wal sidecars. The main-file digest is what B1 asserts; record the
-    # sidecar reality rather than claim it away.
-    report["ledger_post_replay_sha256"] = hashlib.sha256(
-        (MAEZ_TREE / "memory" / "ledger.db").read_bytes()).hexdigest()
-    report["ledger_post_replay_file_set"] = sorted(
-        q.name for q in (MAEZ_TREE / "memory").iterdir()
-        if q.name.startswith("ledger.db"))
-    report["ledger_main_file_unchanged"] = (
-        report["ledger_post_replay_sha256"]
-        == report["ledger_post_migration_sha256"])
-
+    collect_containment_evidence()
     report["finished_at"] = time.time()
     out = Path(args.report)
     out.parent.mkdir(parents=True, exist_ok=True)

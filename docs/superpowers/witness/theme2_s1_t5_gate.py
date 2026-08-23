@@ -85,6 +85,26 @@ ACTIVATION_FLAG = "MAEZ_S1_PHASE_TRUTH"
 # and the ordered join agreed with itself.
 T5_REPLAY_CONSUMER = "memory_manager.store_telegram"
 
+# Round 27 finding #13. The `fixture` label was an unbacked STRING: relabelling
+# a genuine healthy run "partial" validated, and the discriminator lost its
+# controlled variable — the observed flip was then equally explained by the
+# fixture changing as by the flag changing. The partial fixture's post-migration
+# ledger is byte-deterministic and was ALREADY pinned in the frozen protocol
+# under "Static digests (must match exactly, every run)"; the judge simply
+# never read it. The label must be backed by the ledger it ran against.
+MANIFEST_SHA = ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f"
+                "59109cb420")
+
+F_PARTIAL_LEDGER_SHA = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
+                        "cef39472a4c2d5a2")
+
+# Round 27 finding #16: K4 accepted an empty stray list without asking what was
+# swept, so sweeping nothing satisfied it. The producer's frozen sweep scope.
+EXPECTED_SWEEP_ROOTS = frozenset({
+    "/home/rohit/maez/logs", "/home/rohit/maez/.cache", "/home/rohit",
+    "/tmp", "/run", "/var/tmp",
+})
+
 
 def _plain_int(v) -> bool:
     """`True` is an `int` in Python, and round 26 used that to pass a Boolean
@@ -135,6 +155,31 @@ def schema_failures(runs: dict) -> list:
         probe = r.get("phase_probe")
         if not isinstance(probe, dict) or "current_phase" not in probe:
             bad.append({"run": tag, "detail": "phase_probe absent or malformed"})
+        elif probe.get("current_phase") != "gestation":
+            bad.append({"run": tag,
+                        "detail": "flags-off run did not read gestation",
+                        "got": probe.get("current_phase")})
+        else:
+            res = probe.get("resolve")
+            if isinstance(res, dict) and (res.get("phase") != "gestation"
+                                          or res.get("reason") != "dormant"):
+                bad.append({"run": tag,
+                            "detail": "flags-off resolver did not read "
+                                      "gestation/dormant", "resolve": res})
+        # Round 27 (Codex): only the forced-on run was bound to the frozen
+        # manifest; the flags-off pair could have replayed anything.
+        if r.get("manifest_sha256") != MANIFEST_SHA:
+            bad.append({"run": tag, "detail": "run not bound to the frozen "
+                                              "manifest",
+                        "got": r.get("manifest_sha256")})
+        for coll, v in (r.get("collection_counts_before") or {}).items():
+            if not _plain_int(v):
+                bad.append({"run": tag, "detail": f"collection count {coll} "
+                                                  f"is not a plain integer"})
+        for coll, v in (r.get("collection_counts_after") or {}).items():
+            if not _plain_int(v):
+                bad.append({"run": tag, "detail": f"collection count {coll} "
+                                                  f"is not a plain integer"})
         cen = r.get("stamp_census")
         # Gate round 24: a census of {} slid through a vacuous loop. The KEY
         # SET is the contract — all five stores, every run.
@@ -177,14 +222,38 @@ def k5_flags_were_actually_off(runs: dict) -> list:
             bad.append({"run": tag, "detail": "run does not attest that the "
                                               "activation flag was off",
                         "got": r.get("flags_off_after_import")})
-        env = (r.get("env_after_import") or {}).get("values")
-        if not isinstance(env, dict):
-            bad.append({"run": tag, "detail": "no recorded post-import env"})
-        elif ACTIVATION_FLAG in env:
-            bad.append({"run": tag,
-                        "detail": "flags-off run imported with the activation "
-                                  "flag present in its environment",
-                        "value": env.get(ACTIVATION_FLAG)})
+        # Round 27 finding #17: the flag was sought in ONE of the four places
+        # the producer records it. All of them now, and the views must be
+        # internally consistent — a flag hidden in `names` while `values`
+        # stays clean is the same lie told one field over.
+        forced = r.get("forced_on") is True
+        views = {
+            "env_after_import": (r.get("env_after_import") or {}),
+            "env_after_config_load": (r.get("env_after_config_load") or {}),
+            "containment.env_at_entry": ((r.get("containment") or {})
+                                         .get("env_at_entry") or {}),
+        }
+        for label, view in views.items():
+            names, values = view.get("names"), view.get("values")
+            if label == "env_after_import" and not isinstance(values, dict):
+                bad.append({"run": tag, "detail": "no recorded post-import env"})
+                continue
+            present = (isinstance(values, dict) and ACTIVATION_FLAG in values) \
+                or (isinstance(names, list) and ACTIVATION_FLAG in names) \
+                or (ACTIVATION_FLAG in (view.get("maez_names") or []))
+            # The forced-on run MUST carry the flag after import and must NOT
+            # have carried it at entry: that is what "set inside" means.
+            should = forced and label == "env_after_import"
+            if present != should:
+                bad.append({"run": tag,
+                            "detail": ("activation flag missing from "
+                                       if should else
+                                       "activation flag present in ") + label})
+            if isinstance(values, dict) and isinstance(names, list) \
+                    and not set(values).issubset(set(names)):
+                bad.append({"run": tag,
+                            "detail": f"{label}: recorded values are not a "
+                                      f"subset of recorded names"})
     return bad
 
 
@@ -221,8 +290,10 @@ def k6_contained_and_distinct(runs: dict) -> list:
                 bad.append({"detail": "two runs share a start time; they are "
                                       "not two executions",
                             "runs": [tags[i], tags[j]]})
-            a_ = {k: v for k, v in x.items() if k != "fixture"}
-            b_ = {k: v for k, v in y.items() if k != "fixture"}
+            VOLATILE = {"fixture", "started_at", "finished_at",
+                        "daemon_construct_seconds"}
+            a_ = {k: v for k, v in x.items() if k not in VOLATILE}
+            b_ = {k: v for k, v in y.items() if k not in VOLATILE}
             if a_ == b_:
                 bad.append({"detail": "one run is a clone of the other with "
                                       "only the fixture label changed",
@@ -235,10 +306,23 @@ def k1_ledger_unchanged(runs: dict) -> list:
     for tag, r in runs.items():
         pre, post = (r.get("ledger_post_migration_sha256"),
                      r.get("ledger_post_replay_sha256"))
-        if not isinstance(pre, str) or not isinstance(post, str) or len(pre) != 64:
-            bad.append({"run": tag, "detail": "ledger digests missing/malformed"})
+        hexok = (lambda d: isinstance(d, str) and len(d) == 64
+                 and all(c in "0123456789abcdef" for c in d))
+        if not hexok(pre) or not hexok(post):
+            bad.append({"run": tag, "detail": "ledger digests missing or not "
+                                              "lowercase hex sha256"})
         elif pre != post:
             bad.append({"run": tag, "pre": pre, "post": post})
+        # The producer computes this boolean from the same two digests; if it
+        # disagrees, one of the three fields is fabricated.
+        unchanged = r.get("ledger_main_file_unchanged")
+        if unchanged is not None and unchanged is not (pre == post):
+            bad.append({"run": tag,
+                        "detail": "ledger_main_file_unchanged disagrees with "
+                                  "the recorded digests"})
+        fset = r.get("ledger_post_replay_file_set")
+        if fset is not None and not isinstance(fset, list):
+            bad.append({"run": tag, "detail": "ledger file set is not a list"})
     return bad
 
 
@@ -301,6 +385,24 @@ def k3_positive_controls(runs: dict) -> list:
         else:
             b_, a_ = cb.get(EXERCISED_COLLECTION), ca.get(EXERCISED_COLLECTION)
             d_grew = (_plain_int(b_) and _plain_int(a_) and a_ > b_)
+            # Round 27 finding #15: the round-19 fix compared the full census
+            # to the baseline, but these counts are read independently and only
+            # `raw` was constrained — daily and core could grow beside a census
+            # that said they were empty.
+            for other in ("daily", "core"):
+                if cb.get(other) != ca.get(other):
+                    bad.append({"run": tag,
+                                "detail": f"flags-off run changed the {other} "
+                                          f"collection",
+                                "before": cb.get(other), "after": ca.get(other)})
+            cen_raw = (r.get("stamp_census") or {}).get(EXERCISED_STORE)
+            if isinstance(cen_raw, dict) and _plain_int(b_) and _plain_int(a_):
+                total = sum(v for v in cen_raw.values() if _plain_int(v))
+                if total != a_ - b_:
+                    bad.append({"run": tag,
+                                "detail": "census total does not reconcile with "
+                                          "the collection delta",
+                                "census_total": total, "delta": a_ - b_})
         # (a) the DERIVED facts must themselves describe a clean flags-off run
         if d_raised:
             bad.append({"run": tag, "detail": "raw rows raised",
@@ -357,9 +459,30 @@ def k3_positive_controls(runs: dict) -> list:
     return bad
 
 
+def k7_fixture_label_is_backed(runs: dict) -> list:
+    """Round 27 finding #13: `fixture` was a label with nothing behind it."""
+    bad = []
+    for tag, r in runs.items():
+        fx, dig = r.get("fixture"), r.get("ledger_post_migration_sha256")
+        if fx == "partial" and dig != F_PARTIAL_LEDGER_SHA:
+            bad.append({"run": tag, "detail": "run labelled partial did not run "
+                                              "against the pinned partial "
+                                              "ledger", "got": dig})
+        if fx == "healthy" and dig == F_PARTIAL_LEDGER_SHA:
+            bad.append({"run": tag, "detail": "run labelled healthy ran against "
+                                              "the partial ledger"})
+    return bad
+
+
 def k4_no_stray_store(runs: dict) -> list:
     bad = []
     for tag, r in runs.items():
+        roots = r.get("stray_store_sweep_roots")
+        if not isinstance(roots, list) or set(roots) != EXPECTED_SWEEP_ROOTS:
+            bad.append({"run": tag,
+                        "detail": "stray sweep did not cover the frozen "
+                                  "writable roots; an empty result proves "
+                                  "nothing", "got": roots})
         strays = r.get("stray_stores_outside_projected_tree")
         if not isinstance(strays, list):
             bad.append({"run": tag, "detail": "stray-store sweep missing"})
@@ -465,8 +588,6 @@ def discriminator(runs: dict, baseline: dict | None,
     # empirical shape it encodes is the retained real run's: forced-on, every
     # interaction RAISES PhaseUnknownRefusal at the storage tail, exactly one
     # tail passage each.
-    MANIFEST_SHA = ("2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f"
-                    "59109cb420")
     if forced.get("manifest_sha256") != MANIFEST_SHA:
         bad.append({"detail": "forced-on run not bound to the frozen "
                               "manifest", "got": forced.get("manifest_sha256")})
@@ -637,14 +758,22 @@ def main() -> int:
         print(json.dumps(verdict, indent=1))
         return 1
 
-    dv, dbad = discriminator(runs, load(a.baseline_census), load(a.forced_on))
+    forced_report = load(a.forced_on)
+    dv, dbad = discriminator(runs, load(a.baseline_census), forced_report)
+    # Round 27 finding #14: every kill iterated {a, p} only, so the forced-on
+    # report — the half that claims NOTHING was stored — was exempt from the
+    # ledger, latch, escape and containment checks entirely.
+    all_runs = dict(runs)
+    if isinstance(forced_report, dict):
+        all_runs["f"] = forced_report
     clauses = {
-        "K1_ledger_unchanged": k1_ledger_unchanged(runs),
-        "K2_no_latch_artifact": k2_no_latch(runs),
+        "K1_ledger_unchanged": k1_ledger_unchanged(all_runs),
+        "K2_no_latch_artifact": k2_no_latch(all_runs),
         "K3_positive_controls": k3_positive_controls(runs),
-        "K4_no_stray_store": k4_no_stray_store(runs),
-        "K5_flags_were_off": k5_flags_were_actually_off(runs),
-        "K6_contained_and_distinct": k6_contained_and_distinct(runs),
+        "K4_no_stray_store": k4_no_stray_store(all_runs),
+        "K5_flags_were_off": k5_flags_were_actually_off(all_runs),
+        "K6_contained_and_distinct": k6_contained_and_distinct(all_runs),
+        "K7_fixture_label_backed": k7_fixture_label_is_backed(all_runs),
     }
     failures = {k: v for k, v in clauses.items() if v}
     if dbad:

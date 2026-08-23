@@ -25,6 +25,11 @@ PINNED_BASELINE = json.loads(
     (Path(__file__).resolve().parent / "theme2-s1-baseline-census.json").read_text())
 SHA_A = "a" * 64
 EXERCISED = "chroma::raw"
+# Round 27 #13/#16: the constants the judge now pins.
+F_PARTIAL = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
+             "cef39472a4c2d5a2")
+SWEEP_ROOTS = {"/home/rohit/maez/logs", "/home/rohit/maez/.cache",
+               "/home/rohit", "/tmp", "/run", "/var/tmp"}
 
 
 def honest_run(fixture: str) -> dict:
@@ -51,11 +56,13 @@ def honest_run(fixture: str) -> dict:
         # Round 27 self-attack: the judge now READS the premises the producer
         # was already recording — flag off, run contained, coherent span.
         "flags_off_after_import": "PASS",
-        "env_after_import": {"values": {"HOME": "/home/rohit/maez"}},
+        "env_after_import": {"names": ["HOME"], "values": {"HOME": "/home/rohit/maez"}},
+        "env_after_config_load": {"names": ["HOME"], "values": {"HOME": "/home/rohit/maez"}},
         "containment": {"repo_readonly": "PASS",
                         "memory_writable_and_empty": "PASS",
                         "network_unreachable": "PASS",
-                        "no_maez_env_at_entry": "PASS"},
+                        "no_maez_env_at_entry": "PASS",
+                        "env_at_entry": {"names": ["HOME"], "values": {}}},
         "started_at": 1000.0 + (0.0 if fixture == "healthy" else 100.0),
         "finished_at": 1030.0 + (0.0 if fixture == "healthy" else 100.0),
         "store_tail_invocations": 20,
@@ -66,11 +73,14 @@ def honest_run(fixture: str) -> dict:
                              "interactions_without_tail_passage": [],
                              "store_tail_invocations": 20,
                              "collections_grew": True},
-        "ledger_post_migration_sha256": SHA_A,
-        "ledger_post_replay_sha256": SHA_A,
+        "ledger_post_migration_sha256": (F_PARTIAL if fixture == "partial"
+                                         else SHA_A),
+        "ledger_post_replay_sha256": (F_PARTIAL if fixture == "partial"
+                                      else SHA_A),
         "ledger_post_replay_file_set": ["ledger.db", "ledger.db-shm",
                                         "ledger.db-wal"],
         "stray_stores_outside_projected_tree": [],
+        "stray_store_sweep_roots": sorted(SWEEP_ROOTS),
         "latch_artifacts_in_store_tree": [],
         "interaction_count": 20,
     }
@@ -95,7 +105,8 @@ def forced_on_run() -> dict:
     r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
                          "chroma::core": {}, "private_thoughts": {},
                          "audit_log": {}}
-    r["env_after_import"] = {"values": {"MAEZ_S1_PHASE_TRUTH": "1"}}
+    r["env_after_import"] = {"names": ["HOME", "MAEZ_S1_PHASE_TRUTH"],
+                             "values": {"MAEZ_S1_PHASE_TRUTH": "1"}}
     r["started_at"], r["finished_at"] = 1200.0, 1230.0
     r["collection_counts_before"] = {"raw": 0, "daily": 0, "core": 0}
     r["collection_counts_after"] = {"raw": 0, "daily": 0, "core": 0}
@@ -131,23 +142,23 @@ EXPECTED_CLAUSES = {
     "a new write to a store outside raw":
         ["D_discriminator"],
     "both fixtures required, not two partials":
-        ["D_discriminator"],
+        ["D_discriminator", "K7_fixture_label_backed"],
     "explicitly empty baseline must not bypass":
         ["D_discriminator"],
     "fewer tail passages than interactions":
         ["K3_positive_controls"],
     "flags-off HEALTHY did not read gestation":
-        ["D_discriminator"],
+        ["schema"],
     "flags-off partial did not read gestation":
-        ["D_discriminator"],
+        ["schema"],
     "forced-on bound to the wrong fixture":
-        ["D_discriminator"],
+        ["D_discriminator", "K7_fixture_label_backed"],
     "forced-on carries no refusal evidence":
         ["D_discriminator"],
     "forced-on did not flip (guard absent)":
         ["D_discriminator"],
     "forced-on lacks the activation flag":
-        ["D_discriminator"],
+        ["D_discriminator", "K5_flags_were_off"],
     "forced-on wrote unknown-stamped rows":
         ["D_discriminator"],
     "forgery: alien id passing the shape check":
@@ -169,7 +180,7 @@ EXPECTED_CLAUSES = {
     "honest run, baseline omitted (now mandatory)":
         ["D_discriminator"],
     "minimal forged forced-on report":
-        ["D_discriminator"],
+        ["D_discriminator", "K1_ledger_unchanged", "K2_no_latch_artifact", "K4_no_stray_store", "K5_flags_were_off", "K6_contained_and_distinct", "K7_fixture_label_backed"],
     "one interaction of twenty returned":
         ["K3_positive_controls"],
     "refusal evidence is the wrong exception":
@@ -196,8 +207,44 @@ EXPECTED_CLAUSES = {
         ["K3_positive_controls"],
     "round 26: exact key set, impossible counts":
         ["D_discriminator"],
+    "round 27: census does not reconcile with the delta":
+        ["K3_positive_controls"],
+    "round 27: clone with the clock nudged":
+        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+    "round 27: containment probe did not pass":
+        ["K6_contained_and_distinct"],
+    "round 27: flag hidden in the config-load env":
+        ["K5_flags_were_off"],
+    "round 27: flag present at airlock entry":
+        ["K5_flags_were_off"],
+    "round 27: flag present in a flags-off environment":
+        ["K5_flags_were_off"],
+    "round 27: flags-off grew the daily collection":
+        ["K3_positive_controls"],
+    "round 27: flags-off resolver did not read dormant":
+        ["schema"],
+    "round 27: flags-off run admits the flag was ON":
+        ["K5_flags_were_off"],
+    "round 27: flags-off run not bound to the manifest":
+        ["schema"],
+    "round 27: healthy run relabelled partial":
+        ["D_discriminator", "K7_fixture_label_backed"],
+    "round 27: ledger digest is not lowercase hex":
+        ["K1_ledger_unchanged"],
+    "round 27: no containment proof at all":
+        ["K6_contained_and_distinct"],
+    "round 27: partial label, wrong ledger":
+        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+    "round 27: partial run is a clone of the healthy run":
+        ["K6_contained_and_distinct", "K7_fixture_label_backed"],
+    "round 27: producer boolean contradicts its digests":
+        ["K1_ledger_unchanged"],
+    "round 27: run finished before it started":
+        ["K6_contained_and_distinct"],
+    "round 27: swept nothing, found nothing":
+        ["K4_no_stray_store"],
     "run census drifted from the pinned baseline":
-        ["D_discriminator"],
+        ["D_discriminator", "K3_positive_controls"],
     "schema: empty census":
         ["schema"],
     "schema: exercised store produced no stamps":
@@ -291,8 +338,10 @@ def main() -> int:
 
     a = copy.deepcopy(A)
     a["stamp_census"][EXERCISED] = {"gestation": 19}
+    # Round 27: this now also trips K3, because a census that disagrees with
+    # the collection delta is exactly the reconciliation failure #15 added.
     case("run census drifted from the pinned baseline", "FAIL", a=a,
-         baseline=pinned, expect_only="D_discriminator")
+         baseline=pinned)
     doctored = copy.deepcopy(pinned)
     doctored["per_fixture"]["partial"]["stamp_census"]["chroma::daily"] = \
         {"gestation": 3}
@@ -501,8 +550,10 @@ def main() -> int:
     case("round 27: flag present in a flags-off environment", "FAIL", a=a,
          baseline=pinned, expect_only="K5_flags_were_off")
     p_clone = copy.deepcopy(A); p_clone["fixture"] = "partial"
+    # Also trips K7 now: a clone of the healthy run carries the healthy
+    # ledger digest, so its "partial" label is unbacked (#13).
     case("round 27: partial run is a clone of the healthy run", "FAIL",
-         p=p_clone, baseline=pinned, expect_only="K6_contained_and_distinct")
+         p=p_clone, baseline=pinned)
     a = copy.deepcopy(A)
     a["containment"] = dict(a["containment"], network_unreachable="FAIL (reachable)")
     case("round 27: containment probe did not pass", "FAIL", a=a,
@@ -513,6 +564,60 @@ def main() -> int:
     a = copy.deepcopy(A); a["started_at"], a["finished_at"] = 500.0, 100.0
     case("round 27: run finished before it started", "FAIL", a=a,
          baseline=pinned, expect_only="K6_contained_and_distinct")
+
+    # Round 27, external review. #13 is the one that changed what the
+    # evidence PROVES: `fixture` was a bare label, so a genuine healthy run
+    # relabelled "partial" validated and the discriminator lost its
+    # controlled variable.
+    a = copy.deepcopy(A); a["fixture"] = "partial"
+    a["ledger_post_replay_sha256"] = a["ledger_post_migration_sha256"]
+    p_ = copy.deepcopy(P)
+    case("round 27: healthy run relabelled partial", "FAIL", a=a, p=p_,
+         baseline=pinned)
+    p_ = copy.deepcopy(P); p_["ledger_post_migration_sha256"] = SHA_A
+    p_["ledger_post_replay_sha256"] = SHA_A
+    case("round 27: partial label, wrong ledger", "FAIL", p=p_,
+         baseline=pinned)
+    # #15: daily/core may not move on a flags-off run.
+    a = copy.deepcopy(A); a["collection_counts_after"]["daily"] = 40
+    case("round 27: flags-off grew the daily collection", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
+    a = copy.deepcopy(A); a["collection_counts_after"]["raw"] = 25
+    case("round 27: census does not reconcile with the delta", "FAIL", a=a,
+         baseline=pinned)
+    # #16: an empty stray list proves nothing if nothing was swept.
+    a = copy.deepcopy(A); a["stray_store_sweep_roots"] = []
+    case("round 27: swept nothing, found nothing", "FAIL", a=a,
+         baseline=pinned, expect_only="K4_no_stray_store")
+    # #17: the flag hidden one field over.
+    a = copy.deepcopy(A)
+    a["env_after_config_load"]["values"]["MAEZ_S1_PHASE_TRUTH"] = "1"
+    case("round 27: flag hidden in the config-load env", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
+    a = copy.deepcopy(A)
+    a["containment"]["env_at_entry"]["names"].append("MAEZ_S1_PHASE_TRUTH")
+    case("round 27: flag present at airlock entry", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
+    # #18: a clone with the clock nudged is still a clone.
+    p_ = copy.deepcopy(A); p_["fixture"] = "partial"
+    p_["started_at"] += 100.0; p_["finished_at"] += 100.0
+    case("round 27: clone with the clock nudged", "FAIL", p=p_,
+         baseline=pinned)
+    # Codex lane: K1 digest domain, and the producer boolean must agree.
+    a = copy.deepcopy(A)
+    a["ledger_post_migration_sha256"] = a["ledger_post_replay_sha256"] = "Z" * 64
+    case("round 27: ledger digest is not lowercase hex", "FAIL", a=a,
+         baseline=pinned, expect_only="K1_ledger_unchanged")
+    a = copy.deepcopy(A); a["ledger_main_file_unchanged"] = False
+    case("round 27: producer boolean contradicts its digests", "FAIL", a=a,
+         baseline=pinned, expect_only="K1_ledger_unchanged")
+    a = copy.deepcopy(A); a["manifest_sha256"] = "0" * 64
+    case("round 27: flags-off run not bound to the manifest", "FAIL", a=a,
+         baseline=pinned, expect_only="schema")
+    a = copy.deepcopy(A); a["phase_probe"]["resolve"] = {"phase": "unknown",
+                                                          "reason": "structural"}
+    case("round 27: flags-off resolver did not read dormant", "FAIL", a=a,
+         baseline=pinned, expect_only="schema")
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1
