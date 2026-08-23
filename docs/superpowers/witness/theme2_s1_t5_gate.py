@@ -74,7 +74,8 @@ def _manifest_ids() -> list | None:
     if hashlib.sha256(raw).hexdigest() != MANIFEST_SHA:
         return None
     try:
-        return [x["id"] for x in json.loads(raw)["interactions"]]
+        return [(x["id"], x.get("at"), x.get("source"))
+                for x in json.loads(raw)["interactions"]]
     except (KeyError, ValueError):
         return None
 
@@ -142,6 +143,27 @@ REDIRECTORS = ("MAEZ_DATA", "MAEZ_LEDGER_DB_PATH")
 ATTESTED_SOURCES = ("core/memory/birth_phase.py", "memory/memory_manager.py",
                     "core/infra/private_thoughts.py", "core/ledger/writer.py")
 
+# Round 31 #36: the healthy arm was constrained only NEGATIVELY ("not the
+# partial ledger"), so one execution supplied both arms. The applied-migration
+# set is what the fixture CAUSED and cannot be copied between arms without
+# lying about a second, independently-checked field.
+MIGRATIONS_BY_FIXTURE = {
+    "healthy": ["0001_init", "0002_triggers", "0003_add_lifecycle_stage",
+                "0004_add_audit_trace_metadata",
+                "0005_add_taint_privacy_chain_position"],
+    "partial": ["0001_init", "0002_triggers"],
+}
+# Round 31 #42: the protocol pins these; the judge only made the records agree.
+# The airlock runs --clearenv, so LD_LIBRARY_PATH is stripped and the
+# interpreter links the SYSTEM sqlite, not the vendored 3.53.4 production
+# uses. That is deliberate and it is what the protocol pins: the pre-S1
+# baseline was produced the same way, so the comparison is like-for-like.
+# Pinning the version stops a record from being produced under a different
+# library than the baseline it is compared against.
+EXPECTED_SQLITE = "3.46.1"
+# Round 31 #40: the record's own statement of what it loaded.
+EXPECTED_RESOLVER = "/home/rohit/maez/core/memory/birth_phase.py"
+
 EXPECTED_SWEEP_ROOTS = frozenset({
     "/home/rohit/maez/logs", "/home/rohit/maez/.cache", "/home/rohit",
     "/tmp", "/run", "/var/tmp",
@@ -169,7 +191,7 @@ def _canon_sha(obj) -> str:
         obj, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def schema_failures(runs: dict) -> list:
+def schema_failures(runs: dict, *, forced_role: bool = False) -> list:
     """Fail closed on shape. Round 18 passed a report with a missing phase
     probe and empty structures; absent evidence is not evidence."""
     bad = []
@@ -187,7 +209,8 @@ def schema_failures(runs: dict) -> list:
         if mids is None:
             bad.append({"run": tag, "detail": "frozen manifest unreadable"})
         elif not isinstance(ints_, list) \
-                or [i.get("id") for i in ints_] != mids:
+                or [(i.get("id"), i.get("at"), i.get("source"))
+                    for i in ints_] != mids:
             bad.append({"run": tag,
                         "detail": "raw interactions do not match the frozen "
                                   "manifest id sequence"})
@@ -197,6 +220,13 @@ def schema_failures(runs: dict) -> list:
         probe = r.get("phase_probe")
         if not isinstance(probe, dict) or "current_phase" not in probe:
             bad.append({"run": tag, "detail": "phase_probe absent or malformed"})
+        elif forced_role:
+            # The forced-on record must NOT read gestation; that is the flip.
+            if probe.get("current_phase") == "gestation" \
+                    or probe.get("has_resolve_api") is not True:
+                bad.append({"run": tag,
+                            "detail": "forced-on probe does not show the flip",
+                            "probe": probe})
         elif probe.get("current_phase") != "gestation":
             bad.append({"run": tag,
                         "detail": "flags-off run did not read gestation",
@@ -215,7 +245,9 @@ def schema_failures(runs: dict) -> list:
                                       "resolver at all; absence is not "
                                       "dormancy"})
             res = probe.get("resolve")
-            if not isinstance(res, dict):
+            if forced_role:
+                pass
+            elif not isinstance(res, dict):
                 bad.append({"run": tag,
                             "detail": "flags-off run recorded no resolver "
                                       "reading", "resolve": res})
@@ -573,6 +605,17 @@ def k8_record_coherence(runs: dict) -> list:
             bad.append({"run": tag,
                         "detail": "effective store paths are not exactly the "
                                   "producer's pinned map", "got": eff})
+        cen_paths = r.get("census_resolved_paths")
+        if not isinstance(cen_paths, dict) or cen_paths != {
+                "private_thoughts": "/home/rohit/maez/memory/private_thoughts.db",
+                "audit_log": "/home/rohit/maez/memory/audit_log.db"}:
+            bad.append({"run": tag,
+                        "detail": "census-resolved store paths are not exactly "
+                                  "the pinned map", "got": cen_paths})
+        rm = (r.get("phase_probe") or {}).get("resolver_module")
+        if rm is not None and rm != EXPECTED_RESOLVER:
+            bad.append({"run": tag, "detail": "record names a resolver module "
+                                              "outside the tree", "got": rm})
         for field in ("effective_store_paths_after_import",
                       "census_resolved_paths"):
             paths = r.get(field)
@@ -624,7 +667,18 @@ def k8_record_coherence(runs: dict) -> list:
     # One orchestration produced all three records. Round 29 finding #27: this
     # was gated on `if seen`, so DELETING the fields satisfied it — absence
     # read as agreement. Presence is now required, from every run.
-    for field in ("python", "sqlite_version", "protocol", "source_digests"):
+    for tag, r in runs.items():
+        if r.get("sqlite_version") != EXPECTED_SQLITE:
+            bad.append({"run": tag, "detail": "run did not execute under the "
+                                              "pinned SQLite",
+                        "got": r.get("sqlite_version")})
+        inst = r.get("instrument_digests")
+        if not isinstance(inst, dict) or sorted(inst) != [
+                "theme2_s1_airlock.sh", "theme2_s1_t5_replay.py"]:
+            bad.append({"run": tag, "detail": "record does not attest which "
+                                              "instrument produced it"})
+    for field in ("python", "sqlite_version", "protocol", "source_digests",
+                  "instrument_digests", "applied_migrations"):
         vals = [r.get(field) for r in runs.values()]
         if any(v is None for v in vals):
             bad.append({"detail": f"{field} missing from at least one record; "
@@ -710,6 +764,15 @@ def k7_fixture_label_is_backed(runs: dict) -> list:
         if fx == "healthy" and dig == F_PARTIAL_LEDGER_SHA:
             bad.append({"run": tag, "detail": "run labelled healthy ran against "
                                               "the partial ledger"})
+        # Round 31 #36: positive backing for BOTH arms.
+        want = MIGRATIONS_BY_FIXTURE.get(fx)
+        got = r.get("applied_migrations")
+        if want is None:
+            bad.append({"run": tag, "detail": "unknown fixture label", "got": fx})
+        elif not isinstance(got, list) or sorted(got) != want:
+            bad.append({"run": tag,
+                        "detail": f"the {fx} fixture's applied migrations are "
+                                  f"not what that fixture is", "got": got})
     return bad
 
 
@@ -722,6 +785,11 @@ def k4_no_stray_store(runs: dict) -> list:
                         "detail": "stray sweep did not cover the frozen "
                                   "writable roots; an empty result proves "
                                   "nothing", "got": roots})
+        if r.get("stray_store_inventory_before") not in (0, None):
+            bad.append({"run": tag,
+                        "detail": "the sweep's difference basis was not empty; "
+                                  "the airlock guarantees it is",
+                        "before": r.get("stray_store_inventory_before")})
         strays = r.get("stray_stores_outside_projected_tree")
         if not isinstance(strays, list):
             bad.append({"run": tag, "detail": "stray-store sweep missing"})
@@ -867,7 +935,10 @@ def discriminator(runs: dict, baseline: dict | None,
             exc_type = exc_text.split(":", 1)[0].strip()
             if i.get("outcome") != "raised" \
                     or exc_type != "PhaseUnknownRefusal" \
-                    or "refusing to stamp" not in exc_text \
+                    or "refusing to stamp a phase" not in exc_text \
+                    or "the resolver reads unknown" not in exc_text \
+                    or not str(i.get("traceback", "")).count(
+                        "core/memory/birth_phase.py") \
                     or not _plain_int(i.get("tail_passages")) \
                     or i.get("tail_passages") != 1:
                 bad.append({"detail": "interaction did not raise the typed "
@@ -1041,7 +1112,13 @@ def main() -> int:
     a = ap.parse_args()
 
     runs = {"a": load(a.run_a), "p": load(a.run_p)}
+    # Round 31 #41: the schema stage ran over {a, p} only, so round 28's
+    # "absence is not dormancy" closure and the count domain never reached
+    # the forced-on record. It is graded too — with the dormant-resolver
+    # sub-clauses gated on the role rather than skipped.
     schema = schema_failures(runs)
+    if isinstance(forced_report, dict):
+        schema += schema_failures({"f": forced_report}, forced_role=True)
     if schema:
         verdict = {"verdict": "FAIL", "failures": {"schema": schema}}
         Path(a.out).write_text(json.dumps(verdict, indent=1, sort_keys=True) + "\n")
