@@ -505,6 +505,16 @@ def main() -> int:
         return found
 
     def collect_containment_evidence():
+        # Round 29 finding #29: this ran only on the flags-off path, so the
+        # forced-on record carried no census paths at all and its stores were
+        # unconstrained. Both paths record where their stores actually went.
+        report["census_resolved_paths"] = {
+            "private_thoughts": str(
+                __import__("core.infra.private_thoughts", fromlist=["x"])
+                ._default_private_thoughts_path()),
+            "audit_log": str(_paths.audit_log_db()),
+        }
+
         """Round 27 finding #14: the forced-on branch RETURNED before these
         sweeps ran, so the report proving "nothing was stored" carried no
         latch sweep, no escaped-store sweep, and no post-replay ledger
@@ -601,12 +611,6 @@ def main() -> int:
     # T5 deliberately exercises the hermetic fallback, so a reply that is a
     # degraded string is expected -- but it must never be reported as healthy
     # synthesis. Label the shape; do not judge it here.
-    report["census_resolved_paths"] = {
-        "private_thoughts": str(
-            __import__("core.infra.private_thoughts", fromlist=["x"])
-            ._default_private_thoughts_path()),
-        "audit_log": str(_paths.audit_log_db()),
-    }
 
     # Gate round 17/18 item B: enumerating selectors one at a time will
     # always miss one, so this is the catch-all. Round 19 Q4 asked whether it
