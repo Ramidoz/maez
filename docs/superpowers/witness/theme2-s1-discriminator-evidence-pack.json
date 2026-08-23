@@ -1,16 +1,16 @@
 {
- "digests_computed_against_tree_at_commit": "10b2a4dd6cfc2ef9d68be92695039469802cfde0",
- "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Every OTHER file referenced here is unchanged between those two commits, which is checkable with `git diff --stat`.",
+ "digests_computed_against_tree_at_commit": "0691b265bafd9ee59d6c574bc4163464a74dd10e",
+ "provenance_note": "Digests describe the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit. Round 26 showed the bundle could not then digest THIS pack honestly, so the pack is committed alone and the bundle is computed against that commit \u2014 see the bundle's own note.",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "f96b7e7a71b1ff24eb6102622fca6a6261b4f680d7bf40820000a72505342dd7"
+  "sha256": "bcf75215b458361de7ba8c751ed5a54ac2f59f3816a33f93c7eed5be4614e7fd"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "f53269d5d58f8eaae747ea38ed8c27d89e97189fc7573e5eb52131cdbf584161",
+  "sha256": "1867e99fda84b9666a6d4b67ac3eb6da1aa6ce42635ce814397f4b1237db86c3",
   "retained_receipt": {
    "file": "evidence/discriminator-2026-08-23/selftest-stdout.txt",
-   "sha256": "036da231de8a015d2d0e4ebac25d55727bac76968df15f0975028d420215c6cb",
+   "sha256": "215fc0d7512c38f89b959f8c2481bab49e929228a06f0a05a0b8922a1e4a8173",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -46,10 +46,22 @@
   "verdict": "PASS",
   "D_discriminator": "PASS"
  },
- "round_25_forgeries_now_caught": [
-  "flags-off raw row contradicting a clean aggregate -> K3_positive_controls",
-  "forced-on raw row naming an alien consumer under a clean refusal list -> D_discriminator",
-  "forced-on stamp_census emptied to {} -> D_discriminator",
-  "run and baseline co-mutated so they agree with each other -> D_discriminator"
- ]
+ "forgeries_now_caught": {
+  "round_25": [
+   "flags-off raw row contradicting a clean aggregate",
+   "forced-on raw row naming an alien consumer under a clean refusal list",
+   "forced-on stamp_census emptied to {}",
+   "run and baseline co-mutated so they agree with each other"
+  ],
+  "round_26": [
+   "decoy collection key satisfying growth",
+   "interaction and refusal co-mutated to a different KNOWN consumer",
+   "exact five-store census holding impossible negative counts",
+   "Boolean tail counts (True is an int in Python)"
+  ],
+  "found_by_sweeping_the_class": [
+   "Boolean count on the flags-off census",
+   "negative count on the flags-off census"
+  ]
+ }
 }
