@@ -195,19 +195,6 @@ def main() -> int:
     # under test — `resolver_module` was an unverified path string, so a
     # record could name any resolver it liked and a PASS was compatible with
     # a different tree entirely. Digest the sources the claim is about.
-    # Round 31 #36: the HEALTHY arm had only negative backing ("not the
-    # partial ledger"), so one execution could supply both arms by editing
-    # two hex strings. The applied-migration set is a fixture-CAUSED fact the
-    # judge can check against the protocol's frozen expectation.
-    try:
-        _c = sqlite3.connect(f"file:{MAEZ_TREE / 'memory' / 'ledger.db'}?mode=ro", uri=True)
-        report["applied_migrations"] = sorted(
-            r[0] for r in _c.execute("SELECT name FROM schema_migrations"))
-        _c.close()
-    except sqlite3.Error as exc:
-        report["applied_migrations"] = {"error": str(exc)}
-    # Round 31 #38 (partial): nothing required a record to have come from
-    # THIS producer inside THIS airlock. Digest both.
     report["instrument_digests"] = {
         rel: hashlib.sha256((Path(__file__).resolve().parent / rel).read_bytes()).hexdigest()
         for rel in ("theme2_s1_t5_replay.py", "theme2_s1_airlock.sh")}
@@ -296,6 +283,20 @@ def main() -> int:
             conn.executescript((mig / name).read_text())
         conn.commit()
         conn.close()
+    # Round 31 #36: the HEALTHY arm had only negative backing ("not the
+    # partial ledger"), so one execution could supply both arms by editing
+    # two hex strings. The applied-migration set is a fixture-CAUSED fact the
+    # judge can check against the protocol's frozen expectation.
+    try:
+        _c = sqlite3.connect(str(ledger))
+        report["applied_migrations"] = sorted(
+            r[0] for r in _c.execute("SELECT name FROM schema_migrations"))
+        _c.close()
+    except sqlite3.Error as exc:
+        report["applied_migrations"] = {"error": str(exc)}
+    # Round 31 #38 (partial): nothing required a record to have come from
+    # THIS producer inside THIS airlock. Digest both.
+
     report["ledger_post_migration_sha256"] = hashlib.sha256(
         ledger.read_bytes()).hexdigest()
     report["ledger_post_migration_file_set"] = sorted(
