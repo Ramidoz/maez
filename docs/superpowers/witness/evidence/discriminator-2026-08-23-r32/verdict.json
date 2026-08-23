@@ -1,0 +1,52 @@
+{
+ "D_discriminator": "PASS",
+ "clauses": {
+  "K1_ledger_unchanged": "PASS",
+  "K2_no_latch_artifact": "PASS",
+  "K3_positive_controls": "PASS",
+  "K4_no_stray_store": "PASS",
+  "K5_flags_were_off": "PASS",
+  "K6_contained_and_distinct": "PASS",
+  "K7_fixture_label_backed": "PASS",
+  "K8_record_coherence": "PASS"
+ },
+ "failures": {},
+ "inputs_sha256": {
+  "baseline_archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
+  "baseline_census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
+  "forced_on": "7952e7b591f7366643a306429eeacad241c13e0365752e36b7c40b9310ea84d2",
+  "judge_self": "ef1dc88e9b107388da13311824cbfc63a9b5e05047864be017814ec7f1340bc5",
+  "replay_manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420",
+  "run_a": "873db614e9917712057b2f528265027964e7788bc22a74198d9576078e450b8d",
+  "run_p": "079bd7094233bf984ad550a224428812ad618e2cf7d51c92772ae996f7091e22"
+ },
+ "pinned_census": {
+  "per_fixture": {
+   "healthy": {
+    "current_phase": "gestation",
+    "stamp_census": {
+     "audit_log": {},
+     "chroma::core": {},
+     "chroma::daily": {},
+     "chroma::raw": {
+      "gestation": 20
+     },
+     "private_thoughts": {}
+    }
+   },
+   "partial": {
+    "current_phase": "gestation",
+    "stamp_census": {
+     "audit_log": {},
+     "chroma::core": {},
+     "chroma::daily": {},
+     "chroma::raw": {
+      "gestation": 20
+     },
+     "private_thoughts": {}
+    }
+   }
+  }
+ },
+ "verdict": "PASS"
+}

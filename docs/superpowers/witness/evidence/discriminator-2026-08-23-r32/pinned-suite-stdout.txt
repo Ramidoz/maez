@@ -1,0 +1,10 @@
+# pinned suite — executed at 6b4823c14f003284a6d66e4c844c092836484cea on 2026-08-23T16:00:25-05:00
+...........................................................                                      [100%]
+=============================== warnings summary ===============================
+tests/test_t3_consumer_refusal.py::T3Refusal::test_exact_map_coverage_and_refusal
+  /home/rohit/maez/.venv/lib/python3.14/site-packages/chromadb/telemetry/opentelemetry/__init__.py:128: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    if asyncio.iscoroutinefunction(f):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+59 passed, 1 warning, 48 subtests passed in 41.86s
+exit=0
