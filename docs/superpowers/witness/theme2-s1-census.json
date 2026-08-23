@@ -1,5 +1,5 @@
 {
- "_comment": "DERIVED BY EXECUTION on 2026-08-22, not authored. Regenerate with `python3 -m core.memory.s1_census --repo . --emit`. The previous version of this file was hand-written and frozen with a matching digest while naming constructs that do not exist -- a digest proves a file is unchanged, not that its claims are true. See docs/superpowers/specs/2026-08-22-theme2-census-correction.md.",
+ "_comment": "DERIVED BY EXECUTION on 2026-08-22, not authored. Regenerate with `python3 -m core.memory.s1_census --repo . --emit`. The previous version of this file was hand-written and frozen with a matching digest while naming constructs that do not exist -- a digest proves a file is unchanged, not that its claims are true. See docs/superpowers/specs/2026-08-22-theme2-census-correction.md. Re-derived after S1's own resolver landed: the census bit on core/memory/birth_phase.py::resolve, which reads the anchor and was not yet expected — the guard caught its own author.",
  "_interpreter": "3.14.4",
  "_derived_at_commit": "see git log for docs/superpowers/witness/theme2-s1-census.json",
  "_needs_adjudication": {
@@ -29,6 +29,7 @@
   "core/governance/s7_consultation_exemption.py::born_by_any_signal",
   "core/ledger/writer.py::LedgerWriter.write_turn",
   "core/memory/birth_phase.py::birth_event_turn_id",
+  "core/memory/birth_phase.py::resolve",
   "core/memory/source_awareness.py::_should_skip_dir",
   "memory/memory_manager.py::MemoryManager.store",
   "memory/memory_manager.py::MemoryManager.store_core",

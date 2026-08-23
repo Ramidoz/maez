@@ -16,6 +16,7 @@ irreversible by covenant — but this module itself stays stateless.
 from __future__ import annotations
 
 import sqlite3
+from collections import namedtuple as _namedtuple
 from pathlib import Path
 
 PHASE_GESTATION = "gestation"
@@ -66,3 +67,172 @@ def is_born(db_path: str | Path | None = None) -> bool:
 
 def current_phase(db_path: str | Path | None = None) -> str:
     return PHASE_LIVED if is_born(db_path) else PHASE_GESTATION
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# S1 — phase truth. Theme 2, protocol §9 (API), §2/§10 (the resolution
+# table), §12.13 (what is blocked).
+#
+# WHY THIS IS BOLTED ON RATHER THAN REPLACING WHAT IS ABOVE.
+#
+# Everything above answers `gestation` for any ledger without a readable
+# birth anchor — absent, 0-byte, half-migrated, byte-corrupt alike. That is
+# not a bug in the old code's own terms; it is the A6 defect Theme 2 exists
+# to close: phase silently degrading to gestation, so a damaged ledger
+# claims to be an unborn one.
+#
+# S1 must be able to say `unknown`. But it lands DORMANT: with
+# MAEZ_S1_PHASE_TRUTH unset, `current_phase()`, `is_born()` and
+# `birth_event_turn_id()` must behave EXACTLY as they did before. T5's
+# discriminator is built on precisely that — it runs a partial ledger twice
+# and requires the answer to change only when the flag is set. If the old
+# surface drifts even slightly, the dormancy proof stops meaning anything.
+#
+# So: new names, no edits to the old ones.
+# ─────────────────────────────────────────────────────────────────────────
+
+PHASE_UNKNOWN = "unknown"
+
+#: Activation. Pinned in §9 before the code that reads it, so T5's gate can
+#: bind a forced-on run to a flag that already has a fixed spelling.
+ACTIVATION_FLAG = "MAEZ_S1_PHASE_TRUTH"
+
+#: The frozen twelve (§9). T1 asserts phase AND reason per cell, so this
+#: vocabulary is a contract, not an implementation detail.
+REASONS = (
+    "absent",              # no file at the resolved path
+    "uninitialized_empty", # the file exists and is 0 bytes
+    "structural",          # connectable, but not the shipped structure
+    "corrupt",             # unreadable as a database
+    "meta_absent",         # structurally whole, no birth anchor -> gestation
+    "joined",              # anchor pointer joins to its hashed turn -> lived
+    "join_failed",         # anchor pointer names a turn that is not there
+    "latch_conflict",      # a latch exists where the ledger says it cannot
+    "latch_torn",          # latch segment half-published or truncated
+    "latch_foreign",       # latch bound to another path or genesis
+    "rewind",              # ledger behind the latched high-water mark
+    "io_error",            # the resolver could not read what it needed
+)
+
+#: §12.13, as ruled: the latch subsystem is blocked until the production
+#: writer topology is decided and T2 witnesses it. The branches that would
+#: publish or interpret a latch are named and fail closed rather than
+#: quietly returning something plausible — a stub that guesses is worse than
+#: one that refuses, because the guess would be witnessed as truth.
+LATCH_BLOCKED_REASON = (
+    "birth_latch is blocked by S1 protocol §12.13 until the production "
+    "writer topology is ruled (S2 open item O-1) and T2 witnesses it"
+)
+
+
+class PhaseResult(_namedtuple("PhaseResult", ("phase", "reason"))):
+    """(phase, reason). §9 pins both fields; T1 asserts both."""
+    __slots__ = ()
+
+
+class PhaseUnknownRefusal(RuntimeError):
+    """A consumer was asked to stamp a phase the resolver cannot vouch for.
+
+    §4's contract: on `unknown`, a census consumer refuses and writes
+    nothing. Silent success, or a `gestation` stamp, is a kill.
+    """
+
+
+def s1_enabled() -> bool:
+    """Read at call time, never cached — a flag flip must not need a restart."""
+    import os
+    return os.environ.get(ACTIVATION_FLAG) == "1"
+
+
+def _expected_tables() -> frozenset[str]:
+    """The v1 shipped structure (protocol §9's T6 inventory).
+
+    S1 lands before S2, so `gestation` is judged against migrations
+    0001–0005 as shipped. The list is re-frozen when S2's migrations land.
+    """
+    return frozenset({
+        "audit_trace_lineage", "claim_judgements", "claims", "meta",
+        "model_swaps", "schema_migrations", "turns",
+    })
+
+
+def resolve(db_path=None) -> PhaseResult:
+    """The S1 resolver. Latch-independent branches only (§12.13).
+
+    Dormant unless MAEZ_S1_PHASE_TRUTH=1, in which case it answers exactly
+    as the pre-S1 surface did, so that flags-off behaviour is unchanged.
+    """
+    import os
+    import sqlite3 as _sqlite3
+
+    path = Path(db_path) if db_path is not None else default_ledger_path()
+
+    if not s1_enabled():
+        # Dormant: mirror the legacy answer, and say why in the reason so a
+        # report can tell dormancy from a real classification.
+        return PhaseResult(current_phase(path), "dormant")
+
+    # 1. absence and emptiness are provably pre-birth: no structure exists
+    #    that could misreport anything (protocol §2's doctrine note).
+    if not path.exists():
+        return PhaseResult(PHASE_GESTATION, "absent")
+    try:
+        if path.stat().st_size == 0:
+            return PhaseResult(PHASE_GESTATION, "uninitialized_empty")
+    except OSError:
+        return PhaseResult(PHASE_UNKNOWN, "io_error")
+
+    # 2. from here the file claims to be a database, so it must prove it.
+    try:
+        conn = _sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except _sqlite3.Error:
+        return PhaseResult(PHASE_UNKNOWN, "io_error")
+    try:
+        try:
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        except _sqlite3.DatabaseError:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
+
+        missing = _expected_tables() - names
+        if missing:
+            return PhaseResult(PHASE_UNKNOWN, "structural")
+
+        # A table set can be complete while the pages underneath are not.
+        # Counting rows is NOT enough: the T1 F-D2 fixture corrupts 16 bytes
+        # at offset 4096, and SELECT COUNT(*) on turns and meta never reads
+        # that page — the resolver answered `gestation, meta_absent` on a
+        # damaged ledger, which is exactly the misreport this slice exists to
+        # prevent. quick_check walks the pages; it costs 0.2 ms on a healthy
+        # store, and correctness here is worth far more than that.
+        try:
+            conn.execute("PRAGMA quick_check").fetchall()
+        except _sqlite3.DatabaseError:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
+
+        # 3. the birth anchor.
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'birth_event_turn_id'"
+            ).fetchone()
+        except _sqlite3.DatabaseError:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
+
+        anchor = (row[0] or "").strip() if row else ""
+        if not anchor:
+            return PhaseResult(PHASE_GESTATION, "meta_absent")
+
+        # The pointer is a convenience; the truth is the hashed row. A
+        # pointer that names no turn is exactly the F-X case, and answering
+        # `lived` on it would be the misdating this theme exists to prevent.
+        try:
+            hit = conn.execute(
+                "SELECT 1 FROM turns WHERE turn_id = ?", (anchor,)).fetchone()
+        except _sqlite3.DatabaseError:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
+        if hit is None:
+            return PhaseResult(PHASE_UNKNOWN, "join_failed")
+
+        return PhaseResult(PHASE_LIVED, "joined")
+    finally:
+        conn.close()
