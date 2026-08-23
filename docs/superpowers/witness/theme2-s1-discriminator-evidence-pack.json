@@ -1,17 +1,17 @@
 {
- "digests_computed_against_tree_at_commit": "2815fa83987d0d95fe2f4966f98f25674161f832",
+ "digests_computed_against_tree_at_commit": "729c6480e1115b662cb71b7e06d8faf6192b783a",
  "provenance_note": "Digests describe the tree at the commit named above; this file's bytes land in the FOLLOWING commit, and the bundle is computed against that one so its digest of this pack is honest.",
  "evidence_generation": "Executed at round 29. The judge hashes the replay manifest, the pinned archive AND the four attested source files off disk, so the evidence is bound to the corpus and to the code it is about. (Round 30 corrected an earlier overclaim here: source digests had only been compared between records.)",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "dd276270722d9cfd21f9217f43241271f8cf58ae53d8cd4209ceb6917b00ec2c"
+  "sha256": "ec14e8d4526aef90d1c00dd1c7656d6fe3c7a56d2f261930cc4be2c1139f05af"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "23637b165981da1fa2c228be7f025725d6751b8eb9a8ab38fe1317e26786e63e",
+  "sha256": "f29a622cd1e5f38835e4e36b04139a24c77464337af55db8af239628702a3282",
   "retained_receipt": {
-   "file": "evidence/discriminator-2026-08-23-r29/selftest-stdout.txt",
-   "sha256": "25af1a792c9cce7c0297af5e83dc7bb9bd7c56d5eccc786e7779e1c6373bcd6d",
+   "file": "evidence/discriminator-2026-08-23-r31/selftest-stdout.txt",
+   "sha256": "f8511e78830dc47e8e39f9519ff9fe84c4e568552d1a86b260205dc4c6bacdf3",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -20,22 +20,22 @@
  },
  "producer": {
   "file": "theme2_s1_t5_replay.py",
-  "sha256": "1df2e0b23db21c44af98ebdc712b8f69b3d43b2a65d4cfbf4fb76decea37ed2f"
+  "sha256": "73b154ccb23854ae95d4e9addfa233d9d825be93d83142a8d20613cd702c55ec"
  },
  "airlock": {
   "file": "theme2_s1_airlock.sh",
   "sha256": "9a1207b569fdefc35d7e6133e5da4850f3edd18e85150d43b6dff8c50caa0c0e"
  },
  "verdict_inputs_sha256": {
-  "run-a.json": "963f52979977aebdf897d56d04dd8aeed84521f866ee642aeb3c78c6a879a469",
-  "run-p.json": "97181b4b4e471cade31b9c1140b8261786f2e68b275dda5bb8e31b59fc65aa22",
-  "run-f.json": "e069bc0782ef9f3a34d986ee11bbc8846fd5e1d8c4eee62e607bc7e0f46f85cd",
+  "run-a.json": "5abe16920fcce359f02d6dd5775179145da376aeacdee5a35c59e0071b469f0d",
+  "run-p.json": "71f4679a5672a041b4d379a69343badd49532801ec35e5d6f29f66f501e51001",
+  "run-f.json": "d096ef95f8ac4a6e97aa26d1d7404ff26090baaf91af336e4eef1efbeb62c965",
   "baseline-census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "baseline-archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "replay-manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "verdict": {
-  "file": "evidence/discriminator-2026-08-23-r29/verdict.json",
+  "file": "evidence/discriminator-2026-08-23-r31/verdict.json",
   "sha256": "0c97bd90e07b8ff49bb2b6eb0f25ecb56dd0dd4366d1a0a4569274f6acfda85c"
  },
  "verdict_summary": {
@@ -103,11 +103,21 @@
    "store paths were tested for containment where the producer pins them by exact equality",
    "the clone check was defeated by wall-clock jitter in one interaction",
    "round 29's findings had no regression cases; the pack's clause summary omitted K8; run-b was listed as a verdict input though the judge never reads it"
+  ],
+  "round_31": [
+   "one execution could supply all three arms (the healthy fixture had only negative backing)",
+   "the forced-on refusal was free text and the traceback naming the attested source was unread",
+   "the schema stage never ran on the forced-on record",
+   "the census path map was containment-tested where its twin is pinned exactly",
+   "resolver_module \u2014 the record's own statement of what it loaded \u2014 was unread",
+   "python/sqlite were required to agree across records and compared to nothing",
+   "the stray sweep's difference basis was unread, so 'nothing escaped' meant 'nothing new escaped'",
+   "the manifest join used the id and ignored `at` and `source`, and `source` selects the daemon path"
   ]
  },
  "not_a_verdict_input": {
-  "file": "evidence/discriminator-2026-08-23-r29/run-b.json",
-  "sha256": "46dd13d0e69201e51d3a0de77ee8589aba178824f64d39c7eccc83079b4715d8",
-  "note": "a second healthy replay retained for the forensic byte-projection only. The judge never reads it; round 30 caught it being listed as a verdict input."
+  "file": "evidence/discriminator-2026-08-23-r31/run-b.json",
+  "sha256": "ed4583acfe69e851fdb56825f12e088d12a2c118f1d2ca4445b0b10b3f055512",
+  "note": "second healthy replay, forensic byte-projection only; the judge never reads it"
  }
 }
