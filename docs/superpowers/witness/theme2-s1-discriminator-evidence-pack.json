@@ -1,14 +1,15 @@
 {
- "_comment": "Digest-bound evidence pack for the S1 forced-on discriminator run of 2026-08-23 (gate round 22: retained evidence is legitimate to re-judge, but only when bound \u2014 /tmp is mutable). sha256 over each retained artifact, plus the judge and producer sources at the judging commit.",
- "judged_at_commit": "45ff4261f5cc49ef4294896e47ddf27029fbc83c",
+ "_comment": "Digest-bound evidence pack for the S1 forced-on discriminator run of 2026-08-23. Regenerated (gate 23: the earlier pack's judged_at_commit predated the judge it hashed). The judge hashed HERE is the exact-manifest-join generation that produced gate-verdict-v4; retained raw artifacts unchanged, digests below prove it.",
+ "judged_at_commit": "7df6ac8e4295e1e5888de669547b35fa240c8899",
  "artifacts": {
   "run-a.json": "7c3e19e54ec4de650dcfecae698e54bc3a0e3f1da877f4b99c4e80be4cafb10f",
   "run-b.json": "f12a3e204037158208b44df23a28142c5002c144d40bfe0275b7e69a3771bd36",
   "run-p.json": "43ce41d2867a3e8d1e7a65f2cc6a917c10552fa908f0840ffd446ae1308e1fcc",
   "run-f.json": "372af095723076e974e03ad001da340635c28f816ef8fb7d2fa5979d297ff1af",
-  "gate-verdict-v3.json": "c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc",
-  "theme2_s1_t5_gate.py": "969767eb9d285ca237057b10118c472094c9d2cea4c8740b1c540b24d68dc967",
+  "gate-verdict-v4.json": "c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc",
+  "theme2_s1_t5_gate.py": "76ede91a32599984315a24d5c75b366ffc49c890888c03dd2a574f18807a7aac",
   "theme2_s1_t5_replay.py": "34d8d048c4e449e6e6a243fb6535f7a2fc0e45faa4772cfc70d83a8acf0afa36",
-  "theme2_s1_t5_gate_selftest.py": "f6150fa8cf6ef4b7cae7b4a1264787a33e4d32e2ee1b00451e73ecda3c9b0ad3"
+  "theme2_s1_t5_gate_selftest.py": "16be864c316278fd8c5cac13d9322f1b1a5d588ba1316f199697e7a9ad659046",
+  "theme2-s1-replay.json": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  }
 }

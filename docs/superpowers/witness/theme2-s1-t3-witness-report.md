@@ -50,3 +50,21 @@ the gate-20 closure; a retained re-execution belongs to the final S1
 evidence report). The airlock ran the frozen system SQLite 3.46.1, as
 the fixtures and baseline assume; the vendor 3.53.4 runs in production
 units only.
+
+## Final run (post gate-23 closures, at `7df6ac8e4295e1e5888de669547b35fa240c8899`)
+
+T4: census CLEAN — 66 constructs. T3: **37 passed + 43 subtests**, one
+host-only control deferring by design to its executed clone twin.
+Updated digests:
+
+| artifact | sha256 |
+|---|---|
+| theme2-s1-census.json | `5c444463583d06c90b35d396d93ba876851aa216bc31776381402e80f707e3f2` |
+| theme2-s1-t3-map.json | `e84f7eea44a3264de2b345025afe4cc1ac5bfbb1411c6568cd8edb6343ace4fc` |
+| tests/test_t3_consumer_refusal.py | `381cdd1c44031336db54ebfc69fbbf1da87af0bd32b6d42ef0a4abefc012f449` |
+| tests/test_t3_map_join.py | `3e810f4b36055c41c53e966ba1b0a792a2804dfd178a6f997f1b5fe637f18c8d` |
+| tests/test_s1_census.py | `fe4ff1d401bb9d7a57fee79c7303026327650a20be604babf0a3183cb53c5f14` |
+| theme2-s1-t6-execution.json | `d22c679a7153ca418818135b0fb5868021aa931fce0cc57a8cda86b3b2fe13b2` |
+| theme2-s1-discriminator-verdict.json | `c2d11ff56b528c3c25e28810446692406c2c10e7f732d3ea39ab753615598efc` |
+
+T6 is now a retained artifact: all nine mutations flip, control holds.
