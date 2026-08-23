@@ -1,17 +1,17 @@
 {
- "digests_computed_against_tree_at_commit": "049c4e53ece00ef0e0a93c5621ce70fc35bbac4f",
+ "digests_computed_against_tree_at_commit": "7eb28b5ae0ffc4a760879a8b04b26746aebb7ad6",
  "provenance_note": "Digests describe the tree at the commit named above; this file's bytes land in the FOLLOWING commit, and the bundle is computed against that one so its digest of this pack is honest.",
- "evidence_generation": "Re-executed at round 27 after the producer was repaired: the forced-on path previously returned before the containment sweeps ran. The prior set is retained under evidence/discriminator-2026-08-23/ with a SUPERSEDED note and deliberately fails this judge.",
+ "evidence_generation": "Re-executed at round 29. The judge now hashes the replay manifest on disk (it previously trusted a producer-stamped field), and the records digest the resolver and the three stamping consumers, so the evidence is bound to the corpus AND to the code it is about.",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "7ad5023239b2032829e1ca29fa15d772a6fc2aee977df5b8c4b718721b6a1529"
+  "sha256": "62b87f2b76664ddf1eacda40b25c52779910a54baeff8e1ae1ba9359c723d6dc"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "64b54f0d918d6460cf6573ff61a35bcb742778cc8f4bc2fa9caf8ea0c13e2223",
+  "sha256": "1dffd344476fac34268cea56a6d4248e26e687e764a1a9000ac21d6fb26c8742",
   "retained_receipt": {
-   "file": "evidence/discriminator-2026-08-23-r27/selftest-stdout.txt",
-   "sha256": "268a7ae9072098f2138cec61ba1ee2d9aad6fe31f418c9cb9cc1962e709fe6ea",
+   "file": "evidence/discriminator-2026-08-23-r29/selftest-stdout.txt",
+   "sha256": "372bbf5df5fe5d2780764dcb2bf4d2d040c1a35651d60ffb976143a6047743cc",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -20,23 +20,23 @@
  },
  "producer": {
   "file": "theme2_s1_t5_replay.py",
-  "sha256": "8f689ddb261145e7748579b39cf3991420682007abb7cb9b577b46133f639159"
+  "sha256": "1df2e0b23db21c44af98ebdc712b8f69b3d43b2a65d4cfbf4fb76decea37ed2f"
  },
  "airlock": {
   "file": "theme2_s1_airlock.sh",
   "sha256": "9a1207b569fdefc35d7e6133e5da4850f3edd18e85150d43b6dff8c50caa0c0e"
  },
  "verdict_inputs_sha256": {
-  "run-a.json": "c17b0a2038125522d92aabc3dd6ca5648a36a5d8a941ec38a8b945fc897cfa66",
-  "run-b.json": "062637bc6b3fb089a8e2d72a8371f5cdeb0c966d71ce6748ecc80656c8b4a24f",
-  "run-p.json": "8ef4447516a2a6df3b4e026d9e7334cca4b90f0310725e7ab6fe1223ccd05827",
-  "run-f.json": "cd5368e983e4f11b742af1a32432aa4cd7bb09a37722fd8009e8f35c32d64203",
+  "run-a.json": "963f52979977aebdf897d56d04dd8aeed84521f866ee642aeb3c78c6a879a469",
+  "run-b.json": "46dd13d0e69201e51d3a0de77ee8589aba178824f64d39c7eccc83079b4715d8",
+  "run-p.json": "97181b4b4e471cade31b9c1140b8261786f2e68b275dda5bb8e31b59fc65aa22",
+  "run-f.json": "e069bc0782ef9f3a34d986ee11bbc8846fd5e1d8c4eee62e607bc7e0f46f85cd",
   "baseline-census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "baseline-archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "replay-manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "verdict": {
-  "file": "evidence/discriminator-2026-08-23-r27/verdict.json",
+  "file": "evidence/discriminator-2026-08-23-r29/verdict.json",
   "sha256": "0c97bd90e07b8ff49bb2b6eb0f25ecb56dd0dd4366d1a0a4569274f6acfda85c"
  },
  "verdict_summary": {
@@ -89,6 +89,13 @@
    "the census reconciliation compared an absolute census to a delta, so a non-empty starting store validated",
    "four live clauses had no test case; the archive clause was unreachable in effect and never hashed the archive",
    "records could contradict their own containment: paths outside the airlock, /dev/null census paths, reachable brain, disagreeing interpreters, refusals on a flags-off run, twenty empty replies"
+  ],
+  "round_29": [
+   "the replay manifest was never hashed: a forged manifest validated against byte-identical records",
+   "'one orchestration' was satisfied by DELETING the environment fields",
+   "the two fixtures could be one execution (the clone test was negative and K7 freed two channels)",
+   "path containment was type-gated, and an absent census-path map read as innocent",
+   "nothing bound the evidence to the code under test"
   ]
  }
 }
