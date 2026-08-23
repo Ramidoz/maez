@@ -460,6 +460,38 @@ def main() -> int:
                and after[k] > before[k] for k in ("raw", "daily", "core"))
     report["stamp_census"] = stamp_census()
     report["consumer_refusals"] = consumer_refusals
+    SQLITE_MAGIC = b"SQLite format 3\x00"
+
+    def looks_like_sqlite(q: Path) -> bool:
+        try:
+            with q.open("rb") as fh:
+                return fh.read(16) == SQLITE_MAGIC
+        except OSError:
+            return False
+
+    def sweep() -> set[str]:
+        found: set[str] = set()
+        for root in WRITABLE_ROOTS:
+            if not root.exists():
+                continue
+            for q in root.rglob("*"):
+                try:
+                    # The repo is --ro-bind mounted inside the home tmpfs;
+                    # nothing there can be written, and walking it costs
+                    # seconds. logs/ and .cache/ are swept as their own roots.
+                    if root == Path("/home/rohit") and \
+                            MAEZ_TREE in q.parents:
+                        continue
+                    if not q.is_file():
+                        continue
+                    if q.resolve().is_relative_to(STORE_TREE):
+                        continue          # inside the projected tree
+                    if looks_like_sqlite(q):
+                        found.add(str(q))
+                except OSError:
+                    continue
+        return found
+
     def collect_containment_evidence():
         """Round 27 finding #14: the forced-on branch RETURNED before these
         sweeps ran, so the report proving "nothing was stored" carried no
@@ -576,39 +608,6 @@ def main() -> int:
     # honest test is a before/after difference, not an absolute census. The
     # inventory is taken before the daemon is constructed; only paths that
     # appear afterwards are strays.
-    SQLITE_MAGIC = b"SQLite format 3\x00"
-
-    def looks_like_sqlite(q: Path) -> bool:
-        try:
-            with q.open("rb") as fh:
-                return fh.read(16) == SQLITE_MAGIC
-        except OSError:
-            return False
-
-    def sweep() -> set[str]:
-        found: set[str] = set()
-        for root in WRITABLE_ROOTS:
-            if not root.exists():
-                continue
-            for q in root.rglob("*"):
-                try:
-                    # The repo is --ro-bind mounted inside the home tmpfs;
-                    # nothing there can be written, and walking it costs
-                    # seconds. logs/ and .cache/ are swept as their own roots.
-                    if root == Path("/home/rohit") and \
-                            MAEZ_TREE in q.parents:
-                        continue
-                    if not q.is_file():
-                        continue
-                    if q.resolve().is_relative_to(STORE_TREE):
-                        continue          # inside the projected tree
-                    if looks_like_sqlite(q):
-                        found.add(str(q))
-                except OSError:
-                    continue
-        return found
-
-
     collect_containment_evidence()
     report["finished_at"] = time.time()
     out = Path(args.report)
