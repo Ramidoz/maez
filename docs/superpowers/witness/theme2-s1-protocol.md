@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.9
+# Theme 2 — S1 (phase truth) witness protocol, v7.10
 
-Status: PROTOCOL v7.9. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.10. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes.
 
@@ -11,6 +11,53 @@ gate rounds each return zero NEW forgeries against the judge and zero new
 defects found by execution.** One clean round is a coincidence; two is
 evidence the well is dry. This is the loop-until-dry standard this project
 already applies to discovery, applied to its own judge.
+
+**§0.2 — PROPOSAL, NOT ADOPTED. Owner ruling required (raised 2026-08-23,
+after round 32).** §0.1 as written may be unreachable by construction, and
+the reason is worth stating precisely rather than acted on unilaterally.
+
+Round 32's analysis: the judge's inputs divide into those it authenticates
+by reading and hashing files itself (the replay manifest, the pinned
+archive, the baseline census, the four attested sources, the instruments,
+the migration files, the partial-fixture ledger) and those the producer
+asserts about itself (containment probes, environment views, counts,
+censuses, interaction rows, refusal rows). Against an adversary who writes
+the evidence AND reads the judge, no clause over the second half can ever
+suffice, because every clause is a predicate the adversary solves for. Each
+new clause raises the COST of a consistent forgery, never its possibility.
+Findings per round — 12, 11, 6, 4, 9, 10 — did not converge because the
+space of mutually-consistent lies is not finite, only tedious.
+
+So §0.1 as written arguably encodes "no reviewer tried hard enough", which
+is a fact about reviewers, not about the artifact. It would close on
+reviewer fatigue — the worst possible reason — or never.
+
+**Proposed replacement, for the owner to accept, amend or reject:** the
+discriminator closes when two consecutive rounds produce zero
+HONEST-REACHABLE findings — those a non-lying producer, airlock or workflow
+could actually emit: a producer bug, a changed instrument, a changed
+interpreter or library, an altered fixture or migration, an accidentally
+enabled flag, a stale artifact, an unexercised path presented as exercised.
+Every accepted FORGERY-ONLY mutation is still reported each round, with its
+clause and exit code, so the residual surface stays visible; it does not
+reset the counter.
+
+**And a scope statement would become mandatory at closure:** a PASS licenses
+"the artifacts the judge authenticates are the frozen ones, and the
+self-reported observations are internally consistent, mutually corroborating
+across three independently-timed executions, and consistent with those
+artifacts." It does not license "no one forged this report." Forgery
+resistance, if ever required, comes from an independent airlock transcript
+or a hardware-gated signature over the verdict and its inputs — not from
+more clauses.
+
+**Why this is a proposal and not an amendment.** §0.1 was registered before
+round 27's verdict was known, precisely so an outcome could not set the bar.
+Rewriting a closure condition after several rounds have failed it is the
+same move in the opposite direction, and it is not mine to make even with an
+argument this strong. Round 32's own judgment, recorded verbatim: two of its
+ten findings were honest-reachable and worth another round; "the tail is
+not."
 
 Rationale, recorded honestly: rounds 21 through 26 each found real defects
 by execution — round 25 forged three PASSes and round 26 forged four more,
