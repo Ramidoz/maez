@@ -137,6 +137,17 @@ if [ ! -e "$AIRLOCK/home/.cache/chroma/onnx_models" ] \
     cp -a "$HOST_HOME/.cache/chroma/onnx_models" "$AIRLOCK/home/.cache/chroma/"
 fi
 
+# Bind TARGETS must exist in the live tree before bwrap can mount over
+# them; inside the namespace the tree is read-only, so a missing target is
+# fatal there and trivially fixable here. .cache vanished from the repo
+# between run days (gitignored runtime dir; cause unestablished) and the
+# discriminator run died at bwrap setup. Recreate the gitignored runtime
+# targets; refuse if memory/ itself is missing, because that would not be
+# routine.
+[ -d "$MAEZ_TREE/memory" ] || { echo "REFUSED: $MAEZ_TREE/memory missing" >&2; exit 6; }
+mkdir -p "$MAEZ_TREE/.cache" "$MAEZ_TREE/logs" \
+         "$HOST_HOME/.config/maez" "$HOST_HOME/.cache/chroma"
+
 BWRAP_ARGV=(
     bwrap
     --ro-bind / /
