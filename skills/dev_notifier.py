@@ -43,16 +43,41 @@ def send_dev(text: str):
     token = os.getenv('MAEZ_DEV_TOKEN')
     user_id = os.getenv('MAEZ_TELEGRAM_USER_ID')
     if not token or not user_id:
-        logger.warning("MAEZ_DEV_TOKEN not set — dev notification dropped")
+        # Name which one is missing. The old message always said
+        # "MAEZ_DEV_TOKEN not set" even when the token was fine and the user
+        # id was the problem, which sent anyone debugging it to the wrong
+        # place -- and the token had in fact been present and valid in
+        # config/secrets.local.env the whole time. The real fault was a
+        # caller that never loaded credentials.
+        missing = [n for n, v in (('MAEZ_DEV_TOKEN', token),
+                                  ('MAEZ_TELEGRAM_USER_ID', user_id)) if not v]
+        logger.warning(
+            "dev notification dropped — %s unset in this process. If the "
+            "value exists in config/secrets.local.env, the caller did not "
+            "load credentials (see core.infra.secrets.load_secrets_for_process).",
+            " and ".join(missing),
+        )
         return
     try:
-        requests.post(
+        resp = requests.post(
             f'https://api.telegram.org/bot{token}/sendMessage',
             json={'chat_id': user_id, 'text': text},
             timeout=10,
         )
+        # 2026-08-22: the response used to be discarded, so a Telegram
+        # rejection -- bot blocked, wrong chat_id, message too long -- was as
+        # silent as no token at all. An alerting path that cannot tell
+        # delivered from refused is not an alerting path.
+        if resp.status_code != 200 or not resp.json().get('ok'):
+            logger.error(
+                "dev notification REFUSED by Telegram: http=%s body=%s",
+                resp.status_code, resp.text[:200],
+            )
+            return False
+        return True
     except Exception as e:
         logger.error("Dev notification failed: %s", e)
+        return False
 
 
 def _truncate(s: str, n: int) -> str:

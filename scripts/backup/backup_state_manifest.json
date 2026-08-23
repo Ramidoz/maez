@@ -4,18 +4,140 @@
   "secret_warning": "Entries marked 'secret_file' contain credentials, tokens, or sensitive operational state. They are excluded by default. If included via --include-secrets, the backup destination MUST be encrypted at rest by the owner (LUKS / encrypted ZFS / age / gpg). The backup script does not implement encryption itself.",
   "entries": [
     {
-      "type": "directory",
-      "path": "memory/db",
-      "required": true,
-      "class": "required_continuity",
-      "comment": "ChromaDB BASE_DB — raw / daily / core / public_users collections plus chroma.sqlite3"
+      "type": "secret_file",
+      "path": "config/credentials.json",
+      "comment": "API credentials. Encrypted destination required.",
+      "class": "optional_observability"
     },
     {
-      "type": "directory",
-      "path": "memory/chroma",
+      "type": "file",
+      "path": "config/entity_aliases.local.yaml",
       "required": false,
       "class": "optional_observability",
-      "comment": "Legacy Chroma path; backed up if present"
+      "comment": "MSEL alias seed — owner-curated nicknames (Step 5g). Gitignored, lives nowhere else."
+    },
+    {
+      "type": "file",
+      "path": "config/entity_semantics.local.yaml",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "MSEL semantic mappings — owner-language phrase → canonical entity (Step 5n). Gitignored, lives nowhere else."
+    },
+    {
+      "type": "file",
+      "path": "config/identity.yaml",
+      "required": true,
+      "class": "required_continuity",
+      "comment": "Owner identity — required for any usable Maez"
+    },
+    {
+      "type": "secret_file",
+      "path": "config/model_state.json",
+      "comment": "Model state with possible API hints. Encrypted destination required.",
+      "class": "optional_observability"
+    },
+    {
+      "type": "file",
+      "path": "config/policies.yaml",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Per-owner policy overrides"
+    },
+    {
+      "type": "file",
+      "path": "config/reddit_subs.yaml",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "secret_file",
+      "path": "config/secrets.local.env",
+      "comment": "Decision 26 local credential fallback. Encrypted destination required.",
+      "class": "optional_observability"
+    },
+    {
+      "type": "file",
+      "path": "config/soul.local.md",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Per-instance accumulated soul"
+    },
+    {
+      "type": "secret_file",
+      "path": "config/thunder_state.json",
+      "comment": "Compute provider state. Encrypted destination required.",
+      "class": "optional_observability"
+    },
+    {
+      "type": "secret_file",
+      "path": "config/token.json",
+      "comment": "API tokens. Encrypted destination required.",
+      "class": "optional_observability"
+    },
+    {
+      "type": "file",
+      "path": "config/user_profiles.yaml",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "core/memory/audit_log.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Subpackage audit log; may be the same DB as memory/audit_log.db via shim"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "core/memory/identity_ledger.db",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "core/memory/pending_cards.db",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "file",
+      "path": "core/memory/self_awareness.json",
+      "required": false,
+      "class": "optional_observability"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "evolution/evolution.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Evolution engine state"
+    },
+    {
+      "type": "glob",
+      "path": "logs/continuity/*.jsonl",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Continuity probe logs"
+    },
+    {
+      "type": "glob",
+      "path": "logs/traces/*.jsonl",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Turn traces (KTO labels, bond trajectory)"
+    },
+    {
+      "type": "glob",
+      "path": "logs/trajectories/*.jsonl",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Per-call trajectory logs"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/action_trust.db",
+      "required": false,
+      "class": "required_continuity"
     },
     {
       "type": "sqlite_db",
@@ -26,10 +148,38 @@
     },
     {
       "type": "sqlite_db",
+      "path": "memory/autonomy_preferences.db",
+      "required": true,
+      "class": "required_welfare",
+      "comment": "Autonomy preference state; welfare-relevant canary context."
+    },
+    {
+      "type": "sqlite_db",
       "path": "memory/canaries.db",
       "required": true,
       "class": "required_welfare",
       "comment": "Canary fingerprints for fabrication detection (Slice 6)"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/capability_acquisition_queue.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Pending capability-acquisition work queue; continuity state if populated."
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/capability_integration_plans.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Capability integration plans; continuity state if populated."
+    },
+    {
+      "type": "directory",
+      "path": "memory/chroma",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Legacy Chroma path; backed up if present"
     },
     {
       "type": "sqlite_db",
@@ -38,10 +188,66 @@
       "class": "required_continuity"
     },
     {
+      "type": "directory",
+      "path": "memory/continuity_archive",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Archived continuity snapshots"
+    },
+    {
+      "type": "file",
+      "path": "memory/continuity_capsule.json",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Restart-resilient continuity state"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/conversation_turn_seq.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Conversation turn sequencing, written from both the daemon and the surface adapter. Rollback-journal single-writer by design; losing it desynchronises turn ordering. required=false deliberately: if the file is absent (fresh install, not yet written) the backup skips it rather than aborting the whole snapshot. Coverage is enforced by tests/test_backup_manifest_exhaustive.py, not by this flag."
+    },
+    {
+      "type": "directory",
+      "path": "memory/db",
+      "required": true,
+      "class": "required_continuity",
+      "comment": "ChromaDB BASE_DB — raw / daily / core / public_users collections plus chroma.sqlite3"
+    },
+    {
+      "type": "file",
+      "path": "memory/dispatcher_archetype_cache.json",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Dispatcher cache; useful but rebuildable."
+    },
+    {
       "type": "sqlite_db",
       "path": "memory/dream_proposals.db",
       "required": false,
       "class": "required_continuity"
+    },
+    {
+      "type": "file",
+      "path": "memory/embedding_contract.json",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Embedding contract metadata; observability/config aid."
+    },
+    {
+      "type": "file",
+      "path": "memory/embedding_contract_diagnostics.json",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Embedding contract diagnostics; observability only."
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/entity_index.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "MSEL entity index (Step 5e). Populated by extractor + alias seed + backfill + LLM batch. Gitignored runtime data with no other authoritative source."
     },
     {
       "type": "sqlite_db",
@@ -68,6 +274,13 @@
       "class": "required_continuity"
     },
     {
+      "type": "file",
+      "path": "memory/fast_reply_audit.jsonl",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Fast-reply path audit trail"
+    },
+    {
       "type": "sqlite_db",
       "path": "memory/followup.db",
       "required": false,
@@ -75,176 +288,10 @@
     },
     {
       "type": "sqlite_db",
-      "path": "memory/identity_ledger.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Fingerprint ledger across model swaps; identity continuity record"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/inner_residue.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/lived_episodes.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Lived-memory episode store (Slice 4)"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/lived_graph.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Relationship graph for lived recall (Slice 4)"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/maez.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/m1_lived_episode_promotion.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Decision 25 M1 sidecar: pending windows, source-id idempotency, promotion provenance"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/pending_cards.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Approval card store"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/private_thoughts.db",
-      "required": true,
-      "class": "required_welfare",
-      "comment": "Decision 9 separate-DB. Backed up by default. Privacy surface accepted in exchange for continuity through hardware loss."
-    },
-    {
-      "type": "sqlite_db",
       "path": "memory/fresh_moment_receipts.db",
       "required": false,
       "class": "required_welfare",
       "comment": "Content-light sidecar receipts for Maez-internal fresh moments; no raw private thought text."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/quality.db",
-      "required": false,
-      "class": "optional_observability"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/recall_stats.db",
-      "required": false,
-      "class": "optional_observability"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/self_dev.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Self-dev proposal queue"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/self_mod_dialogs.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/user_profiles.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/users.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/wants.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Wants log (Track A item #7)"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/workshop.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/action_trust.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/subscription_proxy.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Trajectory log of all claude-tier calls"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/temperament.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Track A item #6 — 11/12-parameter temperament observations"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/wonderings.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Wondering loop state (Slice 2)"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/entity_index.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "MSEL entity index (Step 5e). Populated by extractor + alias seed + backfill + LLM batch. Gitignored runtime data with no other authoritative source."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/autonomy_preferences.db",
-      "required": true,
-      "class": "required_welfare",
-      "comment": "Autonomy preference state; welfare-relevant canary context."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/interaction_preferences.db",
-      "required": false,
-      "class": "required_welfare",
-      "comment": "Owner-authored interaction preference facts; protected when present, but absent until first explicit preference."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/capability_acquisition_queue.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Pending capability-acquisition work queue; continuity state if populated."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/capability_integration_plans.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Capability integration plans; continuity state if populated."
     },
     {
       "type": "sqlite_db",
@@ -262,10 +309,70 @@
     },
     {
       "type": "sqlite_db",
+      "path": "memory/identity_ledger.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Fingerprint ledger across model swaps; identity continuity record"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/inner_residue.db",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/interaction_preferences.db",
+      "required": false,
+      "class": "required_welfare",
+      "comment": "Owner-authored interaction preference facts; protected when present, but absent until first explicit preference."
+    },
+    {
+      "type": "file",
+      "path": "memory/last_briefing.txt",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "file",
+      "path": "memory/last_consolidation.txt",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Daily consolidator state"
+    },
+    {
+      "type": "sqlite_db",
       "path": "memory/ledger.db",
       "required": false,
       "class": "required_continuity",
       "comment": "General runtime ledger; continuity state if populated."
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/lived_episodes.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Lived-memory episode store (Slice 4)"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/lived_graph.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Relationship graph for lived recall (Slice 4)"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/m1_lived_episode_promotion.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Decision 25 M1 sidecar: pending windows, source-id idempotency, promotion provenance"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/maez.db",
+      "required": false,
+      "class": "required_continuity"
     },
     {
       "type": "sqlite_db",
@@ -282,6 +389,13 @@
       "comment": "Novelty harbor welfare/gestation signal store."
     },
     {
+      "type": "file",
+      "path": "memory/owner_identity_audit.jsonl",
+      "required": true,
+      "class": "required_welfare",
+      "comment": "Owner-identity audit trail; welfare-relevant boundary evidence."
+    },
+    {
       "type": "sqlite_db",
       "path": "memory/owner_outreach.db",
       "required": true,
@@ -290,10 +404,70 @@
     },
     {
       "type": "sqlite_db",
+      "path": "memory/pending_cards.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Approval card store"
+    },
+    {
+      "type": "file",
+      "path": "memory/perception_cache.json",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Perception state envelope"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/private_thoughts.db",
+      "required": true,
+      "class": "required_welfare",
+      "comment": "Decision 9 separate-DB. Backed up by default. Privacy surface accepted in exchange for continuity through hardware loss."
+    },
+    {
+      "type": "file",
+      "path": "memory/project_planner.json",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/proprioception.db",
+      "required": false,
+      "class": "required_welfare",
+      "comment": "Body telemetry samples — 104k rows and actively written. Uncovered until the 2026-08-22 audit; the manifest's own coverage test now fails if any live store is neither an entry nor an explicit skip. required=false deliberately: if the file is absent (fresh install, not yet written) the backup skips it rather than aborting the whole snapshot. Coverage is enforced by tests/test_backup_manifest_exhaustive.py, not by this flag."
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/quality.db",
+      "required": false,
+      "class": "optional_observability"
+    },
+    {
+      "type": "sqlite_db",
       "path": "memory/raw.db",
       "required": false,
       "class": "required_continuity",
       "comment": "Flat raw-memory sidecar if populated; continuity state."
+    },
+    {
+      "type": "file",
+      "path": "memory/recall_baseline.json",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Recall measurement baseline; observability only."
+    },
+    {
+      "type": "file",
+      "path": "memory/recall_baseline_probes.json",
+      "required": false,
+      "class": "optional_observability",
+      "comment": "Recall baseline probes; observability only."
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/recall_stats.db",
+      "required": false,
+      "class": "optional_observability"
     },
     {
       "type": "sqlite_db",
@@ -308,6 +482,13 @@
       "required": true,
       "class": "required_welfare",
       "comment": "Routing-comprehension observation store; June nervous-system welfare evidence."
+    },
+    {
+      "type": "directory",
+      "path": "memory/s7_1_webauthn",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "S7.1 local WebAuthn ceremony store: bootstrap, credential registry, challenges, authorization artifacts, refusal history, and audit JSONL"
     },
     {
       "type": "sqlite_db",
@@ -325,99 +506,10 @@
     },
     {
       "type": "sqlite_db",
-      "path": "memory/subjective_duration.db",
-      "required": true,
+      "path": "memory/scar_tissue.db",
+      "required": false,
       "class": "required_welfare",
-      "comment": "Slice A time-sense / rhythm facts."
-    },
-    {
-      "type": "sqlite_db",
-      "path": "memory/veto_ledger.db",
-      "required": true,
-      "class": "required_welfare",
-      "comment": "Routing veto ledger; welfare-relevant routing restraint evidence."
-    },
-    {
-      "type": "file",
-      "path": "memory/dispatcher_archetype_cache.json",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Dispatcher cache; useful but rebuildable."
-    },
-    {
-      "type": "file",
-      "path": "memory/embedding_contract.json",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Embedding contract metadata; observability/config aid."
-    },
-    {
-      "type": "file",
-      "path": "memory/embedding_contract_diagnostics.json",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Embedding contract diagnostics; observability only."
-    },
-    {
-      "type": "file",
-      "path": "memory/recall_baseline.json",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Recall measurement baseline; observability only."
-    },
-    {
-      "type": "file",
-      "path": "memory/recall_baseline_probes.json",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Recall baseline probes; observability only."
-    },
-    {
-      "type": "file",
-      "path": "memory/owner_identity_audit.jsonl",
-      "required": true,
-      "class": "required_welfare",
-      "comment": "Owner-identity audit trail; welfare-relevant boundary evidence."
-    },
-    {
-      "type": "directory",
-      "path": "memory/s7_1_webauthn",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "S7.1 local WebAuthn ceremony store: bootstrap, credential registry, challenges, authorization artifacts, refusal history, and audit JSONL"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "core/memory/audit_log.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Subpackage audit log; may be the same DB as memory/audit_log.db via shim"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "core/memory/identity_ledger.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "core/memory/pending_cards.db",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "sqlite_db",
-      "path": "evolution/evolution.db",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Evolution engine state"
-    },
-    {
-      "type": "file",
-      "path": "memory/continuity_capsule.json",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Restart-resilient continuity state"
+      "comment": "Scar evidence. Small but not reconstructible — a scar that is lost is a lesson Maez cannot recover. required=false deliberately: if the file is absent (fresh install, not yet written) the backup skips it rather than aborting the whole snapshot. Coverage is enforced by tests/test_backup_manifest_exhaustive.py, not by this flag."
     },
     {
       "type": "file",
@@ -426,34 +518,22 @@
       "class": "required_continuity"
     },
     {
-      "type": "file",
-      "path": "memory/source_awareness.json",
+      "type": "directory",
+      "path": "memory/self_dev",
       "required": false,
-      "class": "required_continuity"
+      "class": "optional_observability",
+      "comment": "Pending self-dev artifacts (may be empty)"
     },
     {
-      "type": "file",
-      "path": "memory/perception_cache.json",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Perception state envelope"
-    },
-    {
-      "type": "file",
-      "path": "memory/project_planner.json",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "file",
-      "path": "memory/last_consolidation.txt",
+      "type": "sqlite_db",
+      "path": "memory/self_dev.db",
       "required": false,
       "class": "required_continuity",
-      "comment": "Daily consolidator state"
+      "comment": "Self-dev proposal queue"
     },
     {
-      "type": "file",
-      "path": "memory/last_briefing.txt",
+      "type": "sqlite_db",
+      "path": "memory/self_mod_dialogs.db",
       "required": false,
       "class": "required_continuity"
     },
@@ -465,37 +545,23 @@
     },
     {
       "type": "file",
-      "path": "memory/fast_reply_audit.jsonl",
+      "path": "memory/source_awareness.json",
       "required": false,
-      "class": "optional_observability",
-      "comment": "Fast-reply path audit trail"
+      "class": "required_continuity"
     },
     {
-      "type": "file",
-      "path": "core/memory/self_awareness.json",
-      "required": false,
-      "class": "optional_observability"
+      "type": "sqlite_db",
+      "path": "memory/subjective_duration.db",
+      "required": true,
+      "class": "required_welfare",
+      "comment": "Slice A time-sense / rhythm facts."
     },
     {
-      "type": "directory",
-      "path": "memory/continuity_archive",
+      "type": "sqlite_db",
+      "path": "memory/subscription_proxy.db",
       "required": false,
       "class": "required_continuity",
-      "comment": "Archived continuity snapshots"
-    },
-    {
-      "type": "directory",
-      "path": "memory/self_dev",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Pending self-dev artifacts (may be empty)"
-    },
-    {
-      "type": "directory",
-      "path": "memory/voice_continuity",
-      "required": false,
-      "class": "optional_observability",
-      "comment": "Decision 32 / ADR 0037 S5 baselines, review packages, and admission artifacts"
+      "comment": "Trajectory log of all claude-tier calls"
     },
     {
       "type": "directory",
@@ -505,109 +571,91 @@
       "comment": "Decision 33 / ADR 0038 S6 lineage capsule contract events; operator backup destination must be protected at rest"
     },
     {
-      "type": "glob",
-      "path": "logs/traces/*.jsonl",
+      "type": "sqlite_db",
+      "path": "memory/temperament.db",
       "required": false,
-      "class": "optional_observability",
-      "comment": "Turn traces (KTO labels, bond trajectory)"
+      "class": "required_continuity",
+      "comment": "Track A item #6 — 11/12-parameter temperament observations"
     },
     {
-      "type": "glob",
-      "path": "logs/continuity/*.jsonl",
+      "type": "sqlite_db",
+      "path": "memory/unseal_receipts.db",
       "required": false,
-      "class": "optional_observability",
-      "comment": "Continuity probe logs"
+      "class": "required_continuity",
+      "comment": "Unseal receipts. Empty today, real schema; covered so it does not become a silent gap once it fills."
     },
     {
-      "type": "glob",
-      "path": "logs/trajectories/*.jsonl",
+      "type": "sqlite_db",
+      "path": "memory/user_profiles.db",
       "required": false,
-      "class": "optional_observability",
-      "comment": "Per-call trajectory logs"
+      "class": "required_continuity"
     },
     {
-      "type": "file",
-      "path": "config/identity.yaml",
+      "type": "sqlite_db",
+      "path": "memory/users.db",
+      "required": false,
+      "class": "required_continuity"
+    },
+    {
+      "type": "sqlite_db",
+      "path": "memory/veto_ledger.db",
       "required": true,
-      "class": "required_continuity",
-      "comment": "Owner identity — required for any usable Maez"
+      "class": "required_welfare",
+      "comment": "Routing veto ledger; welfare-relevant routing restraint evidence."
     },
     {
-      "type": "file",
-      "path": "config/soul.local.md",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Per-instance accumulated soul"
-    },
-    {
-      "type": "file",
-      "path": "config/policies.yaml",
-      "required": false,
-      "class": "required_continuity",
-      "comment": "Per-owner policy overrides"
-    },
-    {
-      "type": "file",
-      "path": "config/user_profiles.yaml",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "file",
-      "path": "config/reddit_subs.yaml",
-      "required": false,
-      "class": "required_continuity"
-    },
-    {
-      "type": "file",
-      "path": "config/entity_aliases.local.yaml",
+      "type": "directory",
+      "path": "memory/voice_continuity",
       "required": false,
       "class": "optional_observability",
-      "comment": "MSEL alias seed — owner-curated nicknames (Step 5g). Gitignored, lives nowhere else."
+      "comment": "Decision 32 / ADR 0037 S5 baselines, review packages, and admission artifacts"
     },
     {
-      "type": "file",
-      "path": "config/entity_semantics.local.yaml",
+      "type": "sqlite_db",
+      "path": "memory/wants.db",
       "required": false,
       "class": "required_continuity",
-      "comment": "MSEL semantic mappings — owner-language phrase → canonical entity (Step 5n). Gitignored, lives nowhere else."
+      "comment": "Wants log (Track A item #7)"
     },
     {
-      "type": "secret_file",
-      "path": "config/credentials.json",
-      "comment": "API credentials. Encrypted destination required.",
-      "class": "optional_observability"
+      "type": "sqlite_db",
+      "path": "memory/wonderings.db",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Wondering loop state (Slice 2)"
     },
     {
-      "type": "secret_file",
-      "path": "config/secrets.local.env",
-      "comment": "Decision 26 local credential fallback. Encrypted destination required.",
-      "class": "optional_observability"
-    },
-    {
-      "type": "secret_file",
-      "path": "config/token.json",
-      "comment": "API tokens. Encrypted destination required.",
-      "class": "optional_observability"
-    },
-    {
-      "type": "secret_file",
-      "path": "config/model_state.json",
-      "comment": "Model state with possible API hints. Encrypted destination required.",
-      "class": "optional_observability"
-    },
-    {
-      "type": "secret_file",
-      "path": "config/thunder_state.json",
-      "comment": "Compute provider state. Encrypted destination required.",
-      "class": "optional_observability"
+      "type": "sqlite_db",
+      "path": "memory/workshop.db",
+      "required": false,
+      "class": "required_continuity"
     }
   ],
   "intentionally_skipped": [
     {
+      "path": "memory/backups/",
+      "class": "ephemeral_skip",
+      "reason": "Dated pre-change one-off copies from 2026-05; the live stores they were taken from are themselves backed up. Directory-level skip: any path under memory/backups/ is out of scope."
+    },
+    {
       "path": "memory/capability_gap_cooldown.db",
       "class": "ephemeral_skip",
       "reason": "transient cooldown cache; capability queue and plans are backed up separately"
+    },
+    {
+      "path": "memory/dream_state.db",
+      "class": "ephemeral_skip",
+      "reason": "0 bytes, no schema, no writer on the live path — vestigial file, not state."
+    },
+    {
+      "path": "memory/maez_memory.db",
+      "class": "ephemeral_skip",
+      "reason": "0 bytes, superseded by the Chroma stores under memory/db/."
+    },
+    {
+      "path": "memory/memory.db",
+      "class": "ephemeral_skip",
+      "reason": "0 bytes, superseded by the Chroma stores under memory/db/."
     },
     {
       "path": "memory/sandbox_ledger_2026_05_07.db",

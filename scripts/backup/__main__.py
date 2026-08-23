@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
              "(default: $MAEZ_BACKUP_ROOT or ~/maez-backups).",
     )
     p.add_argument(
+        "--no-prune", action="store_true",
+        help="Keep every snapshot; skip retention after a successful backup.",
+    )
+    p.add_argument(
         "--include-secrets", action="store_true",
         help="Include credential / token / model_state / thunder_state "
              "files. Requires the destination to be encrypted at rest "
@@ -99,6 +103,41 @@ def main(argv: list[str] | None = None) -> int:
         f"({result['byte_count']} bytes in "
         f"{result['duration_seconds']:.2f}s)"
     )
+
+    # Prune AFTER a successful snapshot, never before, and never in a way
+    # that can fail the backup.
+    #
+    # 2026-08-22: there was no pruning anywhere. The archive reached 407
+    # snapshots and 236 GB on the same filesystem as the live tree, 65% full
+    # and climbing. A full root filesystem does not fail one store, it fails
+    # all seventy at once -- unbounded backups eventually destroy the thing
+    # they protect.
+    #
+    # Ordering matters. Pruning only after a new snapshot has landed means a
+    # failed backup never reduces what is already held. And a pruning failure
+    # is reported, not raised: a backup that succeeded is still a backup.
+    if not args.no_prune:
+        try:
+            import shutil
+            from datetime import datetime, timezone
+
+            from scripts.backup.prune import finalized_snapshots, plan
+
+            root = args.backup_root.resolve()
+            snapshots = finalized_snapshots(root)
+            _kept, doomed = plan(snapshots, now=datetime.now(timezone.utc))
+            removed = 0
+            for _stamp, path, _reason in doomed:
+                if root in path.resolve().parents:
+                    shutil.rmtree(path)
+                    removed += 1
+            if removed:
+                print(f"pruned {removed} snapshot(s); "
+                      f"{len(snapshots) - removed} retained")
+        except Exception as e:                       # noqa: BLE001
+            print(f"prune skipped ({type(e).__name__}: {e}); "
+                  f"the backup itself succeeded", file=sys.stderr)
+
     return 0
 
 

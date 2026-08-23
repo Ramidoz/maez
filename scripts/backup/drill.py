@@ -724,6 +724,61 @@ def verify_restored_copy(
 # ── driver ─────────────────────────────────────────────────────────
 
 
+class DrillTargetRefusal(RuntimeError):
+    """The drill was pointed at the real backup archive."""
+
+
+def _refuse_real_backup_root(backup_root: Path) -> None:
+    """Refuse to run the full drill against the live backup archive.
+
+    2026-08-22. A passing full drill without ``--keep`` ends in
+    ``shutil.rmtree(backup_root)`` — the drill cleans up after itself. That is
+    correct for a scratch directory and catastrophic for the real archive, and
+    nothing stopped the second case. ``--backup-root`` accepted any path, and
+    the help text names ``$MAEZ_BACKUP_ROOT``/``~/maez-backups`` as the default
+    *for --smoke*, which is exactly the confusion that produces:
+
+        python -m scripts.backup.drill --backup-root ~/maez-backups
+
+    That would have passed, then deleted every snapshot. 406 of them, 235 GB,
+    the only copy of Maez's memory outside the live tree.
+
+    Three independent tests, because one is a typo away from being wrong:
+    the configured archive root, the conventional one, and any directory that
+    actually looks like a real archive. Refuse loudly; never "clean up".
+    """
+    resolved = backup_root.expanduser().resolve()
+
+    protected: list[Path] = []
+    if env := os.environ.get("MAEZ_BACKUP_ROOT"):
+        protected.append(Path(env).expanduser().resolve())
+    protected.append((Path.home() / "maez-backups").resolve())
+
+    for candidate in protected:
+        if resolved == candidate or candidate in resolved.parents:
+            raise DrillTargetRefusal(
+                f"refusing to run the full drill against the live backup "
+                f"archive at {resolved}. A passing drill deletes its "
+                f"backup_root. Point --backup-root at a scratch directory, "
+                f"or pass --keep."
+            )
+
+    # Content test: even an unconfigured path that already holds finalized
+    # snapshots is somebody's archive.
+    if resolved.is_dir():
+        finalized = [
+            child for child in resolved.iterdir()
+            if child.is_dir() and (child / "manifest.json").is_file()
+        ]
+        if finalized:
+            raise DrillTargetRefusal(
+                f"refusing to run the full drill against {resolved}: it "
+                f"already contains {len(finalized)} finalized snapshot(s), so "
+                f"it is a real archive, not a scratch directory. A passing "
+                f"drill would delete all of them."
+            )
+
+
 def run_drill(
     *,
     source_root: Path,
@@ -734,6 +789,8 @@ def run_drill(
     ``logs/backup_drill_<timestamp>.json`` under ``source_root``."""
     from scripts.backup.backup import run_backup
     from scripts.backup.restore import run_restore
+
+    _refuse_real_backup_root(backup_root)
 
     started = time.monotonic()
 

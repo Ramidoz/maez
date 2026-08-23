@@ -18,6 +18,39 @@ import requests
 
 _MAEZ_HOME_PATH = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_MAEZ_HOME_PATH))
+
+# 2026-08-22: this watchdog detected 210 outages and delivered none of them.
+# Its docstring promises Telegram alerts; `send_dev` reads MAEZ_DEV_TOKEN from
+# os.environ; and nothing here ever loaded credentials. The token was present
+# and valid in config/secrets.local.env the whole time -- maez-watchdog.service
+# sets only PYTHONUNBUFFERED and MAEZ_HOME, and unlike the daemon this process
+# never called the secrets loader. Every alert logged
+# "MAEZ_DEV_TOKEN not set - dev notification dropped" and vanished: 40 of them,
+# six on the day this was found.
+#
+# A watchdog that cannot reach anyone is not a watchdog. It is a log file.
+#
+# Load credentials the same way daemon/maez_daemon.py:34 does (Decision 26:
+# ordinary config first, then credentials through the dedicated loader),
+# before anything reads os.environ. Failure to load must not stop the
+# watchdog -- a watchdog that dies because alerting is broken is worse than
+# one that watches silently -- but it is logged loudly rather than swallowed.
+try:
+    from core.infra.secrets import (
+        SECRET_NAMES as _SECRET_NAMES,
+        load_ordinary_config_for_process as _load_ordinary_config,
+        load_secrets_for_process as _load_secrets,
+    )
+
+    _load_ordinary_config()
+    _load_secrets(required=set(), optional=set(_SECRET_NAMES),
+                  populate_environ=True)
+    _CREDENTIALS_LOADED = True
+    _CREDENTIAL_ERROR = None
+except Exception as _exc:                            # noqa: BLE001
+    _CREDENTIALS_LOADED = False
+    _CREDENTIAL_ERROR = _exc
+
 from skills.dev_notifier import send_service_card
 
 # --- Config ---
