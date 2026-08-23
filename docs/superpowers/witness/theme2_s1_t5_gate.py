@@ -30,6 +30,7 @@ computed and recorded, and it never decides.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -67,6 +68,26 @@ def _manifest_ids() -> list | None:
 
 EXPECTED_STORES = ("chroma::raw", "chroma::daily", "chroma::core",
                    "private_thoughts", "audit_log")
+
+KNOWN_CONSUMERS = {
+    "memory_manager.store", "memory_manager.store_telegram",
+    "memory_manager.store_core",
+}
+
+# Gate round 25 forged a co-mutated pair: a run-a row grew a stamp AND the
+# supplied baseline grew the same stamp, so the comparison agreed with itself.
+# The baseline is a committed artifact; the judge pins its identity rather
+# than accepting whatever the caller hands it. Canonical (sorted, compact)
+# JSON so re-serialization is not mistaken for tampering.
+PINNED_BASELINE_CANON_SHA = ("7fa5bdb15eb250f4b784cbaf9d56fc6fb9a143d2c4b0a"
+                             "8248306460d93d85353")
+PINNED_ARCHIVE_SHA = ("328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56"
+                      "def0b445216")
+
+
+def _canon_sha(obj) -> str:
+    return hashlib.sha256(json.dumps(
+        obj, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def schema_failures(runs: dict) -> list:
@@ -148,8 +169,12 @@ def k2_no_latch(runs: dict) -> list:
 
 
 def k3_positive_controls(runs: dict) -> list:
-    """The label is not the fact. Round 18 forged a PASS label over false
-    underlying numbers, so the numbers are re-derived here."""
+    """The label is not the fact, and round 25 proved the aggregate is not
+    either: a raw row saying `raised`/no-tail sat under a clean
+    `positive_control` and passed. Every fact here is DERIVED from the raw
+    per-interaction records; the producer's aggregate is then required to
+    AGREE with the derivation. Disagreement is itself a failure — one of the
+    two is lying and the judge does not get to pick."""
     bad = []
     for tag, r in runs.items():
         pc = r.get("positive_control")
@@ -159,12 +184,56 @@ def k3_positive_controls(runs: dict) -> list:
         if pc.get("verdict") != "PASS":
             bad.append({"run": tag, "positive_control": pc})
             continue
-        if pc.get("interactions_raised"):
-            bad.append({"run": tag, "detail": "interactions raised",
-                        "ids": pc["interactions_raised"]})
-        if pc.get("interactions_without_tail_passage"):
-            bad.append({"run": tag, "detail": "interactions never reached the tail",
-                        "ids": pc["interactions_without_tail_passage"]})
+        ints = r.get("interactions")
+        if not isinstance(ints, list) or not ints:
+            bad.append({"run": tag, "detail": "no raw interactions to derive from"})
+            continue
+        d_returned = [i.get("id") for i in ints if i.get("outcome") == "returned"]
+        d_raised = [i.get("id") for i in ints if i.get("outcome") != "returned"]
+        d_no_tail = [i.get("id") for i in ints if not (
+            isinstance(i.get("tail_passages"), int) and i["tail_passages"] >= 1)]
+        cb = r.get("collection_counts_before") or {}
+        ca = r.get("collection_counts_after") or {}
+        d_grew = any(isinstance(ca.get(k), int) and isinstance(cb.get(k), int)
+                     and ca[k] > cb[k] for k in set(cb) | set(ca))
+        # (a) the DERIVED facts must themselves describe a clean flags-off run
+        if d_raised:
+            bad.append({"run": tag, "detail": "raw rows raised",
+                        "ids": d_raised})
+        if d_no_tail:
+            bad.append({"run": tag,
+                        "detail": "raw rows never reached the storage tail",
+                        "ids": d_no_tail})
+        if not d_grew:
+            bad.append({"run": tag, "detail": "no collection grew in the raw "
+                                              "counts; nothing was stored"})
+        # (b) the producer's aggregate must agree with the derivation
+        for field, derived in (("interactions_raised", d_raised),
+                               ("interactions_without_tail_passage", d_no_tail)):
+            if list(pc.get(field) or []) != derived:
+                bad.append({"run": tag,
+                            "detail": f"aggregate {field} disagrees with the "
+                                      f"raw interactions",
+                            "aggregate": pc.get(field), "derived": derived})
+        if pc.get("interactions_returned") != len(d_returned):
+            bad.append({"run": tag,
+                        "detail": "aggregate interactions_returned disagrees "
+                                  "with the raw interactions",
+                        "aggregate": pc.get("interactions_returned"),
+                        "derived": len(d_returned)})
+        if pc.get("collections_grew") is not d_grew:
+            bad.append({"run": tag,
+                        "detail": "aggregate collections_grew disagrees with "
+                                  "the raw counts"})
+        d_tail = sum(i["tail_passages"] for i in ints
+                     if isinstance(i.get("tail_passages"), int))
+        for holder, label in ((pc, "aggregate"), (r, "run")):
+            if holder.get("store_tail_invocations") != d_tail:
+                bad.append({"run": tag,
+                            "detail": f"{label} store_tail_invocations "
+                                      f"disagrees with the raw rows",
+                            "declared": holder.get("store_tail_invocations"),
+                            "derived": d_tail})
         # Round 19: one represented interaction out of the frozen 20 passed.
         n = r.get("interaction_count")
         if not isinstance(n, int) or n < 1:
@@ -226,6 +295,16 @@ def discriminator(runs: dict, baseline: dict | None,
                               "against the committed pinned baseline is "
                               "mandatory"})
     if baseline is not None:
+        # Round 25: a co-mutated run+baseline pair agreed with itself and
+        # passed. The pinned baseline is a committed artifact with a frozen
+        # identity — the caller supplies bytes, not truth.
+        if _canon_sha(baseline) != PINNED_BASELINE_CANON_SHA:
+            return "FAIL", [{"detail": "supplied baseline is not the committed "
+                                       "pinned baseline census",
+                             "canonical_sha256": _canon_sha(baseline)}]
+        if baseline.get("bound_archive_sha256") != PINNED_ARCHIVE_SHA:
+            return "FAIL", [{"detail": "baseline is not bound to the pinned "
+                                       "T5 archive"}]
         # Round 19: an explicitly supplied `{}` bypassed comparison entirely.
         want = baseline.get("per_fixture")
         if not isinstance(want, dict) or set(want) != {"healthy", "partial"}:
@@ -317,6 +396,33 @@ def discriminator(runs: dict, baseline: dict | None,
                             "id": i.get("id"), "outcome": i.get("outcome"),
                             "tail_passages": i.get("tail_passages")})
                 break
+        # Round 25: the raw rows and the refusal list were each plausible
+        # and never joined, so an alien consumer could sit in the raw
+        # exception while the refusal list stayed clean. Every raw refusal
+        # names its own consumer inside the exception text; that name is
+        # joined 1:1, IN ORDER, to the refusal list.
+        rl = forced.get("consumer_refusals")
+        if not isinstance(rl, list) or len(rl) != len(ints):
+            bad.append({"detail": "refusal list does not join the raw "
+                                  "interactions 1:1",
+                        "refusals": len(rl) if isinstance(rl, list) else None,
+                        "interactions": len(ints)})
+        else:
+            for i, row in zip(ints, rl):
+                exc = str(i.get("exception", ""))
+                head, _, msg = exc.partition(": ")
+                who = msg.split(":", 1)[0].strip() if ":" in msg else None
+                if head != "PhaseUnknownRefusal" or who not in KNOWN_CONSUMERS \
+                        or not isinstance(row, dict) \
+                        or row.get("consumer") != who \
+                        or str(row.get("message", "")) != msg:
+                    bad.append({"detail": "raw refusal does not join its "
+                                          "refusal row under a known "
+                                          "reply-path consumer",
+                                "id": i.get("id"), "raw_consumer": who,
+                                "row_consumer": (row or {}).get("consumer")
+                                if isinstance(row, dict) else None})
+                    break
     pc = forced.get("positive_control") or {}
     if pc.get("mode") != "forced_on" or pc.get("verdict") != "PASS":
         bad.append({"detail": "producer positive control is not a forced-on "
@@ -334,10 +440,6 @@ def discriminator(runs: dict, baseline: dict | None,
             and len(refusals_list) != n:
         bad.append({"detail": "refusal count != interaction count",
                     "refusals": len(refusals_list), "interactions": n})
-    KNOWN_CONSUMERS = {
-        "memory_manager.store", "memory_manager.store_telegram",
-        "memory_manager.store_core",
-    }
     for r in (refusals_list or []):
         # Round 24 forged 20 rows under "alien.consumer". A refusal is
         # evidence only when its consumer is a censused reply-path stamper
@@ -358,6 +460,13 @@ def discriminator(runs: dict, baseline: dict | None,
         if not (isinstance(b_, int) and isinstance(a_, int) and a_ == b_):
             bad.append({"detail": f"collection {kcol} not proven flat by "
                                   f"raw counts", "before": b_, "after": a_})
+    fcen = forced.get("stamp_census")
+    if not isinstance(fcen, dict) or sorted(fcen) != sorted(EXPECTED_STORES):
+        # Round 25: `stamp_census = {}` made the emptiness loop below vacuous.
+        # Absence of evidence was reading as evidence of absence.
+        bad.append({"detail": "forced-on stamp_census does not cover exactly "
+                              "the five expected stores",
+                    "got": sorted(fcen) if isinstance(fcen, dict) else fcen})
     for store, v in (forced.get("stamp_census") or {}).items():
         if not isinstance(v, dict) or any(
                 isinstance(c, int) and c > 0 for c in v.values()):

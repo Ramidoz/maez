@@ -794,8 +794,11 @@ successful-synthesis branch (`maez_daemon.py:8937`) and the
 successful-brain path** and the hermetic ruling costs no coverage.
 
 Round 12 also established the honest scope of the replay: it exercises
-**one of the census constructs** *(membership lives in the T3 map — v7.7)* (`MemoryManager.store_telegram`). The
-other 12 are T3's job, via the public entries §9 pins. T5 is a
+**one of the census constructs** *(membership lives in the T3 map — v7.7)* (`MemoryManager.store_telegram`). Every
+other censused construct is T3's job, via the public entries §9 pins.
+*(v7.8: the fixed count "12" was the last survivor of the hand-authored
+census that execution falsified — the map and the derived census are the
+only membership authorities. Gate round 25 found it here.)* T5 is a
 store-tree invariance witness, not a census witness, and the report
 says so rather than implying breadth it does not have.
 

@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parent / "theme2_s1_t5_gate.py"
+PINNED_BASELINE = json.loads(
+    (Path(__file__).resolve().parent / "theme2-s1-baseline-census.json").read_text())
 SHA_A = "a" * 64
 EXERCISED = "chroma::raw"
 
@@ -40,11 +42,15 @@ def honest_run(fixture: str) -> dict:
         "phase_probe": {"current_phase": "gestation",
                         "birth_event_turn_id": None,
                         "has_resolve_api": False},
-        "stamp_census": {
-            EXERCISED: {"gestation": 20},
-            "chroma::daily": {}, "chroma::core": {},
-            "private_thoughts": "absent", "audit_log": "absent"},
+        # Round 25: the judge now pins the committed baseline's identity, so
+        # the synthetic honest run must mirror that artifact rather than an
+        # idealized census of its own invention.
+        "stamp_census": copy.deepcopy(
+            PINNED_BASELINE["per_fixture"][fixture]["stamp_census"]),
         "census_resolved_paths": {"private_thoughts": "/x", "audit_log": "/y"},
+        "store_tail_invocations": 20,
+        "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
+        "collection_counts_after": {"raw": 20, "daily": 0, "core": 0},
         "positive_control": {"verdict": "PASS", "interactions_returned": 20,
                              "interactions_raised": [],
                              "interactions_without_tail_passage": [],
@@ -67,8 +73,9 @@ def forced_on_run() -> dict:
                             "cc2b868f59109cb420")
     r["interactions"] = [
         {"id": f"s1-replay-{i:02d}", "outcome": "raised",
-         "exception": "PhaseUnknownRefusal: refusing to stamp a phase — "
-                      "the resolver reads unknown (structural).",
+         "exception": "PhaseUnknownRefusal: memory_manager.store_telegram: "
+                      "refusing to stamp a phase — the resolver reads "
+                      "unknown (structural).",
          "tail_passages": 1}
         for i in range(20)]
     r["positive_control"] = {"mode": "forced_on", "verdict": "PASS",
@@ -129,8 +136,7 @@ def main() -> int:
     def cen(fx):
         r = honest_run(fx)
         return {"current_phase": "gestation", "stamp_census": r["stamp_census"]}
-    pinned = {"per_fixture": {"healthy": cen("healthy"),
-                              "partial": cen("partial")}}
+    pinned = copy.deepcopy(PINNED_BASELINE)
 
     def case(label, want, a=None, p=None, expect_only=None, **kw):
         nonlocal ok
@@ -158,22 +164,35 @@ def main() -> int:
     case("honest run, baseline omitted (now mandatory)", "FAIL")
     case("honest run against its own pinned baseline", "PASS", baseline=pinned)
 
-    bad_pin = copy.deepcopy(pinned)
-    bad_pin["per_fixture"]["partial"]["stamp_census"][EXERCISED] = {"gestation": 19}
-    case("census drifted from the pinned baseline", "FAIL", baseline=bad_pin)
+    a = copy.deepcopy(A)
+    a["stamp_census"][EXERCISED] = {"gestation": 19}
+    case("run census drifted from the pinned baseline", "FAIL", a=a,
+         baseline=pinned, expect_only="D_discriminator")
+    doctored = copy.deepcopy(pinned)
+    doctored["per_fixture"]["partial"]["stamp_census"]["chroma::daily"] = \
+        {"gestation": 3}
+    case("round 25: doctored baseline supplied", "FAIL", baseline=doctored,
+         expect_only="D_discriminator")
+    unbound = copy.deepcopy(pinned); unbound["bound_archive_sha256"] = "z" * 64
+    case("round 25: baseline unbound from the archive", "FAIL",
+         baseline=unbound, expect_only="D_discriminator")
 
     a = copy.deepcopy(A); a["ledger_post_replay_sha256"] = "b" * 64
     case("K1 ledger main file changed", "FAIL", a=a, baseline=pinned,
          expect_only="K1_ledger_unchanged")
     a = copy.deepcopy(A); del a["ledger_post_replay_sha256"]
-    case("K1 digest key missing", "FAIL", a=a)
+    # A missing key is caught EARLIER, by the fail-closed schema stage —
+    # naming the clause honestly is the point of expect_only.
+    case("K1 digest key missing (schema stage)", "FAIL", a=a, baseline=pinned,
+         expect_only="schema")
 
     p = copy.deepcopy(P)
     p["latch_artifacts_in_store_tree"] = ["birth_observed/segment-000001.jsonl"]
     case("K2 real latch artifact in the store tree", "FAIL", p=p,
          baseline=pinned, expect_only="K2_no_latch_artifact")
     p = copy.deepcopy(P); del p["latch_artifacts_in_store_tree"]
-    case("K2 store-tree latch sweep missing", "FAIL", p=p)
+    case("K2 store-tree latch sweep missing (schema stage)", "FAIL", p=p,
+         baseline=pinned, expect_only="schema")
 
     a = copy.deepcopy(A)
     a["positive_control"]["interactions_without_tail_passage"] = ["s1-replay-07"]
@@ -181,7 +200,18 @@ def main() -> int:
          baseline=pinned, expect_only="K3_positive_controls")
     a = copy.deepcopy(A)
     a["positive_control"] = {"verdict": "PASS"}
-    case("K3 label with no underlying numbers", "FAIL", a=a)
+    case("K3 label with no underlying numbers", "FAIL", a=a, baseline=pinned,
+         expect_only="K3_positive_controls")
+    # Round 25's first forgery: a raw row that contradicts a clean aggregate.
+    a = copy.deepcopy(A)
+    a["interactions"][7]["outcome"] = "raised"
+    a["interactions"][7]["tail_passages"] = 0
+    case("round 25: raw row contradicts clean aggregate", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
+    a = copy.deepcopy(A)
+    a["collection_counts_after"] = copy.deepcopy(a["collection_counts_before"])
+    case("round 25: nothing stored, aggregate says it grew", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
 
     a = copy.deepcopy(A)
     a["stray_stores_outside_projected_tree"] = ["/tmp/escaped.db"]
@@ -208,9 +238,11 @@ def main() -> int:
     case("zero-count census is not a census", "FAIL", a=a)
 
     a = copy.deepcopy(A); a["positive_control"]["interactions_returned"] = 1
-    case("one interaction of twenty returned", "FAIL", a=a)
+    case("one interaction of twenty returned", "FAIL", a=a, baseline=pinned,
+         expect_only="K3_positive_controls")
     a = copy.deepcopy(A); a["positive_control"]["store_tail_invocations"] = 1
-    case("fewer tail passages than interactions", "FAIL", a=a)
+    case("fewer tail passages than interactions", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
 
     a = copy.deepcopy(A)
     a["stamp_census"]["chroma::daily"] = {"gestation": 1}

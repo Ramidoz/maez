@@ -366,8 +366,20 @@ row and the v2 tables are not created.
   around **every** lived commit, but S1's T2 witnesses a single writer
   path. Under the daemon-plus-web multi-writer topology the ordering of
   latch allocation and publication across processes is unwitnessed.
-  Recorded in S1 protocol §12.13; it must close before S1 code lands.
-  It is not a prerequisite for the pre-S1 T5 baseline.
+
+  **Scope corrected 2026-08-23 (gate round 25).** This item was written
+  as "must close before S1 code lands"; the §12.13 ruling later drew the
+  line differently and that older phrasing is superseded. What O-6 blocks
+  is the **latch** — `birth_latch.advance()`, every lived-writer
+  publication hook, the latch-dependent `resolve()` branches, and any
+  enablement of `MAEZ_S1_PHASE_TRUTH`. The topology-neutral S1 code
+  (resolver, census, dormant consumer wiring) is merged and dormant.
+  O-1 itself is **ruled** (option (c), executed the same day); the
+  remaining condition is **U5/T2 witnessing the chosen writer topology
+  under SQLite 3.53.4**, not O-1.
+  Recorded in S1 protocol §12.13. It is not a prerequisite for the
+  pre-S1 T5 baseline, and — per the correction above — not a prerequisite
+  for the topology-neutral S1 code either.
 
 ## 12. Report obligations
 
