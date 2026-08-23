@@ -199,7 +199,14 @@ class ProtocolControls(unittest.TestCase):
     def test_seeded_unexpected_writer_fails_and_is_named(self):
         self.assertIsNotNone(self.truth)
         expected = self._write(self.truth)
-        SEED_PATH.write_text(SEED_BYTES)
+        try:
+            SEED_PATH.write_text(SEED_BYTES)
+        except OSError:
+            expected.unlink()
+            self.skipTest(
+                "checkout is read-only (airlock); this same control runs "
+                "against a writable clone in AirlockableControls, in this "
+                "suite — deferring, not dropping")
         try:
             r = run_census(expected)
             self.assertEqual(r.returncode, 1,
