@@ -1,6 +1,7 @@
 # Theme 2 / S1 — final evidence report (topology-neutral portion)
 
-Assembled at commit `3b733d9` on 2026-08-23. Interpreter 3.12.x (see bundle),
+Assembled against the tree at commit `eda63f8` on 2026-08-23 (this
+file is written after that commit and lands in the next one). Interpreter 3.12.x (see bundle),
 stdlib SQLite as recorded in the bundle; production ledger paths run against
 vendored SQLite 3.53.4. **Maez remains unborn: `memory/ledger.db` is 0 bytes,
 `MAEZ_LEDGER_WRITES` unset, `MAEZ_S1_PHASE_TRUTH` unset.**
@@ -51,7 +52,15 @@ below is digest-bound there. This file is narrative, not authority.
 
 ## What S1 still is NOT
 
-S1 is MERGED-DORMANT, not complete. Blocked by design until O-1 rules the
-production writer topology and T2 is amended for it: the latch, lived-writer
-hooks, latch-dependent resolver branches, the remaining T1 cells, the T2
-crash matrix — and any enablement of `MAEZ_S1_PHASE_TRUTH`.
+S1 is MERGED-DORMANT, not complete. O-1 is **ruled** (the writer topology
+question the owner settled on 2026-08-23); what still blocks the latch is
+**U5/T2 witnessing that ruled topology under SQLite 3.53.4**. Blocked until
+then: the latch itself, lived-writer publication hooks, latch-dependent
+resolver branches, the remaining T1 cells, the T2 crash matrix — and any
+enablement of `MAEZ_S1_PHASE_TRUTH`.
+
+Gate round 25 also recorded, correctly, that the judge was still forgeable
+when this report was first written: three forgeries of the reviewer's design
+and a fourth of mine passed it. They are now permanent selftest cases. That
+sequence — a judge passing, then falling to a better attack, then closing —
+is the honest shape of this work, not a footnote to it.

@@ -1,11 +1,16 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
- "slice": "S1 (topology-neutral portion; latch blocked by \u00a712.13 pending O-1)",
- "assembled_at_commit": "3b733d9362473bf5d4a3817080165ac2623ef6f7",
+ "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
+ "digests_computed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
+ "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Gate round 25 rejected the earlier wording, which named a commit these bytes were absent from.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
-  "version": "v7.7",
-  "sha256": "0a34fd88326aa2f5524f70fbcc6f5f267436fa4146857a2c036f655fa8b1d7db"
+  "version": "v7.8",
+  "sha256": "69c9fc4398c792ddbe7f3fce4f3c5755209382b7ada0c2a4a501db0cd879f8b8"
+ },
+ "s2_protocol": {
+  "file": "theme2-s2-protocol.md",
+  "sha256": "2462884e84a4fc364c41d978169761d68dcaed4b158a64b9ccfdd09b111052fd"
  },
  "t1_resolver": {
   "status": "7 latch-independent cells witnessed",
@@ -31,11 +36,19 @@
    "file": "tests/test_t3_map_join.py",
    "sha256": "d198d35f8e2e2aac0eeb0c94ea97ca746dd4ff4729806f163dd46828fae623ab"
   },
-  "retained_run": {
+  "airlocked_run": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t3-stdout.txt",
    "sha256": "8fc01bd58483a63ac9236c97048aa7fddabd94c28ae21beb732881514437f6ac",
    "tail": [
     "40 passed, 1 skipped, 1 warning, 48 subtests passed in 38.45s",
+    "exit=0"
+   ]
+  },
+  "pinned_suite_run": {
+   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/pinned-suite-stdout.txt",
+   "sha256": "23abe4291bf5075560b17d6c47e82c97f1b0982711265a265a743321aeff21e3",
+   "tail": [
+    "59 passed, 1 warning, 48 subtests passed in 41.78s",
     "exit=0"
    ]
   },
@@ -53,7 +66,7 @@
    "file": "core/memory/s1_census.py",
    "sha256": "12c71c24d20611f5561aa053d1b10a8f711f6ad0e4603b0483356a58467d119b"
   },
-  "retained_run": {
+  "airlocked_run": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t4-stdout.txt",
    "sha256": "424b6a7058ae91a22863ede28537de6e7b9769ff7e358f8b9b3e73b6c5690c1c",
    "tail": [
@@ -67,24 +80,24 @@
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "8b730ef8627911622d410b5ebd6843323ff17dc7102d62fb1c97b6d2f1c542d3",
+   "sha256": "e66fac49b9309a0656ac9a71f70772963fbff71f79c500a7b75dcadadbb89c4c",
    "verdict": {
     "verdict": "PASS",
     "D_discriminator": "PASS"
-   },
-   "judged_at_commit": "3b733d9362473bf5d4a3817080165ac2623ef6f7"
+   }
   }
  },
  "t6_structural": {
   "receipt": {
    "file": "theme2-s1-t6-execution.json",
-   "sha256": "6c77fd9d308795eef0da9396eb89dd47260d684b8490840b85d4d485f053294b",
+   "sha256": "77eecb9db59d8c96bee0d77c373c7599a8e427a36856f66b0c6066027ad3758b",
    "verdict": "ALL NINE FLIP + CONTROL HOLDS",
-   "executed_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257"
+   "executed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
+   "uncommitted_files_at_execution": []
   },
   "raw_log": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t6-log.txt",
-   "sha256": "58fb21621eb93c7cdae6b0078e3d2af004253624b2bf5be0258eb6913d7c277b"
+   "sha256": "9e2deb238a8cac41b3618f650c012ba43316c80178e37cbf04ba7c1eba45f0f2"
   }
  },
  "environment": {
@@ -92,8 +105,8 @@
   "sqlite_stdlib": "3.46.1"
  },
  "blocked_by_design": [
-  "birth_latch.advance() and all lived-writer publication hooks (awaits O-1 topology in T2)",
-  "latch-dependent resolve() branches (LatchBlocked seam raises)",
+  "birth_latch.advance() and all lived-writer publication hooks (awaits U5/T2 witnessing the ruled topology)",
+  "latch-dependent resolve() branches (the LatchBlocked seam raises)",
   "T1 cells 2/4/6/8/10/12/13/14/16 + torn/corrupt/stale/foreign variants",
   "T2 crash/publication/checkpoint matrix",
   "S1 enablement (MAEZ_S1_PHASE_TRUTH stays unset in production)"

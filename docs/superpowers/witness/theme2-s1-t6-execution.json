@@ -1,11 +1,13 @@
 {
- "executed_at_commit": "fe5d762b49f9adff181607f8d8053b90c98a1257",
- "runner": "inline (this receipt's generating script, retained as t6-log)",
- "command_shape": "python -c resolve() per fixture, fresh process each",
+ "executed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
+ "uncommitted_files_at_execution": [],
+ "provenance_note": "This receipt's bytes are written AFTER the commit named above and land in the NEXT one \u2014 a receipt cannot be inside the commit it describes. Gate round 25 caught the earlier version implying otherwise.",
+ "runner": "raw stdout retained as evidence/discriminator-2026-08-23/t6-log.txt",
+ "command_shape": "python -c 'from core.memory.birth_phase import resolve' per fixture, fresh process each",
  "interpreter": "3.14.4",
  "sqlite_version": "3.46.1",
- "fixture_post_migration_sha256": "e8fe948ba2d753f0020bfd223d9b875046df6890be79890d3e9264ab11ded07e",
- "elapsed_seconds": 0.29,
+ "fixture_post_migration_sha256": "2e1fd088b3771109703afa306fb87c9586a172230e015e27a6997332ac7f29fa",
+ "elapsed_seconds": 0.32,
  "results": [
   {
    "mutation": "1",
