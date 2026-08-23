@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.7
+# Theme 2 — S1 (phase truth) witness protocol, v7.8
 
-Status: PROTOCOL v7.7. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.8. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes. *(v7.7: the original blanket "S1 code is
 barred until then" is superseded by the §12.13 scope ruling — the
