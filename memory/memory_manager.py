@@ -19,7 +19,12 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
-from core.memory.birth_phase import current_phase as _memory_phase_tag
+# S1 §4: stamping goes through the gate, not straight to current_phase.
+# Dormant (MAEZ_S1_PHASE_TRUTH unset) this returns exactly what
+# current_phase returned before, so flags-off behaviour is unchanged. With
+# S1 enabled it REFUSES rather than stamping 'gestation' onto a ledger the
+# resolver cannot vouch for -- which is the A6 defect this closes.
+from core.memory.birth_phase import phase_for_stamp as _memory_phase_tag
 from core.egress.gate import (
     KNOWN_ORIGINS,
     MINIMIZABLE_PRIVATE_CONTEXT,
@@ -1503,7 +1508,7 @@ class MemoryManager:
             "cycle": cycle,
             "timestamp": now,
             "type": "reasoning",
-            "memory_phase": _memory_phase_tag(),
+            "memory_phase": _memory_phase_tag(consumer="memory_manager.store"),
         }
         if metadata:
             doc_metadata.update(metadata)
@@ -1602,7 +1607,7 @@ class MemoryManager:
             "timestamp": now,
             "type": "telegram_exchange",
             "wing": _topic_router.detect_wing(content),
-            "memory_phase": _memory_phase_tag(),
+            "memory_phase": _memory_phase_tag(consumer="memory_manager.store_telegram"),
         }
         meta.update(provenance_extra)
         meta.update(egress_origin_extra)
@@ -2070,7 +2075,7 @@ class MemoryManager:
             "timestamp": now,
             "source": source,
             "type": "core_memory",
-            "memory_phase": _memory_phase_tag(),
+            "memory_phase": _memory_phase_tag(consumer="memory_manager.store_core"),
         }
         meta.update(provenance_extra)
         meta.update(egress_origin_extra)

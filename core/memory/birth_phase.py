@@ -236,3 +236,58 @@ def resolve(db_path=None) -> PhaseResult:
         return PhaseResult(PHASE_LIVED, "joined")
     finally:
         conn.close()
+
+
+VALID_STAMPS = (PHASE_GESTATION, PHASE_LIVED)
+
+
+def phase_for_stamp(db_path=None, *, supplied=None, consumer=None) -> str:
+    """The one gate every census consumer calls before stamping a phase.
+
+    Sixteen constructs write `memory_phase`. If each decided for itself when
+    to trust the resolver they would drift, and T3 would be witnessing
+    sixteen different contracts. One helper, one contract:
+
+        dormant  -> the legacy answer, unchanged, always, never raising
+        enabled  -> gestation/lived pass through; unknown REFUSES
+        supplied -> revalidated: a caller may narrow, never assert `lived`
+                    while the gate says otherwise (§4)
+
+    Raises:
+        PhaseUnknownRefusal: the resolver cannot vouch for a phase. §4 is
+            explicit that swallowing this and stamping `gestation` anyway is
+            a kill -- it is the A6 defect wearing the fix's clothes.
+        ValueError: the caller asserted a phase the gate contradicts, or a
+            phase outside the vocabulary.
+    """
+    if supplied is not None and supplied not in VALID_STAMPS:
+        raise ValueError(
+            f"{consumer or 'caller'}: {supplied!r} is not a phase; "
+            f"expected one of {VALID_STAMPS}")
+
+    if not s1_enabled():
+        # Dormant. Return exactly what the pre-S1 code would have written,
+        # including a caller's own choice. Nothing here may change behaviour
+        # or T5's discriminator stops being able to detect this guard at all.
+        return supplied if supplied is not None else current_phase(db_path)
+
+    result = resolve(db_path)
+
+    if result.phase == PHASE_UNKNOWN:
+        raise PhaseUnknownRefusal(
+            f"{consumer or 'consumer'}: refusing to stamp a phase — the "
+            f"resolver reads unknown ({result.reason}). Writing 'gestation' "
+            f"here would assert something no longer true of this ledger."
+        )
+
+    if supplied is None:
+        return result.phase
+
+    # Narrowing is allowed; asserting past the gate is not. `lived` while the
+    # gate says `gestation` is the misdating this theme exists to prevent.
+    if supplied == PHASE_LIVED and result.phase != PHASE_LIVED:
+        raise ValueError(
+            f"{consumer or 'caller'}: supplied memory_phase='lived' while the "
+            f"gate reads {result.phase!r} ({result.reason}); a caller may "
+            f"narrow, never assert")
+    return supplied
