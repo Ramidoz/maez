@@ -195,6 +195,11 @@ def main() -> int:
     # under test — `resolver_module` was an unverified path string, so a
     # record could name any resolver it liked and a PASS was compatible with
     # a different tree entirely. Digest the sources the claim is about.
+    # Round 32 F48: the migration SET was checked by name while the protocol
+    # pins the five FILES by digest, so a rename-preserving edit would pass.
+    report["migration_file_digests"] = {
+        f.name: hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in sorted((MAEZ_TREE / "core" / "ledger" / "migrations").glob("*.sql"))}
     report["instrument_digests"] = {
         rel: hashlib.sha256((Path(__file__).resolve().parent / rel).read_bytes()).hexdigest()
         for rel in ("theme2_s1_t5_replay.py", "theme2_s1_airlock.sh")}

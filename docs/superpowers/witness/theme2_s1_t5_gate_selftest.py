@@ -31,6 +31,9 @@ EXERCISED = "chroma::raw"
 # Round 27 #13/#16: the constants the judge now pins.
 F_PARTIAL = ("87921737ab54cc9d5effb069a1d16f5ec53c33a0f5321384"
              "cef39472a4c2d5a2")
+REAL_MIGRATION_DIGESTS = {
+    f.name: hashlib.sha256(f.read_bytes()).hexdigest()
+    for f in sorted(Path("/home/rohit/maez/core/ledger/migrations").glob("*.sql"))}
 REAL_INSTRUMENT_DIGESTS = {
     rel: hashlib.sha256(
         (Path("/home/rohit/maez/docs/superpowers/witness") / rel).read_bytes()).hexdigest()
@@ -67,6 +70,7 @@ def honest_run(fixture: str) -> dict:
         "phase_probe": {"current_phase": "gestation",
                         "birth_event_turn_id": None,
                         "has_resolve_api": True,
+                        "resolver_module": "/home/rohit/maez/core/memory/birth_phase.py",
                         "resolve": {"phase": "gestation", "reason": "dormant"}},
         # Round 25: the judge now pins the committed baseline's identity, so
         # the synthetic honest run must mirror that artifact rather than an
@@ -86,14 +90,19 @@ def honest_run(fixture: str) -> dict:
         "started_at": 1000.0 + (0.0 if fixture == "healthy" else 100.0),
         "finished_at": 1030.0 + (0.0 if fixture == "healthy" else 100.0),
         "store_tail_invocations": 20,
+        # Round 32 F49: absence no longer satisfies a pin, so the reference
+        # record must carry these the way a real run does.
+        "ledger_main_file_unchanged": True,
         "brain_reachable": False,
         "daemon_construct_seconds": 2.5,
-        "python": "3.14.0", "sqlite_version": "3.53.4", "protocol": "t5.v7",
+        "sqlite_version": "3.46.1", "protocol": "t5.v7",
         # Round 29 #30: the evidence must name the code it is about.
         # Round 30 #32: these are hashed off disk now, so the fixture must
         # carry the real digests of the real files.
         "source_digests": REAL_SOURCE_DIGESTS,
         "instrument_digests": REAL_INSTRUMENT_DIGESTS,
+        "migration_file_digests": REAL_MIGRATION_DIGESTS,
+        "python": "3.14.4 (selftest fixture)",
         "applied_migrations": (
             ["0001_init", "0002_triggers", "0003_add_lifecycle_stage",
              "0004_add_audit_trace_metadata",
@@ -162,6 +171,7 @@ def forced_on_run() -> dict:
                              "all_refusals_typed": True,
                              "stores_with_gestation_stamps": []}
     r["phase_probe"] = {"current_phase": "gestation", "has_resolve_api": True,
+                        "resolver_module": "/home/rohit/maez/core/memory/birth_phase.py",
                         "resolve": {"phase": "unknown", "reason": "structural"}}
     r["stamp_census"] = {EXERCISED: {}, "chroma::daily": {},
                          "chroma::core": {}, "private_thoughts": {},

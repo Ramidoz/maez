@@ -164,6 +164,24 @@ MIGRATIONS_BY_FIXTURE = {
 # Pinning the version stops a record from being produced under a different
 # library than the baseline it is compared against.
 EXPECTED_SQLITE = "3.46.1"
+EXPECTED_PYTHON_PREFIX = "3.14."
+# Round 32 F45: `instrument_digests` was compared to nothing — not to disk,
+# not to a constant — which is exactly the ruling round 30 #32 made about
+# source digests, not applied one round later to the instruments. And the
+# instruments are the files this arc edits every round.
+PINNED_INSTRUMENTS = {
+    "theme2_s1_airlock.sh":
+        "9a1207b569fdefc35d7e6133e5da4850f3edd18e85150d43b6dff8c50caa0c0e",
+    "theme2_s1_t5_replay.py":
+        "928b41e14845e77dea325e68dbed12d18ccdf51fe10000d96395450ed8cb7f1f",
+}
+# Round 32 F48: the migration set was checked by NAME while the protocol pins
+# the five FILES by digest. Rename-preserving edits would slip through.
+PINNED_MIGRATION_DIGESTS = {
+    "0001_init.sql": "eb126df1dd8c6ff5e249dab0259582747e3352991468acc936052d728db7ca75",
+    "0005_add_taint_privacy_chain_position.sql":
+        "5b66deb643d346a7f0b1ff154618b83366b1c7816de7f1d1b7304102c78d7c86",
+}
 # Round 31 #40: the record's own statement of what it loaded.
 EXPECTED_RESOLVER = "/home/rohit/maez/core/memory/birth_phase.py"
 
@@ -441,7 +459,7 @@ def k1_ledger_unchanged(runs: dict) -> list:
         # The producer computes this boolean from the same two digests; if it
         # disagrees, one of the three fields is fabricated.
         unchanged = r.get("ledger_main_file_unchanged")
-        if unchanged is not None and unchanged is not (pre == post):
+        if unchanged is not (pre == post):
             bad.append({"run": tag,
                         "detail": "ledger_main_file_unchanged disagrees with "
                                   "the recorded digests"})
@@ -463,8 +481,11 @@ def k2_no_latch(runs: dict) -> list:
                         "detail": "store-tree latch sweep missing"})
         elif tree:
             bad.append({"run": tag, "detail": tree})
-        fs = r.get("ledger_post_replay_file_set")
-        if isinstance(fs, list):
+        for _key in ("ledger_post_replay_file_set",
+                     "ledger_post_migration_file_set"):
+            fs = r.get(_key)
+            if not isinstance(fs, list):
+                continue
             for name in fs:
                 if any(m in name for m in LATCH_MARKERS):
                     bad.append({"run": tag, "detail": name})
@@ -494,7 +515,7 @@ def k3_positive_controls(runs: dict) -> list:
         d_returned = [i.get("id") for i in ints if i.get("outcome") == "returned"]
         d_raised = [i.get("id") for i in ints if i.get("outcome") != "returned"]
         d_no_tail = [i.get("id") for i in ints if not (
-            isinstance(i.get("tail_passages"), int) and i["tail_passages"] >= 1)]
+            _plain_int(i.get("tail_passages")) and i["tail_passages"] >= 1)]
         cb = r.get("collection_counts_before") or {}
         ca = r.get("collection_counts_after") or {}
         # Round 26 added `decoy_not_a_store: 0 -> 1` and the unconstrained
@@ -627,7 +648,7 @@ def k8_record_coherence(runs: dict) -> list:
                         "detail": "census-resolved store paths are not exactly "
                                   "the pinned map", "got": cen_paths})
         rm = (r.get("phase_probe") or {}).get("resolver_module")
-        if rm is not None and rm != EXPECTED_RESOLVER:
+        if rm != EXPECTED_RESOLVER:
             bad.append({"run": tag, "detail": "record names a resolver module "
                                               "outside the tree", "got": rm})
         for field in ("effective_store_paths_after_import",
@@ -653,7 +674,7 @@ def k8_record_coherence(runs: dict) -> list:
             bad.append({"run": tag, "detail": "run claims a reachable brain "
                                               "inside a network-isolated airlock"})
         secs = r.get("daemon_construct_seconds")
-        if secs is not None and not (isinstance(secs, (int, float))
+        if not (isinstance(secs, (int, float))
                                      and not isinstance(secs, bool) and secs > 0):
             bad.append({"run": tag, "detail": "daemon construct time is not a "
                                               "positive duration", "got": secs})
@@ -687,10 +708,31 @@ def k8_record_coherence(runs: dict) -> list:
                                               "pinned SQLite",
                         "got": r.get("sqlite_version")})
         inst = r.get("instrument_digests")
-        if not isinstance(inst, dict) or sorted(inst) != [
-                "theme2_s1_airlock.sh", "theme2_s1_t5_replay.py"]:
-            bad.append({"run": tag, "detail": "record does not attest which "
-                                              "instrument produced it"})
+        if not isinstance(inst, dict) or inst != PINNED_INSTRUMENTS:
+            bad.append({"run": tag,
+                        "detail": "record was not produced by the pinned "
+                                  "instruments", "got": inst})
+        else:
+            for rel, want in PINNED_INSTRUMENTS.items():
+                try:
+                    real = hashlib.sha256(
+                        (Path(__file__).resolve().parent / rel).read_bytes()).hexdigest()
+                except OSError:
+                    real = None
+                if real != want:
+                    bad.append({"run": tag,
+                                "detail": f"{rel} on disk is not the pinned "
+                                          f"instrument"})
+        if not str(r.get("python", "")).startswith(EXPECTED_PYTHON_PREFIX):
+            bad.append({"run": tag, "detail": "run did not execute under the "
+                                              "pinned interpreter series",
+                        "got": r.get("python")})
+        mig = r.get("migration_file_digests")
+        if not isinstance(mig, dict) or any(
+                mig.get(k) != v for k, v in PINNED_MIGRATION_DIGESTS.items()):
+            bad.append({"run": tag,
+                        "detail": "the migration files this fixture was built "
+                                  "from are not the pinned ones", "got": mig})
     # `applied_migrations` deliberately DIFFERS between the fixtures — that is
     # the whole point of #36 — so it is checked per-fixture in K7, not here.
     for field in ("python", "sqlite_version", "protocol", "source_digests",
@@ -808,7 +850,7 @@ def k4_no_stray_store(runs: dict) -> list:
                         "detail": "stray sweep did not cover the frozen "
                                   "writable roots; an empty result proves "
                                   "nothing", "got": roots})
-        if r.get("stray_store_inventory_before") not in (0, None):
+        if r.get("stray_store_inventory_before") != 0:
             bad.append({"run": tag,
                         "detail": "the sweep's difference basis was not empty; "
                                   "the airlock guarantees it is",
@@ -1169,7 +1211,24 @@ def main() -> int:
     failures = {k: v for k, v in clauses.items() if v}
     if dbad:
         failures["D_discriminator"] = dbad
+    def _d(path):
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except (OSError, TypeError):
+            return None
+    here = Path(__file__).resolve().parent
     verdict = {
+        # Round 32 F46: the verdict named NONE of its inputs and did not
+        # digest the judge, so a stale PASS could sit beside regenerated
+        # records and nothing would notice. These are judge-authored facts,
+        # not hand-copied ones.
+        "inputs_sha256": {
+            "run_a": _d(a.run_a), "run_p": _d(a.run_p),
+            "forced_on": _d(a.forced_on), "baseline_census": _d(a.baseline_census),
+            "baseline_archive": _d(here / "theme2-s1-baseline.tar.zst"),
+            "replay_manifest": _d(here / "theme2-s1-replay.json"),
+            "judge_self": _d(__file__),
+        },
         "clauses": {k: ("PASS" if not v else "FAIL") for k, v in clauses.items()},
         "D_discriminator": dv,
         "failures": failures,
