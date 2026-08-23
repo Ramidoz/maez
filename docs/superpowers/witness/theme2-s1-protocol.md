@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.10
+# Theme 2 — S1 (phase truth) witness protocol, v7.11
 
-Status: PROTOCOL v7.10. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.11. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes.
 
@@ -11,6 +11,89 @@ gate rounds each return zero NEW forgeries against the judge and zero new
 defects found by execution.** One clean round is a coincidence; two is
 evidence the well is dry. This is the loop-until-dry standard this project
 already applies to discovery, applied to its own judge.
+
+**§0.3 — ADOPTED 2026-08-23, by council ruling. This supersedes §0.1 and
+REJECTS §0.2.** Two independent seats were asked to rule, and both were told
+that "live with the rule you wrote" was an acceptable answer. Neither took it,
+and neither endorsed §0.2 either.
+
+**Why §0.2 was rejected.** It fails its own retrodiction test: applied to round
+33's findings, three of them (an altered migration, a changed instrument, a
+stale artifact) land inside §0.2's own enumeration of honest-reachable
+defects, so the counter resets anyway. Adopting it would have bought the
+goalpost-moving objection without buying the closure. Worse, its two-category
+split was applied wrongly on first use — all four classes in the
+"forgery-only" residue reclassify as honest-reachable under §0.2's own
+predicate, because they had been sorted by HOW they were demonstrated
+(someone edited a record) rather than by HOW THE STATE COULD ARISE. One of
+them was a live bug: a store redirector at airlock entry, unswept.
+
+**The closure condition is now a set of proof obligations, not a round count.**
+T5 closes only when all five hold:
+
+1. **The trust table is frozen, and the judge EMITS it.** One table naming the
+   licensed claim, the threat model, the trusted components, the inputs the
+   judge authenticates by reading and hashing them itself, and the fields it
+   takes on the producer's word. The judge emits its own partition with every
+   verdict, so a newly-added unread field appears in the inventory instead of
+   waiting for a reviewer to notice it.
+2. **Every PASS-affecting clause has an isolated mutation witness.** Neuter the
+   clause in a copy of the judge and its named test must turn RED while the
+   honest positive control stays GREEN. This is measured, not asserted — see
+   theme2-s1-clause-coverage.md. It is the one demonstrably FINITE well, because
+   clauses are countable, and it catches a new clause the round it lands.
+3. **The workflow fault matrix covers every declared accidental-fault surface.**
+4. **Zero known workflow-reachable claim breaches and zero judge-assurance
+   defects.** Those are the two resetting categories, defined below.
+5. **Then** two consecutive cold reviews returning zero findings in those two
+   categories — as a discovery backstop, not as the condition itself.
+
+**Three categories, replacing §0.2's two:**
+
+| Category | Test | Resets? |
+|---|---|---|
+| Workflow-reachable claim breach | Can an upstream fault — code, instrument, fixture, environment, dependency, timing, crash/retry, stale selection — flow through the official workflow and yield PASS while the licensed claim is false, WITHOUT direct evidence substitution? | Yes |
+| Judge-assurance defect | Can a PASS-affecting clause be deleted, neutered, bypassed or left unbound without a named isolated test turning RED? | Yes |
+| Adversarial evidence substitution | Does it require synthesising or altering authoritative reports, bypassing the registered workflow, or compromising the judge's trust boundary? | No — but recorded permanently |
+
+The middle category is round 33's contribution and must not be allowed to
+dissolve into either neighbour. "A decisive clause has no isolated test" is not
+a state of a run report at all, which is why §0.2's report-centred predicate
+could not classify it.
+
+**The owner's lever is mechanical, not a judgement call.** §0.2 would have left
+the owner a spectator with no way to reopen a closed counter. Instead: amend the
+frozen claim or the threat model, and the relevant gate resets prospectively.
+
+**§0.4 — The licensed claim. ADOPTED IMMEDIATELY AND UNCONDITIONALLY,
+decoupled from any counter.** Both seats agreed this is the part with content
+and that it must not be held hostage to the closure rule. Every verdict carries
+it verbatim:
+
+> The judge independently matched the frozen artifacts named in the trust
+> table. Three separately executed reports satisfy every registered per-run and
+> cross-run predicate. Assuming the reports were emitted through the registered
+> workflow without deliberate evidence substitution, they support the stated
+> flag-off and forced-on claims. PASS does not establish authenticity against a
+> malicious evidence author, and does not certify any clause that no test
+> exercises.
+
+"**Separately** executed", not "independently" — the three runs share a
+producer, instruments and workflow, so their separation is in time, not in
+failure mode. Claiming independence would overclaim, which is the exact failure
+this witness exists to prevent.
+
+**Standing at adoption: T5 is NOT closed, and §0.3 makes closure harder in the
+near term than §0.1 did.** Obligation 2 is unmet — two clauses are recorded as
+having no isolated witness — and obligation 1 is unbuilt. A rule adopted after
+nine failed rounds that DELAYS one's own closure is the reverse of moving the
+goalposts, and that is the strongest answer available to the objection.
+
+**Recorded honestly, from the Claude seat:** T5's discriminator already returns
+PASS, and what actually blocks the latch is U5/T2 witnessing the ruled writer
+topology. Nine rounds have gone into reviewing the judge of an already-passing
+test that is not on the critical path. After obligations 1 and 2 are discharged,
+the next work is U5/T2 — not a tenth round.
 
 **§0.2 — PROPOSAL, NOT ADOPTED. Owner ruling required (raised 2026-08-23,
 after round 32).** §0.1 as written may be unreachable by construction, and
