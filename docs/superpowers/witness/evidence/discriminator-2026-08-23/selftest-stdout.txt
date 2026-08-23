@@ -1,4 +1,4 @@
-# gate selftest — executed at 61332d7257ed2f5f9e6e27231a74d23675862e73 on 2026-08-23T12:30:10-05:00
+# gate selftest — executed at (pre-commit) 5e271049fd702ab89b08bd2e3c19a4eba2e35e78 on 2026-08-23T13:22:14-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator']
@@ -49,6 +49,12 @@ ok  round 25: forced-on census emptied             FAIL  (want FAIL) ['D_discrim
 ok  round 26: co-mutated to a different KNOWN consumer FAIL  (want FAIL) ['D_discriminator']
 ok  round 26: exact key set, impossible counts     FAIL  (want FAIL) ['D_discriminator']
 ok  round 26: Boolean tail counts                  FAIL  (want FAIL) ['D_discriminator']
+ok  round 27: flags-off run admits the flag was ON FAIL  (want FAIL) ['K5_flags_were_off']
+ok  round 27: flag present in a flags-off environment FAIL  (want FAIL) ['K5_flags_were_off']
+ok  round 27: partial run is a clone of the healthy run FAIL  (want FAIL) ['K6_contained_and_distinct']
+ok  round 27: containment probe did not pass       FAIL  (want FAIL) ['K6_contained_and_distinct']
+ok  round 27: no containment proof at all          FAIL  (want FAIL) ['K6_contained_and_distinct']
+ok  round 27: run finished before it started       FAIL  (want FAIL) ['K6_contained_and_distinct']
 
 ALL PASS
 exit=0

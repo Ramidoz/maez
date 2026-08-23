@@ -48,6 +48,16 @@ def honest_run(fixture: str) -> dict:
         "stamp_census": copy.deepcopy(
             PINNED_BASELINE["per_fixture"][fixture]["stamp_census"]),
         "census_resolved_paths": {"private_thoughts": "/x", "audit_log": "/y"},
+        # Round 27 self-attack: the judge now READS the premises the producer
+        # was already recording — flag off, run contained, coherent span.
+        "flags_off_after_import": "PASS",
+        "env_after_import": {"values": {"HOME": "/home/rohit/maez"}},
+        "containment": {"repo_readonly": "PASS",
+                        "memory_writable_and_empty": "PASS",
+                        "network_unreachable": "PASS",
+                        "no_maez_env_at_entry": "PASS"},
+        "started_at": 1000.0 + (0.0 if fixture == "healthy" else 100.0),
+        "finished_at": 1030.0 + (0.0 if fixture == "healthy" else 100.0),
         "store_tail_invocations": 20,
         "collection_counts_before": {"raw": 0, "daily": 0, "core": 0},
         "collection_counts_after": {"raw": 20, "daily": 0, "core": 0},
@@ -86,6 +96,7 @@ def forced_on_run() -> dict:
                          "chroma::core": {}, "private_thoughts": {},
                          "audit_log": {}}
     r["env_after_import"] = {"values": {"MAEZ_S1_PHASE_TRUTH": "1"}}
+    r["started_at"], r["finished_at"] = 1200.0, 1230.0
     r["collection_counts_before"] = {"raw": 0, "daily": 0, "core": 0}
     r["collection_counts_after"] = {"raw": 0, "daily": 0, "core": 0}
     r["consumer_refusals"] = [
@@ -477,6 +488,31 @@ def main() -> int:
         i["tail_passages"] = True
     case("round 26: Boolean tail counts", "FAIL", baseline=pinned, forced=f,
          expect_only="D_discriminator")
+
+    # Round 27, found by attacking my own judge rather than waiting to be
+    # told. The first is the one that mattered: the dormancy premise itself
+    # — a "flags-off" run that openly declared the flag ON used to pass.
+    a = copy.deepcopy(A); a["flags_off_after_import"] = False
+    a["env_after_import"]["values"]["MAEZ_S1_PHASE_TRUTH"] = "1"
+    case("round 27: flags-off run admits the flag was ON", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
+    a = copy.deepcopy(A)
+    a["env_after_import"]["values"]["MAEZ_S1_PHASE_TRUTH"] = "1"
+    case("round 27: flag present in a flags-off environment", "FAIL", a=a,
+         baseline=pinned, expect_only="K5_flags_were_off")
+    p_clone = copy.deepcopy(A); p_clone["fixture"] = "partial"
+    case("round 27: partial run is a clone of the healthy run", "FAIL",
+         p=p_clone, baseline=pinned, expect_only="K6_contained_and_distinct")
+    a = copy.deepcopy(A)
+    a["containment"] = dict(a["containment"], network_unreachable="FAIL (reachable)")
+    case("round 27: containment probe did not pass", "FAIL", a=a,
+         baseline=pinned, expect_only="K6_contained_and_distinct")
+    a = copy.deepcopy(A); del a["containment"]
+    case("round 27: no containment proof at all", "FAIL", a=a,
+         baseline=pinned, expect_only="K6_contained_and_distinct")
+    a = copy.deepcopy(A); a["started_at"], a["finished_at"] = 500.0, 100.0
+    case("round 27: run finished before it started", "FAIL", a=a,
+         baseline=pinned, expect_only="K6_contained_and_distinct")
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1

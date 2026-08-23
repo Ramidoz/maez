@@ -76,6 +76,9 @@ KNOWN_CONSUMERS = {
 
 COLLECTION_KEYS = ("raw", "daily", "core")
 
+# The flag whose ABSENCE the flags-off runs are supposed to demonstrate.
+ACTIVATION_FLAG = "MAEZ_S1_PHASE_TRUTH"
+
 # The T5 replay drives one surface, and every retained interaction reaches
 # exactly one stamper. Membership in KNOWN_CONSUMERS was not enough: round 26
 # co-mutated an interaction AND its refusal row to a different known consumer
@@ -158,6 +161,72 @@ def schema_failures(runs: dict) -> list:
                 # Round 19: {"gestation": 0} counted as a nonempty census.
                 bad.append({"run": tag,
                             "detail": f"{EXERCISED_STORE} produced no stamps"})
+    return bad
+
+
+def k5_flags_were_actually_off(runs: dict) -> list:
+    """Self-attack, round 27. The ENTIRE dormancy claim is "with the flag off,
+    behavior is exactly legacy" — and the judge never checked that the flag
+    was off. The producer records `flags_off_after_import` and the env it
+    imported under; both were ignored, so a run that openly ADMITTED the flag
+    was set passed as the dormancy baseline. Absence of the flag is the
+    premise, so it is now evidence."""
+    bad = []
+    for tag, r in runs.items():
+        if r.get("flags_off_after_import") != "PASS":
+            bad.append({"run": tag, "detail": "run does not attest that the "
+                                              "activation flag was off",
+                        "got": r.get("flags_off_after_import")})
+        env = (r.get("env_after_import") or {}).get("values")
+        if not isinstance(env, dict):
+            bad.append({"run": tag, "detail": "no recorded post-import env"})
+        elif ACTIVATION_FLAG in env:
+            bad.append({"run": tag,
+                        "detail": "flags-off run imported with the activation "
+                                  "flag present in its environment",
+                        "value": env.get(ACTIVATION_FLAG)})
+    return bad
+
+
+def k6_contained_and_distinct(runs: dict) -> list:
+    """Self-attack, round 27. Two more premises the judge took on faith:
+    (a) the run happened inside the airlock at all — containment was recorded
+    and never read, so a run against the LIVE stores passed; and (b) the two
+    fixtures were two executions — run-p could be a byte-clone of run-a with
+    the label flipped, and one run would answer for both."""
+    bad = []
+    for tag, r in runs.items():
+        c = r.get("containment")
+        if not isinstance(c, dict):
+            bad.append({"run": tag, "detail": "no containment proof"})
+            continue
+        for probe in ("repo_readonly", "memory_writable_and_empty",
+                      "network_unreachable", "no_maez_env_at_entry"):
+            if not str(c.get(probe, "")).startswith("PASS"):
+                bad.append({"run": tag, "detail": f"containment probe {probe} "
+                                                  f"did not pass",
+                            "got": c.get(probe)})
+        st, fi = r.get("started_at"), r.get("finished_at")
+        if not (isinstance(st, (int, float)) and isinstance(fi, (int, float))
+                and not isinstance(st, bool) and not isinstance(fi, bool)
+                and 0 < st < fi):
+            bad.append({"run": tag, "detail": "run has no coherent wall-clock "
+                                              "span", "started_at": st,
+                        "finished_at": fi})
+    tags = sorted(runs)
+    for i in range(len(tags)):
+        for j in range(i + 1, len(tags)):
+            x, y = runs[tags[i]], runs[tags[j]]
+            if x.get("started_at") == y.get("started_at"):
+                bad.append({"detail": "two runs share a start time; they are "
+                                      "not two executions",
+                            "runs": [tags[i], tags[j]]})
+            a_ = {k: v for k, v in x.items() if k != "fixture"}
+            b_ = {k: v for k, v in y.items() if k != "fixture"}
+            if a_ == b_:
+                bad.append({"detail": "one run is a clone of the other with "
+                                      "only the fixture label changed",
+                            "runs": [tags[i], tags[j]]})
     return bad
 
 
@@ -574,6 +643,8 @@ def main() -> int:
         "K2_no_latch_artifact": k2_no_latch(runs),
         "K3_positive_controls": k3_positive_controls(runs),
         "K4_no_stray_store": k4_no_stray_store(runs),
+        "K5_flags_were_off": k5_flags_were_actually_off(runs),
+        "K6_contained_and_distinct": k6_contained_and_distinct(runs),
     }
     failures = {k: v for k, v in clauses.items() if v}
     if dbad:
