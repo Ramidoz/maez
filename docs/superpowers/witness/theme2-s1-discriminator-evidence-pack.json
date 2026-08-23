@@ -1,17 +1,17 @@
 {
- "digests_computed_against_tree_at_commit": "04b1d4a5b09c86f2c8d915de5db28f157dd855ca",
+ "digests_computed_against_tree_at_commit": "049c4e53ece00ef0e0a93c5621ce70fc35bbac4f",
  "provenance_note": "Digests describe the tree at the commit named above; this file's bytes land in the FOLLOWING commit, and the bundle is computed against that one so its digest of this pack is honest.",
  "evidence_generation": "Re-executed at round 27 after the producer was repaired: the forced-on path previously returned before the containment sweeps ran. The prior set is retained under evidence/discriminator-2026-08-23/ with a SUPERSEDED note and deliberately fails this judge.",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "25561d845f4cfcbfe498579e10a3ae9279133318d7a3dd04bffdbf873f5d405a"
+  "sha256": "7ad5023239b2032829e1ca29fa15d772a6fc2aee977df5b8c4b718721b6a1529"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "e9562c0853d9ed68492a7b74fdc956d2c536e0e682e3c506758d41b742b6e639",
+  "sha256": "64b54f0d918d6460cf6573ff61a35bcb742778cc8f4bc2fa9caf8ea0c13e2223",
   "retained_receipt": {
    "file": "evidence/discriminator-2026-08-23-r27/selftest-stdout.txt",
-   "sha256": "38f852d67257b78622f78793974bf3e7990c775bb3bc8b52b63f07f85937bf85",
+   "sha256": "268a7ae9072098f2138cec61ba1ee2d9aad6fe31f418c9cb9cc1962e709fe6ea",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -37,7 +37,7 @@
  },
  "verdict": {
   "file": "evidence/discriminator-2026-08-23-r27/verdict.json",
-  "sha256": "62dc5f96fa8c39f7a79f1b49946986f06ec84e37b1a4fce908f97f0cba7e48cb"
+  "sha256": "0c97bd90e07b8ff49bb2b6eb0f25ecb56dd0dd4366d1a0a4569274f6acfda85c"
  },
  "verdict_summary": {
   "verdict": "PASS",
@@ -81,6 +81,14 @@
    "clone check bypassed by nudging the clock",
    "K1 satisfiable by two matching fabricated digests",
    "digest domain, producer-boolean agreement, manifest binding, resolver reading"
+  ],
+  "round_28": [
+   "the dormancy proof never required the feature to be PRESENT (a pre-S1 tree validated: a tautology)",
+   "the forced-on half never received the flags-off half's rederivations (round 26's decoy forgery still open there)",
+   "the forced-on control could declare that gestation stamps landed and still read PASS",
+   "the census reconciliation compared an absolute census to a delta, so a non-empty starting store validated",
+   "four live clauses had no test case; the archive clause was unreachable in effect and never hashed the archive",
+   "records could contradict their own containment: paths outside the airlock, /dev/null census paths, reachable brain, disagreeing interpreters, refusals on a flags-off run, twenty empty replies"
   ]
  }
 }
