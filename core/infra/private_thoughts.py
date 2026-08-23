@@ -583,8 +583,17 @@ class PrivateThoughts:
           - unknown memory_phase
           - content empty or over MAX_CONTENT_LEN
         """
-        if memory_phase is None:
-            memory_phase = birth_phase.current_phase()
+        # S1 §4: the stamp goes through the gate. Dormant this returns
+        # exactly current_phase() (or the caller's value, unchanged); with
+        # MAEZ_S1_PHASE_TRUTH=1 it refuses on `unknown` and revalidates a
+        # caller-supplied phase -- narrow yes, assert 'lived' past the gate
+        # no. Replaces the bare current_phase() default so a private thought
+        # can never be stamped 'gestation' against a ledger the resolver
+        # cannot vouch for.
+        memory_phase = birth_phase.phase_for_stamp(
+            supplied=memory_phase,
+            consumer="private_thoughts.record_thought",
+        )
         if provenance not in ALLOWED_PROVENANCES:
             raise ValueError(
                 f"unknown provenance {provenance!r} (allowed: {sorted(ALLOWED_PROVENANCES)})"
@@ -623,8 +632,17 @@ class PrivateThoughts:
         writes must carry the minimal contextual-integrity envelope
         that later readers and audits can reason over.
         """
-        if memory_phase is None:
-            memory_phase = birth_phase.current_phase()
+        # S1 §4: the stamp goes through the gate. Dormant this returns
+        # exactly current_phase() (or the caller's value, unchanged); with
+        # MAEZ_S1_PHASE_TRUTH=1 it refuses on `unknown` and revalidates a
+        # caller-supplied phase -- narrow yes, assert 'lived' past the gate
+        # no. Replaces the bare current_phase() default so a private thought
+        # can never be stamped 'gestation' against a ledger the resolver
+        # cannot vouch for.
+        memory_phase = birth_phase.phase_for_stamp(
+            supplied=memory_phase,
+            consumer="private_thoughts.record_signal",
+        )
         if signal_kind is None:
             signal_kind = provenance
         if signal_kind is None:
@@ -670,8 +688,17 @@ class PrivateThoughts:
         memory_phase: str | None = None,
     ) -> int:
         """Append a producer signal using an existing caller-owned transaction."""
-        if memory_phase is None:
-            memory_phase = birth_phase.current_phase()
+        # S1 §4: the stamp goes through the gate. Dormant this returns
+        # exactly current_phase() (or the caller's value, unchanged); with
+        # MAEZ_S1_PHASE_TRUTH=1 it refuses on `unknown` and revalidates a
+        # caller-supplied phase -- narrow yes, assert 'lived' past the gate
+        # no. Replaces the bare current_phase() default so a private thought
+        # can never be stamped 'gestation' against a ledger the resolver
+        # cannot vouch for.
+        memory_phase = birth_phase.phase_for_stamp(
+            supplied=memory_phase,
+            consumer="private_thoughts.insert_signal_in_transaction",
+        )
         if signal_kind is None:
             signal_kind = provenance
         if signal_kind is None:

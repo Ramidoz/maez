@@ -53,6 +53,8 @@ import json
 import os
 import secrets
 import sqlite3
+
+from core.memory.birth_phase import phase_for_stamp as _phase_for_stamp
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -307,14 +309,16 @@ class AuditLog:
                     reasoning, concerns_json, mitigations_json, summary,
                     injection_buckets, injection_severity,
                     judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
-                    outcome, outcome_ts, outcome_notes
+                    outcome, outcome_ts, outcome_notes,
+                    memory_phase
                 ) VALUES (
                     ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?,
                     ?, ?, ?, ?, ?,
-                    NULL, NULL, NULL
+                    NULL, NULL, NULL,
+                    ?
                 )
                 """,
                 (
@@ -323,6 +327,15 @@ class AuditLog:
                     reasoning, json.dumps(concerns), json.dumps(mitigations), summary,
                     json.dumps(buckets), severity,
                     judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
+                    # Owner ruling 2026-08-23: record() used to omit this
+                    # column and let the SQL DEFAULT 'gestation' fill it in.
+                    # A stamp the database supplies cannot be refused by
+                    # application code -- with the resolver reading unknown,
+                    # rows would still land claiming gestation (the A6 defect
+                    # inside the schema). Stamping explicitly routes this
+                    # through the same gate as every other census consumer.
+                    # The DEFAULT stays in the schema as a harmless fallback.
+                    _phase_for_stamp(consumer="audit_log.record"),
                 ),
             )
             if cur.rowcount != 1:
@@ -408,7 +421,7 @@ class AuditLog:
         reason: str,
         source: str,
         user_id: Optional[str] = None,
-        memory_phase: str = MEMORY_PHASE_GESTATION,
+        memory_phase: Optional[str] = None,
     ) -> str:
         """Open a new developer-mode session. Returns the session_id.
 
@@ -433,6 +446,12 @@ class AuditLog:
             memory_phase: Defaults to 'gestation'. After the birth
                 event, the daemon will pass 'lived' here.
         """
+        # S1 §4 via the shared gate: dormant -> the legacy 'gestation'
+        # default unchanged; enabled -> refuses on unknown, and a caller may
+        # narrow but never assert 'lived' past the gate.
+        memory_phase = _phase_for_stamp(
+            supplied=memory_phase, consumer="audit_log.start_direct_edit_session")
+
         if user_id is None:
             try:
                 from core.identity import user_profile_id as _owner_id
@@ -485,7 +504,7 @@ class AuditLog:
         diff_summary: str,
         commit_hash: Optional[str] = None,
         reason: str = "",
-        memory_phase: str = MEMORY_PHASE_GESTATION,
+        memory_phase: Optional[str] = None,
     ) -> str:
         """Record a single direct-edit event inside an open session.
 
@@ -509,6 +528,12 @@ class AuditLog:
                 reason. If empty, the session-level reason applies.
             memory_phase: Same semantics as start_direct_edit_session.
         """
+        # S1 §4 via the shared gate: dormant -> the legacy 'gestation'
+        # default unchanged; enabled -> refuses on unknown, and a caller may
+        # narrow but never assert 'lived' past the gate.
+        memory_phase = _phase_for_stamp(
+            supplied=memory_phase, consumer="audit_log.log_direct_edit")
+
         request_id = secrets.token_hex(12)
         ts = time.time()
         params = {
@@ -551,7 +576,7 @@ class AuditLog:
         self,
         *,
         session_id: str,
-        memory_phase: str = MEMORY_PHASE_GESTATION,
+        memory_phase: Optional[str] = None,
     ) -> str:
         """Close an open developer-mode session. Returns the
         request_id of the end-event row.
@@ -564,6 +589,12 @@ class AuditLog:
         they land after the session_end event, which is the signal
         that something is off.
         """
+        # S1 §4 via the shared gate: dormant -> the legacy 'gestation'
+        # default unchanged; enabled -> refuses on unknown, and a caller may
+        # narrow but never assert 'lived' past the gate.
+        memory_phase = _phase_for_stamp(
+            supplied=memory_phase, consumer="audit_log.end_direct_edit_session")
+
         request_id = secrets.token_hex(12)
         ts = time.time()
         params = {"closed_at": ts}
