@@ -1,6 +1,6 @@
 {
- "digests_computed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
- "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Gate round 25 rejected the earlier wording, which named a commit these bytes were absent from.",
+ "digests_computed_against_tree_at_commit": "10b2a4dd6cfc2ef9d68be92695039469802cfde0",
+ "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Every OTHER file referenced here is unchanged between those two commits, which is checkable with `git diff --stat`.",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
   "sha256": "f96b7e7a71b1ff24eb6102622fca6a6261b4f680d7bf40820000a72505342dd7"
@@ -10,7 +10,7 @@
   "sha256": "f53269d5d58f8eaae747ea38ed8c27d89e97189fc7573e5eb52131cdbf584161",
   "retained_receipt": {
    "file": "evidence/discriminator-2026-08-23/selftest-stdout.txt",
-   "sha256": "3994e58a51dbfe44c7835ac9cdd47906ca699a82152e8a9d96dfa3e83a35439b",
+   "sha256": "036da231de8a015d2d0e4ebac25d55727bac76968df15f0975028d420215c6cb",
    "result": [
     "ALL PASS",
     "exit=0"

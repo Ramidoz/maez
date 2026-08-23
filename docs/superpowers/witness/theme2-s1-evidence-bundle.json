@@ -1,12 +1,12 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "eda63f8da07573abec5b218f30ac035f5c79247c",
- "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Gate round 25 rejected the earlier wording, which named a commit these bytes were absent from.",
+ "digests_computed_against_tree_at_commit": "10b2a4dd6cfc2ef9d68be92695039469802cfde0",
+ "provenance_note": "Digests are computed against the tree at the commit named above. This file's own bytes are written afterwards and land in the FOLLOWING commit \u2014 an artifact cannot be inside the commit whose contents it digests. Every OTHER file referenced here is unchanged between those two commits, which is checkable with `git diff --stat`.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
   "version": "v7.8",
-  "sha256": "69c9fc4398c792ddbe7f3fce4f3c5755209382b7ada0c2a4a501db0cd879f8b8"
+  "sha256": "c2f5b21d95db1acd317beba010f103ee31a1ebb65041da2ab62244789ad46b1c"
  },
  "s2_protocol": {
   "file": "theme2-s2-protocol.md",
@@ -46,9 +46,9 @@
   },
   "pinned_suite_run": {
    "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/pinned-suite-stdout.txt",
-   "sha256": "23abe4291bf5075560b17d6c47e82c97f1b0982711265a265a743321aeff21e3",
+   "sha256": "29c346adc91c4dee72d61847ece646f6162875e00be258c277e459979a14dc09",
    "tail": [
-    "59 passed, 1 warning, 48 subtests passed in 41.78s",
+    "59 passed, 1 warning, 48 subtests passed in 43.19s",
     "exit=0"
    ]
   },
@@ -80,7 +80,7 @@
   "baseline_census_sha256": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "e66fac49b9309a0656ac9a71f70772963fbff71f79c500a7b75dcadadbb89c4c",
+   "sha256": "1b1eb8b769057575e7b279b0ba70242544d04fa61e2fc70b69bb0e29ed044d67",
    "verdict": {
     "verdict": "PASS",
     "D_discriminator": "PASS"
@@ -110,5 +110,10 @@
   "T1 cells 2/4/6/8/10/12/13/14/16 + torn/corrupt/stale/foreign variants",
   "T2 crash/publication/checkpoint matrix",
   "S1 enablement (MAEZ_S1_PHASE_TRUTH stays unset in production)"
- ]
+ ],
+ "final_report": {
+  "file": "theme2-s1-final-report.md",
+  "sha256": "37996922d331cae040419e32c5e4eb30a9f75b5622419b605d54ff709b59db29",
+  "authority": "narrative only; this bundle is the authority"
+ }
 }
