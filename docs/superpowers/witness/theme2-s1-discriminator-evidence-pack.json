@@ -1,17 +1,17 @@
 {
- "digests_computed_against_tree_at_commit": "729c6480e1115b662cb71b7e06d8faf6192b783a",
+ "digests_computed_against_tree_at_commit": "bd415bb6bba7e9e3e1e6aca8bca2d4cddb756315",
  "provenance_note": "Digests describe the tree at the commit named above; this file's bytes land in the FOLLOWING commit, and the bundle is computed against that one so its digest of this pack is honest.",
  "evidence_generation": "Executed at round 29. The judge hashes the replay manifest, the pinned archive AND the four attested source files off disk, so the evidence is bound to the corpus and to the code it is about. (Round 30 corrected an earlier overclaim here: source digests had only been compared between records.)",
  "judge": {
   "file": "theme2_s1_t5_gate.py",
-  "sha256": "ec14e8d4526aef90d1c00dd1c7656d6fe3c7a56d2f261930cc4be2c1139f05af"
+  "sha256": "ef1dc88e9b107388da13311824cbfc63a9b5e05047864be017814ec7f1340bc5"
  },
  "judge_selftest": {
   "file": "theme2_s1_t5_gate_selftest.py",
-  "sha256": "f29a622cd1e5f38835e4e36b04139a24c77464337af55db8af239628702a3282",
+  "sha256": "b4fd54b63e6e7d7173ed51b9d1a70320f114cfcf57180d4e43654082b466fcc7",
   "retained_receipt": {
-   "file": "evidence/discriminator-2026-08-23-r31/selftest-stdout.txt",
-   "sha256": "f8511e78830dc47e8e39f9519ff9fe84c4e568552d1a86b260205dc4c6bacdf3",
+   "file": "evidence/discriminator-2026-08-23-r32/selftest-stdout.txt",
+   "sha256": "e6801a41e6be08ac8ff42595ca196450f13558b7f1156323d5480f35ae8a301b",
    "result": [
     "ALL PASS",
     "exit=0"
@@ -20,23 +20,23 @@
  },
  "producer": {
   "file": "theme2_s1_t5_replay.py",
-  "sha256": "73b154ccb23854ae95d4e9addfa233d9d825be93d83142a8d20613cd702c55ec"
+  "sha256": "928b41e14845e77dea325e68dbed12d18ccdf51fe10000d96395450ed8cb7f1f"
  },
  "airlock": {
   "file": "theme2_s1_airlock.sh",
   "sha256": "9a1207b569fdefc35d7e6133e5da4850f3edd18e85150d43b6dff8c50caa0c0e"
  },
  "verdict_inputs_sha256": {
-  "run-a.json": "5abe16920fcce359f02d6dd5775179145da376aeacdee5a35c59e0071b469f0d",
-  "run-p.json": "71f4679a5672a041b4d379a69343badd49532801ec35e5d6f29f66f501e51001",
-  "run-f.json": "d096ef95f8ac4a6e97aa26d1d7404ff26090baaf91af336e4eef1efbeb62c965",
+  "run-a.json": "873db614e9917712057b2f528265027964e7788bc22a74198d9576078e450b8d",
+  "run-p.json": "079bd7094233bf984ad550a224428812ad618e2cf7d51c92772ae996f7091e22",
+  "run-f.json": "7952e7b591f7366643a306429eeacad241c13e0365752e36b7c40b9310ea84d2",
   "baseline-census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "baseline-archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "replay-manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "verdict": {
-  "file": "evidence/discriminator-2026-08-23-r31/verdict.json",
-  "sha256": "0c97bd90e07b8ff49bb2b6eb0f25ecb56dd0dd4366d1a0a4569274f6acfda85c"
+  "file": "evidence/discriminator-2026-08-23-r32/verdict.json",
+  "sha256": "f57fceb6a9d575ffc3a7d42471b0990584c3a83f26bb7f9941ed82abe8f4102f"
  },
  "verdict_summary": {
   "verdict": "PASS",
@@ -113,11 +113,37 @@
    "python/sqlite were required to agree across records and compared to nothing",
    "the stray sweep's difference basis was unread, so 'nothing escaped' meant 'nothing new escaped'",
    "the manifest join used the id and ignored `at` and `source`, and `source` selects the daemon path"
+  ],
+  "round_32_honest_reachable": [
+   "instrument_digests compared to nothing \u2014 the producer and airlock are the files this arc edits most",
+   "the verdict named none of its inputs and did not digest the judge (a stale PASS beside fresh records)",
+   "the interpreter was agreed-across-records and compared to nothing",
+   "the migration set was checked by name while the protocol pins the five files by digest",
+   "four pins were satisfiable by DELETING the field",
+   "the latch sweep ran on one of two file-set channels; Boolean tail counts were open on the flags-off side"
   ]
  },
  "not_a_verdict_input": {
-  "file": "evidence/discriminator-2026-08-23-r31/run-b.json",
-  "sha256": "ed4583acfe69e851fdb56825f12e088d12a2c118f1d2ca4445b0b10b3f055512",
+  "file": "evidence/discriminator-2026-08-23-r32/run-b.json",
+  "sha256": "f5ca8d214db1d50b819f66cffedd8d102f8c28fbf173f7fe67798192f1bedc80",
   "note": "second healthy replay, forensic byte-projection only; the judge never reads it"
+ },
+ "verdict_names_its_own_inputs": {
+  "baseline_archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
+  "baseline_census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
+  "forced_on": "7952e7b591f7366643a306429eeacad241c13e0365752e36b7c40b9310ea84d2",
+  "judge_self": "ef1dc88e9b107388da13311824cbfc63a9b5e05047864be017814ec7f1340bc5",
+  "replay_manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420",
+  "run_a": "873db614e9917712057b2f528265027964e7788bc22a74198d9576078e450b8d",
+  "run_p": "079bd7094233bf984ad550a224428812ad618e2cf7d51c92772ae996f7091e22"
+ },
+ "forgery_only_residue": {
+  "note": "Round 32 accepted these by editing the record to contradict itself. They are recorded, not closed, pending the owner's ruling on protocol \u00a70.2 \u2014 closing them one at a time in a report-grading judge is an infinite task.",
+  "classes": [
+   "carried-but-unread fields (reply_shapes, ordinary_config_loaded_names, before-import paths, text)",
+   "whitelist grading: extra keys in containment probes and positive controls are invisible",
+   "type-gated predicates (a string where an int is expected skips the check)",
+   "containment.env_at_entry is swept for the activation flag but not the redirectors"
+  ]
  }
 }
