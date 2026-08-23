@@ -1254,6 +1254,44 @@ def main() -> int:
         # records and nothing would notice. These are judge-authored facts,
         # not hand-copied ones.
         "inputs_sha256": _inputs_sha256(a),
+        # Protocol §0.3 obligation 1: the judge emits its OWN partition, so a
+        # newly-added field the producer reports and no clause reads shows up
+        # in this inventory instead of waiting for a reviewer to notice it.
+        "trust_table": {
+            "authenticated_by_the_judge": [
+                "theme2-s1-replay.json (hashed against MANIFEST_SHA)",
+                "theme2-s1-baseline.tar.zst (hashed against PINNED_ARCHIVE_SHA)",
+                "baseline census (canonical digest)",
+                "core/memory/birth_phase.py, memory/memory_manager.py, "
+                "core/infra/private_thoughts.py, core/ledger/writer.py",
+                "theme2_s1_t5_replay.py and theme2_s1_airlock.sh",
+                "the five core/ledger/migrations/*.sql files",
+                "the partial fixture's post-migration ledger digest",
+            ],
+            "taken_on_the_producer_s_word": [
+                "containment probe strings", "recorded environment views",
+                "collection counts", "stamp censuses", "interaction rows",
+                "refusal rows", "wall-clock spans", "applied_migrations",
+                "store path maps", "stray sweep results",
+            ],
+            "known_unauthenticated_instrument": [
+                "theme2_s1_t5_run.sh (the orchestrator) — round 33 F58, open",
+            ],
+            "clauses_without_an_isolated_witness": [
+                "PINNED_INSTRUMENTS comparison", "PINNED_MIGRATION_DIGESTS "
+                "comparison — see theme2-s1-clause-coherence recorded in "
+                "theme2-s1-clause-coverage.md",
+            ],
+        },
+        "licensed_claim": (
+            "The judge independently matched the frozen artifacts named in the "
+            "trust table. Three separately executed reports satisfy every "
+            "registered per-run and cross-run predicate. Assuming the reports "
+            "were emitted through the registered workflow without deliberate "
+            "evidence substitution, they support the stated flag-off and "
+            "forced-on claims. PASS does not establish authenticity against a "
+            "malicious evidence author, and does not certify any clause that "
+            "no test exercises."),
         "clauses": {k: ("PASS" if not v else "FAIL") for k, v in clauses.items()},
         "D_discriminator": dv,
         "failures": failures,

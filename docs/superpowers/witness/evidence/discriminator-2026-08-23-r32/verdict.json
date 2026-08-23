@@ -15,11 +15,12 @@
   "baseline_archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "baseline_census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "forced_on": "7952e7b591f7366643a306429eeacad241c13e0365752e36b7c40b9310ea84d2",
-  "judge_self": "d88f7729334f9deae9fc0c62cf860886d3e8195aa1fea4aebdcf955ce1862388",
+  "judge_self": "428d7bc9af7c57417caa75db084121cacf0ef4727d4d8289aae75fa864a007cd",
   "replay_manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420",
   "run_a": "873db614e9917712057b2f528265027964e7788bc22a74198d9576078e450b8d",
   "run_p": "079bd7094233bf984ad550a224428812ad618e2cf7d51c92772ae996f7091e22"
  },
+ "licensed_claim": "The judge independently matched the frozen artifacts named in the trust table. Three separately executed reports satisfy every registered per-run and cross-run predicate. Assuming the reports were emitted through the registered workflow without deliberate evidence substitution, they support the stated flag-off and forced-on claims. PASS does not establish authenticity against a malicious evidence author, and does not certify any clause that no test exercises.",
  "pinned_census": {
   "per_fixture": {
    "healthy": {
@@ -47,6 +48,36 @@
     }
    }
   }
+ },
+ "trust_table": {
+  "authenticated_by_the_judge": [
+   "theme2-s1-replay.json (hashed against MANIFEST_SHA)",
+   "theme2-s1-baseline.tar.zst (hashed against PINNED_ARCHIVE_SHA)",
+   "baseline census (canonical digest)",
+   "core/memory/birth_phase.py, memory/memory_manager.py, core/infra/private_thoughts.py, core/ledger/writer.py",
+   "theme2_s1_t5_replay.py and theme2_s1_airlock.sh",
+   "the five core/ledger/migrations/*.sql files",
+   "the partial fixture's post-migration ledger digest"
+  ],
+  "clauses_without_an_isolated_witness": [
+   "PINNED_INSTRUMENTS comparison",
+   "PINNED_MIGRATION_DIGESTS comparison \u2014 see theme2-s1-clause-coherence recorded in theme2-s1-clause-coverage.md"
+  ],
+  "known_unauthenticated_instrument": [
+   "theme2_s1_t5_run.sh (the orchestrator) \u2014 round 33 F58, open"
+  ],
+  "taken_on_the_producer_s_word": [
+   "containment probe strings",
+   "recorded environment views",
+   "collection counts",
+   "stamp censuses",
+   "interaction rows",
+   "refusal rows",
+   "wall-clock spans",
+   "applied_migrations",
+   "store path maps",
+   "stray sweep results"
+  ]
  },
  "verdict": "PASS"
 }
