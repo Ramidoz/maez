@@ -66,8 +66,11 @@ def report(where: str = "") -> str:
         line = (f"sqlite {v} (WAL-reset fix present)"
                 f"{f' [{where}]' if where else ''}")
         logger.info("%s", line)
-        if not logging.getLogger().hasHandlers():
-            _sys.stderr.write(line + "\n")
+        # Gate round 20, executed: with a WARNING-level root handler
+        # installed, the success line vanished — hasHandlers() was true, so
+        # the stderr fallback was skipped, and INFO was filtered. One boot
+        # banner per process is cheap; invisibility is not. Always write it.
+        _sys.stderr.write(line + "\n")
     else:
         logger.warning(
             "sqlite %s is INSIDE the WAL-reset corruption window (< 3.51.3)."

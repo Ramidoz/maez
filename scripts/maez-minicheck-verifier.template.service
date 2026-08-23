@@ -10,6 +10,9 @@ ExecStart=/home/rohit/maez/.venv/bin/python -B /home/rohit/maez/scripts/minichec
 Restart=on-failure
 # CPU only; the daemon never loads this model.
 Environment=CUDA_VISIBLE_DEVICES=
+# Repo-local SQLite (WAL-reset fix; see vendor/sqlite and
+# core/infra/sqlite_runtime.py). Harmless if the dir is absent.
+Environment=LD_LIBRARY_PATH=__MAEZ_HOME__/vendor/sqlite/lib
 
 [Install]
 WantedBy=default.target

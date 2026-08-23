@@ -1,6 +1,6 @@
 Invoked as: ./configure --prefix=/home/rohit/maez/vendor/sqlite --enable-fts5 --enable-load-extension
 Tclsh: /usr/bin/tclsh
-Failed: cc -c -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX conftest__.c -o conftest__.o
+Failed: cc -c -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX -DSQLITE_SECURE_DELETE -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_ALLOW_ROWID_IN_VIEW -DSQLITE_USE_URI -DSQLITE_MAX_DEFAULT_PAGE_SIZE=32768 -DSQLITE_MAX_FUNCTION_ARG=127 -DSQLITE_MAX_SCHEMA_RETRY=25 -DHAVE_ISNAN conftest__.c -o conftest__.o
 conftest__.c: In function ‘main’:
 conftest__.c:3:12: error: size of array ‘_x’ is negative
     3 | static int _x[sizeof(off_t) == 4 ? 1 : -1] = { 1 };
@@ -14,8 +14,8 @@ static int _x[sizeof(off_t) == 4 ? 1 : -1] = { 1 };
 return 0;
 }
 ============
-Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX conftest__.c -o conftest__
-/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/ccyPlNMP.o: in function `main':
+Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX -DSQLITE_SECURE_DELETE -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_ALLOW_ROWID_IN_VIEW -DSQLITE_USE_URI -DSQLITE_MAX_DEFAULT_PAGE_SIZE=32768 -DSQLITE_MAX_FUNCTION_ARG=127 -DSQLITE_MAX_SCHEMA_RETRY=25 -DHAVE_ISNAN conftest__.c -o conftest__
+/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/cceBHSbE.o: in function `main':
 conftest__.c:(.text.startup+0x9): undefined reference to `localtime_s'
 collect2: error: ld returned 1 exit status
 child process exited abnormally
@@ -27,8 +27,8 @@ localtime_s();
 return 0;
 }
 ============
-Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX conftest__.c -o conftest__
-/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/ccWdu4Jy.o: in function `main':
+Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX -DSQLITE_SECURE_DELETE -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_ALLOW_ROWID_IN_VIEW -DSQLITE_USE_URI -DSQLITE_MAX_DEFAULT_PAGE_SIZE=32768 -DSQLITE_MAX_FUNCTION_ARG=127 -DSQLITE_MAX_SCHEMA_RETRY=25 -DHAVE_ISNAN conftest__.c -o conftest__
+/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/ccjujFuC.o: in function `main':
 conftest__.c:(.text.startup+0x9): undefined reference to `deflate'
 collect2: error: ld returned 1 exit status
 child process exited abnormally
@@ -40,7 +40,7 @@ deflate();
 return 0;
 }
 ============
-Failed: cc -rpath /home/rohit/maez/vendor/sqlite/lib -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX conftest__.c -o conftest__
+Failed: cc -rpath /home/rohit/maez/vendor/sqlite/lib -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX -DSQLITE_SECURE_DELETE -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_ALLOW_ROWID_IN_VIEW -DSQLITE_USE_URI -DSQLITE_MAX_DEFAULT_PAGE_SIZE=32768 -DSQLITE_MAX_FUNCTION_ARG=127 -DSQLITE_MAX_SCHEMA_RETRY=25 -DHAVE_ISNAN conftest__.c -o conftest__
 cc: error: unrecognized command-line option ‘-rpath’
 child process exited abnormally
 ============
@@ -50,14 +50,14 @@ int main(void) {
 return 0;
 }
 ============
-Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX conftest__.c -o conftest__
+Failed: cc -O2 -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_SOUNDEX -DSQLITE_SECURE_DELETE -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_ALLOW_ROWID_IN_VIEW -DSQLITE_USE_URI -DSQLITE_MAX_DEFAULT_PAGE_SIZE=32768 -DSQLITE_MAX_FUNCTION_ARG=127 -DSQLITE_MAX_SCHEMA_RETRY=25 -DHAVE_ISNAN conftest__.c -o conftest__
 conftest__.c:1:13: warning: conflicting types for built-in function ‘ceil’; expected ‘double(double)’ [-Wbuiltin-declaration-mismatch]
     1 | extern void ceil(void);
       |             ^~~~
 conftest__.c:1:1: note: ‘ceil’ is declared in header ‘<math.h>’
   +++ |+#include <math.h>
     1 | extern void ceil(void);
-/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/ccXUf8FX.o: in function `main':
+/usr/bin/x86_64-linux-gnu-ld.bfd: /tmp/cch5obZZ.o: in function `main':
 conftest__.c:(.text.startup+0x9): undefined reference to `ceil'
 collect2: error: ld returned 1 exit status
 child process exited abnormally

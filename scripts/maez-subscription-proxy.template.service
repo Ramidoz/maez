@@ -12,6 +12,9 @@ WorkingDirectory=__MAEZ_HOME__
 # Decision 26: config/.env is ordinary config only. Provider credentials are
 # loaded inside Python from systemd credentials or config/secrets.local.env.
 Environment=PYTHONUNBUFFERED=1
+# Repo-local SQLite (WAL-reset fix; see vendor/sqlite and
+# core/infra/sqlite_runtime.py). Harmless if the dir is absent.
+Environment=LD_LIBRARY_PATH=__MAEZ_HOME__/vendor/sqlite/lib
 Environment=MAEZ_SUBSCRIPTION_PROXY_PORT=11438
 Environment=MAEZ_HOME=__MAEZ_HOME__
 ExecStart=__MAEZ_HOME__/.venv/bin/python3 -m core.subscription_proxy

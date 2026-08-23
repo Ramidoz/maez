@@ -9,6 +9,9 @@ After=default.target
 [Service]
 Type=simple
 Environment=SEARXNG_SETTINGS_PATH=%h/.config/maez/searxng-settings.yml
+# Repo-local SQLite (WAL-reset fix; see vendor/sqlite and
+# core/infra/sqlite_runtime.py). Harmless if the dir is absent.
+Environment=LD_LIBRARY_PATH=__MAEZ_HOME__/vendor/sqlite/lib
 ExecStart=%h/searxng/.venv/bin/python -m searx.webapp
 Restart=on-failure
 

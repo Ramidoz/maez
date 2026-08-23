@@ -1119,6 +1119,14 @@ class PrivateThoughts:
         surface_sensitivity: str = SurfaceSensitivity.FORENSIC_SENSITIVE.value,
         signal_state: str = SignalState.ACTIVE.value,
     ) -> int:
+        # Gate round 20, executed witness: these sinks are the actual INSERT
+        # and were directly callable with any phase -- the public methods
+        # refused while a direct caller wrote 'gestation' against a
+        # forced-unknown resolver. Authority belongs at the sink: revalidate
+        # here too. Idempotent for the public path (its value already passed
+        # the gate; dormant returns it unchanged).
+        memory_phase = birth_phase.phase_for_stamp(
+            supplied=memory_phase, consumer="private_thoughts._insert_thought")
         conn = sqlite3.connect(self.db_path)
         try:
             thought_id = self._insert_thought_on_connection(
@@ -1154,6 +1162,14 @@ class PrivateThoughts:
         surface_sensitivity: str = SurfaceSensitivity.FORENSIC_SENSITIVE.value,
         signal_state: str = SignalState.ACTIVE.value,
     ) -> int:
+        # Gate round 20, executed witness: these sinks are the actual INSERT
+        # and were directly callable with any phase -- the public methods
+        # refused while a direct caller wrote 'gestation' against a
+        # forced-unknown resolver. Authority belongs at the sink: revalidate
+        # here too. Idempotent for the public path (its value already passed
+        # the gate; dormant returns it unchanged).
+        memory_phase = birth_phase.phase_for_stamp(
+            supplied=memory_phase, consumer="private_thoughts._insert_thought_on_connection")
         if memory_phase not in _RECOGNIZED_MEMORY_PHASES:
             raise ValueError(
                 f"unknown memory_phase {memory_phase!r} "

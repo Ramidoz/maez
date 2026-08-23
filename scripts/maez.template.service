@@ -42,6 +42,9 @@ User=__MAEZ_USER__
 Group=__MAEZ_USER__
 WorkingDirectory=__MAEZ_HOME__
 Environment=PYTHONUNBUFFERED=1
+# Repo-local SQLite (WAL-reset fix; see vendor/sqlite and
+# core/infra/sqlite_runtime.py). Harmless if the dir is absent.
+Environment=LD_LIBRARY_PATH=__MAEZ_HOME__/vendor/sqlite/lib
 Environment=MAEZ_HOME=__MAEZ_HOME__
 
 # X11 env — only needed by the perception stack's active-window lookup

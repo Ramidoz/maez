@@ -130,6 +130,15 @@ class PhaseResult(_namedtuple("PhaseResult", ("phase", "reason"))):
     __slots__ = ()
 
 
+class LatchBlocked(NotImplementedError):
+    """resolve() reached a lived-answer branch while the latch is blocked.
+
+    §12.13: raising is the fail-closed seam. Returning `lived` without latch
+    creation, or `unknown` with a fabricated reason, would each be a quiet
+    lie the witness machinery would then certify.
+    """
+
+
 class PhaseUnknownRefusal(RuntimeError):
     """A consumer was asked to stamp a phase the resolver cannot vouch for.
 
@@ -144,16 +153,129 @@ def s1_enabled() -> bool:
     return os.environ.get(ACTIVATION_FLAG) == "1"
 
 
-def _expected_tables() -> frozenset[str]:
-    """The v1 shipped structure (protocol §9's T6 inventory).
+# ── the structural fingerprint (protocol §9's frozen T6 inventory) ──────
+#
+# Gate round 20 executed the nine T6 mutation controls against the first
+# version of this resolver, which checked only that seven table NAMES were
+# present. Eight of nine mutations still read `gestation` — a dropped index,
+# a phantom migration row, a renamed migration, a flipped genesis byte and a
+# stale head all sailed through, and a counterfeit database containing
+# nothing but the seven names could reach `lived,joined`. "Gestation must be
+# proven as hard as lived" (design ND13) is the whole point of this slice;
+# a name check proves nothing.
+#
+# S1 lands before S2, so everything below is the 0001–0005 shipped world and
+# is re-frozen when S2's migrations land.
 
-    S1 lands before S2, so `gestation` is judged against migrations
-    0001–0005 as shipped. The list is re-frozen when S2's migrations land.
+_FROZEN_TABLES = frozenset({
+    "audit_trace_lineage", "claim_judgements", "claims", "meta",
+    "model_swaps", "schema_migrations", "turns",
+})
+_FROZEN_TRIGGERS = frozenset({
+    "claim_judgements_no_delete", "claim_judgements_no_update",
+    "claims_no_delete", "claims_no_update",
+    "turns_no_delete", "turns_no_update",
+})
+_FROZEN_INDEXES = frozenset({
+    "idx_claims_extracted_ts", "idx_claims_tenant_turn",
+    "idx_judgements_claim_ts", "idx_judgements_provenance",
+    "idx_judgements_tenant_ts", "idx_swaps_tenant_ts",
+    "idx_turns_audit_trace", "idx_turns_chain_position",
+    "idx_turns_kind_ts", "idx_turns_lifecycle_ts", "idx_turns_model",
+    "idx_turns_parent", "idx_turns_raw_surface_ts", "idx_turns_surface_ts",
+    "idx_turns_tenant_ts",
+})
+_FROZEN_MIGRATIONS = frozenset({
+    "0001_init", "0002_triggers", "0003_add_lifecycle_stage",
+    "0004_add_audit_trace_metadata", "0005_add_taint_privacy_chain_position",
+})
+#: sha256 of the shipped migration FILES (protocol §0). schema_migrations
+#: stores only (name, applied_at) pre-S2, so file integrity is checked on
+#: disk: the rows must name exactly the shipped set AND the shipped files
+#: must still hash to what the protocol froze.
+_FROZEN_MIGRATION_FILE_DIGESTS = {
+    "0001_init":
+        "eb126df1dd8c6ff5e249dab0259582747e3352991468acc936052d728db7ca75",
+    "0002_triggers":
+        "7aa3876024f45778a67e3e744f4ed5624146e94603cd7dd1e188c56a740fdc38",
+    "0003_add_lifecycle_stage":
+        "5e0829a501408b5db940a15b47899bd2899eb551da3f5795babe215ea00d9185",
+    "0004_add_audit_trace_metadata":
+        "69e5f4bc78ac8a81f742c61da49bab022234dfb8647b9977ce3e1812ce77a659",
+    "0005_add_taint_privacy_chain_position":
+        "5b66deb643d346a7f0b1ff154618b83366b1c7816de7f1d1b7304102c78d7c86",
+}
+_GENESIS_RAW_TEXT = '{"event":"genesis","schema_version":1}'
+
+
+def _structural_failure(conn) -> str | None:
+    """Return a short description of the first fingerprint failure, or None.
+
+    Every check here answers one question: is this EXACTLY the shipped
+    0001–0005 structure with an intact, head-consistent chain? Anything less
+    is `unknown` — a half-built or tampered ledger must never pass as a
+    clean pre-birth one.
     """
-    return frozenset({
-        "audit_trace_lineage", "claim_judgements", "claims", "meta",
-        "model_swaps", "schema_migrations", "turns",
-    })
+    import hashlib
+
+    def names(kind: str, like: str | None = None) -> set[str]:
+        q = "SELECT name FROM sqlite_master WHERE type=?"
+        rows = conn.execute(q, (kind,)).fetchall()
+        got = {r[0] for r in rows if not r[0].startswith("sqlite_")}
+        if like:
+            got = {n for n in got if n.startswith(like)}
+        return got
+
+    tables = names("table")
+    if tables != _FROZEN_TABLES:
+        return f"table set {sorted(tables ^ _FROZEN_TABLES)}"
+    triggers = names("trigger")
+    if triggers != _FROZEN_TRIGGERS:
+        return f"trigger set {sorted(triggers ^ _FROZEN_TRIGGERS)}"
+    # The FULL index set, not an idx_-prefixed slice: T6 mutation 2 creates
+    # `extra_idx`, which a prefix filter is blind to. sqlite_autoindex_* are
+    # implementation artifacts of UNIQUE constraints and excluded by the
+    # sqlite_ prefix rule already applied in names().
+    indexes = names("index")
+    if indexes != _FROZEN_INDEXES:
+        return f"index set {sorted(indexes ^ _FROZEN_INDEXES)}"
+
+    rows = conn.execute(
+        "SELECT name FROM schema_migrations").fetchall()
+    migrations = {r[0] for r in rows}
+    if migrations != _FROZEN_MIGRATIONS:
+        return f"migration rows {sorted(migrations ^ _FROZEN_MIGRATIONS)}"
+    mig_dir = Path(__file__).resolve().parents[2] / "core/ledger/migrations"
+    for name, want in _FROZEN_MIGRATION_FILE_DIGESTS.items():
+        f = mig_dir / f"{name}.sql"
+        try:
+            got = hashlib.sha256(f.read_bytes()).hexdigest()
+        except OSError:
+            return f"shipped migration {name} unreadable"
+        if got != want:
+            return f"shipped migration {name} digest drift"
+
+    g = conn.execute(
+        "SELECT turn_id, raw_text FROM turns WHERE chain_position = 0"
+    ).fetchone()
+    if g is None or g[0] != "genesis" or g[1] != _GENESIS_RAW_TEXT:
+        return "genesis projection"
+
+    # Chain verification to head, and head == tip. This is what turns a
+    # flipped genesis byte or a stale meta pointer into `unknown` instead of
+    # a confident `gestation`.
+    from core.ledger import chain as _chain
+    cur = conn.execute("SELECT * FROM turns ORDER BY chain_position")
+    cols = [d[0] for d in cur.description]
+    turn_rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    if _chain.verify_chain(turn_rows):
+        return "chain verification"
+    tip = turn_rows[-1]["chain_hash"] if turn_rows else None
+    meta_head = conn.execute(
+        "SELECT value FROM meta WHERE key='last_chain_hash'").fetchone()
+    if meta_head is None or tip is None or meta_head[0] != tip:
+        return "meta.last_chain_hash != actual tip"
+    return None
 
 
 def resolve(db_path=None) -> PhaseResult:
@@ -174,10 +296,22 @@ def resolve(db_path=None) -> PhaseResult:
 
     # 1. absence and emptiness are provably pre-birth: no structure exists
     #    that could misreport anything (protocol §2's doctrine note).
+    def _orphan_sidecars() -> bool:
+        # A -wal or -shm beside a missing/empty main file means a database
+        # EXISTED here and something removed or truncated it mid-flight.
+        # Calling that provably-pre-birth would swallow evidence of exactly
+        # the rewind/omission story this theme exists to tell.
+        return any(path.with_name(path.name + suf).exists()
+                   for suf in ("-wal", "-shm"))
+
     if not path.exists():
+        if _orphan_sidecars():
+            return PhaseResult(PHASE_UNKNOWN, "io_error")
         return PhaseResult(PHASE_GESTATION, "absent")
     try:
         if path.stat().st_size == 0:
+            if _orphan_sidecars():
+                return PhaseResult(PHASE_UNKNOWN, "io_error")
             return PhaseResult(PHASE_GESTATION, "uninitialized_empty")
     except OSError:
         return PhaseResult(PHASE_UNKNOWN, "io_error")
@@ -188,27 +322,25 @@ def resolve(db_path=None) -> PhaseResult:
     except _sqlite3.Error:
         return PhaseResult(PHASE_UNKNOWN, "io_error")
     try:
+        # Page integrity FIRST. Counting rows is not enough (the F-D2
+        # fixture corrupts bytes no COUNT(*) reads), and gate round 20 found
+        # something worse in the first fix: quick_check was executed and its
+        # RESULT DISCARDED. quick_check reports many corruptions as rows,
+        # not exceptions — a database that answered ("page 2 is never used",)
+        # still resolved `gestation`. Check the answer, not just survival.
         try:
-            names = {r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
+            qc = conn.execute("PRAGMA quick_check").fetchall()
         except _sqlite3.DatabaseError:
             return PhaseResult(PHASE_UNKNOWN, "corrupt")
+        if qc != [("ok",)]:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
 
-        missing = _expected_tables() - names
-        if missing:
+        try:
+            failure = _structural_failure(conn)
+        except _sqlite3.DatabaseError:
+            return PhaseResult(PHASE_UNKNOWN, "corrupt")
+        if failure is not None:
             return PhaseResult(PHASE_UNKNOWN, "structural")
-
-        # A table set can be complete while the pages underneath are not.
-        # Counting rows is NOT enough: the T1 F-D2 fixture corrupts 16 bytes
-        # at offset 4096, and SELECT COUNT(*) on turns and meta never reads
-        # that page — the resolver answered `gestation, meta_absent` on a
-        # damaged ledger, which is exactly the misreport this slice exists to
-        # prevent. quick_check walks the pages; it costs 0.2 ms on a healthy
-        # store, and correctness here is worth far more than that.
-        try:
-            conn.execute("PRAGMA quick_check").fetchall()
-        except _sqlite3.DatabaseError:
-            return PhaseResult(PHASE_UNKNOWN, "corrupt")
 
         # 3. the birth anchor.
         try:
@@ -218,7 +350,10 @@ def resolve(db_path=None) -> PhaseResult:
         except _sqlite3.DatabaseError:
             return PhaseResult(PHASE_UNKNOWN, "corrupt")
 
-        anchor = (row[0] or "").strip() if row else ""
+        # Coerce: an anchor column can hold an int (SQLite is dynamically
+        # typed) and `.strip()` on it crashed the resolver — an unhandled
+        # exception from resolve() is worse than any wrong cell.
+        anchor = str(row[0]).strip() if row and row[0] is not None else ""
         if not anchor:
             return PhaseResult(PHASE_GESTATION, "meta_absent")
 
@@ -233,7 +368,16 @@ def resolve(db_path=None) -> PhaseResult:
         if hit is None:
             return PhaseResult(PHASE_UNKNOWN, "join_failed")
 
-        return PhaseResult(PHASE_LIVED, "joined")
+        # §12.13, restored after gate round 20: answering `lived` IS the
+        # latch-dependent truth claim. T1 cell 13 requires the first lived
+        # observation to CREATE the latch, and the latch subsystem is blocked
+        # until the writer topology is ruled (S2 O-1) and T2 witnesses it. A
+        # `lived` returned here without a latch would be witnessed as truth
+        # and would encode the exact allocation assumptions O-1 may
+        # invalidate. Fail closed: refuse loudly. Nothing in the unborn
+        # world reaches this branch; the first thing that does will be the
+        # latch build itself, with this seam as its anchor.
+        raise LatchBlocked(LATCH_BLOCKED_REASON)
     finally:
         conn.close()
 
@@ -241,7 +385,8 @@ def resolve(db_path=None) -> PhaseResult:
 VALID_STAMPS = (PHASE_GESTATION, PHASE_LIVED)
 
 
-def phase_for_stamp(db_path=None, *, supplied=None, consumer=None) -> str:
+def phase_for_stamp(db_path=None, *, supplied=None, consumer=None,
+                    dormant_default=None) -> str:
     """The one gate every census consumer calls before stamping a phase.
 
     Sixteen constructs write `memory_phase`. If each decided for itself when
@@ -269,7 +414,19 @@ def phase_for_stamp(db_path=None, *, supplied=None, consumer=None) -> str:
         # Dormant. Return exactly what the pre-S1 code would have written,
         # including a caller's own choice. Nothing here may change behaviour
         # or T5's discriminator stops being able to detect this guard at all.
-        return supplied if supplied is not None else current_phase(db_path)
+        #
+        # `dormant_default` exists because legacy defaults were NOT uniform
+        # (gate round 20, item D): private_thoughts and memory_manager
+        # defaulted to current_phase(), but audit_log defaulted to the
+        # LITERAL 'gestation' (a Python constant on the direct-edit methods,
+        # the SQL column default on record()). On a born ledger those
+        # diverge — dormant parity means reproducing each consumer's own
+        # legacy answer, not a tidied-up common one.
+        if supplied is not None:
+            return supplied
+        if dormant_default is not None:
+            return dormant_default
+        return current_phase(db_path)
 
     result = resolve(db_path)
 

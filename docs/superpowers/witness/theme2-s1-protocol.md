@@ -160,6 +160,45 @@ consumer call. Frozen census and per-consumer expected outcome:
 contract; a different spelling with identical semantics is recorded,
 not failed — but "silent success" or a `gestation` stamp is a kill.)
 
+### v7.3 — gate round 20's executed findings, closed
+
+Round 20 executed adversarial controls against the first S1 code and
+failed A/B/D/E (C passed). Closed in code the same day; the protocol
+records what changed and why, so the next reader does not re-derive it:
+
+- **Census roots now include `scripts/`** — the owner birth ceremony
+  performs the re-birth-prevention anchor read, and a census blind to the
+  birth transaction is not a census of birth-state readers. The daemon's
+  own import form (`from core.memory import birth_phase`) is recognized;
+  `phase_for_stamp` is an accessor; unscannable files fail the census
+  loudly instead of vanishing as empty results. The frozen digest in §9 is
+  superseded by the derived artifact's current digest (the JSON itself is
+  authoritative; §9's literal is historical).
+- **The resolver's structural check is the full T6 fingerprint** — exact
+  table/trigger/index sets, migration rows against the shipped files'
+  frozen digests, genesis projection, chain verification to head, and
+  head == tip. Round 20 showed eight of nine T6 mutations passing a
+  name-only check; all nine now flip to `unknown, structural`, and
+  `PRAGMA quick_check`'s *result* is checked, not merely executed.
+- **`resolve()`'s joined branch raises `LatchBlocked`** rather than
+  returning `lived, joined`. Answering `lived` without latch creation is
+  the latch-dependent truth claim §12.13 blocks; T1 cells 13–14 are
+  therefore unexecutable until the latch lands, by design.
+- **Reason `"dormant"`** is returned only when `MAEZ_S1_PHASE_TRUTH` is
+  unset. It is deliberately outside §9's frozen twelve: T1 runs enabled,
+  and a dormant answer must be distinguishable from a classification.
+- **Dormant defaults are per-consumer** (`dormant_default`): audit_log's
+  legacy default was the literal `gestation` (Python constant /
+  SQL DEFAULT), while private_thoughts and memory_manager defaulted to
+  `current_phase()`. Dormant parity reproduces each consumer's own legacy
+  answer. On the current unborn ledger these coincide.
+- **Authority is at the sinks**: `MemoryManager.store` revalidates a
+  caller-supplied phase pulled from free-form metadata (round 20's
+  executed overwrite witness), and `PrivateThoughts._insert_thought*`
+  gate directly so the public wrappers cannot be bypassed.
+- **`AuditLog._initialize` normalizes NULL phases on every open**,
+  idempotently, per §10's ruling — not only when the column is added.
+
 ### v7.2 correction — the census was derived, and this table inherited its errors
 
 `core/memory/s1_census.py` now derives the census by execution

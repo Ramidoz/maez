@@ -38,13 +38,21 @@ import json
 import sys
 from pathlib import Path
 
-WALK_ROOTS = ("memory", "core", "daemon", "skills", "cli")
+# Gate round 20: scripts/ added -- the owner birth ceremony
+# (scripts/birth_ceremony.py) performs the re-birth-prevention anchor read,
+# and a census that cannot see the birth transaction itself is not a census
+# of birth-state readers. Protocol §5's root list is amended (v7.3).
+WALK_ROOTS = ("memory", "core", "daemon", "skills", "cli", "scripts")
 EXCLUDED_PARTS = {"tests", "docs", "logs", "__pycache__", ".venv",
                   ".claude", "node_modules", "backups"}
 
 # This module names both literals in its own source, so it censuses itself
 # and would sit in its own frozen expectation forever. It stamps nothing.
 SELF_PATH = "core/memory/s1_census.py"
+
+class CensusScanError(RuntimeError):
+    """A walked file could not be scanned. Fails the census loudly."""
+
 
 PHASE_KEY = "memory_phase"
 BIRTH_KEY = "birth_event_turn_id"
@@ -56,6 +64,7 @@ BIRTH_KEY = "birth_event_turn_id"
 # other way round. Any call to the birth_phase accessor surface counts.
 BIRTH_ACCESSORS = frozenset({
     "is_born", "current_phase", "birth_event_turn_id", "resolve",
+    "phase_for_stamp",
 })
 
 # A SQL string counts as a WRITE of the column only in these shapes. A bare
@@ -113,7 +122,7 @@ def _is_phase_write(node: ast.AST, parents: dict) -> bool:
     return False
 
 
-def _birth_accessor_names(tree: ast.AST) -> set[str]:
+def _birth_accessor_names(tree: ast.AST) -> tuple[set[str], set[str]]:
     """Local names that resolve to a birth_phase accessor, aliases included.
 
     `source_awareness.py:341` does
@@ -125,6 +134,14 @@ def _birth_accessor_names(tree: ast.AST) -> set[str]:
     `resolve` and `is_born` are ordinary words, so a bare name only counts in
     a file that actually imports birth_phase.
     """
+    # Returns (from-import accessor names incl. aliases, module alias names).
+    # Kept separate on purpose: a bare call like `resolve()` counts only when
+    # that NAME was from-imported from birth_phase, and an attribute call like
+    # `x.resolve()` counts only when `x` IS the birth_phase module alias.
+    # Gate round 20's fix for the daemon's import form briefly made every
+    # `Path(...).resolve()` in any importing file a "birth anchor reader" --
+    # over-inclusion is the safe direction for a census, but 20 false readers
+    # in the daemon is not a census, it is noise wearing one's clothes.
     local: set[str] = set()
     module_aliases: set[str] = set()
     for node in ast.walk(tree):
@@ -133,15 +150,20 @@ def _birth_accessor_names(tree: ast.AST) -> set[str]:
             for a in node.names:
                 if a.name in BIRTH_ACCESSORS:
                     local.add(a.asname or a.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            # Gate round 20: `from core.memory import birth_phase` -- the form
+            # the daemon itself uses (maez_daemon.py:4594 calls
+            # birth_phase.is_born()). The first version only matched
+            # birth_phase in the MODULE path, so the daemon's own reads were
+            # invisible to the census.
+            for a in node.names:
+                if a.name == "birth_phase" or "birth_phase" in a.name:
+                    module_aliases.add(a.asname or a.name)
         elif isinstance(node, ast.Import):
             for a in node.names:
                 if "birth_phase" in a.name:
                     module_aliases.add(a.asname or a.name.split(".")[-1])
-    # `import ... birth_phase as bp` then `bp.is_born()` -- the attribute form
-    # is already matched by name, so signal that module-qualified calls count.
-    if module_aliases:
-        local |= set(BIRTH_ACCESSORS)
-    return local
+    return local, module_aliases
 
 
 def scan_file(path: Path, rel: str) -> tuple[list[str], list[str], list[str]]:
@@ -149,8 +171,11 @@ def scan_file(path: Path, rel: str) -> tuple[list[str], list[str], list[str]]:
     try:
         src = path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(src)
-    except (SyntaxError, OSError):
-        return [], [], []
+    except (SyntaxError, OSError) as exc:
+        # Gate round 20: a file that cannot be parsed used to vanish as an
+        # empty result -- indistinguishable from a file with no hits. Absent
+        # evidence is not evidence of absence.
+        raise CensusScanError(f"{rel}: {type(exc).__name__}: {exc}") from exc
 
     spans = _qualname_index(tree)
 
@@ -172,7 +197,7 @@ def scan_file(path: Path, rel: str) -> tuple[list[str], list[str], list[str]]:
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
 
-    accessor_names = _birth_accessor_names(tree)
+    from_import_names, module_alias_names = _birth_accessor_names(tree)
 
     writers: set[str] = set()
     birth: set[str] = set()
@@ -214,9 +239,12 @@ def scan_file(path: Path, rel: str) -> tuple[list[str], list[str], list[str]]:
         # indirect read: a call to the birth_phase accessor surface
         elif isinstance(node, ast.Call):
             fn = node.func
-            name = (fn.attr if isinstance(fn, ast.Attribute)
-                    else fn.id if isinstance(fn, ast.Name) else None)
-            if name and name in accessor_names:
+            if isinstance(fn, ast.Name) and fn.id in from_import_names:
+                birth.add(label(node.lineno))
+            elif isinstance(fn, ast.Attribute) \
+                    and fn.attr in BIRTH_ACCESSORS \
+                    and isinstance(fn.value, ast.Name) \
+                    and fn.value.id in module_alias_names:
                 birth.add(label(node.lineno))
 
     return sorted(writers), sorted(birth), sorted(readers)
@@ -226,6 +254,7 @@ def census(repo: Path) -> dict:
     writers: set[str] = set()
     birth: set[str] = set()
     readers: set[str] = set()
+    unscannable: list[str] = []
     for root in WALK_ROOTS:
         base = repo / root
         if not base.is_dir():
@@ -236,7 +265,11 @@ def census(repo: Path) -> dict:
                 continue
             if str(rel_path) == SELF_PATH:
                 continue
-            w, b, r = scan_file(path, str(rel_path))
+            try:
+                w, b, r = scan_file(path, str(rel_path))
+            except CensusScanError as exc:
+                unscannable.append(str(exc))
+                continue
             writers.update(w)
             birth.update(b)
             readers.update(r)
@@ -244,6 +277,7 @@ def census(repo: Path) -> dict:
         "_comment": "DERIVED BY EXECUTION, not authored. Regenerate with "
                     "`python3 -m core.memory.s1_census --repo . --emit`.",
         "_interpreter": sys.version.split()[0],
+        "unscannable": sorted(unscannable),
         "memory_phase_writers": sorted(writers),
         "birth_meta_readers": sorted(birth),
         "readers_of_memory_phase_values": sorted(readers),
@@ -252,6 +286,8 @@ def census(repo: Path) -> dict:
 
 def diff(observed: dict, expected: dict) -> list[str]:
     problems: list[str] = []
+    for entry in observed.get("unscannable", []):
+        problems.append(f"UNSCANNABLE {entry}")
     for key in ("memory_phase_writers", "birth_meta_readers",
                 "readers_of_memory_phase_values"):
         got = set(observed.get(key, []))

@@ -1511,7 +1511,20 @@ class MemoryManager:
             "memory_phase": _memory_phase_tag(consumer="memory_manager.store"),
         }
         if metadata:
+            # Gate round 20, executed witness: a caller passing
+            # metadata={"memory_phase": "lived"} landed its value OVER the
+            # gate's — the gate ran two lines up and the dict update quietly
+            # replaced its answer. The gate must dominate every path to the
+            # stamped column, so a caller-supplied value is pulled OUT of the
+            # free-form metadata and put through the gate's revalidation
+            # (narrow yes, assert past the gate no), exactly as a
+            # caller-supplied phase is treated everywhere else.
+            metadata = dict(metadata)
+            supplied_phase = metadata.pop("memory_phase", None)
             doc_metadata.update(metadata)
+            if supplied_phase is not None:
+                doc_metadata["memory_phase"] = _memory_phase_tag(
+                    supplied=supplied_phase, consumer="memory_manager.store")
         doc_metadata.update(provenance_extra)
         doc_metadata.update(egress_origin_extra)
 

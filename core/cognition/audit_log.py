@@ -221,6 +221,15 @@ class AuditLog:
                 conn.execute(
                     "UPDATE audit_log SET memory_phase = 'gestation' WHERE memory_phase IS NULL"
                 )
+            # §10 (gate round 20, item D): normalization is idempotent and
+            # runs on EVERY open, not only when the column is first added. A
+            # pre-existing memory_phase column carrying NULLs — restored
+            # backup, partial migration, direct edit — was previously left
+            # unnormalized, contrary to the witness contract that pre-S1
+            # legacy rows are gestation by census fact.
+            conn.execute(
+                "UPDATE audit_log SET memory_phase = 'gestation' WHERE memory_phase IS NULL"
+            )
             if "session_id" not in cols:
                 conn.execute("ALTER TABLE audit_log ADD COLUMN session_id TEXT")
 
@@ -335,7 +344,8 @@ class AuditLog:
                     # inside the schema). Stamping explicitly routes this
                     # through the same gate as every other census consumer.
                     # The DEFAULT stays in the schema as a harmless fallback.
-                    _phase_for_stamp(consumer="audit_log.record"),
+                    _phase_for_stamp(consumer="audit_log.record",
+                        dormant_default=MEMORY_PHASE_GESTATION),
                 ),
             )
             if cur.rowcount != 1:
@@ -450,7 +460,8 @@ class AuditLog:
         # default unchanged; enabled -> refuses on unknown, and a caller may
         # narrow but never assert 'lived' past the gate.
         memory_phase = _phase_for_stamp(
-            supplied=memory_phase, consumer="audit_log.start_direct_edit_session")
+            supplied=memory_phase, consumer="audit_log.start_direct_edit_session",
+            dormant_default=MEMORY_PHASE_GESTATION)
 
         if user_id is None:
             try:
@@ -532,7 +543,8 @@ class AuditLog:
         # default unchanged; enabled -> refuses on unknown, and a caller may
         # narrow but never assert 'lived' past the gate.
         memory_phase = _phase_for_stamp(
-            supplied=memory_phase, consumer="audit_log.log_direct_edit")
+            supplied=memory_phase, consumer="audit_log.log_direct_edit",
+            dormant_default=MEMORY_PHASE_GESTATION)
 
         request_id = secrets.token_hex(12)
         ts = time.time()
@@ -593,7 +605,8 @@ class AuditLog:
         # default unchanged; enabled -> refuses on unknown, and a caller may
         # narrow but never assert 'lived' past the gate.
         memory_phase = _phase_for_stamp(
-            supplied=memory_phase, consumer="audit_log.end_direct_edit_session")
+            supplied=memory_phase, consumer="audit_log.end_direct_edit_session",
+            dormant_default=MEMORY_PHASE_GESTATION)
 
         request_id = secrets.token_hex(12)
         ts = time.time()
