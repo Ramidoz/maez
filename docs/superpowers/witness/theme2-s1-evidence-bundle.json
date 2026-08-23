@@ -1,7 +1,7 @@
 {
  "theme": "Theme 2 \u2014 the ledger cannot omit or misdate a life",
  "slice": "S1 (topology-neutral portion; the latch is blocked by \u00a712.13 \u2014 O-1 is RULED, the remaining condition is U5/T2 witnessing the chosen writer topology)",
- "digests_computed_against_tree_at_commit": "e175cde554283777c56b0e8b632089414df17fe4",
+ "digests_computed_against_tree_at_commit": "f323eb900c6c24bd81504e5e0b79e5bbde10f535",
  "provenance_note": "Every digest describes the file's bytes at the commit named above, which is this file's PARENT \u2014 an artifact cannot digest the commit it lands in. The evidence pack was committed by itself at that commit so its digest here is honest. Sections reporting an EXECUTION name their commit differently on purpose (the T6 receipt's field is `executed_against_tree_at_commit`): they record when something RAN, not when it was hashed.",
  "protocol": {
   "file": "theme2-s1-protocol.md",
@@ -37,12 +37,9 @@
    "sha256": "d198d35f8e2e2aac0eeb0c94ea97ca746dd4ff4729806f163dd46828fae623ab"
   },
   "airlocked_run": {
-   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t3-stdout.txt",
+   "file": "evidence/discriminator-2026-08-23/t3-stdout.txt",
    "sha256": "8fc01bd58483a63ac9236c97048aa7fddabd94c28ae21beb732881514437f6ac",
-   "tail": [
-    "40 passed, 1 skipped, 1 warning, 48 subtests passed in 38.45s",
-    "exit=0"
-   ]
+   "note": "retained from the original airlocked T3 run; that directory's DISCRIMINATOR records are superseded, this receipt is not"
   },
   "pinned_suite_run": {
    "file": "evidence/discriminator-2026-08-23-r29/pinned-suite-stdout.txt",
@@ -68,12 +65,9 @@
    "sha256": "12c71c24d20611f5561aa053d1b10a8f711f6ad0e4603b0483356a58467d119b"
   },
   "airlocked_run": {
-   "file": "docs/superpowers/witness/evidence/discriminator-2026-08-23/t4-stdout.txt",
+   "file": "evidence/discriminator-2026-08-23/t4-stdout.txt",
    "sha256": "424b6a7058ae91a22863ede28537de6e7b9769ff7e358f8b9b3e73b6c5690c1c",
-   "tail": [
-    "census CLEAN \u2014 66 constructs match /home/rohit/maez/docs/superpowers/witness/theme2-s1-census.json",
-    "exit=0"
-   ]
+   "note": "same: a census receipt, not a discriminator record"
   }
  },
  "t5_baseline_and_discriminator": {
@@ -82,9 +76,9 @@
   "evidence_dir": "evidence/discriminator-2026-08-23-r29/",
   "evidence_pack": {
    "file": "theme2-s1-discriminator-evidence-pack.json",
-   "sha256": "4619907780b83ab9b382d7bae90734d344798501f6e85746f47dcfaaa622a045"
+   "sha256": "1f6c75babb1682e65b652d5e59c53cfac39f0d83547ee1ced83f3e9c46a40d42"
   },
-  "status": "all clauses PASS on evidence re-executed at round 29. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27/28/29 found twelve, eleven and six.",
+  "status": "all clauses PASS on the round-29 evidence under the round-30 judge. NOT CLOSED: v7.9 \u00a70.1 needs two consecutive rounds with zero new findings; rounds 27-30 found twelve, eleven, six and four.",
   "replay_manifest_sha256": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420"
  },
  "t6_structural": {
