@@ -27,6 +27,7 @@ ARCHIVE=1
 UNIT=maez.service
 BASELINE_CENSUS=""
 FORCED_ON=""
+DISCRIMINATOR=0
 ARCHIVE_PATH="$REPO/docs/superpowers/witness/theme2-s1-baseline.tar.zst"
 MAX_ARCHIVE_BYTES=$((25 * 1024 * 1024))
 
@@ -35,6 +36,7 @@ while [ $# -gt 0 ]; do
         --work) W="$2"; shift 2 ;;
         --baseline-census) BASELINE_CENSUS="$2"; shift 2 ;;
         --forced-on) FORCED_ON="$2"; shift 2 ;;
+        --discriminator) DISCRIMINATOR=1; ARCHIVE=0; shift ;;
         --stop-daemon) STOP_DAEMON=1; shift ;;
         --no-archive) ARCHIVE=0; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -196,12 +198,13 @@ one_run() {
     # same statement dies under `set -u` with "tag: unbound variable".
     local tag="$1"
     local fixture="${2:-healthy}"
+    local extra="${3:-}"
     local A="$W/airlock-$tag"
     say "--- run $tag: airlock $A"
     rm -rf "$A"
     "$AIRLOCK" "$A" --self-test 2>&1 | tee "$W/selftest-$tag.txt" | tee -a "$LOG"
     T5_REUSE_AIRLOCK=1 T5_RUN_ID="$T5_RUN_ID" "$AIRLOCK" "$A" "$PY" "$REPLAY" \
-        --manifest "$MANIFEST" --fixture "$fixture" \
+        --manifest "$MANIFEST" --fixture "$fixture" $extra \
         --report "$REPO/logs/t5_run.json" 2>&1 | tee -a "$LOG"
     cp "$A/maez/logs/t5_run.json" "$W/run-$tag.json"
     # Everything below is FORENSIC: the extract and the byte projection are
@@ -223,6 +226,16 @@ one_run() {
     set -e
 }
 
+if [ "$DISCRIMINATOR" = "1" ]; then
+    # Gate round 20 F-list, executed as one mode: flags-off runs against
+    # both fixtures (compared to the committed pinned baseline), then the
+    # forced-on partial run whose refusals are the dormancy proof. No
+    # archive is produced -- the pre-S1 artifacts are frozen and this run
+    # exists to be measured against them, not to replace them.
+    BASELINE_CENSUS="$REPO/docs/superpowers/witness/theme2-s1-baseline-census.json"
+    [ -f "$BASELINE_CENSUS" ] || { say "REFUSED: pinned baseline census missing"; exit 4; }
+fi
+
 one_run a healthy
 # Run b is FORENSIC ONLY -- the gate consumes a and p. It is kept because
 # run-to-run repeatability is useful context for the archive, but round 19
@@ -238,6 +251,14 @@ set -e
 # pins the legacy stamps on it; after S1 lands, flags-off must reproduce them
 # exactly, and a forced-on S1 must NOT.
 one_run p partial
+
+if [ "$DISCRIMINATOR" = "1" ]; then
+    say "--- FORCED-ON run: partial fixture, MAEZ_S1_PHASE_TRUTH=1 inside"
+    one_run f partial "--forced-on"
+    FORCED_ON="$W/run-f.json"
+    say "forced-on producer verdict: $("$PY" -c "
+import json; print(json.load(open('$W/run-f.json'))['positive_control']['verdict'])")"
+fi
 
 say "--- discriminator: legacy behavior on the partial fixture"
 "$PY" - "$W/run-p.json" <<'PYEOF' 2>&1 | tee "$W/discriminator.txt" | tee -a "$LOG"

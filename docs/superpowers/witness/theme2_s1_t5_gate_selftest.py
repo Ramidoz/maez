@@ -117,8 +117,13 @@ def main() -> int:
         print(f"{'ok ' if good else 'BAD'} {label:46s} {got:5s} "
               f"(want {want}) {extra}")
 
-    # The case that matters most: an honest run must PASS.
-    case("honest pre-S1 run, other stores empty", "PASS")
+    # The case that matters most: an honest run WITH its pinned baseline
+    # must PASS. Without one it must now FAIL — the baseline census is a
+    # committed artifact as of protocol v7.1, so an omitted comparison is a
+    # skipped comparison, not a pre-baseline state (gate round 20, F-3).
+    # This case asserted PASS until the baseline existed; the flip is the
+    # transition happening, not a regression.
+    case("honest run, baseline omitted (now mandatory)", "FAIL")
     case("honest run against its own pinned baseline", "PASS", baseline=pinned)
 
     bad_pin = copy.deepcopy(pinned)

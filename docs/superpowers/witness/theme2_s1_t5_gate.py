@@ -185,6 +185,14 @@ def discriminator(runs: dict, baseline: dict | None,
         return "FAIL", [{"detail": "both fixtures are required",
                          "observed": sorted(observed)}]
 
+    if baseline is None:
+        # Gate round 20, F-list item 3: the pinned baseline census is a
+        # committed artifact (protocol v7.1), so omitting it is no longer a
+        # pre-baseline state — it is a skipped comparison, and a skipped
+        # comparison must fail rather than silently narrow the verdict.
+        bad.append({"detail": "no baseline census supplied; comparison "
+                              "against the committed pinned baseline is "
+                              "mandatory"})
     if baseline is not None:
         # Round 19: an explicitly supplied `{}` bypassed comparison entirely.
         want = baseline.get("per_fixture")

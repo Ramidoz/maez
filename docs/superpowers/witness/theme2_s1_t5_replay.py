@@ -65,7 +65,8 @@ LOGS_TREE = MAEZ_TREE / "logs"
 # config/.env carries credentials, and a witness report is a committed file.
 ENV_VALUES_SAFE_TO_RECORD = (
     "HOME", "LANG", "LC_ALL", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE",
-    "PYTHONHASHSEED", "TZ", "VIRTUAL_ENV", "MAEZ_LLM_BACKEND",
+    "PYTHONHASHSEED", "TZ", "VIRTUAL_ENV", "MAEZ_S1_PHASE_TRUTH",
+    "MAEZ_LLM_BACKEND",
     "MAEZ_LIVE_FAST_LANE_ENABLED", "MAEZ_WORKING_SELF",
 )
 
@@ -163,6 +164,15 @@ def main() -> int:
     # proof; the healthy fixture alone is not one.
     ap.add_argument("--fixture", choices=("healthy", "partial"),
                     default="healthy")
+    # Gate round 20 F-list item 1: the forced-on producer. G5's dormancy
+    # proof needs a run in which S1 is ON against the partial fixture, and
+    # the flag is set HERE, inside the contained process, after the
+    # containment checks -- not smuggled through the environment where the
+    # flags-off assertions would (rightly) refuse it. Expected outcomes
+    # invert: refusals are success, stores must NOT grow.
+    ap.add_argument("--forced-on", action="store_true",
+                    help="enable MAEZ_S1_PHASE_TRUTH inside the namespace "
+                         "and witness refusals instead of stores")
     args = ap.parse_args()
 
     report: dict = {
@@ -195,6 +205,11 @@ def main() -> int:
     set_flags = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
     if set_flags:
         raise SystemExit(f"REFUSED: flags-off violated: {set_flags}")
+    if args.forced_on:
+        # Set AFTER the environment was proven clean, so the report shows
+        # the flag came from this producer and nowhere else.
+        os.environ["MAEZ_S1_PHASE_TRUTH"] = "1"
+        report["forced_on"] = True
 
     from core.infra import paths as _paths
     from core.memory.birth_phase import default_ledger_path
@@ -280,7 +295,9 @@ def main() -> int:
     # Re-assert on the post-import state; this is the configuration that
     # actually runs.
     report["env_after_import"] = env_snapshot()
-    set_flags_2 = [f for f in FLAGS_THAT_MUST_BE_UNSET if os.environ.get(f)]
+    set_flags_2 = [f for f in FLAGS_THAT_MUST_BE_UNSET
+                   if os.environ.get(f)
+                   and not (f == "MAEZ_S1_PHASE_TRUTH" and args.forced_on)]
     if set_flags_2:
         raise SystemExit(
             f"REFUSED: flags-off violated after import: {set_flags_2}")
@@ -320,11 +337,24 @@ def main() -> int:
     # "baseline". So: count the store tail's invocations and its observable
     # effect, and fail the run if the tail never executed.
     tail_calls = {"store_telegram": 0}
+    consumer_refusals: list[dict] = []
     _orig_store = daemon.memory.store_telegram
 
     def _counting_store(*a, **kw):
         tail_calls["store_telegram"] += 1
-        return _orig_store(*a, **kw)
+        try:
+            return _orig_store(*a, **kw)
+        except Exception as exc:                     # noqa: BLE001
+            # Forced-on, a PhaseUnknownRefusal here IS the witnessed
+            # behaviour G5 requires — record it with its consumer and
+            # reason, then re-raise so the caller's own handling (and the
+            # flags-off failure path) stay untouched.
+            consumer_refusals.append({
+                "consumer": "memory_manager.store_telegram",
+                "exception": type(exc).__name__,
+                "message": str(exc)[:200],
+            })
+            raise
 
     # Observation only: the proxy calls through unchanged and is removed
     # before the store tree is projected.
@@ -337,6 +367,44 @@ def main() -> int:
                 out[name] = getattr(daemon.memory, name).count()
             except Exception as e:                       # noqa: BLE001
                 out[name] = f"error: {type(e).__name__}"
+        return out
+
+    # The stamp census: what memory_phase values actually landed, per store.
+    # This is the quantity the discriminator compares -- flags off must
+    # reproduce the legacy stamps on BOTH fixtures, and a forced-on S1 must
+    # change them on the partial fixture.
+    def stamp_census() -> dict:
+        out: dict = {}
+        for name in ("raw", "daily", "core"):
+            try:
+                col = getattr(daemon.memory, name)
+                got = col.get(include=["metadatas"])
+                counts: dict = {}
+                for md in (got.get("metadatas") or []):
+                    v = (md or {}).get("memory_phase")
+                    counts[str(v)] = counts.get(str(v), 0) + 1
+                out[f"chroma::{name}"] = dict(sorted(counts.items()))
+            except Exception as e:                       # noqa: BLE001
+                out[f"chroma::{name}"] = f"error: {type(e).__name__}"
+        # Gate round 17 item B: censusing a reconstructed filename reads the
+        # wrong file when a selector moved the store. Ask each module where
+        # its store actually is.
+        from core.infra.private_thoughts import _default_private_thoughts_path
+        for label, dbp in (("private_thoughts",
+                            _default_private_thoughts_path()),
+                           ("audit_log", _paths.audit_log_db())):
+            if not dbp.exists():
+                out[label] = "absent"
+                continue
+            try:
+                c = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+                rows = c.execute(
+                    f"SELECT memory_phase, COUNT(*) FROM {label} "
+                    "GROUP BY memory_phase").fetchall()
+                c.close()
+                out[label] = {str(k): v for k, v in rows}
+            except Exception as e:                       # noqa: BLE001
+                out[label] = f"error: {type(e).__name__}"
         return out
 
     report["collection_counts_before"] = collection_counts()
@@ -390,6 +458,42 @@ def main() -> int:
                      report["collection_counts_after"])
     grew = any(isinstance(after.get(k), int) and isinstance(before.get(k), int)
                and after[k] > before[k] for k in ("raw", "daily", "core"))
+    report["stamp_census"] = stamp_census()
+    report["consumer_refusals"] = consumer_refusals
+    if args.forced_on:
+        # G5's contract (protocol §12.8 v7): resolve() reads unknown, every
+        # reached consumer refuses with PhaseUnknownRefusal, no store grows,
+        # zero gestation stamps land. The flags-off control below would call
+        # that failure; here it is precisely success.
+        refused_ok = bool(consumer_refusals) and all(
+            r["exception"] == "PhaseUnknownRefusal"
+            for r in consumer_refusals)
+        grew_any = any(
+            isinstance(report["collection_counts_after"].get(k), int)
+            and isinstance(report["collection_counts_before"].get(k), int)
+            and report["collection_counts_after"][k]
+                > report["collection_counts_before"][k]
+            for k in ("raw", "daily", "core"))
+        gest = [s_ for s_, v in report["stamp_census"].items()
+                if isinstance(v, dict) and v.get("gestation")]
+        report["positive_control"] = {
+            "mode": "forced_on",
+            "refusals_observed": len(consumer_refusals),
+            "all_refusals_typed": refused_ok,
+            "collections_grew": grew_any,
+            "stores_with_gestation_stamps": gest,
+            "verdict": ("PASS" if refused_ok and not grew_any and not gest
+                        else "FAIL"),
+        }
+        out = Path(args.report)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        report["finished_at"] = time.time()
+        out.write_text(json.dumps(report, indent=1, default=str) + "\n")
+        pc = report["positive_control"]
+        print(f"forced-on run: {pc['refusals_observed']} refusals, "
+              f"grew={pc['collections_grew']}, verdict {pc['verdict']}")
+        return 0 if pc["verdict"] == "PASS" else 1
+
     report["positive_control"] = {
         "interactions_returned": returned,
         "interactions_raised": raised,
@@ -403,45 +507,6 @@ def main() -> int:
     # T5 deliberately exercises the hermetic fallback, so a reply that is a
     # degraded string is expected -- but it must never be reported as healthy
     # synthesis. Label the shape; do not judge it here.
-    # The stamp census: what memory_phase values actually landed, per store.
-    # This is the quantity the discriminator compares -- flags off must
-    # reproduce the legacy stamps on BOTH fixtures, and a forced-on S1 must
-    # change them on the partial fixture.
-    def stamp_census() -> dict:
-        out: dict = {}
-        for name in ("raw", "daily", "core"):
-            try:
-                col = getattr(daemon.memory, name)
-                got = col.get(include=["metadatas"])
-                counts: dict = {}
-                for md in (got.get("metadatas") or []):
-                    v = (md or {}).get("memory_phase")
-                    counts[str(v)] = counts.get(str(v), 0) + 1
-                out[f"chroma::{name}"] = dict(sorted(counts.items()))
-            except Exception as e:                       # noqa: BLE001
-                out[f"chroma::{name}"] = f"error: {type(e).__name__}"
-        # Gate round 17 item B: censusing a reconstructed filename reads the
-        # wrong file when a selector moved the store. Ask each module where
-        # its store actually is.
-        from core.infra.private_thoughts import _default_private_thoughts_path
-        for label, dbp in (("private_thoughts",
-                            _default_private_thoughts_path()),
-                           ("audit_log", _paths.audit_log_db())):
-            if not dbp.exists():
-                out[label] = "absent"
-                continue
-            try:
-                c = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
-                rows = c.execute(
-                    f"SELECT memory_phase, COUNT(*) FROM {label} "
-                    "GROUP BY memory_phase").fetchall()
-                c.close()
-                out[label] = {str(k): v for k, v in rows}
-            except Exception as e:                       # noqa: BLE001
-                out[label] = f"error: {type(e).__name__}"
-        return out
-
-    report["stamp_census"] = stamp_census()
     report["census_resolved_paths"] = {
         "private_thoughts": str(
             __import__("core.infra.private_thoughts", fromlist=["x"])
