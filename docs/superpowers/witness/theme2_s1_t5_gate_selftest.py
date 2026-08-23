@@ -97,6 +97,111 @@ def forced_on_run() -> dict:
     return r
 
 
+# Gate round 26: 26 expected-FAIL cases carried no clause assertion, so
+# "every negative is isolated" was not literally true. Rather than annotate
+# each call site — where the next new case would simply forget again — every
+# FAIL case must declare its EXACT failure set here, and an undeclared one
+# fails loudly. Omission is now impossible, not merely discouraged.
+EXPECTED_CLAUSES = {
+    "K1 digest key missing (schema stage)":
+        ["schema"],
+    "K1 ledger main file changed":
+        ["K1_ledger_unchanged"],
+    "K2 real latch artifact in the store tree":
+        ["K2_no_latch_artifact"],
+    "K2 store-tree latch sweep missing (schema stage)":
+        ["schema"],
+    "K3 forged PASS over a missed tail":
+        ["K3_positive_controls"],
+    "K3 label with no underlying numbers":
+        ["K3_positive_controls"],
+    "K4 store escaped the projected tree":
+        ["K4_no_stray_store"],
+    "a new write to a store outside raw":
+        ["D_discriminator"],
+    "both fixtures required, not two partials":
+        ["D_discriminator"],
+    "explicitly empty baseline must not bypass":
+        ["D_discriminator"],
+    "fewer tail passages than interactions":
+        ["K3_positive_controls"],
+    "flags-off HEALTHY did not read gestation":
+        ["D_discriminator"],
+    "flags-off partial did not read gestation":
+        ["D_discriminator"],
+    "forced-on bound to the wrong fixture":
+        ["D_discriminator"],
+    "forced-on carries no refusal evidence":
+        ["D_discriminator"],
+    "forced-on did not flip (guard absent)":
+        ["D_discriminator"],
+    "forced-on lacks the activation flag":
+        ["D_discriminator"],
+    "forced-on wrote unknown-stamped rows":
+        ["D_discriminator"],
+    "forgery: alien id passing the shape check":
+        ["D_discriminator"],
+    "forgery: growth hidden in raw counts":
+        ["D_discriminator"],
+    "forgery: interaction_count stripped":
+        ["D_discriminator"],
+    "forgery: named exception, no message, wrong count":
+        ["D_discriminator"],
+    "forgery: one raw interaction returned, no tail":
+        ["D_discriminator"],
+    "forgery: producer control FAIL under clean aggregates":
+        ["D_discriminator"],
+    "forgery: raw list one short of declared count":
+        ["D_discriminator"],
+    "forgery: unbound manifest":
+        ["D_discriminator"],
+    "honest run, baseline omitted (now mandatory)":
+        ["D_discriminator"],
+    "minimal forged forced-on report":
+        ["D_discriminator"],
+    "one interaction of twenty returned":
+        ["K3_positive_controls"],
+    "refusal evidence is the wrong exception":
+        ["D_discriminator"],
+    "resolve() exists but no forced-on run":
+        ["D_discriminator"],
+    "round 25: alien raw consumer under a clean list":
+        ["D_discriminator"],
+    "round 25: baseline unbound from the archive":
+        ["D_discriminator"],
+    "round 25: doctored baseline supplied":
+        ["D_discriminator"],
+    "round 25: forced-on census emptied":
+        ["D_discriminator"],
+    "round 25: nothing stored, aggregate says it grew":
+        ["K3_positive_controls"],
+    "round 25: raw row contradicts clean aggregate":
+        ["K3_positive_controls"],
+    "round 26: Boolean tail counts":
+        ["D_discriminator"],
+    "round 26: co-mutated to a different KNOWN consumer":
+        ["D_discriminator"],
+    "round 26: decoy key satisfies growth":
+        ["K3_positive_controls"],
+    "round 26: exact key set, impossible counts":
+        ["D_discriminator"],
+    "run census drifted from the pinned baseline":
+        ["D_discriminator"],
+    "schema: empty census":
+        ["schema"],
+    "schema: exercised store produced no stamps":
+        ["schema"],
+    "schema: phase probe missing":
+        ["schema"],
+    "sweep: Boolean count, flags-off":
+        ["schema"],
+    "sweep: negative count, flags-off":
+        ["schema"],
+    "zero-count census is not a census":
+        ["schema"],
+}
+
+
 _CASE = [0]
 
 
@@ -143,6 +248,15 @@ def main() -> int:
         v = run_gate(tmp, a or copy.deepcopy(A), p or copy.deepcopy(P), **kw)
         got = v["verdict"]
         good = got == want
+        if want == "FAIL":
+            declared = ([expect_only] if isinstance(expect_only, str)
+                        else EXPECTED_CLAUSES.get(label))
+            if declared is None:
+                good = False
+                print(f"BAD {label}: expected-FAIL case declares no clause "
+                      f"set; add it to EXPECTED_CLAUSES")
+            elif sorted(v.get("failures", {})) != sorted(declared):
+                good = False
         if good and expect_only is not None:
             # Gate round 24: a K-case that also trips clause D proves
             # nothing about K. With the baseline supplied, the failure set
@@ -212,6 +326,22 @@ def main() -> int:
     a["collection_counts_after"] = copy.deepcopy(a["collection_counts_before"])
     case("round 25: nothing stored, aggregate says it grew", "FAIL", a=a,
          baseline=pinned, expect_only="K3_positive_controls")
+    # Round 26's four, each reproduced exactly as the reviewer wrote it.
+    a = copy.deepcopy(A)
+    for k in ("raw", "daily", "core"):
+        a["collection_counts_after"][k] = a["collection_counts_before"][k]
+    a["collection_counts_before"]["decoy_not_a_store"] = 0
+    a["collection_counts_after"]["decoy_not_a_store"] = 1
+    case("round 26: decoy key satisfies growth", "FAIL", a=a,
+         baseline=pinned, expect_only="K3_positive_controls")
+    # Sweeping the class rather than the instance: the same count-domain
+    # vectors on the flags-off side, where round 26 did not look.
+    a = copy.deepcopy(A); a["stamp_census"][EXERCISED] = {"gestation": True}
+    case("sweep: Boolean count, flags-off", "FAIL", a=a, baseline=pinned,
+         expect_only="schema")
+    a = copy.deepcopy(A); a["stamp_census"]["chroma::daily"] = {"gestation": -5}
+    case("sweep: negative count, flags-off", "FAIL", a=a, baseline=pinned,
+         expect_only="schema")
 
     a = copy.deepcopy(A)
     a["stray_stores_outside_projected_tree"] = ["/tmp/escaped.db"]
@@ -318,6 +448,35 @@ def main() -> int:
     f["interactions"][3]["id"] = "s1-replay-forged"
     case("forgery: alien id passing the shape check", "FAIL",
          baseline=pinned, forced=f)
+
+    # Round 25's remaining two, made permanent (round 26 found them absent),
+    # plus round 26's three forced-on forgeries.
+    f = forced_on_run()
+    f["interactions"][3]["exception"] = ("PhaseUnknownRefusal: alien.consumer: "
+                                         "refusing to stamp a phase.")
+    case("round 25: alien raw consumer under a clean list", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    f = forced_on_run(); f["stamp_census"] = {}
+    case("round 25: forced-on census emptied", "FAIL", baseline=pinned,
+         forced=f, expect_only="D_discriminator")
+    f = forced_on_run()
+    f["interactions"][7]["exception"] = f["interactions"][7]["exception"].replace(
+        "store_telegram", "store_core")
+    f["consumer_refusals"][7] = {
+        "consumer": "memory_manager.store_core",
+        "exception": "PhaseUnknownRefusal",
+        "message": f["interactions"][7]["exception"].split(": ", 1)[1]}
+    case("round 26: co-mutated to a different KNOWN consumer", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    f = forced_on_run()
+    f["stamp_census"] = {k: {"unknown": -1} for k in f["stamp_census"]}
+    case("round 26: exact key set, impossible counts", "FAIL",
+         baseline=pinned, forced=f, expect_only="D_discriminator")
+    f = forced_on_run()
+    for i in f["interactions"]:
+        i["tail_passages"] = True
+    case("round 26: Boolean tail counts", "FAIL", baseline=pinned, forced=f,
+         expect_only="D_discriminator")
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1

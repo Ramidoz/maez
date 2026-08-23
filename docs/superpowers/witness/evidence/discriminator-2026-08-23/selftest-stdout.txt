@@ -1,4 +1,4 @@
-# gate selftest — executed at da893aa3a09f32b87640149b80171cf7b492b4a9 on 2026-08-23T12:03:56-05:00
+# gate selftest — executed at 61332d7257ed2f5f9e6e27231a74d23675862e73 on 2026-08-23T12:30:10-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator']
@@ -12,6 +12,9 @@ ok  K3 forged PASS over a missed tail              FAIL  (want FAIL) ['K3_positi
 ok  K3 label with no underlying numbers            FAIL  (want FAIL) ['K3_positive_controls']
 ok  round 25: raw row contradicts clean aggregate  FAIL  (want FAIL) ['K3_positive_controls']
 ok  round 25: nothing stored, aggregate says it grew FAIL  (want FAIL) ['K3_positive_controls']
+ok  round 26: decoy key satisfies growth           FAIL  (want FAIL) ['K3_positive_controls']
+ok  sweep: Boolean count, flags-off                FAIL  (want FAIL) ['schema']
+ok  sweep: negative count, flags-off               FAIL  (want FAIL) ['schema']
 ok  K4 store escaped the projected tree            FAIL  (want FAIL) ['K4_no_stray_store']
 ok  schema: phase probe missing                    FAIL  (want FAIL) ['schema']
 ok  schema: empty census                           FAIL  (want FAIL) ['schema']
@@ -41,6 +44,11 @@ ok  forgery: producer control FAIL under clean aggregates FAIL  (want FAIL) ['D_
 ok  forgery: unbound manifest                      FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: raw list one short of declared count  FAIL  (want FAIL) ['D_discriminator']
 ok  forgery: alien id passing the shape check      FAIL  (want FAIL) ['D_discriminator']
+ok  round 25: alien raw consumer under a clean list FAIL  (want FAIL) ['D_discriminator']
+ok  round 25: forced-on census emptied             FAIL  (want FAIL) ['D_discriminator']
+ok  round 26: co-mutated to a different KNOWN consumer FAIL  (want FAIL) ['D_discriminator']
+ok  round 26: exact key set, impossible counts     FAIL  (want FAIL) ['D_discriminator']
+ok  round 26: Boolean tail counts                  FAIL  (want FAIL) ['D_discriminator']
 
 ALL PASS
 exit=0

@@ -74,6 +74,20 @@ KNOWN_CONSUMERS = {
     "memory_manager.store_core",
 }
 
+COLLECTION_KEYS = ("raw", "daily", "core")
+
+# The T5 replay drives one surface, and every retained interaction reaches
+# exactly one stamper. Membership in KNOWN_CONSUMERS was not enough: round 26
+# co-mutated an interaction AND its refusal row to a different known consumer
+# and the ordered join agreed with itself.
+T5_REPLAY_CONSUMER = "memory_manager.store_telegram"
+
+
+def _plain_int(v) -> bool:
+    """`True` is an `int` in Python, and round 26 used that to pass a Boolean
+    off as a count. A count is an int and not a bool."""
+    return type(v) is int
+
 # Gate round 25 forged a co-mutated pair: a run-a row grew a stamp AND the
 # supplied baseline grew the same stamp, so the comparison agreed with itself.
 # The baseline is a committed artifact; the judge pins its identity rather
@@ -127,12 +141,23 @@ def schema_failures(runs: dict) -> list:
                         "detail": "stamp_census does not cover exactly the "
                                   "five expected stores",
                         "got": sorted(cen) if isinstance(cen, dict) else cen})
-        elif not isinstance(cen[EXERCISED_STORE], dict) or not any(
-                isinstance(v, int) and v > 0
-                for v in cen[EXERCISED_STORE].values()):
-            # Round 19: {"gestation": 0} counted as a nonempty census.
-            bad.append({"run": tag,
-                        "detail": f"{EXERCISED_STORE} produced no stamps"})
+        else:
+            # Round 26 hit the count DOMAIN on the forced-on side only; the
+            # same hole was here. Sweep the class, not the instance: every
+            # count in every store is a nonnegative plain integer (bools are
+            # ints in Python and were used as a forgery vector).
+            for store, counts in cen.items():
+                if not isinstance(counts, dict) or not all(
+                        _plain_int(c) and c >= 0 for c in counts.values()):
+                    bad.append({"run": tag,
+                                "detail": f"{store} census holds a value that "
+                                          f"is not a count", "got": counts})
+            if not isinstance(cen[EXERCISED_STORE], dict) or not any(
+                    _plain_int(v) and v > 0
+                    for v in cen[EXERCISED_STORE].values()):
+                # Round 19: {"gestation": 0} counted as a nonempty census.
+                bad.append({"run": tag,
+                            "detail": f"{EXERCISED_STORE} produced no stamps"})
     return bad
 
 
@@ -194,8 +219,19 @@ def k3_positive_controls(runs: dict) -> list:
             isinstance(i.get("tail_passages"), int) and i["tail_passages"] >= 1)]
         cb = r.get("collection_counts_before") or {}
         ca = r.get("collection_counts_after") or {}
-        d_grew = any(isinstance(ca.get(k), int) and isinstance(cb.get(k), int)
-                     and ca[k] > cb[k] for k in set(cb) | set(ca))
+        # Round 26 added `decoy_not_a_store: 0 -> 1` and the unconstrained
+        # any() over producer-supplied keys called it growth. Growth means
+        # the ONE collection T5's replay path actually writes.
+        EXERCISED_COLLECTION = "raw"
+        if sorted(set(cb) | set(ca)) != sorted(COLLECTION_KEYS):
+            bad.append({"run": tag,
+                        "detail": "collection counters are not exactly the "
+                                  "three real collections",
+                        "got": sorted(set(cb) | set(ca))})
+            d_grew = False
+        else:
+            b_, a_ = cb.get(EXERCISED_COLLECTION), ca.get(EXERCISED_COLLECTION)
+            d_grew = (_plain_int(b_) and _plain_int(a_) and a_ > b_)
         # (a) the DERIVED facts must themselves describe a clean flags-off run
         if d_raised:
             bad.append({"run": tag, "detail": "raw rows raised",
@@ -390,6 +426,7 @@ def discriminator(runs: dict, baseline: dict | None,
             if i.get("outcome") != "raised" \
                     or exc_type != "PhaseUnknownRefusal" \
                     or "refusing to stamp" not in exc_text \
+                    or not _plain_int(i.get("tail_passages")) \
                     or i.get("tail_passages") != 1:
                 bad.append({"detail": "interaction did not raise the typed "
                                       "refusal at exactly one tail passage",
@@ -412,7 +449,7 @@ def discriminator(runs: dict, baseline: dict | None,
                 exc = str(i.get("exception", ""))
                 head, _, msg = exc.partition(": ")
                 who = msg.split(":", 1)[0].strip() if ":" in msg else None
-                if head != "PhaseUnknownRefusal" or who not in KNOWN_CONSUMERS \
+                if head != "PhaseUnknownRefusal" or who != T5_REPLAY_CONSUMER \
                         or not isinstance(row, dict) \
                         or row.get("consumer") != who \
                         or str(row.get("message", "")) != msg:
@@ -468,9 +505,13 @@ def discriminator(runs: dict, baseline: dict | None,
                               "the five expected stores",
                     "got": sorted(fcen) if isinstance(fcen, dict) else fcen})
     for store, v in (forced.get("stamp_census") or {}).items():
-        if not isinstance(v, dict) or any(
-                isinstance(c, int) and c > 0 for c in v.values()):
-            bad.append({"detail": f"store {store} census not empty", "got": v})
+        # Round 26 supplied {"unknown": -1} for all five stores: the key set
+        # was exact and the ">0" test never fired. A count is a nonnegative
+        # plain integer, and under refusal every one of them is zero.
+        if not isinstance(v, dict) or not all(
+                _plain_int(c) and c == 0 for c in v.values()):
+            bad.append({"detail": f"store {store} census is not a set of zero "
+                                  f"counts", "got": v})
 
     if forced.get("fixture") != "partial":
         bad.append({"detail": "forced-on run is not against the partial fixture",
