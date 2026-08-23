@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.4
+# Theme 2 — S1 (phase truth) witness protocol, v7.5
 
-Status: PROTOCOL v7.4. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.5. (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes; S1 code is barred until then. The S1
 implementation is judged against this file, not design prose.
@@ -247,7 +247,9 @@ Theme 2 exists to close — phase degrading to `gestation` — sitting inside
 the audit store's own schema, and no consumer-refusal wiring in Python can
 reach it.
 
-The two candidate closures, neither adopted here:
+The two candidate closures — *(v7.5: closure 1 was ADOPTED by owner
+ruling 2026-08-23 and is implemented; `record()` stamps explicitly
+through the gate. Kept for the record of the decision as it stood:)*
 
 1. Make `record()` name the column explicitly and gate it like its
    siblings. Cheapest; leaves the default in place for any other writer.
@@ -282,10 +284,11 @@ The S1 census test walks `memory/`, `core/`, `daemon/`, `skills/`,
 `cli/` (excluding `tests/`, `docs/`, `logs/`) with Python `ast`
 (pinned: the venv interpreter's version recorded), collecting every
 (a) writer of a `memory_phase` key/column and (b) reader of
-`birth_event_turn_id`. Expected sorted census = exactly the 13
-constructs of §4's table plus `core/memory/birth_phase.py` itself and
-`core/ledger/chain.py`'s comment-level mention excluded by AST (not a
-read). The committed expected list lives beside the test as a sorted
+`birth_event_turn_id`. Expected sorted census = the DERIVED artifact
+`theme2-s1-census.json` *(v7.5: the original "exactly the 13 constructs"
+literal is superseded — the census is derived by execution and joined to
+the T3 map by `tests/test_t3_map_join.py`; a fixed count in prose was
+exactly the kind of claim that rotted)*. The committed expected list lives beside the test as a sorted
 JSON file; its digest is recorded in the run report.
 
 - Seeded-unexpected control: write the 6-line file
@@ -907,8 +910,10 @@ is **forensic**: computed, recorded, archived, and never deciding.
 empty census, or an exercised store with no stamps fails before any
 clause is evaluated. Absent evidence is not evidence.
 
-**The gate has its own self-test**, `theme2_s1_t5_gate_selftest.py`, 21
-cases, run by the orchestrator *before* the daemon is touched. Round 18
+**The gate has its own self-test**, `theme2_s1_t5_gate_selftest.py`,
+run by the orchestrator *before* the daemon is touched. Its case count
+is whatever `grep -c "case("` reports — v7.5 stopped asserting the
+number in prose after twice writing a count the file contradicted. Round 18
 was right that a sole authority without one is a blocking gap — the
 first version of the gate would have failed every honest baseline while
 passing four forgeries, and nothing in the witness would have said so.
@@ -1316,7 +1321,7 @@ slice, which is broader than the actual dependency. The ruling:
 > topology is ruled and T2 witnesses that topology. It does not block
 > `core.memory.s1_census`, the pinned `PhaseResult`/reason contract,
 > latch-independent resolver classification, or flag-dormant consumer
-> refusal wiring. **S1 must not be enabled or declared complete until
+> refusal wiring *(the stamper count lives in the T3 map, not here — v7.5)*. **S1 must not be enabled or declared complete until
 > this closes.**
 
 Build order, with the reason for each position:

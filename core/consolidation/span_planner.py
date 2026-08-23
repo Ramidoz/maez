@@ -847,7 +847,19 @@ def run_consolidation_pass(
     # legacy behaviour is what T5's dormancy proof measures.
     from core.memory import birth_phase as _bp
     if _bp.s1_enabled():
-        _pr = _bp.resolve(run_paths.ledger_db_path)
+        try:
+            _pr = _bp.resolve(run_paths.ledger_db_path)
+        except _bp.LatchBlocked:
+            # Found writing the positive control: an ANCHORED ledger with S1
+            # enabled raises LatchBlocked from resolve() (§12.13), and my
+            # first wiring let that crash the whole pass. The span planner
+            # digests lived spans — it cannot proceed while lived cannot be
+            # asserted — so this is a typed refusal, not an error.
+            return _result(
+                "deferred",
+                refusals=({"episode_key": "",
+                           "refusal_code": "phase_latch_blocked"},),
+            )
         if _pr.phase == "unknown":
             return _result(
                 "deferred",

@@ -52,6 +52,27 @@ class CensusMapJoin(unittest.TestCase):
                          "join carries constructs the census no longer "
                          "finds — re-derive both:\n  " + "\n  ".join(stale))
 
+    def test_every_censused_reader_is_mapped_or_ruled(self):
+        covers = MAP["census_join"]["readers"]
+        rows = ({e["consumer"] for e in MAP["stampers"]}
+                | {r["consumer"] for r in MAP["readers_and_exemptions"]})
+        problems = []
+        for r in CENSUS["birth_meta_readers"]:
+            target = covers.get(r)
+            if target is None:
+                problems.append(f"censused reader with no join: {r}")
+            elif target not in rows and not target.startswith(("SELF", "OWNER-ONLY")):
+                problems.append(f"join names a nonexistent row: {r} -> "
+                                f"{target}")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_reader_join_keys_are_current_census_constructs(self):
+        readers = set(CENSUS["birth_meta_readers"])
+        stale = [k for k in MAP["census_join"]["readers"] if k not in readers]
+        self.assertEqual(stale, [],
+                         "reader join carries constructs the census no "
+                         "longer finds:\n  " + "\n  ".join(stale))
+
     def test_reader_rows_carry_entry_and_dormant(self):
         for row in MAP["readers_and_exemptions"]:
             self.assertTrue(row.get("entry"), row["consumer"])

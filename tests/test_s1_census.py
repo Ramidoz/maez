@@ -95,6 +95,91 @@ class CensusContract(unittest.TestCase):
             tmp.unlink()
 
 
+def _writable_clone() -> Path:
+    """Copy the walked code roots into a scratch tree.
+
+    Gate round 22 item 7: the seeded-unexpected control writes
+    core/_s1_census_seed.py, but the airlock mounts the checkout read-only —
+    so the two-direction T4 controls could never run where the protocol says
+    T4 runs. The census takes --repo; seeding happens in a writable CLONE of
+    the code roots (code only, no stores), preserving the protocol's literal
+    seed path relative to the repo root.
+    """
+    import shutil
+    clone = Path(tempfile.mkdtemp(prefix="t4clone_"))
+    ignore = shutil.ignore_patterns(
+        "__pycache__", "*.pyc", ".git", "db", "*.db", "*.sqlite3",
+        "backups", "node_modules")
+    for root in ("memory", "core", "daemon", "skills", "cli", "scripts"):
+        src = REPO / root
+        if src.is_dir():
+            shutil.copytree(src, clone / root, ignore=ignore,
+                            dirs_exist_ok=True)
+    return clone
+
+
+class AirlockableControls(unittest.TestCase):
+    """§5's two controls, runnable under a read-only checkout."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clone = _writable_clone()
+        r = subprocess.run(
+            [sys.executable, "-m", "core.memory.s1_census",
+             "--repo", str(cls.clone), "--emit"],
+            capture_output=True, text=True, cwd=str(REPO))
+        assert r.returncode == 0, r.stderr[:400]
+        cls.truth = json.loads(r.stdout)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.clone, ignore_errors=True)
+
+    def _expected(self, payload) -> Path:
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(payload, fh); fh.close()
+        return Path(fh.name)
+
+    def test_clone_census_matches_repo_census(self):
+        r = subprocess.run(
+            [sys.executable, "-m", "core.memory.s1_census",
+             "--repo", str(REPO), "--emit"],
+            capture_output=True, text=True, cwd=str(REPO))
+        repo_truth = json.loads(r.stdout)
+        for k in ("memory_phase_writers", "birth_meta_readers"):
+            self.assertEqual(self.truth[k], repo_truth[k],
+                             f"{k}: the clone is not a faithful census "
+                             f"surface")
+
+    def test_seeded_unexpected_fails_in_the_clone(self):
+        seed = self.clone / "core" / "_s1_census_seed.py"
+        seed.write_text(SEED_BYTES)
+        try:
+            expected = self._expected(self.truth)
+            r = subprocess.run(
+                [sys.executable, "-m", "core.memory.s1_census",
+                 "--repo", str(self.clone), "--expected", str(expected)],
+                capture_output=True, text=True, cwd=str(REPO))
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("_s1_census_seed", r.stdout + r.stderr)
+            expected.unlink()
+        finally:
+            seed.unlink(missing_ok=True)
+
+    def test_missing_expected_fails_in_the_clone(self):
+        shrunk = json.loads(json.dumps(self.truth))
+        dropped = shrunk["memory_phase_writers"].pop()
+        expected = self._expected(shrunk)
+        r = subprocess.run(
+            [sys.executable, "-m", "core.memory.s1_census",
+             "--repo", str(self.clone), "--expected", str(expected)],
+            capture_output=True, text=True, cwd=str(REPO))
+        expected.unlink()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(dropped.split("::")[0], r.stdout + r.stderr)
+
+
 class ProtocolControls(unittest.TestCase):
     """§5's two controls. The census must fail in BOTH directions."""
 

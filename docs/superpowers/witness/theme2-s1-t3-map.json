@@ -149,6 +149,32 @@
    "memory/memory_manager.py::MemoryManager.store_telegram": "memory_manager.store_telegram",
    "memory/memory_manager.py::MemoryManager.store_core": "memory_manager.store_core"
   },
-  "unmatched_at_freeze": []
+  "unmatched_at_freeze": [],
+  "readers": {
+   "core/consolidation/span_planner.py::_birth_anchor_chain_position": "span_planner.run_consolidation_pass",
+   "core/consolidation/span_planner.py::run_consolidation_pass": "span_planner.run_consolidation_pass",
+   "core/governance/s7_consultation_exemption.py::born_by_any_signal": "s7_consultation_exemption.born_by_any_signal",
+   "core/ledger/writer.py::LedgerWriter.write_turn": "ledger_writer.write_turn",
+   "core/memory/birth_phase.py::birth_event_turn_id": "SELF (the resolver)",
+   "core/memory/source_awareness.py::_should_skip_dir": "source_awareness._should_skip_dir",
+   "daemon/maez_daemon.py::MaezDaemon._birth_readiness._birth_phase": "maez_daemon._birth_readiness (_birth_phase, _flag_state)",
+   "daemon/maez_daemon.py::MaezDaemon._birth_readiness._flag_state": "maez_daemon._birth_readiness (_birth_phase, _flag_state)",
+   "scripts/birth_ceremony.py::run_transaction": "OWNER-ONLY (the birth transaction itself; never driven by a witness)",
+   "memory/memory_manager.py::MemoryManager.store": "memory_manager.store",
+   "memory/memory_manager.py::MemoryManager.store_telegram": "memory_manager.store_telegram",
+   "memory/memory_manager.py::MemoryManager.store_core": "memory_manager.store_core",
+   "core/cognition/audit_log.py::AuditLog.record": "audit_log.record",
+   "core/cognition/audit_log.py::AuditLog.start_direct_edit_session": "audit_log.start_direct_edit_session",
+   "core/cognition/audit_log.py::AuditLog.log_direct_edit": "audit_log.log_direct_edit",
+   "core/cognition/audit_log.py::AuditLog.end_direct_edit_session": "audit_log.end_direct_edit_session",
+   "core/infra/private_thoughts.py::PrivateThoughts.record_thought": "private_thoughts.record_thought",
+   "core/infra/private_thoughts.py::PrivateThoughts.record_signal": "private_thoughts.record_signal",
+   "core/infra/private_thoughts.py::PrivateThoughts.insert_signal_in_transaction": "private_thoughts.insert_signal_in_transaction",
+   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought": "private_thoughts._insert_thought (direct sink)",
+   "core/infra/private_thoughts.py::PrivateThoughts._insert_thought_on_connection": "private_thoughts._insert_thought_on_connection (direct sink)",
+   "core/memory/birth_phase.py::resolve": "SELF (the resolver)",
+   "scripts/replay_harness.py::_run_multi_turn_self_history_probe": "SELF-WITNESS-TOOLING (the pre-S1 probe harness reads self-history through the ledger; a witness instrument, not a production consumer; it stamps nothing)"
+  },
+  "_reader_rule": "every birth_meta_reader in the derived census maps to a T3 row, to SELF (the resolver's own accessor), or to OWNER-ONLY (the birth ceremony); anything else fails tests/test_t3_map_join.py"
  }
 }

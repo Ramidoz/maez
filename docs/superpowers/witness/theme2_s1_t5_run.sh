@@ -139,7 +139,7 @@ fi
 say "sqlite: $($PY -c 'import sqlite3;print(sqlite3.sqlite_version)')"
 
 # The comparator is the instrument the verdict rests on. Verify it first.
-say "--- gate self-test (the sole authority; 21 biting cases)"
+say "--- gate self-test (the sole authority; case count = grep -c)"
 "$PY" "$GATE_SELFTEST" 2>&1 | tee -a "$LOG"
 
 # FORENSIC instrument: its self-test is recorded, not gating (round 19 Q3).
