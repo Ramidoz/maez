@@ -324,7 +324,27 @@ row and the v2 tables are not created.
   diagnostic-only. **The ruling is the owner's; this records the
   recommendation, it does not adopt it.**
 
-  Options, none chosen here: (a) the v2 ledger moves off WAL for the fenced
+  **RULED by the owner, 2026-08-23: option (c), upgrade the runtime.**
+  Executed the same day: no apt pocket on Ubuntu 26.04 reaches the fix
+  (3.46.1 everywhere) and `pysqlite3-binary` bundles 3.51.1 — still
+  inside the window — so SQLite **3.53.4** is built repo-local at
+  `vendor/sqlite` from the sqlite.org autoconf tarball (sha3-256
+  verified against the download page), with Ubuntu's compile flags
+  mirrored and FTS5 confirmed working under chroma. Loaded via
+  `LD_LIBRARY_PATH` in the six maez systemd unit drop-ins and the venv
+  activation — deliberately not system-wide. Every long-lived process
+  logs its linked version at startup (`core/infra/sqlite_runtime.py`);
+  the drop-ins initially applied *nothing* because they lacked a
+  `[Service]` header, and that reporter caught it on the first boot.
+
+  **The upgrade does not lift the no-concurrent-WAL-writers rule.** The
+  rule stands until U5 witnesses the chosen topology under this library
+  — 3.53.4 makes U5 *meaningful* (it no longer certifies a topology the
+  host cannot safely run), not unnecessary. `require_fixed()` exists
+  for the code that will someday depend on the fix; nothing calls it
+  yet. U5 is UNBLOCKED for protocol purposes.
+
+  The options as they stood before the ruling: (a) the v2 ledger moves off WAL for the fenced
   path so multi-process writing is lock-serialized and unexposed; (b)
   B10 is re-scoped to a single-writer topology and the fence is
   witnessed differently; (c) the runtime is upgraded or a backport is

@@ -44,6 +44,12 @@ try:
     )
 
     _load_ordinary_config_for_process()
+    # One line per boot: which SQLite did this process actually link?
+    # (vendor 3.53.4 via the unit drop-in, or a WARNING if the drop-in was
+    # lost and we silently fell back to the system 3.46.1 — see
+    # core/infra/sqlite_runtime.py for why that must never be invisible.)
+    from core.infra.sqlite_runtime import report as _sqlite_report
+    _sqlite_report("daemon")
     _CREDENTIAL_REPORT = _load_secrets_for_process(
         required=set(),
         optional=set(_MAEZ_SECRET_NAMES),
