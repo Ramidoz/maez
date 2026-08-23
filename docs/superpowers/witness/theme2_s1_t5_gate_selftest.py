@@ -362,7 +362,31 @@ EXPECTED_CLAUSES = {
         ["K5_flags_were_off"],
     "round 30: agreed source digests that match no code":
         ["K8_record_coherence"],
+    "round 30: forced record denies its own role":
+        ["D_discriminator", "K5_flags_were_off"],
+    "round 30: store map is not exactly the pinned map":
+        ["K8_record_coherence"],
     "round 30: stores moved into a directory the archive excludes":
+        ["K8_record_coherence"],
+    "round 31: healthy arm carries the partial migration set":
+        ["K7_fixture_label_backed"],
+    "round 31: resolver module outside the tree":
+        ["K8_record_coherence"],
+    "round 31: run under a different SQLite":
+        ["K8_record_coherence"],
+    "round 31: sweep basis was not empty":
+        ["K4_no_stray_store"],
+    "round 32: instrument digests match no instrument":
+        ["K8_record_coherence"],
+    "round 32: latch marker in the migration file set":
+        ["K2_no_latch_artifact"],
+    "round 32: no instrument attestation at all":
+        ["K8_record_coherence"],
+    "round 32: run under a different interpreter series":
+        ["K8_record_coherence"],
+    "round 33: a sixth migration file appears":
+        ["K8_record_coherence"],
+    "round 33: an edited migration file, name unchanged":
         ["K8_record_coherence"],
     "run census drifted from the pinned baseline":
         ["D_discriminator", "K3_positive_controls"],
@@ -894,6 +918,70 @@ def main() -> int:
     ok &= good
     print(f"{'ok ' if good else 'BAD'} {'round 28: the archive on disk is not the pinned archive':46s} "
           f"{got.get('verdict', 'CRASH'):5s} (want FAIL)")
+
+
+    # Round 33 F55: THIRTEEN clauses had no case that exercised them — ten
+    # could be deleted at once and this suite still said ALL PASS. Round 30
+    # made the same finding about round 29's clauses, so one round's worth of
+    # cases at a time demonstrably does not prevent recurrence. Every clause
+    # added in rounds 31 and 32 gets its negative here.
+    # Round 33 F56's shape, in my own case: mutating ONE record trips
+    # cross-record disagreement, not the pin. All three, or the case is
+    # testing something other than what it names.
+    zeros = {k: "0" * 64 for k in REAL_INSTRUMENT_DIGESTS}
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    for r_ in (a, p_, f_):
+        r_["instrument_digests"] = zeros
+    case("round 32: instrument digests match no instrument", "FAIL", a=a,
+         p=p_, forced=f_, baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); del a["instrument_digests"]
+    case("round 32: no instrument attestation at all", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    for r_ in (a, p_, f_):
+        r_["python"] = "3.9.18"
+    case("round 32: run under a different interpreter series", "FAIL", a=a,
+         p=p_, forced=f_, baseline=pinned, expect_only="K8_record_coherence")
+    edited = dict(REAL_MIGRATION_DIGESTS,
+                  **{"0003_add_lifecycle_stage.sql": "0" * 64})
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    for r_ in (a, p_, f_):
+        r_["migration_file_digests"] = edited
+    case("round 33: an edited migration file, name unchanged", "FAIL", a=a,
+         p=p_, forced=f_, baseline=pinned, expect_only="K8_record_coherence")
+    sixth = dict(REAL_MIGRATION_DIGESTS, **{"0006_new.sql": "1" * 64})
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    for r_ in (a, p_, f_):
+        r_["migration_file_digests"] = sixth
+    case("round 33: a sixth migration file appears", "FAIL", a=a, p=p_,
+         forced=f_, baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); p_ = copy.deepcopy(P); f_ = forced_on_run()
+    for r_ in (a, p_, f_):
+        r_["sqlite_version"] = "3.53.4"
+    case("round 31: run under a different SQLite", "FAIL", a=a, p=p_,
+         forced=f_, baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A)
+    a["ledger_post_migration_file_set"] = ["ledger.db", "birth_observed"]
+    case("round 32: latch marker in the migration file set", "FAIL", a=a,
+         baseline=pinned, expect_only="K2_no_latch_artifact")
+    a = copy.deepcopy(A)
+    a["phase_probe"]["resolver_module"] = "/tmp/shadow/birth_phase.py"
+    case("round 31: resolver module outside the tree", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    a = copy.deepcopy(A); a["stray_store_inventory_before"] = 7
+    case("round 31: sweep basis was not empty", "FAIL", a=a,
+         baseline=pinned, expect_only="K4_no_stray_store")
+    a = copy.deepcopy(A)
+    a["applied_migrations"] = ["0001_init", "0002_triggers"]
+    case("round 31: healthy arm carries the partial migration set", "FAIL",
+         a=a, baseline=pinned, expect_only="K7_fixture_label_backed")
+    a = copy.deepcopy(A)
+    a["effective_store_paths_after_import"]["logs_dir"] = "/home/rohit/maez/x"
+    case("round 30: store map is not exactly the pinned map", "FAIL", a=a,
+         baseline=pinned, expect_only="K8_record_coherence")
+    f = forced_on_run(); f["forced_on"] = False
+    case("round 30: forced record denies its own role", "FAIL",
+         baseline=pinned, forced=f)
 
     print("\nALL PASS" if ok else "\nSOME CASES FAILED")
     return 0 if ok else 1

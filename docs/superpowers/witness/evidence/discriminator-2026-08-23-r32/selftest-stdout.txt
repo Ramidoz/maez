@@ -1,4 +1,4 @@
-# gate selftest — executed at 6b4823c14f003284a6d66e4c844c092836484cea on 2026-08-23T16:00:22-05:00
+# gate selftest — executed pre-commit 2026-08-23T16:24:17-05:00
 ok  honest run, baseline omitted (now mandatory)   FAIL  (want FAIL) ['D_discriminator']
 ok  honest run against its own pinned baseline     PASS  (want PASS) []
 ok  run census drifted from the pinned baseline    FAIL  (want FAIL) ['D_discriminator', 'K3_positive_controls']
@@ -93,6 +93,18 @@ ok  round 30: agreed source digests that match no code FAIL  (want FAIL) ['K8_re
 ok  round 30: stores moved into a directory the archive excludes FAIL  (want FAIL) ['K8_record_coherence']
 ok  round 30: a clone distinguished only by timing jitter FAIL  (want FAIL) ['K7_fixture_label_backed', 'K8_record_coherence']
 ok  round 28: the archive on disk is not the pinned archive FAIL  (want FAIL)
+ok  round 32: instrument digests match no instrument FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 32: no instrument attestation at all     FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 32: run under a different interpreter series FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 33: an edited migration file, name unchanged FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 33: a sixth migration file appears       FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 31: run under a different SQLite         FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 32: latch marker in the migration file set FAIL  (want FAIL) ['K2_no_latch_artifact']
+ok  round 31: resolver module outside the tree     FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 31: sweep basis was not empty            FAIL  (want FAIL) ['K4_no_stray_store']
+ok  round 31: healthy arm carries the partial migration set FAIL  (want FAIL) ['K7_fixture_label_backed']
+ok  round 30: store map is not exactly the pinned map FAIL  (want FAIL) ['K8_record_coherence']
+ok  round 30: forced record denies its own role    FAIL  (want FAIL) ['D_discriminator', 'K5_flags_were_off']
 
 ALL PASS
 exit=0

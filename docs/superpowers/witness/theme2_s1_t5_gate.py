@@ -178,7 +178,14 @@ PINNED_INSTRUMENTS = {
 # Round 32 F48: the migration set was checked by NAME while the protocol pins
 # the five FILES by digest. Rename-preserving edits would slip through.
 PINNED_MIGRATION_DIGESTS = {
-    "0001_init.sql": "eb126df1dd8c6ff5e249dab0259582747e3352991468acc936052d728db7ca75",
+    "0001_init.sql":
+        "eb126df1dd8c6ff5e249dab0259582747e3352991468acc936052d728db7ca75",
+    "0002_triggers.sql":
+        "7aa3876024f45778a67e3e744f4ed5624146e94603cd7dd1e188c56a740fdc38",
+    "0003_add_lifecycle_stage.sql":
+        "5e0829a501408b5db940a15b47899bd2899eb551da3f5795babe215ea00d9185",
+    "0004_add_audit_trace_metadata.sql":
+        "69e5f4bc78ac8a81f742c61da49bab022234dfb8647b9977ce3e1812ce77a659",
     "0005_add_taint_privacy_chain_position.sql":
         "5b66deb643d346a7f0b1ff154618b83366b1c7816de7f1d1b7304102c78d7c86",
 }
@@ -728,8 +735,7 @@ def k8_record_coherence(runs: dict) -> list:
                                               "pinned interpreter series",
                         "got": r.get("python")})
         mig = r.get("migration_file_digests")
-        if not isinstance(mig, dict) or any(
-                mig.get(k) != v for k, v in PINNED_MIGRATION_DIGESTS.items()):
+        if not isinstance(mig, dict) or mig != PINNED_MIGRATION_DIGESTS:
             bad.append({"run": tag,
                         "detail": "the migration files this fixture was built "
                                   "from are not the pinned ones", "got": mig})
@@ -1167,6 +1173,24 @@ def discriminator(runs: dict, baseline: dict | None,
     return ("PASS" if not bad else "FAIL"), bad
 
 
+def _d(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
+def _inputs_sha256(a) -> dict:
+    """Round 33 F59: judge-authored, and emitted on BOTH exit paths."""
+    here = Path(__file__).resolve().parent
+    return {"run_a": _d(a.run_a), "run_p": _d(a.run_p),
+            "forced_on": _d(a.forced_on),
+            "baseline_census": _d(a.baseline_census),
+            "baseline_archive": _d(here / "theme2-s1-baseline.tar.zst"),
+            "replay_manifest": _d(here / "theme2-s1-replay.json"),
+            "judge_self": _d(__file__)}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-a", required=True)
@@ -1186,7 +1210,10 @@ def main() -> int:
     if isinstance(forced_report, dict):
         schema += schema_failures({"f": forced_report}, forced_role=True)
     if schema:
-        verdict = {"verdict": "FAIL", "failures": {"schema": schema}}
+        # Round 33 F59(b): the early return emitted neither the inputs nor
+        # the clause map, so F46's binding covered PASS verdicts only.
+        verdict = {"verdict": "FAIL", "failures": {"schema": schema},
+                   "inputs_sha256": _inputs_sha256(a)}
         Path(a.out).write_text(json.dumps(verdict, indent=1, sort_keys=True) + "\n")
         print(json.dumps(verdict, indent=1))
         return 1
@@ -1211,24 +1238,12 @@ def main() -> int:
     failures = {k: v for k, v in clauses.items() if v}
     if dbad:
         failures["D_discriminator"] = dbad
-    def _d(path):
-        try:
-            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        except (OSError, TypeError):
-            return None
-    here = Path(__file__).resolve().parent
     verdict = {
         # Round 32 F46: the verdict named NONE of its inputs and did not
         # digest the judge, so a stale PASS could sit beside regenerated
         # records and nothing would notice. These are judge-authored facts,
         # not hand-copied ones.
-        "inputs_sha256": {
-            "run_a": _d(a.run_a), "run_p": _d(a.run_p),
-            "forced_on": _d(a.forced_on), "baseline_census": _d(a.baseline_census),
-            "baseline_archive": _d(here / "theme2-s1-baseline.tar.zst"),
-            "replay_manifest": _d(here / "theme2-s1-replay.json"),
-            "judge_self": _d(__file__),
-        },
+        "inputs_sha256": _inputs_sha256(a),
         "clauses": {k: ("PASS" if not v else "FAIL") for k, v in clauses.items()},
         "D_discriminator": dv,
         "failures": failures,

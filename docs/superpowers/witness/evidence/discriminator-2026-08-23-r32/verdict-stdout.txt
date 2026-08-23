@@ -6,7 +6,7 @@
   "baseline_census": "9e4c145b07fc6d000f8ed9c6c1739c71c711e99b3409dc198e2a03ea78eef21b",
   "baseline_archive": "328f98d4d9cb222e437e97a74b22cee46a4cac9114d7f3875bb56def0b445216",
   "replay_manifest": "2b9faf616941bb6a0ab6294e1323e2dd73cb57389ab021cc2b868f59109cb420",
-  "judge_self": "ef1dc88e9b107388da13311824cbfc63a9b5e05047864be017814ec7f1340bc5"
+  "judge_self": "d88f7729334f9deae9fc0c62cf860886d3e8195aa1fea4aebdcf955ce1862388"
  },
  "clauses": {
   "K1_ledger_unchanged": "PASS",
