@@ -1,25 +1,62 @@
 {
-  "_comment": "S1 frozen expected census at bd083be. (a) memory_phase writers, (b) birth_event_turn_id readers. Sorted. T4 compares the AST walk to exactly this.",
-  "memory_phase_writers": [
-    "core/cognition/audit_log.py::AuditLog.log_direct_edit",
-    "core/cognition/audit_log.py::AuditLog.record",
-    "core/cognition/audit_log.py::AuditLog.start_direct_edit_session",
-    "core/cognition/audit_log.py::AuditLog._migration_null_normalize",
-    "core/infra/private_thoughts.py::PrivateThoughts@587",
-    "core/infra/private_thoughts.py::PrivateThoughts@627",
-    "core/infra/private_thoughts.py::PrivateThoughts@674",
-    "memory/memory_manager.py::@1506",
-    "memory/memory_manager.py::@1605",
-    "memory/memory_manager.py::@2073"
-  ],
-  "birth_meta_readers": [
-    "core/consolidation/span_planner.py::@241",
-    "core/ledger/writer.py::LedgerWriter.write_turn@450",
-    "core/memory/birth_phase.py::birth_event_turn_id",
-    "core/memory/source_awareness.py::@342"
-  ],
-  "readers_of_memory_phase_values": [
-    "core/cognition/lean_idle_heartbeat.py::@295"
-  ],
-  "_pin_note": "@NNN line anchors are re-derived to enclosing qualnames by the census test at S1-implementation commit; the COUNT and files are frozen here and may not change without a protocol revision."
+ "_comment": "DERIVED BY EXECUTION on 2026-08-22, not authored. Regenerate with `python3 -m core.memory.s1_census --repo . --emit`. The previous version of this file was hand-written and frozen with a matching digest while naming constructs that do not exist -- a digest proves a file is unchanged, not that its claims are true. See docs/superpowers/specs/2026-08-22-theme2-census-correction.md.",
+ "_interpreter": "3.14.4",
+ "_derived_at_commit": "see git log for docs/superpowers/witness/theme2-s1-census.json",
+ "_needs_adjudication": {
+  "core/infra/private_thoughts.py::@1300,@1313,@1321": "caller sites inside private_thoughts' own in-module selftest block, not production stamp sites. Retained because over-inclusion is the safe direction for a census; the gate should rule whether to exclude in-module selftests from the walk.",
+  "core/eval/longmemeval.py::ingest_haystack": "evaluation harness, not the reply path. Real writer, never censused. The gate should rule whether core/eval belongs in the S1 census roots."
+ },
+ "memory_phase_writers": [
+  "core/cognition/audit_log.py::AuditLog._initialize",
+  "core/cognition/audit_log.py::AuditLog.end_direct_edit_session",
+  "core/cognition/audit_log.py::AuditLog.log_direct_edit",
+  "core/cognition/audit_log.py::AuditLog.start_direct_edit_session",
+  "core/eval/longmemeval.py::ingest_haystack",
+  "core/infra/private_thoughts.py::@1300",
+  "core/infra/private_thoughts.py::@1313",
+  "core/infra/private_thoughts.py::@1321",
+  "core/infra/private_thoughts.py::PrivateThoughts._insert_thought",
+  "core/infra/private_thoughts.py::PrivateThoughts._insert_thought_on_connection",
+  "core/infra/private_thoughts.py::PrivateThoughts.insert_signal_in_transaction",
+  "core/infra/private_thoughts.py::PrivateThoughts.record_signal",
+  "core/infra/private_thoughts.py::PrivateThoughts.record_thought",
+  "memory/memory_manager.py::MemoryManager.store",
+  "memory/memory_manager.py::MemoryManager.store_core",
+  "memory/memory_manager.py::MemoryManager.store_telegram"
+ ],
+ "birth_meta_readers": [
+  "core/consolidation/span_planner.py::_birth_anchor_chain_position",
+  "core/governance/s7_consultation_exemption.py::born_by_any_signal",
+  "core/ledger/writer.py::LedgerWriter.write_turn",
+  "core/memory/birth_phase.py::birth_event_turn_id",
+  "core/memory/source_awareness.py::_should_skip_dir",
+  "memory/memory_manager.py::MemoryManager.store",
+  "memory/memory_manager.py::MemoryManager.store_core",
+  "memory/memory_manager.py::MemoryManager.store_telegram"
+ ],
+ "readers_of_memory_phase_values": [
+  "core/cognition/audit_log.py::@121",
+  "core/cognition/audit_log.py::@88",
+  "core/cognition/audit_log.py::@961",
+  "core/cognition/audit_log.py::@962",
+  "core/cognition/audit_log.py::@968",
+  "core/cognition/audit_log.py::@969",
+  "core/cognition/audit_log.py::AuditLog._initialize",
+  "core/cognition/lean_idle_heartbeat.py::select_private_reader_thoughts",
+  "core/infra/private_thoughts.py::@1260",
+  "core/infra/private_thoughts.py::@1262",
+  "core/infra/private_thoughts.py::@1291",
+  "core/infra/private_thoughts.py::@1316",
+  "core/infra/private_thoughts.py::@1322",
+  "core/infra/private_thoughts.py::@1324",
+  "core/infra/private_thoughts.py::@1386",
+  "core/infra/private_thoughts.py::@324",
+  "core/infra/private_thoughts.py::@335",
+  "core/infra/private_thoughts.py::PrivateThoughts._behavior_signal_metadata_for_class",
+  "core/infra/private_thoughts.py::PrivateThoughts._insert_thought_on_connection",
+  "core/infra/private_thoughts.py::PrivateThoughts._recent_behavior_signal_metadata",
+  "core/infra/private_thoughts.py::PrivateThoughts._recent_forensic_signal_metadata",
+  "core/infra/private_thoughts.py::PrivateThoughts.recent_by_source",
+  "core/infra/private_thoughts_s1b.py::behavior_safe_reasoning_residue_recency"
+ ]
 }
