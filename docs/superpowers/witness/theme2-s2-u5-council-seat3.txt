@@ -1,0 +1,39 @@
+[0m
+> build · x-preview-f-free
+[0m
+**Verdict first: the frozen design is wrong. Do not build it as specified.**
+
+## 1. Topology — change it
+
+An append-only ledger gains nothing from two direct writers. Interleaved single-row INSERTs have no throughput argument that batching inside one owner process doesn't win outright. Put a single writer process on the ledger (web surface enqueues via unix socket or a spool the writer drains); WAL stays — your standing rule permits WAL with a single writer, and you keep its reader concurrency. This collapses the hazard class instead of patching past one known member of it: 3.53.4 fixes the documented WAL-reset defect, not the class, and multi-process WAL has a long history of subtle failures (shm recovery after SIGKILL, checkpoint interplay, fork-inherited-lock breakage).
+
+- WAL2: unreleased branch. Disqualified for a life-record.
+- Rollback journal: still two writers, still contention, different bug surface. No.
+
+The O-1 ruling makes U5 *valid* (it would measure the right library) but not *warranted* — it witnesses a topology your standing rule forbids shipping. Only proceed with two writers if that is a written, explicit override of O-rule — never as a downstream consequence of a green number.
+
+## 2. Library binding (if it runs anyway)
+
+Bind to bytes, not version strings. In **each** writer process, on the **live measurement connection**, record before interpretation: `sqlite_source_id()` (pins the exact amalgamation), the libsqlite3 path resolved in `/proc/self/maps`, and sha256(mapped file) == sha256(`vendor/sqlite/lib/...`). Startup assertion `version >= 3.51.3` as an added kill condition. Reconstruct the systemd drop-in environment exactly; do **not** reuse the T5 `--clearenv` harness unless it re-adds the vendor path identically. Asymmetric env inheritance — one process vendored, one system — is the classic silent failure, hence per-process proof, and the proofs belong in the raw record beside the samples, per your own protocol.
+
+## 3. Kill rule — partly wrong
+
+Nearest-rank p99 at N=1000 discards your ten worst samples, and `busy_timeout=5000` makes legal five-second waits that hide precisely in that discarded tail. Kill on: any BUSY/error (keep), plus **max** acquisition over a hard budget (~1 s) as primary; p99 demoted to reported context. Use CLOCK_MONOTONIC — "wall-clock" invites NTP steps. Add missing kills: post-run `PRAGMA integrity_check`, row-completeness versus the schedule, sample-count mismatch, journal_mode drift, and any retry attempt (retries must be structurally impossible, or every retry is recorded). Positive control stays, but assert *why* it tripped — refusal at ≈5000 ms — not merely that it tripped; a control passing because busy_timeout got misconfigured to 0 validates nothing.
+
+## 4. How GREEN lies
+
+1. Links system 3.46.1 — clearenv sandbox, venv-bundled `_sqlite3`, static linkage — or one process vendored, one system.
+2. Connections opened before fork/exec; inherited SQLite fds break POSIX locking; everything goes trivially green and means nothing.
+3. Schedule so sparse writers never overlap — witness measures uncontended BEGIN IMMEDIATE. Require evidence of ≥K genuinely contended acquisitions.
+4. Scratch DB instead of the real ledger, or divergent pragmas (page_size, synchronous, autocheckpoint), or a sandbox filesystem whose shm/mmap coherence differs from the prod mount.
+5. Control trips for the wrong reason (see §3).
+6. p99 computed over successes after silently dropping refusals; or failed runs retried until green.
+7. Timing green while the database is quietly damaged: no integrity/completeness verification afterward. p99 never looks at corruption or lost writes — the actual stake.
+8. Result later cited as "concurrent WAL writers are safe," detached from the pinned (lib-hash, config, fs, topology) quadruple; production subsequently relinks or rebuilds something else.
+9. Deepest: even perfectly executed, green certifies latency under benign conditions, not non-corruption. 1000 clean exchanges barely sample a probabilistic hazard. Green is fully compatible with unsafe.
+
+## 5. Cheaper instrument
+
+Invert it: a falsifier, not a statistic. Drive tens of thousands of deterministic appends (payload = f(index)) through the real topology, then verify every row present exactly once and byte-exact, plus `integrity_check` and a forced `wal_checkpoint(TRUNCATE)` under concurrent write load. Then add fault injection: repeatedly SIGKILL a writer mid-batch and verify recovery — crash recovery is where WAL defects actually live. Hours to build, minutes to run, and it attacks the claim that matters (no loss, no corruption) where the timing harness only grazes it.
+
+Build the single-writer topology; point the witness at what will actually ship.
