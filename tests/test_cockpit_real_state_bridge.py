@@ -354,5 +354,77 @@ class TestCockpitDir(unittest.TestCase):
         importlib.reload(wi2)
 
 
+# ── Part 6: ledger admission liveness on the real-state surface ──────────
+#
+# Council ruling 1 (2026-08-24): "a loud unclaimed/aging-entries report
+# wired into the same real-state surface as dead_letter_status(). A spool
+# nobody drains is a silent-omission machine with excellent durability."
+
+
+class TestLedgerAdmissionRealState(unittest.TestCase):
+    def test_cockpit_state_carries_ledger_admission_health(self):
+        state = _build_state_under_patches(_FakeDaemon())
+        adm = state["ledger_admission"]
+        self.assertIsNotNone(adm, "admission liveness must be surfaced")
+        for key in ("dead_letter", "spool", "writes_enabled",
+                    "drainer_thread_alive", "attention"):
+            self.assertIn(key, adm)
+        # Unborn live tree: nothing pending, nothing dead-lettered,
+        # writes disabled — no attention.
+        self.assertFalse(adm["attention"])
+
+    def test_attention_fires_on_dead_letters(self):
+        import tempfile
+        from pathlib import Path
+
+        from daemon import maez_daemon as md
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            db.touch()
+            # A dead-letter sidecar with one omitted life-event.
+            (Path(td) / "ledger.db.deadletter.999.jsonl").write_text(
+                json.dumps({"event_id": "x", "ts": 1.0,
+                            "category": "failed"}) + "\n"
+            )
+            with mock.patch.object(md, "LEDGER_DB_PATH", db):
+                state = _build_state_under_patches(_FakeDaemon())
+        adm = state["ledger_admission"]
+        self.assertEqual(adm["dead_letter"]["rows"], 1)
+        self.assertTrue(
+            adm["attention"],
+            "omitted life pending replay must demand attention",
+        )
+
+    def test_attention_fires_on_pending_spool_with_no_drainer(self):
+        import tempfile
+        from pathlib import Path
+
+        from core.ledger import spool as spool_mod
+        from daemon import maez_daemon as md
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            db.touch()
+            spool_mod.enqueue(
+                spool_mod.default_spool_root(str(db)),
+                producer="web",
+                turn_kind="user_message",
+                raw_text="waiting for a drainer that is not running",
+                kwargs={"surface": "web_owner",
+                        "taint_labels": ["owner_utterance"],
+                        "privacy_access": "public"},
+            )
+            with mock.patch.object(md, "LEDGER_DB_PATH", db):
+                state = _build_state_under_patches(_FakeDaemon())
+        adm = state["ledger_admission"]
+        self.assertEqual(adm["spool"]["pending_total"], 1)
+        self.assertTrue(
+            adm["attention"],
+            "a pending envelope with no live drainer is the "
+            "silent-omission machine — it must demand attention",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2787,6 +2787,48 @@ def _cockpit_flags_snapshot() -> dict:
     return {name: os.environ.get(name) for name in _COCKPIT_FLAG_NAMES}
 
 
+def _ledger_admission_health(daemon) -> dict:
+    """Admission liveness for the real-state surface (council ruling 1,
+    2026-08-24): a spool nobody drains is a silent-omission machine with
+    excellent durability, and a nonzero dead-letter count means omitted
+    life pending replay — both must be SURFACED, not logged.
+
+    ``attention`` is the loud predicate: any dead-lettered rows, or
+    pending envelopes with no live drainer, or pending envelopes older
+    than ten minutes. Never raises (callers _safe-wrap regardless).
+    """
+    from core.ledger.spool import default_spool_root, spool_status
+    from core.ledger.writer import dead_letter_status
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    db = str(LEDGER_DB_PATH)
+    dead = dead_letter_status(db)
+    spool = spool_status(default_spool_root(db))
+    thread = getattr(daemon, "_ledger_spool_thread", None)
+    drainer_alive = bool(thread.is_alive()) if thread is not None else None
+    oldest = spool.get("oldest_pending_ts")
+    age = (
+        max(0.0, time.time() - oldest)
+        if isinstance(oldest, (int, float))
+        else None
+    )
+    attention = bool(
+        dead.get("rows")
+        or (
+            spool.get("pending_total")
+            and (drainer_alive is not True or (age is not None and age > 600))
+        )
+    )
+    return {
+        "dead_letter": dead,
+        "spool": spool,
+        "oldest_pending_age_s": age,
+        "drainer_thread_alive": drainer_alive,
+        "writes_enabled": ledger_writes_enabled(),
+        "attention": attention,
+    }
+
+
 def _build_cockpit_state(daemon) -> dict:
     """Assemble the fast cockpit real-state JSON true-by-construction.
 
@@ -2840,6 +2882,9 @@ def _build_cockpit_state(daemon) -> dict:
             lambda: daemon._voice_continuity_health(), default=None
         ),
         "birth_readiness": _safe(lambda: daemon._birth_readiness(), default=None),
+        "ledger_admission": _safe(
+            lambda: _ledger_admission_health(daemon), default=None
+        ),
         "flags": _cockpit_flags_snapshot(),
         "sampled_at": time.time(),
     }
