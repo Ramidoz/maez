@@ -11929,12 +11929,21 @@ class MaezDaemon:
         # changes nothing about the unborn state. Deliberately at start(),
         # not import: importing this module must never make a test or
         # tooling process believe it owns the ledger.
+        # Eager: with writes enabled the latch is taken NOW (closing the
+        # pre-claim window — a lazily-taken latch is an invitation, not a
+        # lease) and require_fixed() fires at boot, not at the first
+        # life-event. Inert while the flag is unset.
         try:
             from core.ledger.owner import claim_ownership as _claim_ledger_owner
 
-            _claim_ledger_owner()
+            _claim_ledger_owner(str(LEDGER_DB_PATH))
         except Exception:
-            logger.warning("ledger ownership claim failed", exc_info=True)
+            logger.error(
+                "ledger ownership claim failed — with writes enabled this "
+                "daemon does NOT own the ledger and every write will "
+                "dead-letter until that is resolved",
+                exc_info=True,
+            )
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 

@@ -88,6 +88,44 @@ class OwnerLatchTests(unittest.TestCase):
         )
 
 
+class EagerLatchTests(unittest.TestCase):
+    """Council trap #3 (Grok, 2026-08-24): stopping the owner FREES the
+    latch — stop is an invitation, not a lease. The owner must therefore
+    take the latch EAGERLY at claim time when writes are enabled, closing
+    the pre-claim window the falsifier's F2 found during development."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+
+    def tearDown(self):
+        ledger_owner._reset_for_tests()
+
+    def test_enabled_claim_takes_the_latch_before_any_write(self):
+        db = _fresh_db("eager")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership(db)
+            # No write has happened, yet a second enabled writer must
+            # already refuse: the pre-claim window is closed.
+            with self.assertRaises(RuntimeError):
+                writer.LedgerWriter(db)
+
+    def test_disabled_claim_stays_inert(self):
+        db = _fresh_db("eager_dormant")
+        env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
+        with patch.dict(os.environ, env, clear=True):
+            ledger_owner.claim_ownership(db)
+        self.assertFalse(
+            Path(db + ".ownerlock").exists(),
+            "dormant claim must not grow latch files",
+        )
+
+    def test_pathless_claim_still_works(self):
+        # Existing callers (tests) claim without a db_path; behavior is
+        # the old lazy shape.
+        ledger_owner.claim_ownership()
+        self.assertTrue(ledger_owner.this_process_is_owner())
+
+
 class OwnerSingletonTests(unittest.TestCase):
     def setUp(self):
         ledger_owner._reset_for_tests()

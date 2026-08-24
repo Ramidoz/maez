@@ -277,8 +277,17 @@ class LedgerWriter:
             # Wait up to 5 seconds for cross-process write lock contention
             # rather than failing immediately with "database is locked".
             self._conn.execute("PRAGMA busy_timeout = 5000")
-            # Explicit synchronous=NORMAL — fine under WAL, makes intent clear.
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+            # Council ruling Q2 (2026-08-24, four seats): synchronous=FULL
+            # on the canonical path, unconditionally. The acknowledgment
+            # (the returned turn_id, used immediately as parent/felt-state)
+            # must never be more durable than the commit it names; under
+            # NORMAL a power cut can erase an acked commit until the next
+            # checkpoint, and no checkpoint policy ships. Rehearsal
+            # sidecars are explicitly disposable and keep NORMAL.
+            if self._rehearsal_mode:
+                self._conn.execute("PRAGMA synchronous = NORMAL")
+            else:
+                self._conn.execute("PRAGMA synchronous = FULL")
         except BaseException:
             self._release_owner_latch()
             raise

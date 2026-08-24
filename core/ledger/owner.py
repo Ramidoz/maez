@@ -43,9 +43,45 @@ _writer_db_path: str | None = None
 _constructions = 0
 
 
-def claim_ownership() -> None:
-    """Mark THIS process as the single serialized ledger owner."""
+def claim_ownership(db_path: str | None = None) -> None:
+    """Mark THIS process as the single serialized ledger owner.
+
+    With ``db_path`` and writes ENABLED, the owner writer is constructed
+    EAGERLY — taking the on-disk latch now, not at the first write.
+    Council trap #3 (2026-08-24): a lazily-taken latch leaves a
+    pre-claim window in which any enabled process can become the writer;
+    "stop the daemon" is an invitation, not a lease, unless the restarted
+    owner closes that window immediately. Eager construction also fires
+    require_fixed() at startup — a daemon on the wrong SQLite fails at
+    boot, not at the first life-event. Raises on eager failure; inert
+    (no latch, no files) while writes are disabled.
+    """
     os.environ[_OWNER_PID_ENV] = str(os.getpid())
+    if db_path is None:
+        return
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    if not ledger_writes_enabled():
+        return
+    with _lock:
+        _ensure_writer_locked(db_path)
+
+
+def _ensure_writer_locked(db_path: str) -> LedgerWriter:
+    """Construct/reuse the long-lived writer. Caller holds ``_lock``."""
+    global _writer, _writer_db_path, _constructions
+    if _writer is None or _writer_db_path != db_path:
+        if _writer is not None:
+            try:
+                _writer.close()
+            except Exception:
+                pass
+            _writer = None
+            _writer_db_path = None
+        _writer = LedgerWriter(db_path)
+        _writer_db_path = db_path
+        _constructions += 1
+    return _writer
 
 
 def this_process_is_owner() -> bool:
@@ -84,17 +120,7 @@ def owner_write_turn(
         if not ledger_writes_enabled():
             return None
         try:
-            if _writer is None or _writer_db_path != db_path:
-                if _writer is not None:
-                    try:
-                        _writer.close()
-                    except Exception:
-                        pass
-                    _writer = None
-                    _writer_db_path = None
-                _writer = LedgerWriter(db_path)
-                _writer_db_path = db_path
-                _constructions += 1
+            _ensure_writer_locked(db_path)
         except Exception as e:
             _report_dropped_write(
                 db_path, turn_kind, raw_text, kwargs, e, "init", attempt_id
