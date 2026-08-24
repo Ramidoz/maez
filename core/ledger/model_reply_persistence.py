@@ -82,7 +82,7 @@ def _meta_connect(db_path: str) -> sqlite3.Connection:
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+    return conn  # sqlite-raw-ok: both callers close in try/finally
 
 
 def _marker_already_written(db_path: str) -> bool:
@@ -97,31 +97,20 @@ def _marker_already_written(db_path: str) -> bool:
         conn.close()
 
 
-def _record_marker_turn_id(db_path: str, marker_turn_id: str) -> None:
-    conn = _meta_connect(db_path)
-    try:
-        # BEGIN IMMEDIATE declares write intent up front so lock
-        # acquisition happens here, under the busy handler, not at COMMIT.
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-                (MODEL_REPLY_PERSISTENCE_MARKER_KEY, marker_turn_id),
-            )
-            conn.execute("COMMIT")
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-    finally:
-        conn.close()
-
-
 def _ensure_persistence_marker(db_path: str) -> None:
-    """Best-effort one-time marker for the persistence discontinuity."""
+    """Best-effort one-time marker for the persistence discontinuity.
+
+    ATOMIC since 2026-08-23: the marker turn and the meta row naming it
+    land in one writer transaction (``meta_marker_keys``), write-once
+    enforced inside the transaction. The previous two-transaction shape
+    (turn committed, then meta recorded on a separate connection) had a
+    crash/failure window that guaranteed a duplicate "one-time" marker
+    at the next call.
+    """
     try:
         if _marker_already_written(db_path):
             return
-        marker_id = try_write_turn(
+        try_write_turn(
             db_path,
             "system_event",
             _marker_payload(),
@@ -129,9 +118,8 @@ def _ensure_persistence_marker(db_path: str) -> None:
             raw_surface="model_reply_persistence",
             taint_labels=["self_generated"],
             privacy_access="public",
+            meta_marker_keys=[MODEL_REPLY_PERSISTENCE_MARKER_KEY],
         )
-        if marker_id:
-            _record_marker_turn_id(db_path, marker_id)
     except Exception as exc:  # noqa: BLE001 — persistence is best-effort
         _warn_once(
             "marker",

@@ -149,6 +149,41 @@ _TURN_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _owner_latch_path(db_path: str) -> str:
+    return f"{os.path.abspath(db_path)}.ownerlock"
+
+
+def _acquire_owner_latch(db_path: str) -> int:
+    """Take the single-owner flock for this ledger, or refuse immediately.
+
+    No retry loop on purpose: a live owner holds the latch for its whole
+    lifetime, so waiting is not contention — it is a second writer trying
+    to exist. Refusal feeds the dead-letter path, which is recoverable;
+    a second concurrent writer is the corruption class the standing rule
+    forbids. O_CLOEXEC so exec'd children cannot inherit ownership.
+    """
+    import fcntl
+
+    path = _owner_latch_path(db_path)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            holder = os.pread(fd, 64, 0).decode("ascii", "replace").strip()
+        except OSError:
+            holder = ""
+        os.close(fd)
+        raise RuntimeError(
+            f"ledger {db_path} already has a live owner"
+            f"{f' (pid {holder})' if holder else ''}; refusing a second "
+            f"concurrent writer — enqueue through the owner instead"
+        ) from None
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode("ascii"), 0)
+    return fd
+
+
 def _is_rehearsal_sidecar_ledger_path(db_path: str, *, rehearsal_root: Path) -> bool:
     try:
         path = Path(db_path).resolve()
@@ -209,6 +244,7 @@ class LedgerWriter:
         self._rehearsal_mode = rehearsal_mode
         self._lock = threading.Lock()
         self._enabled = self._parse_flag()
+        self._owner_latch_fd: int | None = None
         if self._enabled:
             # An ENABLED writer refuses to construct on a SQLite inside the
             # WAL-reset corruption window (< 3.51.3) instead of merely
@@ -219,23 +255,33 @@ class LedgerWriter:
             from core.infra.sqlite_runtime import require_fixed
 
             require_fixed("ledger writer (MAEZ_LEDGER_WRITES enabled)")
+            # Single-owner latch: at most one live ENABLED writer per DB,
+            # in or across processes. flock dies with the process (SIGKILL
+            # included), so a crashed owner never wedges the ledger. This
+            # makes the forbidden concurrent-WAL-writers topology
+            # structurally unreachable rather than discouraged by rule.
+            self._owner_latch_fd = _acquire_owner_latch(db_path)
         # check_same_thread=False so the threading.Lock is the
         # serialization point, not Python's per-connection thread guard.
         # isolation_level=None gives manual transaction control so we can
         # use BEGIN IMMEDIATE — required to close the cross-process fork
         # window where two writers SELECT the same head pointer under
         # SHARED locks and both succeed at INSERT.
-        self._conn: sqlite3.Connection | None = sqlite3.connect(
-            db_path,
-            check_same_thread=False,
-            isolation_level=None,
-        )
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        # Wait up to 5 seconds for cross-process write lock contention
-        # rather than failing immediately with "database is locked".
-        self._conn.execute("PRAGMA busy_timeout = 5000")
-        # Explicit synchronous=NORMAL — fine under WAL, makes intent clear.
-        self._conn.execute("PRAGMA synchronous = NORMAL")
+        try:
+            self._conn: sqlite3.Connection | None = sqlite3.connect(
+                db_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            # Wait up to 5 seconds for cross-process write lock contention
+            # rather than failing immediately with "database is locked".
+            self._conn.execute("PRAGMA busy_timeout = 5000")
+            # Explicit synchronous=NORMAL — fine under WAL, makes intent clear.
+            self._conn.execute("PRAGMA synchronous = NORMAL")
+        except BaseException:
+            self._release_owner_latch()
+            raise
 
     # ------------------------------------------------------------------ flag
 
@@ -284,9 +330,28 @@ class LedgerWriter:
         audit_trace_lineage: dict | None = None,
         lifecycle_stage: str | None = None,
         birth_anchor: bool = False,
+        meta_marker_keys: list[str] | tuple[str, ...] | None = None,
         taint_labels: list[str] | tuple[str, ...] | set[str],
         privacy_access: str,
     ) -> str | None:
+        # One-time markers: each named meta key is set to the new turn_id
+        # INSIDE the write transaction, and refused (rolling back the turn
+        # row) if already set. This is what makes "the marker turn and the
+        # meta row that names it" atomic — the crash window between a turn
+        # commit and a separate meta commit produced duplicate one-time
+        # markers (model_reply_persistence, 2026-08-23 council follow-up).
+        _RESERVED_META_KEYS = (
+            "last_chain_hash",
+            "birth_event_turn_id",
+            "ledger_era_starts_at",
+        )
+        for _mk in meta_marker_keys or ():
+            if not isinstance(_mk, str) or not _mk.strip():
+                raise ValueError("meta_marker_keys entries must be non-empty strings")
+            if _mk in _RESERVED_META_KEYS:
+                raise ValueError(
+                    f"meta_marker_keys may not name reserved meta key {_mk!r}"
+                )
         if self._rehearsal_mode and lifecycle_stage != "rehearsal":
             raise ValueError("rehearsal ledger writer requires lifecycle_stage='rehearsal'")
         if lifecycle_stage == "rehearsal" and not self._rehearsal_mode:
@@ -556,6 +621,19 @@ class LedgerWriter:
                         "INSERT INTO meta(key, value) VALUES ('birth_event_turn_id', ?)",
                         (turn_id,),
                     )
+                for _mk in meta_marker_keys or ():
+                    _already = conn.execute(
+                        "SELECT value FROM meta WHERE key = ?", (_mk,)
+                    ).fetchone()
+                    if _already is not None and (_already[0] or "").strip():
+                        raise ValueError(
+                            f"meta marker {_mk!r} already set — one-time "
+                            "markers are write-once"
+                        )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                        (_mk, turn_id),
+                    )
                 # Explicit COMMIT — with isolation_level=None,
                 # conn.commit() is a no-op; transaction control is
                 # via SQL statements.
@@ -578,6 +656,14 @@ class LedgerWriter:
                     self._conn.close()
                 finally:
                     self._conn = None
+            self._release_owner_latch()
+
+    def _release_owner_latch(self) -> None:
+        if self._owner_latch_fd is not None:
+            try:
+                os.close(self._owner_latch_fd)  # closing the fd drops flock
+            finally:
+                self._owner_latch_fd = None
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +683,43 @@ def dead_letter_path(db_path: str) -> str:
 def dead_letter_glob(db_path: str) -> str:
     """Glob matching every process's dead-letter sidecar for this DB."""
     return f"{db_path}.deadletter.*.jsonl"
+
+
+def dead_letter_status(db_path: str) -> dict:
+    """Machine-readable dead-letter state: {files, rows, oldest_ts, bytes}.
+
+    Logs are not operator state — a nonzero row count here is the honest
+    'the ledger has omitted life-events pending replay' health predicate
+    for status endpoints and the cockpit real-state surface. Never raises.
+    """
+    import glob as _glob
+
+    files = sorted(_glob.glob(dead_letter_glob(db_path)))
+    rows = 0
+    oldest_ts: float | None = None
+    total_bytes = 0
+    for f in files:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    rows += 1
+                    try:
+                        ts = json.loads(line).get("ts")
+                    except (ValueError, AttributeError):
+                        continue
+                    if isinstance(ts, (int, float)):
+                        oldest_ts = ts if oldest_ts is None else min(oldest_ts, ts)
+            total_bytes += os.path.getsize(f)
+        except OSError:
+            continue
+    return {
+        "files": len(files),
+        "rows": rows,
+        "oldest_ts": oldest_ts,
+        "bytes": total_bytes,
+    }
 
 
 #: Deterministic writer refusals (bad payload / provenance). These are
@@ -636,6 +759,7 @@ def _dead_letter(
     kwargs: dict,
     error: BaseException,
     stage: str,
+    attempt_id: str | None = None,
 ) -> str:
     """Append the full failed payload to the dead-letter sidecar, fsynced.
 
@@ -660,7 +784,11 @@ def _dead_letter(
     reconstruction provenance.
     """
     record = {
-        "event_id": uuid.uuid4().hex,
+        # Identity minted BEFORE the first attempt when the caller passes
+        # attempt_id (try_write_turn / owner_write_turn do) — a post-hoc
+        # id cannot identify a transaction that committed before the
+        # response was lost. The fallback mint keeps old callers safe.
+        "event_id": attempt_id or uuid.uuid4().hex,
         "ts": time.time(),
         "pid": os.getpid(),
         "stage": stage,
@@ -682,7 +810,12 @@ def _dead_letter(
     existed = os.path.exists(path)
     fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
     try:
-        os.write(fd, line)
+        # os.write may write fewer bytes than asked; a short write here
+        # would be a torn JSON record despite the fsync. Loop to complete.
+        view = memoryview(line)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -702,6 +835,7 @@ def _report_dropped_write(
     kwargs: dict,
     error: BaseException,
     stage: str,
+    attempt_id: str | None = None,
 ) -> None:
     """Failed enabled write: dead-letter the payload, log ERROR; if even the
     dead-letter append fails, say the payload is LOST at CRITICAL. Never
@@ -712,7 +846,9 @@ def _report_dropped_write(
         else "shadow ledger write failed"
     )
     try:
-        path = _dead_letter(db_path, turn_kind, raw_text, kwargs, error, stage)
+        path = _dead_letter(
+            db_path, turn_kind, raw_text, kwargs, error, stage, attempt_id
+        )
         _LOGGER.error(
             "%s (kind=%r): %s — payload dead-lettered to %s",
             prefix, turn_kind, error, path,
@@ -755,15 +891,34 @@ def try_write_turn(
     if not ledger_writes_enabled():
         return None
 
+    # Owner routing: a process that claimed ledger ownership holds ONE
+    # long-lived writer (and the owner latch with it) — a per-call writer
+    # here would collide with our own latch. Everything below this line
+    # is the non-owner / unclaimed-process path.
+    from core.ledger import owner as _owner
+
+    if _owner.this_process_is_owner():
+        return _owner.owner_write_turn(db_path, turn_kind, raw_text, **kwargs)
+
+    # Attempt identity, minted BEFORE any attempt: the same id names this
+    # submission whether it commits, dead-letters, or vanishes mid-flight.
+    # (The schema cannot yet enforce uniqueness on it — recorded as the
+    # admission-protocol gap in the council synthesis; this is the seam.)
+    attempt_id = uuid.uuid4().hex
+
     try:
         w = LedgerWriter(db_path)
     except Exception as e:
-        _report_dropped_write(db_path, turn_kind, raw_text, kwargs, e, "init")
+        _report_dropped_write(
+            db_path, turn_kind, raw_text, kwargs, e, "init", attempt_id
+        )
         return None
     try:
         return w.write_turn(turn_kind, raw_text, **kwargs)
     except Exception as e:
-        _report_dropped_write(db_path, turn_kind, raw_text, kwargs, e, "write")
+        _report_dropped_write(
+            db_path, turn_kind, raw_text, kwargs, e, "write", attempt_id
+        )
         return None
     finally:
         try:

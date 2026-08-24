@@ -8,6 +8,11 @@ config/token.json*
 config/credentials.json*
 memory/db/
 memory/*.db
+# Ledger dead-letter sidecars + single-owner latch: runtime life-bytes /
+# lock state, never source. The backup manifest covers the dead-letters;
+# git must not (private life text would become an accidental commit).
+memory/*.deadletter.*.jsonl
+memory/*.ownerlock
 memory/egress_telemetry.key
 memory/drive_curiosity_master.key
 memory/chroma/

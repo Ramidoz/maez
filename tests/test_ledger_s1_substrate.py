@@ -240,6 +240,14 @@ class WriterStampingTests(unittest.TestCase):
 
 class ChainPositionTests(unittest.TestCase):
     def test_chain_position_is_unique_and_matches_chain_walk_under_concurrency(self):
+        # Since the single-owner latch landed, two ENABLED writers can no
+        # longer exist concurrently — the racing constructions this test
+        # originally used now refuse by design. Workers therefore retry
+        # construction until the latch frees; the assertions (a unique,
+        # contiguous, walkable chain out of 16 racing threads) are
+        # unchanged, and no worker may be silently dropped.
+        import time as _time
+
         db = _fresh_db("position_concurrent")
         count = 16
         barrier = Barrier(count)
@@ -247,8 +255,15 @@ class ChainPositionTests(unittest.TestCase):
 
         def worker(index: int) -> None:
             barrier.wait()
-            with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
-                w = writer.LedgerWriter(db)
+            deadline = _time.monotonic() + 30.0
+            while True:
+                try:
+                    w = writer.LedgerWriter(db)
+                except RuntimeError:
+                    if _time.monotonic() >= deadline:
+                        raise
+                    _time.sleep(0.005)
+                    continue
                 try:
                     results[index] = w.write_turn(
                         "user_message",
@@ -259,9 +274,13 @@ class ChainPositionTests(unittest.TestCase):
                     )
                 finally:
                     w.close()
+                return
 
-        with ThreadPoolExecutor(max_workers=count) as executor:
-            list(executor.map(worker, range(count)))
+        # Patch once around the pool: a per-worker patch.dict would
+        # restore (unset) the flag while other workers still retry.
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with ThreadPoolExecutor(max_workers=count) as executor:
+                list(executor.map(worker, range(count)))
 
         self.assertTrue(all(results), results)
         conn = sqlite3.connect(db)

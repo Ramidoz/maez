@@ -350,59 +350,124 @@ class MemoryProjectionRulesModelReplyScopeTests(unittest.TestCase):
         self.assertIn("warn_model_reply_persistence_skip", src)
 
 
-class MarkerMetaFencingTests(unittest.TestCase):
-    """Pin the marker meta-write's behavior under write contention.
+class AtomicMarkerTests(unittest.TestCase):
+    """The one-time persistence marker must be ATOMIC: the marker turn and
+    the meta row that names it land in ONE writer transaction, or neither
+    does. The previous shape (turn committed in one transaction, meta
+    recorded on a separate connection afterwards) had a crash/failure
+    window that guaranteed duplicate "one-time" markers — the real defect
+    the U5 council's falsified 0-ms claim was standing in front of.
 
-    HONESTY NOTE (2026-08-23): the U5 council finding claimed the previous
-    bare ``sqlite3.connect`` here "fails at 0 ms under contention". A live
-    probe falsified that — Python's default ``timeout=5.0`` installs a busy
-    handler, so the old code already waited. This test therefore PINS the
-    required behavior (wait out a short write lock, land exactly once); it
-    did not fail before the explicit fencing landed. The fencing makes the
-    discipline explicit (busy_timeout pragma + BEGIN IMMEDIATE) instead of
-    an inherited library default.
+    HONESTY NOTE (2026-08-23): the council claimed the old bare
+    ``sqlite3.connect`` meta write "fails at 0 ms under contention". A
+    live probe falsified that (Python's default timeout=5.0 installs a
+    busy handler; the old write waited 1.53s and succeeded). The fix that
+    actually bites is this atomicity, not busy-handler fencing.
     """
 
-    def test_marker_meta_write_waits_out_contention(self):
-        import threading
-        import time as _time
-
-        db = _fresh_db("marker_fencing")
-        from core.ledger import model_reply_persistence as mrp
-
-        blocker = sqlite3.connect(
-            db, isolation_level=None, check_same_thread=False
-        )
-        blocker.execute("BEGIN IMMEDIATE")
-        blocker.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES ('blk', 'x')"
-        )
-
-        def _release():
-            _time.sleep(0.5)
-            blocker.execute("COMMIT")
-            blocker.close()
-
-        t = threading.Thread(target=_release)
-        t.start()
-        t0 = _time.monotonic()
-        try:
-            mrp._record_marker_turn_id(db, "marker-under-contention")
-        finally:
-            t.join()
-        waited = _time.monotonic() - t0
-        self.assertGreaterEqual(
-            waited, 0.4, "the write must have waited for the lock, not raced it"
-        )
+    def _count_marker_turns(self, db: str) -> int:
         conn = sqlite3.connect(db)
         try:
-            row = conn.execute(
+            return conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE turn_kind='system_event'"
+                " AND raw_text LIKE '%model_reply_persistence_introduced%'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_marker_turn_and_meta_land_in_one_transaction(self):
+        db = _fresh_db("atomic_marker")
+        from core.ledger import model_reply_persistence as mrp
+
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            mrp._ensure_persistence_marker(db)
+        conn = sqlite3.connect(db)
+        try:
+            meta = conn.execute(
                 "SELECT value FROM meta WHERE key = ?",
                 (mrp.MODEL_REPLY_PERSISTENCE_MARKER_KEY,),
             ).fetchone()
+            turn = conn.execute(
+                "SELECT turn_id FROM turns WHERE turn_kind='system_event'"
+                " AND raw_surface='model_reply_persistence'"
+            ).fetchone()
         finally:
             conn.close()
-        self.assertEqual(row, ("marker-under-contention",))
+        self.assertIsNotNone(turn)
+        self.assertEqual(
+            meta[0], turn[0],
+            "meta must name the marker turn, written in the same transaction",
+        )
+        self.assertEqual(self._count_marker_turns(db), 1)
+
+    def test_second_ensure_is_a_no_op(self):
+        db = _fresh_db("atomic_marker_twice")
+        from core.ledger import model_reply_persistence as mrp
+
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            mrp._ensure_persistence_marker(db)
+            mrp._ensure_persistence_marker(db)
+        self.assertEqual(self._count_marker_turns(db), 1)
+
+    def test_meta_marker_key_is_write_once_inside_the_writer(self):
+        """Even racing callers that both pass the pre-check cannot produce
+        two marker turns: the writer checks the meta key INSIDE the write
+        transaction and refuses (rolling back the turn row) if present."""
+        db = _fresh_db("atomic_marker_race")
+        from core.ledger.writer import LedgerWriter
+
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = LedgerWriter(db)
+            try:
+                first = w.write_turn(
+                    "system_event", "marker one",
+                    taint_labels=["self_generated"],
+                    privacy_access="public",
+                    meta_marker_keys=["one_time_test_marker"],
+                )
+                self.assertIsNotNone(first)
+                before = self._turn_count(db)
+                with self.assertRaises(ValueError):
+                    w.write_turn(
+                        "system_event", "marker two",
+                        taint_labels=["self_generated"],
+                        privacy_access="public",
+                        meta_marker_keys=["one_time_test_marker"],
+                    )
+                self.assertEqual(
+                    self._turn_count(db), before,
+                    "a refused marker write must leave zero rows behind",
+                )
+            finally:
+                w.close()
+
+    def test_reserved_meta_keys_are_refused(self):
+        db = _fresh_db("atomic_marker_reserved")
+        from core.ledger.writer import LedgerWriter
+
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = LedgerWriter(db)
+            try:
+                for key in (
+                    "last_chain_hash", "birth_event_turn_id",
+                    "ledger_era_starts_at",
+                ):
+                    with self.assertRaises(ValueError):
+                        w.write_turn(
+                            "system_event", "reserved",
+                            taint_labels=["self_generated"],
+                            privacy_access="public",
+                            meta_marker_keys=[key],
+                        )
+            finally:
+                w.close()
+
+    def _turn_count(self, db: str) -> int:
+        conn = sqlite3.connect(db)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

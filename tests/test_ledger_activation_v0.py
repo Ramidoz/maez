@@ -49,7 +49,13 @@ class PredicateDoesNotFork(unittest.TestCase):
         for v in ("1", "true", "0", "", "off", "garbage"):
             with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": v}):
                 expected = writes_flag.ledger_writes_enabled()
-                self.assertEqual(LedgerWriter(wp).is_enabled(), expected, v)
+                # close() matters now: an enabled writer holds the
+                # single-owner latch until closed.
+                w = LedgerWriter(wp)
+                try:
+                    self.assertEqual(w.is_enabled(), expected, v)
+                finally:
+                    w.close()
                 self.assertEqual(reconcile._writes_enabled(), expected, v)
 
     def test_modules_no_longer_define_value_sets(self):

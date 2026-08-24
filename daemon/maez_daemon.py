@@ -11921,6 +11921,20 @@ class MaezDaemon:
 
         log_activation_startup_state()
         log_recall_stack_posture()
+        # Single serialized ledger owner (U5 council ruling, 2026-08-23):
+        # the daemon is THE process that holds the ledger's one long-lived
+        # writer; in-process try_write_turn callers route through it.
+        # Claiming is inert while MAEZ_LEDGER_WRITES is unset — the owner
+        # writer is lazy-constructed on the first enabled write, so this
+        # changes nothing about the unborn state. Deliberately at start(),
+        # not import: importing this module must never make a test or
+        # tooling process believe it owns the ledger.
+        try:
+            from core.ledger.owner import claim_ownership as _claim_ledger_owner
+
+            _claim_ledger_owner()
+        except Exception:
+            logger.warning("ledger ownership claim failed", exc_info=True)
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 

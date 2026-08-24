@@ -247,6 +247,23 @@ class DeadLetterTests(unittest.TestCase):
         self.assertTrue(any("LOST" in line for line in cm.output),
                         "a lost payload must be named as lost, loudly")
 
+    def test_dead_letter_status_is_machine_readable(self):
+        db = _fresh_db("deadletter_status")
+        self.assertEqual(
+            writer.dead_letter_status(db),
+            {"files": 0, "rows": 0, "oldest_ts": None, "bytes": 0},
+        )
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.writer", level="ERROR"):
+                writer.try_write_turn(
+                    db, "model_reply", "health probe payload", **_MODEL_STAMP
+                )
+        status = writer.dead_letter_status(db)
+        self.assertEqual(status["files"], 1)
+        self.assertEqual(status["rows"], 1)
+        self.assertIsNotNone(status["oldest_ts"])
+        self.assertGreater(status["bytes"], 0)
+
     def test_disabled_write_leaves_no_dead_letter(self):
         db = _fresh_db("deadletter_disabled")
         env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
