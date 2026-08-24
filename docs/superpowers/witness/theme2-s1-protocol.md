@@ -1,6 +1,6 @@
-# Theme 2 — S1 (phase truth) witness protocol, v7.11
+# Theme 2 — S1 (phase truth) witness protocol, v7.12
 
-Status: PROTOCOL v7.11. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
+Status: PROTOCOL v7.12. (v7.8, gate round 25: the last hand-authored census count is superseded — see §12 — and S2's O-6 scope is corrected there.) (Earlier headers drifted across string-edited bumps — title and status disagreed; this line is now the single authority.) Body = v1; §9 = v3, §10 = v4 (one v6.1
 correction), §11 = v5, §12 = v6.6.
 Binding once its gate passes.
 
@@ -11,6 +11,69 @@ gate rounds each return zero NEW forgeries against the judge and zero new
 defects found by execution.** One clean round is a coincidence; two is
 evidence the well is dry. This is the loop-until-dry standard this project
 already applies to discovery, applied to its own judge.
+
+**§0.5 — AMENDED 2026-08-23 by the third seat. §0.3's obligations 1 and 2
+are DEMOTED; the closure ritual is ENDED. This is the last revision of the
+stopping rule.**
+
+The third seat (retained verbatim as theme2-s1-council-ox-alpha.txt) attacked
+the synthesis the first two produced, and landed. Recorded because I said I
+would reopen rather than defend:
+
+**Obligation 2 (every clause has a mutation witness) is wrong as a closure
+criterion.** Three pathologies. (i) A clause guarding input an honest producer
+can never emit has no witness except a hand-forged fixture — so fully covering
+the anti-forgery clauses *requires forging*, and the measurement cannot
+distinguish "exercised by the real workflow" from "exercised by a hand-built
+fixture". (ii) Redundant fail-closed stages — which are desirable — produce
+immortal mutants, pushing us to delete defence-in-depth or invent a "shadowed"
+exemption that is itself unfalsifiable. (iii) Sensitivity is not attribution: a
+single golden-snapshot case turns red under every mutation, satisfying the
+metric while testing nothing. And mutation coverage proves a test detects
+tampering with a clause's TEXT, not that the clause encodes the CLAIM —
+wrong-but-witnessed passes. **Demoted to a one-off, time-boxed hygiene sweep
+over fail-closed paths only, with a specificity requirement (the witness must
+be the sole red test, or must assert that clause's distinct exit path).**
+
+**Obligation 1 (the judge emits its own trust table) is a mirror, not a
+measurement,** computed by the very code whose classification is in question,
+and it launders producer-asserted fields into authenticated-looking output so
+reviewers audit the table instead of the code. **Kept only in the form that
+survives the objection: the table is hashed into the frozen artifact set so a
+classification change appears as a diff, and it carries §0.4 verbatim. It is
+not assurance.**
+
+**Three shared premises no seat examined.** (a) All three accepted that the
+producer-asserted residue must be *classified* rather than *eliminated* —
+nobody put the architecture question on the table: have the judge re-execute
+the replay itself, or run the producer under a separate uid with kernel
+attestation, collapsing that residue toward zero. Taxonomy was the consolation
+prize for a decision never surfaced. (b) All three assumed formal closure is
+reachable and designed rules to reach it; the alternative — no closure, convert
+to a standing risk register — was invisible, most likely because a terminal
+PASS is wanted for the birth. (c) All three preserved an owner lever, and a
+mechanical amendment executed by the motivated party is still discretion in
+uniform. Also missed: property-based fuzzing of the judge finds the finite
+"fail-closed" well mechanically; human review rounds are an expensive
+subscription to the same product.
+
+**THE CLOSURE RITUAL IS REPLACED BY A RISK REGISTER.** No further adversarial
+rounds are scheduled. T5 is not "closed" and will not be; it carries a dated
+register of disclaimed classes (see the evidence pack's forgery_only_residue
+and the open items in theme2-s1-clause-coverage.md), reopened only on a
+producer-interface change or on the flag being un-dormanted. §0.4's licensed
+claim stands unchanged and unconditional — all three seats endorsed it, and it
+is the part with content.
+
+**Why this revision is the last one.** The third seat's closing datum: four
+seats and four protocol revisions adjudicating the stopping rule for reviewing
+the reviewer of a dormant-flag harness is itself the strongest argument for
+stopping. Rounds 25-33 found roughly fifty defects; that proves the method
+worked AND that it is finished. The yield curve now pays out forgery-class
+findings the licensed claim already disclaims, while U5/T2 — the actual gate on
+the latch — starves.
+
+**The next work is U5/T2**, not a tenth round.
 
 **§0.3 — ADOPTED 2026-08-23, by council ruling. This supersedes §0.1 and
 REJECTS §0.2.** Two independent seats were asked to rule, and both were told

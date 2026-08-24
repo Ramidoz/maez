@@ -1,0 +1,25 @@
+[0m
+> build · x-preview-f-free
+[0m
+**1. Mutation-witness measurement — achievable, with three priced-in pathologies.**
+
+- *Unreachable defensive clauses.* A clause guarding input the honest producer can never emit has no witness except a hand-forged report in a unit test. Irony: fully covering the anti-forgery clauses requires forging. The measurement therefore can't distinguish "exercised via honest workflow" from "exercised via hand-built fixture" — a clause can be fully covered and still fire on no real run.
+- *Shadowing.* Redundant fail-closed stages (desirable in a judge) yield immortal mutants. You're pushed to delete defense-in-depth or invent a "shadowed" exemption — and the exemption is unfalsifiable, absorbing whatever the metric misses.
+- *Sensitivity ≠ attribution.* One golden-snapshot test turns red under every mutation; metric satisfied, nothing tested. Without a specificity requirement (witness asserts this clause's distinct exit path, or is the sole red test), the count is vanity. Deeper: mutation coverage proves the test detects tampering with clause *text*, not that the clause encodes the *claim*. Wrong-but-witnessed passes.
+
+Usable as a time-boxed hygiene sweep restricted to fail-closed paths. Wrong as a closure criterion.
+
+**2. Self-emitted trust table.** It's computed by the very code whose classification is in question, so any misclassification reproduces with equal confidence — a mirror, not a measurement. Secondary failure: it launders (b)-type assertions into (a)-looking output; reviewers audit the table instead of the code. It drifts unobserved because it's metadata outside the witness regime — fixing that recurses infinitely. Only defensible role: hash it into the frozen artifacts so classification changes appear as diffs, and cover it with §0.4 verbatim. Standalone, net negative.
+
+**3. Groupthink — three shared premises nobody examined.**
+
+- All three seats accepted that the (b)-assertion residue must be *tolerated and classified*. Nobody asked whether the judge should stop consuming reports and re-execute the replay itself (or run the producer as a separate uid with kernel attestation), collapsing (b) toward zero. Taxonomy is the consolation prize for an architecture decision never surfaced.
+- All three assumed formal closure is reachable and designed rules to reach it. The honest alternative — no closure; convert to a standing risk register once residual findings fall entirely in disclaimed classes — was invisible, likely because a terminal PASS is wanted for the birth.
+- All three preserved an owner lever. Seat 2 mechanized it; a mechanical amendment executed by the motivated party is still discretion in uniform.
+- Missed cheaper instrument: property-based fuzzing of the judge (arbitrary malformed reports must fail closed). Round 33's "finite well" is exactly what coverage tooling finds mechanically; human rounds are the expensive subscription to the same product.
+
+**4. Dissent: yes, abandon the ritual; keep the core.** The adversary model — producer writes evidence and reads the judge — is fiction at one operator/one machine: if the operator is the adversary they own the judge too and nothing here binds; if honest, only the producer-bug class is live, which is ordinary engineering. Rounds 25–33 yielding fifty defects proves the method works and that it's finished; the yield curve now pays out forgery-class findings the license already disclaims, while U5/T2 — the actual gate — starves.
+
+Minimum honest replacement: (1) keep the three-run replay, hash-pinned artifacts, flag-off identity check; (2) one time-boxed sweep — delete the ten dead clauses, mutation-witness fail-closed paths only; (3) replace the closure ritual with a dated, signed risk register of disclaimed classes, reopened only on producer-interface change or un-dormanting; (4) redirect the effort to U5/T2.
+
+Moral seriousness cuts against expansion: where stakes are highest, the serious failure is a receipt that overstated what it established. §0.4 is right — finish the logic and shrink the ceremony until its cost matches its licensed claim. Meta-note: four seats and four protocol revisions adjudicating the stopping rule for reviewing the reviewer of a dormant-flag harness is itself the strongest datum for closing.
