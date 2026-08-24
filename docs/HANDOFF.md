@@ -1,4 +1,16 @@
-# Handoff — 2026-08-23 (evening). Supersedes the morning handoff.
+# Handoff — 2026-08-23/24. Supersedes the morning handoff.
+
+**2026-08-24 addendum — the owner delegated the three open decisions and
+the council ruled, unanimously (3-0 on each):** transport = durable
+admission SPOOL for every producer (no socket ever carries state);
+durability = `synchronous=FULL` now, unconditionally, no mode switch at
+birth; birth = stop-the-daemon hardened into a fail-closed maintenance
+lease (the current `_assert_quiesced` misses maez-web, migrates before
+the latch, and reconcile has no quiesce at all — verified). Full rulings
+with binding conditions:
+`docs/superpowers/witness/theme2-s2-owner-delegated-council-rulings.md`.
+The admission-protocol slice absorbs all three and is now ONE design;
+nothing else ships to the ledger before it. Everything below stands.
 
 Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes,
 `MAEZ_LEDGER_WRITES` unset, `MAEZ_S1_PHASE_TRUTH` unset. The daemon is
