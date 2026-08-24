@@ -63,6 +63,10 @@ _AUTHORITY_KWARGS = frozenset(
         "submission_id",
         "submitted_at",
         "parent_turn_id",
+        # Codex validation round (2026-08-24): tenant selection is
+        # identity authority — a surface envelope must never write as
+        # another tenant.
+        "tenant_id",
     }
 )
 
@@ -98,7 +102,36 @@ def _producer_dirs(spool_root: str, producer: str) -> dict[str, Path]:
         d = base / state
         d.mkdir(parents=True, exist_ok=True)
         dirs[state] = d
+    # Spool dirs are life-bytes (council ruling 1): 0o700, enforced —
+    # mkdir alone inherits the ambient umask (usually 022 → 0755).
+    for d in (Path(spool_root), base, *dirs.values()):
+        os.chmod(d, 0o700)
     return dirs
+
+
+def _envelope_digest(envelope: dict) -> str:
+    """Digest over the WHOLE submission (identity, kwargs, parent — not
+    just kind+text). The drainer recomputes and refuses a mismatch, so
+    an envelope edited after publication cannot commit as published
+    (Codex validation round, 2026-08-24)."""
+    core = {
+        key: envelope.get(key)
+        for key in (
+            "submission_id",
+            "producer",
+            "seq",
+            "submitted_at",
+            "turn_kind",
+            "raw_text",
+            "kwargs",
+            "parent_submission_id",
+        )
+    }
+    return hashlib.sha256(
+        json.dumps(
+            core, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _atomic_publish(target_dir: Path, name: str, payload: bytes) -> Path:
@@ -150,13 +183,8 @@ def enqueue(
         "raw_text": raw_text,
         "kwargs": _json_safe(kwargs),
         "parent_submission_id": parent_submission_id,
-        "payload_digest": hashlib.sha256(
-            json.dumps(
-                {"turn_kind": turn_kind, "raw_text": raw_text},
-                sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-            ).encode("utf-8")
-        ).hexdigest(),
     }
+    envelope["payload_digest"] = _envelope_digest(envelope)
     dirs = _producer_dirs(spool_root, producer)
     _atomic_publish(
         dirs["pending"],
@@ -198,11 +226,20 @@ def _resolve_submission(db_path: str, submission_id: str):
 def _ack(dirs: dict[str, Path], path: Path, submission_id: str,
          db_path: str) -> None:
     resolved = _resolve_submission(db_path, submission_id)
+    if resolved is None:
+        # Codex validation round (2026-08-24): a receipt with null
+        # turn/position/hash is a terminal ack that is NOT chain-bound.
+        # Leave the envelope pending — the redrive path re-resolves by
+        # identity (UNIQUE) and acks properly next pass.
+        raise RuntimeError(
+            f"cannot chain-bind ack for {submission_id}: committed turn "
+            "not resolvable right now; envelope stays pending for redrive"
+        )
     receipt = {
         "submission_id": submission_id,
-        "turn_id": resolved[0] if resolved else None,
-        "chain_position": resolved[1] if resolved else None,
-        "chain_hash": resolved[2] if resolved else None,
+        "turn_id": resolved[0],
+        "chain_position": resolved[1],
+        "chain_hash": resolved[2],
         "acked_at": time.time(),
     }
     # Receipt FIRST, then the envelope moves: a crash between the two
@@ -246,6 +283,15 @@ def drain_once(spool_root: str, db_path: str) -> dict:
                         raise ValueError("submission_id does not match filename")
                 except Exception as e:
                     _quarantine(dirs, path, f"unparseable envelope: {e!r}")
+                    refused += 1
+                    continue
+                if env.get("payload_digest") != _envelope_digest(env):
+                    _quarantine(
+                        dirs, path,
+                        "envelope digest mismatch: the submission was "
+                        "modified after publication — refusing to commit "
+                        "bytes nobody published",
+                    )
                     refused += 1
                     continue
                 entries.append((env, path, dirs))
@@ -356,9 +402,13 @@ def spool_status(spool_root: str) -> dict:
         counts = {}
         for state in _STATES:
             d = producer_dir / state
+            # Count SUBMISSIONS, not artifacts: receipts and error
+            # sidecars live beside the envelopes they describe.
             files = [f for f in d.iterdir()
                      if f.name.endswith(".json")
-                     and not f.name.startswith(".tmp-")] if d.is_dir() else []
+                     and not f.name.startswith(".tmp-")
+                     and not f.name.endswith(".receipt.json")
+                     and not f.name.endswith(".error.json")] if d.is_dir() else []
             counts[state] = len(files)
             if state == "pending":
                 out["pending_total"] += len(files)

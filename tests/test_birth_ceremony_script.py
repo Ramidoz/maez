@@ -609,13 +609,22 @@ class ForRealChoreographyTests(unittest.TestCase):
             self.assertTrue(later_stops)
 
     def test_unknown_classification_restarts_nothing(self):
+        # Post-transaction UNKNOWN (preflight sees a clean unborn db;
+        # the transaction fails leaving an unclassifiable one — staged
+        # via classify_commit side_effect, since the preflight refusal
+        # now blocks a pre-corrupted db from ever entering the ceremony).
         with TemporaryDirectory() as td:
-            canonical = Path(td) / "ledger.db"
-            canonical.write_bytes(b"garbage that is definitely not sqlite..")
             runner = FakeSystemctl(
                 {"maez.service": "active", "maez-web.service": "active"}
             )
-            rc, db = self._run_main(Path(td), runner)
+            with mock.patch(
+                "scripts.birth_ceremony.classify_commit",
+                side_effect=["NOT_COMMITTED", "UNKNOWN"],
+            ), mock.patch(
+                "scripts.birth_ceremony.run_transaction",
+                side_effect=RuntimeError("simulated mid-transaction death"),
+            ):
+                rc, db = self._run_main(Path(td), runner)
             self.assertEqual(rc, 1)
             receipt = self._receipt(db)
             self.assertEqual(
@@ -675,6 +684,175 @@ class ForRealChoreographyTests(unittest.TestCase):
             printed = "".join(c.args[0] for c in stderr.write.call_args_list)
             self.assertIn("do not re-birth", printed.lower())
             self.assertIn("--resume-services", printed)
+
+
+class ValidationRoundFixesTests(unittest.TestCase):
+    """Codex validation round (2026-08-24): confirmed findings, each
+    encoded as a test that fails on the pre-fix code."""
+
+    def test_for_real_refuses_unclassifiable_ledger_before_touching_anything(self):
+        # CRITICAL #2: preflight refused only COMMITTED; an UNKNOWN
+        # (unclassifiable) canonical db walked straight into the
+        # irreversible transaction.
+        with TemporaryDirectory() as td:
+            canonical = Path(td) / "ledger.db"
+            canonical.write_bytes(b"garbage that is definitely not sqlite..")
+            runner = FakeSystemctl()
+            with mock.patch(
+                "scripts.birth_ceremony.birth_phase.default_ledger_path",
+                return_value=canonical,
+            ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "sys.stderr"
+            ) as stderr:
+                rc = main(
+                    ["--for-real", "--s7-receipt-ref", "s7:t"], runner=runner
+                )
+            self.assertEqual(rc, 2)
+            self.assertEqual(
+                runner.calls, [],
+                "an unclassifiable ledger refuses BEFORE any unit is touched",
+            )
+            printed = "".join(c.args[0] for c in stderr.write.call_args_list)
+            self.assertIn("UNKNOWN", printed)
+
+    def test_classify_detects_logically_tampered_chain(self):
+        # CRITICAL #3: physical integrity_check is green after a logical
+        # tamper; classification must recompute the chain.
+        from scripts.birth_ceremony import classify_commit
+
+        with TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            run_transaction(
+                db_path=db,
+                s7_receipt_ref="s7:t",
+                owner_witness="rohit",
+                dry_run=True,
+            )
+            self.assertEqual(classify_commit(db), "COMMITTED")
+            conn = sqlite3.connect(db)
+            try:
+                # Simulate OFFLINE tampering (raw file edit): SQL-level
+                # UPDATE is blocked by the append-only trigger, so drop
+                # it first — the classifier must not depend on triggers
+                # that a file editor never runs. Same event, different
+                # witness: payload check alone stays green; only chain
+                # recomputation catches it.
+                for (trig,) in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger'"
+                ).fetchall():
+                    conn.execute(f"DROP TRIGGER {trig}")
+                conn.execute(
+                    "UPDATE turns SET raw_text = replace(raw_text,"
+                    " '\"rohit\"', '\"mallory\"')"
+                    " WHERE raw_text LIKE '%\"event\": \"birth\"%'"
+                    " OR raw_text LIKE '%\"event\":\"birth\"%'"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self.assertEqual(
+                classify_commit(db), "UNKNOWN",
+                "a logically tampered ledger must never classify COMMITTED",
+            )
+
+    def test_mute_web_is_its_own_terminal_state(self):
+        # MAJOR #4: web up but blind to the flag was labeled
+        # COMMITTED_ACTIVE — the exact silent-omission state Theme 2
+        # exists to name.
+        from scripts import birth_ceremony as bc
+
+        with TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            run_transaction(
+                db_path=db, s7_receipt_ref="s7:t",
+                owner_witness="rohit", dry_run=True,
+            )
+            runner = FakeSystemctl()
+            pids = {"maez.service": 4242, "maez-web.service": 5555}
+            with mock.patch(
+                "scripts.birth_ceremony._activation_flag_landed",
+                return_value=True,
+            ), mock.patch(
+                "scripts.birth_ceremony._unit_main_pid",
+                side_effect=lambda unit, runner=None: pids[unit],
+            ), mock.patch(
+                "scripts.birth_ceremony._pid_env_has_flag",
+                side_effect=lambda pid: pid == 4242,
+            ), mock.patch(
+                "scripts.birth_ceremony._latch_is_held", return_value=True
+            ):
+                state = bc._bring_up_after_commit(
+                    db, runner=runner, prompt=lambda *_: "",
+                    printer=lambda *_: None,
+                )
+            self.assertEqual(state, "COMMITTED_WEB_MUTE")
+
+    def test_restore_starts_only_what_was_running(self):
+        # MAJOR #13: restore must not activate a unit the owner had
+        # deliberately stopped before the ceremony.
+        with TemporaryDirectory() as td:
+            canonical = Path(td) / "ledger.db"
+            runner = FakeSystemctl(
+                {"maez.service": "active", "maez-web.service": "inactive"}
+            )
+            with mock.patch(
+                "scripts.birth_ceremony.birth_phase.default_ledger_path",
+                return_value=canonical,
+            ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "builtins.input", return_value="birth maez"
+            ), mock.patch(
+                "scripts.birth_ceremony.run_transaction",
+                side_effect=RuntimeError("transaction failed on purpose"),
+            ):
+                rc = main(
+                    ["--for-real", "--s7-receipt-ref", "s7:t"], runner=runner
+                )
+            self.assertEqual(rc, 1)
+            web_starts = [
+                c for c in runner.calls
+                if c[:3] == ["systemctl", "--user", "start"]
+                and c[3] == "maez-web.service"
+            ]
+            self.assertEqual(
+                web_starts, [],
+                "maez-web was NOT running before the ceremony — restore "
+                "must not start it",
+            )
+
+    def test_quiesce_refuses_on_probe_error(self):
+        # MAJOR #14: pgrep rc>=2 is a probe ERROR, not 'no process'.
+        from scripts.birth_ceremony import QuiesceRefused, _assert_quiesced
+
+        class BrokenPgrep(FakeSystemctl):
+            def __call__(self, cmd, **kwargs):
+                if cmd[0] == "pgrep":
+                    self.calls.append(list(cmd))
+                    return subprocess.CompletedProcess(
+                        cmd, 2, stdout="", stderr="pgrep: bad pattern"
+                    )
+                return super().__call__(cmd, **kwargs)
+
+        with TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            with self.assertRaisesRegex(QuiesceRefused, "(?i)probe|error"):
+                _assert_quiesced(db, runner=BrokenPgrep())
+
+    def test_resume_services_parses_without_receipt_ref(self):
+        # MINOR #17: the printed recovery command must parse as printed.
+        with TemporaryDirectory() as td:
+            canonical = Path(td) / "ledger.db"
+            canonical.touch()
+            with mock.patch(
+                "scripts.birth_ceremony.birth_phase.default_ledger_path",
+                return_value=canonical,
+            ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "sys.stderr"
+            ):
+                rc = main(["--resume-services"], runner=FakeSystemctl())
+            self.assertEqual(
+                rc, 2,
+                "must reach the uncommitted-ledger refusal, not argparse",
+            )
 
 
 class ResumeServicesTests(unittest.TestCase):

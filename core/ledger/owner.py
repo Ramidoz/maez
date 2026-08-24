@@ -64,7 +64,17 @@ def claim_ownership(db_path: str | None = None) -> None:
     if not ledger_writes_enabled():
         return
     with _lock:
-        _ensure_writer_locked(db_path)
+        try:
+            _ensure_writer_locked(db_path)
+        except BaseException:
+            # Codex validation round (2026-08-24): the marker must not
+            # outlive a failed claim. A process that could not take the
+            # latch is NOT the owner — leaving the marker set would make
+            # this_process_is_owner() true, so surfaces would route
+            # owner-direct and dead-letter instead of spooling, while
+            # the real owner lives elsewhere.
+            os.environ.pop(_OWNER_PID_ENV, None)
+            raise
 
 
 def _ensure_writer_locked(db_path: str) -> LedgerWriter:

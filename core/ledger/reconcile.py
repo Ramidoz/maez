@@ -23,6 +23,7 @@ never auto-repaired in this slice — claim extraction is slice 4.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -213,56 +214,88 @@ def reconcile(
         )
 
     repairs_enqueued = 0
+    repairs_refused = 0
     if not dry_run and total_orphans > 0:
+        import fcntl
+
         from core.ledger import spool
 
         spool_root = spool.default_spool_root(ledger_db_path)
-        for table, ts_col, fk_col, key in _FK_MAP:
-            ext_db = ext_paths[key]
-            post_era = _post_era_rows(ext_db, table, ts_col, era_ts)
-            row_by_id = {int(row["id"]): row for row in post_era}
-            for orphan_id in orphans[key]:
-                # Enqueue-drain window idempotency: the orphan census
-                # cannot see queued repairs (they are not committed
-                # yet), so a second apply before the owner drains would
-                # double-enqueue. The spool can see them — skip any
-                # orphan whose repair is already pending or refused.
-                if _repair_already_enqueued(spool_root, fk_col, orphan_id):
-                    continue
-                source_ts = row_by_id.get(orphan_id, {}).get("ts")
-                raw_text = json.dumps(
-                    {
-                        "event": "orphan_dependent_row",
-                        "reason": (
-                            "ledger_write_missing_after_crash_or_legacy_write"
-                        ),
-                        "source_db": key,
-                        "source_id": orphan_id,
-                        "source_table": table,
-                        "source_ts": source_ts,
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                spool.enqueue(
-                    spool_root,
-                    producer="reconcile",
-                    turn_kind="system_event",
-                    raw_text=raw_text,
-                    kwargs={
-                        "surface": "system",
-                        "raw_surface": "ledger_reconciliation",
-                        "taint_labels": ["self_generated"],
-                        "privacy_access": "public",
-                        fk_col: orphan_id,
-                    },
-                )
-                repairs_enqueued += 1
+        root = Path(spool_root)
+        root.mkdir(parents=True, exist_ok=True)
+        # Apply lock (Codex validation #11): the census+dedup below is
+        # check-then-enqueue; two concurrent applies could both pass the
+        # check and enqueue distinct submission ids for the same orphan,
+        # and the ledger has no uniqueness on the FK columns.
+        lock_fd = os.open(
+            root / "reconcile.apply.lock", os.O_CREAT | os.O_RDWR, 0o600
+        )
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(lock_fd)
+            raise RuntimeError(
+                "another reconcile --apply is running (apply lock held); "
+                "refusing to risk double-enqueued repairs"
+            )
+        try:
+            for table, ts_col, fk_col, key in _FK_MAP:
+                ext_db = ext_paths[key]
+                post_era = _post_era_rows(ext_db, table, ts_col, era_ts)
+                row_by_id = {int(row["id"]): row for row in post_era}
+                for orphan_id in orphans[key]:
+                    # Enqueue-drain window idempotency: the orphan
+                    # census cannot see queued repairs (not committed
+                    # yet); the spool can. A pending repair is skipped
+                    # silently; a REFUSED one is counted — it will never
+                    # drain, and calling it 'pending' would report a
+                    # permanent orphan as in-progress forever.
+                    already = _repair_already_enqueued(
+                        spool_root, fk_col, orphan_id
+                    )
+                    if already == "refused":
+                        repairs_refused += 1
+                        continue
+                    if already == "pending":
+                        continue
+                    source_ts = row_by_id.get(orphan_id, {}).get("ts")
+                    raw_text = json.dumps(
+                        {
+                            "event": "orphan_dependent_row",
+                            "reason": (
+                                "ledger_write_missing_after_crash_or_legacy_write"
+                            ),
+                            "source_db": key,
+                            "source_id": orphan_id,
+                            "source_table": table,
+                            "source_ts": source_ts,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    spool.enqueue(
+                        spool_root,
+                        producer="reconcile",
+                        turn_kind="system_event",
+                        raw_text=raw_text,
+                        kwargs={
+                            "surface": "system",
+                            "raw_surface": "ledger_reconciliation",
+                            "taint_labels": ["self_generated"],
+                            "privacy_access": "public",
+                            fk_col: orphan_id,
+                        },
+                    )
+                    repairs_enqueued += 1
+        finally:
+            os.close(lock_fd)
 
     if dry_run:
         verdict = "orphans_found" if total_orphans > 0 else "clean"
     elif repairs_enqueued > 0:
         verdict = "repairs_enqueued"
+    elif repairs_refused > 0:
+        verdict = "repairs_refused_needs_owner"
     elif total_orphans > 0:
         # Every orphan's repair is already sitting in the spool waiting
         # for the owner's drainer — honest state, not "clean".
@@ -275,17 +308,18 @@ def reconcile(
         "orphans_found": orphans,
         "state_c_turns": state_c,
         "repairs_enqueued": repairs_enqueued,
+        "repairs_refused": repairs_refused,
         "verdict": verdict,
     }
 
 
 def _repair_already_enqueued(
     spool_root: str, fk_col: str, orphan_id: int
-) -> bool:
-    """Is a repair for (fk_col, orphan_id) already sitting in the
-    reconcile producer's spool (pending or terminally refused)? Acked
-    entries need no check: their commit makes the row referenced, so the
-    orphan census already excludes them."""
+) -> str | None:
+    """'pending' | 'refused' | None for a repair of (fk_col, orphan_id)
+    already sitting in the reconcile producer's spool. Acked entries
+    need no check: their commit makes the row referenced, so the orphan
+    census already excludes them."""
     for state in ("pending", "refused"):
         directory = Path(spool_root) / "reconcile" / state
         if not directory.is_dir():
@@ -300,5 +334,5 @@ def _repair_already_enqueued(
             except (ValueError, OSError):
                 continue
             if (envelope.get("kwargs") or {}).get(fk_col) == orphan_id:
-                return True
-    return False
+                return state
+    return None

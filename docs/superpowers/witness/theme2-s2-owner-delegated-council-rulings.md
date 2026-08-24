@@ -301,6 +301,63 @@ split. And the frame itself: "how do lease and latch compose?"
 presupposed two primitives — the executed probe showed the best
 composition is that there is only one.
 
+## Sixth round (2026-08-24, post-implementation Codex validation): DO-NOT-SHIP → fixed under test
+
+The owner asked whether the built slices had been independently
+validated. They had not (only the design had) — so Codex (xhigh,
+read-only) reviewed the finished diffs as an adversarial validation
+lane. Verdict: DO-NOT-SHIP, 18 findings. Triage, per
+apply-judgment-don't-capitulate:
+
+**FIXED same session, each behind a test that failed on the pre-fix
+code (14 RED → GREEN), falsifier re-run GREEN 8/8:**
+- CRITICAL claim-marker leak: `claim_ownership` set the owner PID
+  marker before taking the latch; a failed eager claim left the process
+  believing it owned the ledger, so surfaces routed owner-direct and
+  dead-lettered instead of spooling. Marker now cleared on failure.
+- CRITICAL preflight hole: for-real refused only COMMITTED — an
+  UNKNOWN (unclassifiable) canonical db could enter the irreversible
+  transaction and be laundered into COMMITTED by migration. Now only
+  NOT_COMMITTED may proceed.
+- CRITICAL logical-tamper blindness: classification relied on PHYSICAL
+  integrity_check; it now recomputes the hash chain and requires the
+  anchor to be a system_event — a content-tampered ledger classifies
+  UNKNOWN.
+- Web-mute is its own terminal state (COMMITTED_WEB_MUTE), never folded
+  into green; restore starts only units that were running before the
+  ceremony; pgrep/fuser probe ERRORS refuse instead of reading clean;
+  `--resume-services` parses as printed (receipt-ref no longer global).
+- Spool: digest now covers the WHOLE submission and the drainer
+  verifies it (post-publish edits quarantine); `tenant_id` added to the
+  authority set; an ack that cannot be chain-bound stays pending
+  instead of moving to acked/ with null fields; spool_status counts
+  submissions not artifacts; dirs enforced 0o700.
+- Reconcile: terminally refused repairs get their own verdict
+  (`repairs_refused_needs_owner`, nonzero CLI exit) instead of
+  "pending forever"; apply takes an exclusive lock (check-then-enqueue
+  race between concurrent applies).
+- Falsifier F7: dormancy predicate now proves db BYTES unchanged, and
+  the note states its scope honestly (helper mechanism; handler wiring
+  is proven by the source-assertion tests).
+
+**DEFERRED / ANSWERED, recorded not hidden:**
+- Reply-without-parent when the user enqueue failed: KEPT deliberately —
+  parity with the daemon's existing contract (a failed user write still
+  persists the reply parentless); dropping Maez's own speech to punish a
+  parent I/O failure is the worse omission. Owner may overrule.
+- CLI honest-empty early return (user turn recorded, no reply): shape
+  predates this slice unchanged; belongs to the coherence campaign.
+- `seq` as time_ns not a durable producer counter: pre-existing
+  envelope design; only matters at compaction, which is ruled to wait
+  for verified binding — replay/compaction slice.
+- Dead-letter→spool convergence + cockpit surfacing "deferred not
+  encoded": scope disagreement — the owner's ordered slice list places
+  the replay organ and cockpit surfacing NEXT; recorded, not a defect
+  of this slice.
+- Daemon continuing startup after a failed ownership claim: with the
+  marker fix the process now honestly routes as non-owner; whether the
+  daemon should hard-fail at boot instead is an open lifecycle item.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE

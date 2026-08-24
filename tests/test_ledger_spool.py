@@ -147,6 +147,9 @@ class SpoolTests(unittest.TestCase):
         child_path = Path(root) / "web" / "pending" / f"{child_sid}.json"
         env = json.loads(child_path.read_text())
         env["parent_submission_id"] = parent_sid
+        # The digest covers the whole submission; a legitimate client
+        # republishing recomputes it (an unrecomputed edit quarantines).
+        env["payload_digest"] = spool._envelope_digest(env)
         child_path.write_text(json.dumps(env))
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             ledger_owner.claim_ownership()
@@ -253,6 +256,105 @@ class SpoolTests(unittest.TestCase):
             "dormant drain must move nothing",
         )
         self.assertEqual(len(_turns(db)), 0)
+
+
+class ValidationRoundFixesTests(unittest.TestCase):
+    """Codex validation round (2026-08-24): confirmed spool findings."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+
+    def tearDown(self):
+        ledger_owner._reset_for_tests()
+
+    def test_tampered_envelope_kwargs_are_quarantined(self):
+        # MAJOR #7: the digest covered only turn_kind+raw_text and was
+        # never verified — kwargs/parent could be edited after publish.
+        db, root = _fresh("tamper")
+        sid = spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="honest text", kwargs={"surface": "web_owner", **_STAMP},
+        )
+        path = Path(root) / "web" / "pending" / f"{sid}.json"
+        env = json.loads(path.read_text())
+        env["kwargs"]["privacy_access"] = "owner_private"  # post-publish edit
+        path.write_text(json.dumps(env))
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            report = spool.drain_once(root, db)
+        self.assertEqual(report["refused"], 1)
+        self.assertEqual(len(_turns(db)), 0)
+        err = json.loads(
+            (Path(root) / "web" / "refused" / f"{sid}.error.json").read_text()
+        )
+        self.assertIn("digest", err["error"].lower())
+
+    def test_tenant_id_is_authority(self):
+        # MAJOR #8: tenant_id is a writer kwarg — an envelope could
+        # select another tenant through the "authority-free" spool.
+        db, root = _fresh("tenant")
+        sid = spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="tenant hop",
+            kwargs={"surface": "web_owner", "tenant_id": "mallory", **_STAMP},
+        )
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            report = spool.drain_once(root, db)
+        self.assertEqual(report["refused"], 1)
+        self.assertEqual(len(_turns(db)), 0)
+        self.assertTrue(
+            (Path(root) / "web" / "refused" / f"{sid}.json").exists()
+        )
+
+    def test_ack_with_unresolvable_commit_stays_pending(self):
+        # MAJOR #15: a failed post-commit resolve wrote a null receipt
+        # and moved the envelope to acked/ anyway — a terminal ack that
+        # is not chain-bound.
+        db, root = _fresh("ackfail")
+        sid = spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="resolve fails", kwargs={"surface": "web_owner", **_STAMP},
+        )
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            with patch.object(spool, "_resolve_submission", return_value=None):
+                spool.drain_once(root, db)
+        self.assertTrue(
+            (Path(root) / "web" / "pending" / f"{sid}.json").exists(),
+            "an ack that cannot be chain-bound must stay pending for "
+            "redrive, never move to acked/ with null fields",
+        )
+        self.assertFalse(
+            (Path(root) / "web" / "acked" / f"{sid}.receipt.json").exists()
+        )
+
+    def test_spool_status_counts_submissions_not_artifacts(self):
+        # MINOR #16: receipts/error sidecars doubled the acked/refused
+        # counts.
+        db, root = _fresh("counts")
+        spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="counted once", kwargs={"surface": "web_owner", **_STAMP},
+        )
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            spool.drain_once(root, db)
+        status = spool.spool_status(root)
+        self.assertEqual(status["producers"]["web"]["acked"], 1)
+
+    def test_spool_dirs_are_0700(self):
+        # MINOR #18: life-byte directories must not be world-readable.
+        db, root = _fresh("perms")
+        spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="private", kwargs={"surface": "web_owner", **_STAMP},
+        )
+        for rel in ("web", "web/pending", "web/acked", "web/refused"):
+            mode = (Path(root) / rel).stat().st_mode & 0o777
+            self.assertEqual(
+                mode, 0o700, f"{rel} is {oct(mode)}, want 0o700"
+            )
 
 
 class StaleTempFileTests(unittest.TestCase):

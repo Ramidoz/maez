@@ -681,12 +681,21 @@ def main() -> int:
 
     dormant_env = _child_env()
     dormant_env.pop("MAEZ_LEDGER_WRITES", None)
+    # Dormancy is proven against DB BYTES, not just spool absence: a
+    # flag-off SQLite/meta write would be invisible to a spool-only
+    # predicate (Codex validation #6).
+    db7_bytes_before = hashlib.sha256(Path(db7).read_bytes()).hexdigest()
     dormant_p = subprocess.Popen(
         [sys.executable, __file__, "--role", "dormant_surface", db7],
         env=dormant_env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     dormant_out, dormant_err = dormant_p.communicate(timeout=300)
+    db7_untouched = (
+        hashlib.sha256(Path(db7).read_bytes()).hexdigest() == db7_bytes_before
+        and not os.path.exists(db7 + "-wal")
+        and not os.path.exists(db7 + "-shm")
+    )
 
     n7 = 250  # pairs per client; 2 clients -> 500 users + 500 replies
     surface_clients = [
@@ -735,6 +744,7 @@ def main() -> int:
     status7 = spool_mod.spool_status(root7)
     verdicts["F7_shipped_surface_wiring"] = {
         "dormant_control": dormant_out.strip(),
+        "dormant_db_bytes_untouched": db7_untouched,
         "clients_failed": client_errs,
         "enqueued_before_drain": enqueued7,
         "user_rows": len(users7),
@@ -745,6 +755,7 @@ def main() -> int:
         "integrity_check": integrity7,
         "green": (
             dormant_out.strip() == "DORMANT_OK"
+            and db7_untouched
             and not client_errs
             and enqueued7 == 4 * n7
             and len(users7) == 2 * n7
@@ -754,11 +765,15 @@ def main() -> int:
             and integrity7 == "ok"
         ),
         "note": (
-            "the exact helpers web/CLI ship with (submit_user_message + "
-            "persist_model_reply non-owner branch) ran in real non-owner "
-            "processes; the owner drainer committed parent-before-child; "
-            "every reply's parent_turn_id is its real user turn — and a "
-            "flag-unset surface left no trace at all"
+            "SCOPE: this arm proves the surface HELPER mechanism "
+            "(submit_user_message + persist_model_reply non-owner branch) "
+            "in real non-owner processes — it does not execute the flask/"
+            "CLI handlers themselves; that the handlers call these helpers "
+            "is proven by tests/test_ledger_surface_spool_wiring.py source "
+            "assertions. Proven here: drain commits parent-before-child, "
+            "every reply's parent_turn_id is its real user turn, and a "
+            "flag-unset surface leaves no spool trace AND no db-byte "
+            "change"
         ),
     }
 

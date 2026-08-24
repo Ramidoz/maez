@@ -1,10 +1,10 @@
 {
   "witness": "theme2-s2-falsifier",
   "replaces": "U5 (council ruling 2026-08-23: booleans, never p99)",
-  "ran_at": 1787592265.8661897,
-  "duration_s": 9.2,
+  "ran_at": 1787594203.2775242,
+  "duration_s": 9.0,
   "n": 20000,
-  "scratch": "/tmp/theme2_s2_falsifier_bu1qc30w",
+  "scratch": "/tmp/theme2_s2_falsifier_qf1vdd3w",
   "sqlite_version": "3.53.4",
   "verdict": "GREEN",
   "arms": {
@@ -89,6 +89,7 @@
     },
     "F7_shipped_surface_wiring": {
       "dormant_control": "DORMANT_OK",
+      "dormant_db_bytes_untouched": true,
       "clients_failed": [],
       "enqueued_before_drain": 1000,
       "user_rows": 500,
@@ -98,12 +99,12 @@
       "pending_after_drain": 0,
       "integrity_check": "ok",
       "green": true,
-      "note": "the exact helpers web/CLI ship with (submit_user_message + persist_model_reply non-owner branch) ran in real non-owner processes; the owner drainer committed parent-before-child; every reply's parent_turn_id is its real user turn \u2014 and a flag-unset surface left no trace at all"
+      "note": "SCOPE: this arm proves the surface HELPER mechanism (submit_user_message + persist_model_reply non-owner branch) in real non-owner processes \u2014 it does not execute the flask/CLI handlers themselves; that the handlers call these helpers is proven by tests/test_ledger_surface_spool_wiring.py source assertions. Proven here: drain commits parent-before-child, every reply's parent_turn_id is its real user turn, and a flag-unset surface leaves no spool trace AND no db-byte change"
     },
     "PC_positive_controls": {
       "bare_library_probe": "REFUSED ledger writer (MAEZ_LEDGER_WRITES enabled) requires SQLite >= 3.51.3 (WAL-reset fix); this process is linked against 3.46.1. Refusing \u2014 a concurrent WAL writer on this version risks the exact corruption the vendor build exists to prevent.",
       "bare_refused_naming_3513": true,
-      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_bu1qc30w/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
+      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_qf1vdd3w/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
       "held_latch_refused_naming_owner": true,
       "green": true
     }

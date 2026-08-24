@@ -322,6 +322,38 @@ class CliWiringTests(unittest.TestCase):
         self.assertNotIn("parent_turn_id", body)
 
 
+class FailedClaimUnclaimsTests(unittest.TestCase):
+    """Codex validation CRITICAL #1: claim_ownership set the PID marker
+    BEFORE constructing the latch-holding writer; on eager failure the
+    daemon catches and continues, leaving this_process_is_owner() true
+    while another process holds the latch — so replies take the
+    owner-direct branch and dead-letter instead of spooling."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def test_failed_eager_claim_does_not_leave_owner_marker(self):
+        import fcntl
+
+        db = _fresh("claimfail")
+        fd = os.open(f"{os.path.abspath(db)}.ownerlock",
+                     os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+                with self.assertRaises(Exception):
+                    ledger_owner.claim_ownership(db)
+                self.assertFalse(
+                    ledger_owner.this_process_is_owner(),
+                    "a failed latch claim must not leave this process "
+                    "believing it is the owner — surfaces would route "
+                    "owner-direct and dead-letter instead of spooling",
+                )
+        finally:
+            os.close(fd)
+
+
 class InDaemonProducersUnchangedTests(unittest.TestCase):
     """Grok overturn: the daemon and in-daemon Telegram keep synchronous
     owner writes — routing them through the spool is structurally wrong

@@ -151,6 +151,10 @@ def main(argv: list | None = None) -> int:
 
     if not args.apply and total_orphans > 0:
         exit_code = 1
+    elif args.apply and result.get("verdict") == "repairs_refused_needs_owner":
+        # A refused repair will never drain — reporting success would
+        # hide a permanent orphan behind a green exit.
+        exit_code = 1
     elif has_state_c:
         exit_code = 3
     else:

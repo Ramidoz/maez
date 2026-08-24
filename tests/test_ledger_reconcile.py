@@ -431,6 +431,64 @@ class OrphanRepairTests(unittest.TestCase):
         self.assertEqual(len(rows), 2, "exactly one repair row per orphan")
 
 
+class ValidationRoundFixesTests(unittest.TestCase):
+    """Codex validation round (2026-08-24): confirmed reconcile findings."""
+
+    def setUp(self):
+        from core.ledger import owner as ledger_owner
+
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def test_refused_repair_is_named_not_pending_forever(self):
+        # MAJOR #10: a terminally refused repair suppressed re-enqueue
+        # (correct) but reported repairs_pending_drain (a lie — nothing
+        # remains drainable).
+        from core.ledger import spool
+
+        ledger = _fresh_ledger("refused_named")
+        ext = _make_external_quartet("refused_named")
+        _seed_ledger_era(ledger, 0.0)
+        _seed_external_row(ext["audit_log_db_path"], "audit_log", "ts", 1.0)
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            first = reconcile.reconcile(ledger, dry_run=False, **ext)
+        self.assertEqual(first["repairs_enqueued"], 1)
+        # Simulate the owner quarantining the repair terminally.
+        pending = Path(spool.default_spool_root(ledger)) / "reconcile" / "pending"
+        refused = Path(spool.default_spool_root(ledger)) / "reconcile" / "refused"
+        refused.mkdir(parents=True, exist_ok=True)
+        for p in pending.iterdir():
+            p.rename(refused / p.name)
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            second = reconcile.reconcile(ledger, dry_run=False, **ext)
+        self.assertEqual(second["repairs_enqueued"], 0)
+        self.assertEqual(second["repairs_refused"], 1)
+        self.assertEqual(second["verdict"], "repairs_refused_needs_owner")
+
+    def test_concurrent_apply_is_excluded_by_lock(self):
+        # MAJOR #11: check-then-enqueue raced — two concurrent applies
+        # could both enqueue distinct submission ids for one orphan.
+        import fcntl
+
+        from core.ledger import spool
+
+        ledger = _fresh_ledger("apply_lock")
+        ext = _make_external_quartet("apply_lock")
+        _seed_ledger_era(ledger, 0.0)
+        _seed_external_row(ext["audit_log_db_path"], "audit_log", "ts", 1.0)
+        root = Path(spool.default_spool_root(ledger))
+        root.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(root / "reconcile.apply.lock",
+                          os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+                with self.assertRaisesRegex(RuntimeError, "(?i)apply.*running|another"):
+                    reconcile.reconcile(ledger, dry_run=False, **ext)
+        finally:
+            os.close(lock_fd)
+
+
 # ============ State C detect ============
 
 class StateCDetectionTests(unittest.TestCase):

@@ -75,6 +75,7 @@ NOT_COMMITTED_SERVICES_RESTORED = "NOT_COMMITTED_SERVICES_RESTORED"
 NOT_COMMITTED_SERVICES_DOWN = "NOT_COMMITTED_SERVICES_DOWN"
 COMMITTED_ACTIVE = "COMMITTED_ACTIVE"
 COMMITTED_WEB_DOWN = "COMMITTED_WEB_DOWN"
+COMMITTED_WEB_MUTE = "COMMITTED_WEB_MUTE"
 COMMITTED_SERVICES_DOWN = "COMMITTED_SERVICES_DOWN"
 COMMIT_STATUS_UNKNOWN_SERVICES_DOWN = "COMMIT_STATUS_UNKNOWN_SERVICES_DOWN"
 
@@ -171,19 +172,30 @@ def _assert_quiesced(db_path: Path, *, runner=subprocess.run) -> None:
                 f"REFUSED: {label} process is running (pids: "
                 f"{' '.join(probe.stdout.split())}) — quiesce first"
             )
+        if probe.returncode != 1:
+            # pgrep rc 1 means 'no process matched'; anything else is a
+            # PROBE ERROR — quiesce can only fail closed (Codex
+            # validation #14: an errored probe must never read as clean).
+            raise QuiesceRefused(
+                f"REFUSED: {label} probe error (pgrep rc="
+                f"{probe.returncode}, stderr="
+                f"{(probe.stderr or '').strip()!r}) — cannot prove quiesce"
+            )
     db_path = Path(db_path)
     for target in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
         if target.exists():
-            held = (
-                runner(
-                    ["fuser", str(target)], capture_output=True, text=True
-                ).returncode
-                == 0
+            probe = runner(
+                ["fuser", str(target)], capture_output=True, text=True
             )
-            if held:
+            if probe.returncode == 0:
                 raise QuiesceRefused(
                     f"REFUSED: a process holds {target} open — "
                     "no live writer allowed"
+                )
+            if probe.returncode != 1:
+                raise QuiesceRefused(
+                    f"REFUSED: fuser probe error on {target} (rc="
+                    f"{probe.returncode}) — cannot prove quiesce"
                 )
 
 
@@ -217,16 +229,31 @@ def classify_commit(db_path: Path | str) -> str:
         anchor = (row[0] or "").strip() if row else ""
         if not anchor:
             return "NOT_COMMITTED"
+        conn.row_factory = sqlite3.Row
         birth = conn.execute(
-            "SELECT raw_text FROM turns WHERE turn_id = ?", (anchor,)
+            "SELECT turn_kind, raw_text FROM turns WHERE turn_id = ?",
+            (anchor,),
         ).fetchone()
-        if birth is None:
+        if birth is None or birth["turn_kind"] != "system_event":
             return "UNKNOWN"
-        payload = json.loads(birth[0])
+        payload = json.loads(birth["raw_text"])
         if payload.get("event") != "birth":
             return "UNKNOWN"
+        # Logical chain verification (Codex validation #3): PRAGMA
+        # integrity_check is PHYSICAL — a tampered row's content leaves
+        # it green. Recompute the hash chain; any break is UNKNOWN.
+        from core.ledger import chain as _chain
+
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM turns ORDER BY chain_position"
+            ).fetchall()
+        ]
+        if _chain.verify_chain(rows):
+            return "UNKNOWN"
         return "COMMITTED"
-    except (sqlite3.Error, ValueError, TypeError):
+    except (sqlite3.Error, ValueError, TypeError, KeyError):
         return "UNKNOWN"
     finally:
         conn.close()
@@ -351,13 +378,28 @@ def _stop_unit(unit: str, *, runner=subprocess.run) -> None:
     runner(["systemctl", "--user", "stop", unit], capture_output=True, text=True)
 
 
-def _restore_services(*, runner=subprocess.run) -> bool:
-    """NOT_COMMITTED path: put the organism back the way we found it.
-    Daemon first; web only on top of a live daemon."""
-    if not _start_unit_once("maez.service", runner=runner):
-        _stop_unit("maez-web.service", runner=runner)
-        return False
-    return _start_unit_once("maez-web.service", runner=runner)
+def _restore_services(
+    *, runner=subprocess.run, initially_active: dict | None = None
+) -> bool:
+    """NOT_COMMITTED path: put the organism back the way we FOUND it —
+    a unit the owner had deliberately stopped before the ceremony must
+    stay stopped (Codex validation #13). Daemon first; web only on top
+    of a live daemon."""
+    if initially_active is None:
+        initially_active = {u: True for u in _WRITER_UNITS}
+    ok = True
+    daemon_wanted = initially_active.get("maez.service", True)
+    daemon_up = False
+    if daemon_wanted:
+        daemon_up = _start_unit_once("maez.service", runner=runner)
+        ok = ok and daemon_up
+    if initially_active.get("maez-web.service", True):
+        if daemon_wanted and not daemon_up:
+            _stop_unit("maez-web.service", runner=runner)
+            ok = False
+        else:
+            ok = _start_unit_once("maez-web.service", runner=runner) and ok
+    return ok
 
 
 def _activation_flag_landed() -> bool:
@@ -481,13 +523,17 @@ def _bring_up_after_commit(
         return COMMITTED_WEB_DOWN
     web_pid = _unit_main_pid("maez-web.service", runner=runner)
     if not (web_pid and _pid_env_has_flag(web_pid)):
+        # Codex validation #4: web-up-but-blind is the exact
+        # silent-omission state Theme 2 exists to name — it must be its
+        # own terminal state, never folded into green.
         printer(
-            "WARNING: maez-web.service does not see MAEZ_LEDGER_WRITES "
+            "maez-web.service is up but does NOT see MAEZ_LEDGER_WRITES "
             "in its process environment (it loads no EnvironmentFile) — "
             "web conversation turns will be silently omitted from "
             "admission until the owner wires the flag into a maez-web "
-            "drop-in. The birth stands; the web surface is mute."
+            "drop-in. The birth stands; the web surface is MUTE."
         )
+        return COMMITTED_WEB_MUTE
     return COMMITTED_ACTIVE
 
 
@@ -529,7 +575,10 @@ def _refuse(msg: str) -> int:
 def main(argv: list[str] | None = None, *, runner=subprocess.run) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, default=None)
-    parser.add_argument("--s7-receipt-ref", required=True)
+    # Required for dry-run and --for-real (checked below); NOT for
+    # --resume-services, which never writes — the printed recovery
+    # command must parse as printed (Codex validation #17).
+    parser.add_argument("--s7-receipt-ref", default="")
     parser.add_argument("--owner-witness", default="rohit")
     parser.add_argument("--for-real", action="store_true")
     parser.add_argument(
@@ -551,6 +600,8 @@ def _main_dry_run(args) -> int:
         return _refuse(
             "--dry-run requires --db-path (a temp path, never the real ledger)"
         )
+    if not args.s7_receipt_ref.strip():
+        return _refuse("--s7-receipt-ref is required — the act ties to the proof")
     try:
         result = run_transaction(
             db_path=args.db_path,
@@ -631,10 +682,22 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
             "a ceremony must not commit a decoy db while the daemon reads "
             "another"
         )
-    if classify_commit(db_path) == "COMMITTED":
+    if not args.s7_receipt_ref.strip():
+        return _refuse("--s7-receipt-ref is required — the act ties to the proof")
+    preflight = classify_commit(db_path)
+    if preflight == "COMMITTED":
         return _refuse(
             "REFUSED: this ledger is already birthed — we do not re-birth. "
             "If the bring-up was interrupted, run --resume-services."
+        )
+    if preflight != "NOT_COMMITTED":
+        # Codex validation #2: an unclassifiable canonical db must never
+        # enter the irreversible transaction — migration would stamp the
+        # Maez schema onto whatever it is and launder it into COMMITTED.
+        return _refuse(
+            f"REFUSED: the canonical ledger classifies {preflight} — "
+            "cannot prove it is an unborn Maez ledger. Hands off; "
+            "recover/classify by hand before any ceremony."
         )
     typed = input(f'Type "{_CONFIRM_PHRASE}" to proceed: ').strip().lower()
     if typed != _CONFIRM_PHRASE:
@@ -650,6 +713,18 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
         "s7_receipt_ref": args.s7_receipt_ref,
     }
     _write_receipt(db_path, receipt)
+
+    # Record what was actually running BEFORE we touch anything, so a
+    # restore never activates a unit the owner had deliberately stopped
+    # (Codex validation #13). An unanswerable probe refuses pre-stop.
+    try:
+        initially_active = {
+            unit: _unit_active_state(unit, runner=runner) == "active"
+            for unit in _WRITER_UNITS
+        }
+    except RuntimeError as exc:
+        return _refuse(f"REFUSED: cannot read unit states before stopping: {exc}")
+    receipt["initially_active"] = initially_active
 
     # Stop web first (it Wants= the daemon but survives it), then the
     # daemon. Quiesce is then ASSERTED inside run_transaction.
@@ -697,7 +772,9 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
     elif verdict == "NOT_COMMITTED":
         state = (
             NOT_COMMITTED_SERVICES_RESTORED
-            if _restore_services(runner=runner)
+            if _restore_services(
+                runner=runner, initially_active=initially_active
+            )
             else NOT_COMMITTED_SERVICES_DOWN
         )
     else:
@@ -720,6 +797,12 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
         return 0
 
     loud = {
+        COMMITTED_WEB_MUTE: (
+            "birth COMMITTED; daemon is live and owns the ledger; maez-web "
+            "is UP but cannot see MAEZ_LEDGER_WRITES (no EnvironmentFile) "
+            "— every web turn will be SILENTLY OMITTED from admission. "
+            "Wire the flag into a maez-web drop-in and restart maez-web."
+        ),
         COMMITTED_WEB_DOWN: (
             "birth COMMITTED; daemon is live and owns the ledger; maez-web "
             "FAILED to start and was left stopped. Fix web, then "

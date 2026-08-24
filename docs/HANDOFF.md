@@ -54,6 +54,20 @@ ruling. **GREEN all 8 arms at n=20000** (9.2 s; report JSON beside it).
 Battery: 380 tests green across the 23 named ledger/ceremony/surface
 files.
 
+**Validation round (sixth).** A post-implementation Codex xhigh
+read-only review of the finished diffs returned DO-NOT-SHIP with 18
+findings; 3 CRITICALs and 8 MAJOR/MINORs were confirmed and FIXED same
+session behind tests that failed on the pre-fix code (claim-marker leak
+on failed ownership claim; UNKNOWN ledger admitted to the birth
+transaction; logical-tamper-blind classification — chain now
+recomputed; COMMITTED_WEB_MUTE terminal state; restore respects
+pre-ceremony unit states; probe errors refuse; whole-envelope digest
+verified at drain; tenant_id is authority; unresolvable acks stay
+pending; honest refused-repair verdict + apply lock; falsifier
+dormancy proves db bytes). Deferred findings are recorded with reasons
+in the rulings doc's sixth round. Falsifier re-ran GREEN 8/8 after the
+fixes; battery 394 green.
+
 **Council record.** Fifth round appended to
 `theme2-s2-owner-delegated-council-rulings.md`: three seats (stealth
 endpoint down twice), two author probes, Q1 upheld 2-1, Q2 resolved as
