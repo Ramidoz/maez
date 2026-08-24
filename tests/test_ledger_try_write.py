@@ -152,5 +152,114 @@ class TryWriteTurnTests(unittest.TestCase):
         self.assertIsNotNone(tid2)
 
 
+class DeadLetterTests(unittest.TestCase):
+    """A failed ENABLED write must never be silent: the payload is durably
+    dead-lettered next to the DB and the failure logs at ERROR. The
+    never-raise contract for the reply path is unchanged."""
+
+    def test_failed_enabled_write_is_dead_lettered(self):
+        db = _fresh_db("deadletter")
+        dead = Path(writer.dead_letter_path(db))
+        self.assertFalse(dead.exists())
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.writer", level="ERROR") as cm:
+                # model_reply without model_id → ValueError inside write_turn.
+                tid = writer.try_write_turn(
+                    db, "model_reply", "a life event that must not vanish",
+                    **_MODEL_STAMP,
+                )
+        self.assertIsNone(tid)
+        self.assertTrue(
+            dead.exists(),
+            "failed enabled write must leave a durable dead-letter record",
+        )
+        import json
+        lines = dead.read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+        record = json.loads(lines[0])
+        self.assertEqual(record["turn_kind"], "model_reply")
+        self.assertEqual(record["raw_text"], "a life event that must not vanish")
+        self.assertIn("error", record)
+        # Replay identity + classification: a deterministic validation
+        # refusal must be marked non-replayable, with an idempotency id.
+        self.assertEqual(record["category"], "refused")
+        self.assertTrue(record["event_id"])
+        self.assertTrue(any("shadow ledger write failed" in line
+                            for line in cm.output))
+        self.assertTrue(any("deadletter" in line for line in cm.output),
+                        "ERROR log must name the dead-letter path")
+
+    def test_set_typed_kwargs_do_not_break_dead_letter(self):
+        """write_turn accepts set-typed taint_labels; the dead-letter
+        serializer must coerce them losslessly, not crash or stringify."""
+        db = _fresh_db("deadletter_set")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.writer", level="ERROR"):
+                tid = writer.try_write_turn(
+                    db, "model_reply", "set-typed stamp payload",
+                    taint_labels={"self_generated", "a_second_label"},
+                    privacy_access="public",
+                )
+        self.assertIsNone(tid)
+        import json
+        record = json.loads(
+            Path(writer.dead_letter_path(db)).read_text().splitlines()[0]
+        )
+        self.assertEqual(
+            record["kwargs"]["taint_labels"],
+            ["a_second_label", "self_generated"],
+        )
+
+    def test_writer_init_failure_is_dead_lettered(self):
+        # A directory as db_path makes sqlite3.connect fail at init.
+        dbdir = Path(_TEST_DB_DIR) / f"init_fail_{os.urandom(4).hex()}"
+        dbdir.mkdir()
+        dead = Path(writer.dead_letter_path(str(dbdir)))
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.writer", level="ERROR"):
+                tid = writer.try_write_turn(
+                    str(dbdir), "user_message", "init-failure payload",
+                    **_OWNER_STAMP,
+                )
+        self.assertIsNone(tid)
+        self.assertTrue(
+            dead.exists(),
+            "init failure of an enabled writer must dead-letter the payload",
+        )
+        import json
+        record = json.loads(dead.read_text().splitlines()[0])
+        self.assertEqual(record["raw_text"], "init-failure payload")
+        # sqlite refusing to open a directory is environmental, not a
+        # payload refusal — it must be classified as a replay candidate.
+        self.assertEqual(record["category"], "failed")
+
+    def test_unwritable_dead_letter_logs_critical_and_never_raises(self):
+        db = _fresh_db("deadletter_blocked")
+        # Occupy the dead-letter path with a directory so append fails.
+        Path(writer.dead_letter_path(db)).mkdir()
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.writer", level="CRITICAL") as cm:
+                tid = writer.try_write_turn(
+                    db, "model_reply", "payload with blocked dead-letter",
+                    **_MODEL_STAMP,
+                )
+        self.assertIsNone(tid)
+        self.assertTrue(any("LOST" in line for line in cm.output),
+                        "a lost payload must be named as lost, loudly")
+
+    def test_disabled_write_leaves_no_dead_letter(self):
+        db = _fresh_db("deadletter_disabled")
+        env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
+        env["MAEZ_LEDGER_WRITES"] = "0"
+        with patch.dict(os.environ, env, clear=True):
+            tid = writer.try_write_turn(
+                db, "model_reply", "dormant", **_MODEL_STAMP,
+            )
+        self.assertIsNone(tid)
+        import glob
+        self.assertEqual(glob.glob(writer.dead_letter_glob(db)), [],
+                         "dormant state must not grow new files")
+
+
 if __name__ == "__main__":
     unittest.main()

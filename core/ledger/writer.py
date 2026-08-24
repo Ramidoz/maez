@@ -46,6 +46,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -208,6 +209,16 @@ class LedgerWriter:
         self._rehearsal_mode = rehearsal_mode
         self._lock = threading.Lock()
         self._enabled = self._parse_flag()
+        if self._enabled:
+            # An ENABLED writer refuses to construct on a SQLite inside the
+            # WAL-reset corruption window (< 3.51.3) instead of merely
+            # reporting it at boot — a process launched without the vendored
+            # library (a bare shell, unlike the systemd units) must not be
+            # able to write the life record on a vulnerable engine. Disabled
+            # writers are untouched so the flag-dormant state is unchanged.
+            from core.infra.sqlite_runtime import require_fixed
+
+            require_fixed("ledger writer (MAEZ_LEDGER_WRITES enabled)")
         # check_same_thread=False so the threading.Lock is the
         # serialization point, not Python's per-connection thread guard.
         # isolation_level=None gives manual transaction control so we can
@@ -574,6 +585,146 @@ class LedgerWriter:
 # ---------------------------------------------------------------------------
 
 
+def dead_letter_path(db_path: str) -> str:
+    """Sidecar file where this process's failed ENABLED writes are durably
+    preserved. Per-process (pid suffix) so concurrent failing processes
+    never interleave partial lines — a shared append file would quietly
+    rebuild the multi-writer problem in JSONL. Discovery uses
+    :func:`dead_letter_glob`."""
+    return f"{db_path}.deadletter.{os.getpid()}.jsonl"
+
+
+def dead_letter_glob(db_path: str) -> str:
+    """Glob matching every process's dead-letter sidecar for this DB."""
+    return f"{db_path}.deadletter.*.jsonl"
+
+
+#: Deterministic writer refusals (bad payload / provenance). These are
+#: preserved as evidence but must never be blindly re-submitted by a
+#: replayer — resubmitting bytes the writer refused at the door would
+#: invert the refusal semantics. Environmental failures are "failed" and
+#: are the replay candidates.
+_REFUSAL_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    taint_stamping.TaintStampingRefusal,
+)
+
+
+def _json_safe(obj):
+    """Lossless-enough JSON coercion for dead-letter kwargs: sets become
+    sorted lists (write_turn accepts set-typed taint_labels; str() of a
+    set would be unreplayable), unknown objects become repr strings."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        vals = [_json_safe(v) for v in obj]
+        try:
+            return sorted(vals)
+        except TypeError:
+            return sorted(vals, key=repr)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return repr(obj)
+
+
+def _dead_letter(
+    db_path: str,
+    turn_kind: str,
+    raw_text: str | None,
+    kwargs: dict,
+    error: BaseException,
+    stage: str,
+) -> str:
+    """Append the full failed payload to the dead-letter sidecar, fsynced.
+
+    The Theme-2 claim is that the ledger cannot omit a life. A write that
+    fails while writes are enabled must therefore leave the payload bytes
+    somewhere durable — never only a log line. Raises on failure; the
+    caller decides how loud losing the payload has to be.
+
+    Mechanics chosen against known failure modes: one os.write() of the
+    whole line (a buffered writer may split a line across syscalls),
+    fsync of the file, fsync of the parent directory on first creation
+    (else the file's existence itself is not crash-durable), 0o600 like
+    the DB. ``event_id`` is minted here so replay/reconcile has an
+    idempotency identity; ``category`` separates deterministic refusals
+    (never blindly replayable) from environmental failures (replay
+    candidates) so a replayer cannot poison itself.
+
+    Honest limits, stated: this file shares the DB's filesystem, so the
+    failures most likely to break the DB (ENOSPC, read-only remount)
+    likely break it too — that is the CRITICAL branch; and its rows are
+    outside the chain until a replayer re-appends them with explicit
+    reconstruction provenance.
+    """
+    record = {
+        "event_id": uuid.uuid4().hex,
+        "ts": time.time(),
+        "pid": os.getpid(),
+        "stage": stage,
+        "category": (
+            "refused" if isinstance(error, _REFUSAL_ERRORS) else "failed"
+        ),
+        "turn_kind": turn_kind,
+        "raw_text": raw_text,
+        "kwargs": _json_safe(kwargs),
+        "error": repr(error),
+    }
+    line = (
+        json.dumps(
+            record, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        + "\n"
+    ).encode("utf-8")
+    path = dead_letter_path(db_path)
+    existed = os.path.exists(path)
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, line)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if not existed:
+        dfd = os.open(os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    return path
+
+
+def _report_dropped_write(
+    db_path: str,
+    turn_kind: str,
+    raw_text: str | None,
+    kwargs: dict,
+    error: BaseException,
+    stage: str,
+) -> None:
+    """Failed enabled write: dead-letter the payload, log ERROR; if even the
+    dead-letter append fails, say the payload is LOST at CRITICAL. Never
+    raises — the reply path ships regardless."""
+    prefix = (
+        "shadow ledger writer init failed"
+        if stage == "init"
+        else "shadow ledger write failed"
+    )
+    try:
+        path = _dead_letter(db_path, turn_kind, raw_text, kwargs, error, stage)
+        _LOGGER.error(
+            "%s (kind=%r): %s — payload dead-lettered to %s",
+            prefix, turn_kind, error, path,
+        )
+    except Exception as dl_error:
+        _LOGGER.critical(
+            "%s (kind=%r): %s — AND the dead-letter append failed (%s); "
+            "the payload is LOST",
+            prefix, turn_kind, error, dl_error,
+        )
+
+
 def try_write_turn(
     db_path: str,
     turn_kind: str,
@@ -584,8 +735,13 @@ def try_write_turn(
 
     Daemon callers use this so a ledger failure (writer disabled, DB
     missing, validation error, SQL error, anything) does NOT break the
-    user-facing reply path. On any exception, logs a warning at
-    core.ledger.writer level and returns None.
+    user-facing reply path.
+
+    A failure while writes are ENABLED is never silent: the full payload
+    is dead-lettered to ``<db_path>.deadletter.jsonl`` (fsynced, for later
+    reconcile/replay) and the failure logs at ERROR; if even the
+    dead-letter append fails, the loss is named at CRITICAL. The disabled
+    path is a silent no-op exactly as before.
 
     Returns the new turn_id on success, or None on disabled-writer /
     failure. The single-call shape keeps the daemon plumbing to one
@@ -602,21 +758,12 @@ def try_write_turn(
     try:
         w = LedgerWriter(db_path)
     except Exception as e:
-        _LOGGER.warning(
-            "shadow ledger writer init failed (kind=%r, path=%r): %s",
-            turn_kind,
-            db_path,
-            e,
-        )
+        _report_dropped_write(db_path, turn_kind, raw_text, kwargs, e, "init")
         return None
     try:
         return w.write_turn(turn_kind, raw_text, **kwargs)
     except Exception as e:
-        _LOGGER.warning(
-            "shadow ledger write failed (kind=%r): %s",
-            turn_kind,
-            e,
-        )
+        _report_dropped_write(db_path, turn_kind, raw_text, kwargs, e, "write")
         return None
     finally:
         try:

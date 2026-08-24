@@ -70,8 +70,23 @@ def _marker_payload() -> str:
     )
 
 
+def _meta_connect(db_path: str) -> sqlite3.Connection:
+    """Fenced connect for the marker meta rows, matching the writer's
+    discipline (explicit 5000 ms busy_timeout, manual transactions).
+
+    2026-08-23 probe note: Python's ``sqlite3.connect`` default
+    ``timeout=5.0`` already installs a busy handler, so the previous bare
+    connect did NOT fail at 0 ms under contention as the U5 council
+    finding claimed. The explicit pragma pins the fencing against
+    parameter drift instead of relying on a library default.
+    """
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
 def _marker_already_written(db_path: str) -> bool:
-    conn = sqlite3.connect(db_path)
+    conn = _meta_connect(db_path)
     try:
         row = conn.execute(
             "SELECT value FROM meta WHERE key = ?",
@@ -83,13 +98,20 @@ def _marker_already_written(db_path: str) -> bool:
 
 
 def _record_marker_turn_id(db_path: str, marker_turn_id: str) -> None:
-    conn = sqlite3.connect(db_path)
+    conn = _meta_connect(db_path)
     try:
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (MODEL_REPLY_PERSISTENCE_MARKER_KEY, marker_turn_id),
-        )
-        conn.commit()
+        # BEGIN IMMEDIATE declares write intent up front so lock
+        # acquisition happens here, under the busy handler, not at COMMIT.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                (MODEL_REPLY_PERSISTENCE_MARKER_KEY, marker_turn_id),
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     finally:
         conn.close()
 

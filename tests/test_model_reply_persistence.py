@@ -350,5 +350,60 @@ class MemoryProjectionRulesModelReplyScopeTests(unittest.TestCase):
         self.assertIn("warn_model_reply_persistence_skip", src)
 
 
+class MarkerMetaFencingTests(unittest.TestCase):
+    """Pin the marker meta-write's behavior under write contention.
+
+    HONESTY NOTE (2026-08-23): the U5 council finding claimed the previous
+    bare ``sqlite3.connect`` here "fails at 0 ms under contention". A live
+    probe falsified that — Python's default ``timeout=5.0`` installs a busy
+    handler, so the old code already waited. This test therefore PINS the
+    required behavior (wait out a short write lock, land exactly once); it
+    did not fail before the explicit fencing landed. The fencing makes the
+    discipline explicit (busy_timeout pragma + BEGIN IMMEDIATE) instead of
+    an inherited library default.
+    """
+
+    def test_marker_meta_write_waits_out_contention(self):
+        import threading
+        import time as _time
+
+        db = _fresh_db("marker_fencing")
+        from core.ledger import model_reply_persistence as mrp
+
+        blocker = sqlite3.connect(
+            db, isolation_level=None, check_same_thread=False
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('blk', 'x')"
+        )
+
+        def _release():
+            _time.sleep(0.5)
+            blocker.execute("COMMIT")
+            blocker.close()
+
+        t = threading.Thread(target=_release)
+        t.start()
+        t0 = _time.monotonic()
+        try:
+            mrp._record_marker_turn_id(db, "marker-under-contention")
+        finally:
+            t.join()
+        waited = _time.monotonic() - t0
+        self.assertGreaterEqual(
+            waited, 0.4, "the write must have waited for the lock, not raced it"
+        )
+        conn = sqlite3.connect(db)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (mrp.MODEL_REPLY_PERSISTENCE_MARKER_KEY,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("marker-under-contention",))
+
+
 if __name__ == "__main__":
     unittest.main()
