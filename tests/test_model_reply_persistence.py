@@ -62,8 +62,16 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
             )
         persist_model_reply = mod.persist_model_reply
 
+        # This test models the DAEMON's owner-private path: since the
+        # 2026-08-24 council rulings, a NON-owner process routes replies
+        # to the admission spool instead — so claim ownership like the
+        # daemon does at startup.
+        from core.ledger import owner as ledger_owner
+
         db = _fresh_db("helper")
+        self.addCleanup(ledger_owner._reset_for_tests)
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
             parent = mod.write_user_message_for_test(
                 db, "owner asks", surface="telegram_text",
             )
@@ -216,7 +224,12 @@ class WebModelReplyPersistenceWiringTests(unittest.TestCase):
         persist_window = body[persist_idx:persist_idx + 850]
         self.assertIn("if owner_bridge:", body[audit_idx:persist_idx])
         self.assertIn('surface="web_owner"', persist_window)
-        self.assertIn("parent_turn_id=_owner_user_msg_turn_id", persist_window)
+        # Council rulings 2026-08-24: web is a non-owner surface; parent
+        # linkage is async via the spool submission id, never a turn_id.
+        self.assertIn(
+            "parent_submission_id=_owner_user_msg_submission_id",
+            persist_window,
+        )
         self.assertIn("evidence_envelope=_evidence_envelope", persist_window)
         self.assertIn("build_model_reply_audit_verdict", persist_window)
 
@@ -246,7 +259,11 @@ class CliModelReplyPersistenceWiringTests(unittest.TestCase):
 
         window = body[persist_idx - 250:persist_idx + 850]
         self.assertIn('surface="cli"', window)
-        self.assertIn("parent_turn_id=_cli_user_msg_turn_id", window)
+        # Council rulings 2026-08-24: the CLI is a non-owner surface;
+        # parent linkage is async via the spool submission id.
+        self.assertIn(
+            "parent_submission_id=_cli_user_msg_submission_id", window,
+        )
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn("final_reply", window)
         self.assertIn("if _cli_ledger_db_path and _cli_audit_ran:", window)

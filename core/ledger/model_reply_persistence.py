@@ -27,6 +27,7 @@ __all__ = [
     "MODEL_REPLY_PERSISTENCE_MARKER_KEY",
     "build_model_reply_audit_verdict",
     "persist_model_reply",
+    "submit_user_message",
     "warn_model_reply_persistence_skip",
     "write_user_message_for_test",
 ]
@@ -118,6 +119,53 @@ def _ensure_persistence_marker(db_path: str) -> None:
         )
 
 
+def submit_user_message(
+    db_path: str,
+    raw_text: str,
+    *,
+    surface: str,
+) -> str | None:
+    """Durably admit one surface user_message through the spool.
+
+    NON-OWNER surfaces only (web, CLI — council ruling 2026-08-24): the
+    surface never opens the ledger; it publishes an envelope and the
+    daemon owner drains. Returns the client-minted submission_id (the
+    reply's ``parent_submission_id``), or None.
+
+    Flag-gated so dormancy stays exact: with MAEZ_LEDGER_WRITES unset
+    there is NO trace — no spool file, no directory. Pre-birth
+    conversations must not pile into the spool and drain into the ledger
+    at birth as pre-birth life. Never raises: the reply path ships
+    regardless of what happens here.
+    """
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    if not ledger_writes_enabled():
+        return None
+    try:
+        from core.ledger import spool as _spool
+
+        return _spool.enqueue(
+            _spool.default_spool_root(db_path),
+            producer=surface,
+            turn_kind="user_message",
+            raw_text=raw_text,
+            kwargs={
+                "surface": surface,
+                "taint_labels": ["owner_utterance"],
+                "privacy_access": "public",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — admission is best-effort
+        _warn_once(
+            f"user-msg-enqueue:{surface}",
+            "user_message spool enqueue failed for surface=%s: %s",
+            surface,
+            exc,
+        )
+        return None
+
+
 def build_model_reply_audit_verdict(
     *,
     surface: str,
@@ -136,12 +184,48 @@ def build_model_reply_audit_verdict(
     }
 
 
+def _model_reply_kwargs(
+    *,
+    surface: str,
+    model_id: str,
+    prompt_material: Any,
+    soul_material: Any,
+    evidence_envelope: dict | None,
+    audit_verdict: dict,
+    memory_read_ids: list | None,
+    audit_trace_label: str | None,
+    audit_trace_value_schema: int | None,
+    audit_trace_metadata_shape: int | None,
+    audit_trace_lineage: dict | None,
+) -> dict:
+    """One write shape for both paths (owner-direct and spool) so the
+    contract cannot fork by transport. Parent linkage is deliberately
+    NOT here: it is parent_turn_id on the owner path and
+    parent_submission_id on the envelope."""
+    return {
+        "surface": surface,
+        "model_id": model_id,
+        "prompt_hash": _sha256_material(prompt_material),
+        "soul_hash": _sha256_material(soul_material),
+        "evidence_envelope": evidence_envelope,
+        "audit_verdict": audit_verdict,
+        "memory_read_ids": memory_read_ids or [],
+        "audit_trace_label": audit_trace_label,
+        "audit_trace_value_schema": audit_trace_value_schema,
+        "audit_trace_metadata_shape": audit_trace_metadata_shape,
+        "audit_trace_lineage": audit_trace_lineage,
+        "taint_labels": ["self_generated"],
+        "privacy_access": "public",
+    }
+
+
 def persist_model_reply(
     *,
     db_path: str,
     raw_text: str,
     surface: str,
-    parent_turn_id: str | None,
+    parent_turn_id: str | None = None,
+    parent_submission_id: str | None = None,
     model_id: str,
     prompt_material: Any,
     soul_material: Any,
@@ -153,23 +237,87 @@ def persist_model_reply(
     audit_trace_metadata_shape: int | None = None,
     audit_trace_lineage: dict | None = None,
 ) -> str | None:
-    """Append an audited owner-private reply as a ledger model_reply.
+    """Persist an audited owner-private reply as a ledger model_reply.
 
-    The helper is intentionally best-effort via :func:`try_write_turn`:
-    ledger failures must not block the user-facing reply path. The
-    payload is post-audit text only.
+    Two paths, chosen by PROCESS identity, not surface name (council
+    rulings 2026-08-24, incl. the Grok overturn):
+
+    - Owner process (daemon, in-daemon Telegram): synchronous write
+      through the owner's serialized writer; parent linkage is
+      ``parent_turn_id``. Returns the committed turn_id.
+    - Non-owner process (web, CLI): the reply becomes a durable spool
+      envelope; parent linkage is ``parent_submission_id`` (the id the
+      surface got when it enqueued the user_message). Returns None —
+      the commit happens at drain, never at the surface, and the reply
+      path never blocks on the ledger.
+
+    Best-effort either way: ledger/spool failures must not block the
+    user-facing reply path. The payload is post-audit text only.
     """
     if not raw_text or evidence_envelope is None:
         return None
 
-    # Ledger state honesty (v0). One switch: is writing allowed? Then: is the
-    # notebook actually built? Gate BEFORE any SQLite open or meta probe.
-    from core.ledger.migrate import ledger_is_initialized
+    # Ledger state honesty (v0). One switch: is writing allowed? Gate
+    # BEFORE any SQLite open or meta probe.
     from core.ledger.writes_flag import ledger_writes_enabled
 
     if not ledger_writes_enabled():
-        # Disabled: silent no-op. Do NOT open SQLite or probe meta.
+        # Disabled: silent no-op. Do NOT open SQLite, probe meta, or
+        # leave spool residue — dormancy is exact.
         return None
+
+    from core.ledger import owner as _owner
+
+    if not _owner.this_process_is_owner():
+        # Non-owner surface: durable custody through the admission
+        # spool. No SQLite open of any kind (the db may not even exist
+        # yet — the envelope simply waits), no persistence marker
+        # (meta_marker_keys is authority, structurally inexpressible
+        # through the spool; the owner writes its own marker).
+        if parent_turn_id is not None:
+            _warn_once(
+                f"parent-turn-id-nonowner:{surface}",
+                "persist_model_reply(surface=%s): parent_turn_id cannot be "
+                "expressed through the spool and was dropped; link with "
+                "parent_submission_id",
+                surface,
+            )
+        try:
+            from core.ledger import spool as _spool
+
+            _spool.enqueue(
+                _spool.default_spool_root(db_path),
+                producer=surface,
+                turn_kind="model_reply",
+                raw_text=raw_text,
+                kwargs=_model_reply_kwargs(
+                    surface=surface,
+                    model_id=model_id,
+                    prompt_material=prompt_material,
+                    soul_material=soul_material,
+                    evidence_envelope=evidence_envelope,
+                    audit_verdict=audit_verdict,
+                    memory_read_ids=memory_read_ids,
+                    audit_trace_label=audit_trace_label,
+                    audit_trace_value_schema=audit_trace_value_schema,
+                    audit_trace_metadata_shape=audit_trace_metadata_shape,
+                    audit_trace_lineage=audit_trace_lineage,
+                ),
+                parent_submission_id=parent_submission_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — admission is best-effort
+            _warn_once(
+                f"reply-enqueue:{surface}",
+                "model_reply spool enqueue failed for surface=%s: %s",
+                surface,
+                exc,
+            )
+        return None
+
+    # Owner process: synchronous serialized write. Is the notebook
+    # actually built?
+    from core.ledger.migrate import ledger_is_initialized
+
     if not ledger_is_initialized(db_path):
         _warn_once(
             "uninitialized",
@@ -183,20 +331,20 @@ def persist_model_reply(
             db_path,
             "model_reply",
             raw_text,
-            surface=surface,
             parent_turn_id=parent_turn_id,
-            model_id=model_id,
-            prompt_hash=_sha256_material(prompt_material),
-            soul_hash=_sha256_material(soul_material),
-            evidence_envelope=evidence_envelope,
-            audit_verdict=audit_verdict,
-            memory_read_ids=memory_read_ids or [],
-            audit_trace_label=audit_trace_label,
-            audit_trace_value_schema=audit_trace_value_schema,
-            audit_trace_metadata_shape=audit_trace_metadata_shape,
-            audit_trace_lineage=audit_trace_lineage,
-            taint_labels=["self_generated"],
-            privacy_access="public",
+            **_model_reply_kwargs(
+                surface=surface,
+                model_id=model_id,
+                prompt_material=prompt_material,
+                soul_material=soul_material,
+                evidence_envelope=evidence_envelope,
+                audit_verdict=audit_verdict,
+                memory_read_ids=memory_read_ids,
+                audit_trace_label=audit_trace_label,
+                audit_trace_value_schema=audit_trace_value_schema,
+                audit_trace_metadata_shape=audit_trace_metadata_shape,
+                audit_trace_lineage=audit_trace_lineage,
+            ),
         )
         if turn_id is None:
             _warn_once(

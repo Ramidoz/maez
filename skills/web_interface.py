@@ -6810,24 +6810,26 @@ def chat():
     messages_list = []
     user_key = None
     _owner_ledger_db_path = None
-    _owner_user_msg_turn_id = None
+    _owner_user_msg_submission_id = None
     _evidence_envelope = None
     _envelope_block = ""
 
     if owner_bridge:
+        # Non-owner surface: web never opens the ledger. The user turn
+        # becomes a durable spool envelope the daemon owner drains; its
+        # submission_id links the reply (council rulings 2026-08-24).
         try:
             from core.cognition.envelope_builder import default_ledger_db_path
-            from core.ledger.writer import try_write_turn as _try_write_turn
+            from core.ledger.model_reply_persistence import (
+                submit_user_message as _submit_user_message,
+            )
 
             _owner_ledger_db_path = default_ledger_db_path()
             if _owner_ledger_db_path:
-                _owner_user_msg_turn_id = _try_write_turn(
+                _owner_user_msg_submission_id = _submit_user_message(
                     _owner_ledger_db_path,
-                    "user_message",
                     message,
                     surface="web_owner",
-                    taint_labels=["owner_utterance"],
-                    privacy_access="public",
                 )
         except Exception:
             _owner_ledger_db_path = None
@@ -7400,7 +7402,7 @@ def chat():
                     db_path=_owner_ledger_db_path,
                     raw_text=reply,
                     surface="web_owner",
-                    parent_turn_id=_owner_user_msg_turn_id,
+                    parent_submission_id=_owner_user_msg_submission_id,
                     model_id=MODEL,
                     prompt_material={
                         "messages": messages_list,
@@ -7448,7 +7450,9 @@ def chat():
 
             with moment_assembly_turn(
                 surface="web_owner",
-                turn_id=_owner_user_msg_turn_id,
+                # No surface-side turn_id exists any more: the turn
+                # commits at drain, in the owner process.
+                turn_id=None,
                 lifecycle_phase="turn_close",
             ):
                 pass

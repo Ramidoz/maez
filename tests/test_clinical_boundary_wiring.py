@@ -77,7 +77,9 @@ class ClinicalBoundarySurfaceWiringTests(unittest.TestCase):
         body = _block(_read("skills/web_interface.py"), "def chat():", "\n\n# ──")
 
         for later in (
-            "try_write_turn",
+            # Web rides the admission spool now (council 2026-08-24);
+            # the guard must still precede the enqueue.
+            "submit_user_message(",
             "recall_for_telegram(message)",
             "build_lived_recall_brief",
             "/internal/brain_loop",

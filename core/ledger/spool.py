@@ -47,7 +47,7 @@ from pathlib import Path
 
 from core.ledger.writer import _json_safe
 
-__all__ = ["enqueue", "drain_once", "spool_status"]
+__all__ = ["default_spool_root", "enqueue", "drain_once", "spool_status"]
 
 _LOGGER = logging.getLogger("core.ledger.spool")
 
@@ -67,6 +67,18 @@ _AUTHORITY_KWARGS = frozenset(
 )
 
 _STATES = ("pending", "acked", "refused")
+
+
+def default_spool_root(db_path: str) -> str:
+    """The spool root beside its ledger: ``<memory>/ledger_spool``.
+
+    The units' ReadWritePaths only cover memory/, and a rename across
+    filesystems is EXDEV (trap #1) — the spool must live on the same
+    subtree as the db it feeds. One derivation, shared by the daemon's
+    drainer and every surface producer, so the two ends can never
+    disagree about where the mailbox is.
+    """
+    return str(Path(os.path.abspath(db_path)).parent / "ledger_spool")
 
 
 def _dir_fsync(path: Path) -> None:
