@@ -143,6 +143,91 @@ the same choreography, not the rail.
   the thin cases (CLI, web-while-daemon-down). Size the spool for that
   end-state.
 
+## Fourth seat (Grok, 2026-08-24, owner-requested): consensus attacked — two overturns sustained
+
+Grok's credit returned; the owner asked for it as a fourth seat with one
+job: attack the 3-0. It upheld spool/FULL/stop as directions and
+overturned two unifications. Every claim below was re-verified in the
+tree before being recorded.
+
+**Overturn 1 — the spool does NOT eat the owner (amends Ruling 1).**
+"One spool for every producer" was a slogan: in-daemon producers
+(Telegram, handle_message, in-process model_reply) have no
+daemon-down client left over to need a file — forcing them through a
+spool creates a second durability domain inside the process that holds
+the latch, drained by machinery that must not be the single-threaded
+werkzeug server. AMENDED RULING: non-owner surfaces (web, CLI) spool;
+in-owner producers write through `owner_write_turn` directly (made
+latency-safe by the admission slice — the current synchronous
+pre-synthesis write with a 5 s busy window dies either way).
+
+**Overturn 2 — reconcile is unwelded from birth (amends Ruling 3).**
+Verified: reconcile `--apply` writes ordinary schema-legal
+`system_event` rows with FK kwargs (reconcile.py:239-246) — no
+`birth_anchor`, no meta authority the rail must forbid. Taking the
+companion offline to stitch orphan audit ids is an outage sized to the
+wrong problem. AMENDED RULING: birth keeps the offline maintenance
+lease; reconcile `--apply` becomes an owner-client (enqueue repairs
+through the live owner); dry-run stays a `mode=ro` reader.
+
+**Q2 upheld, argument corrected.** The invariant is
+"acknowledgment durability must never exceed commit durability" — FULL
+is required not "by construction" of the future spool but because
+TODAY'S ack is `write_turn`'s returned `turn_id`, immediately used as
+`parent_turn_id` and felt-state, while the commit behind it can vanish
+under NORMAL; and because with no shipped checkpoint policy the NORMAL
+durability point is wall-clock-unbounded. Sharpest verified finding:
+**the birth anchor itself would currently commit under NORMAL while the
+genesis row (written by migrate under SQLite's default FULL) is MORE
+durable than the birth event.**
+
+**New verified traps for the admission slice** (each checked against
+the tree):
+1. Both units run `PrivateTmp=true` + `ProtectSystem=strict` +
+   `ReadWritePaths=memory logs config` — the spool MUST live under
+   `memory/`, and its temp files must be created inside the spool dir
+   itself (a /tmp rename would cross tmpfs → EXDEV).
+2. `maez-web` is `Wants=maez.service`, not `Requires=` — stopping the
+   daemon does NOT cascade; the ceremony's quiesce must stop web
+   explicitly.
+3. Stopping the owner FREES the latch — stop is an invitation, not a
+   lease: any enabled non-owner can construct a writer while the daemon
+   is down. The lease must be an eager latch at `claim_ownership()`
+   (also closes the recorded pre-claim window / F2's development RED).
+4. `migrate.run()` is itself an unlatched WAL writer
+   (bare connect, migrate.py:213) invoked before the ceremony's writer
+   takes the latch — lease-before-migrate is mandatory.
+5. Drain must be dependency-aware (parent-before-child via
+   `parent_submission_id`), never sorted-UUID rename — else replies
+   commit before the user turns they answer, and conversation edges
+   become drain artifacts.
+6. Spool dirs must enter the backup manifest and .gitignore IN THE SAME
+   SLICE (the dead-letter precedent exists; a spool omitted from
+   Decision-22 restore is a Theme-2 hole).
+7. Dead-letter JSONL → spool-entry convergence is a format MIGRATION,
+   not a rename — you cannot atomic-rename-ack a line inside a pid
+   sidecar.
+8. `_marker_already_written` opened a READ-WRITE connect from any
+   surface process (could run WAL recovery/autocheckpoint as a stray
+   writer) — FIXED same-day to `mode=ro` (model_reply_persistence.py).
+9. `run_transaction()` is importable and never calls `_assert_quiesced`
+   — the lease must live inside it, not only in `main()`.
+10. Scripted ceremony steps must use `systemctl --user`
+    (system-bus stop is a silent no-op on this host) and export the
+    vendored `LD_LIBRARY_PATH` explicitly — a bare owner shell
+    otherwise hits `require_fixed()` refusal at the irreversible
+    moment. UNVERIFIED and flagged: `sqlite_runtime.py`'s docstring
+    claims the venv activation exports the vendor path; no in-repo hook
+    does, and the `.venv` contents are outside this session's read
+    perimeter — verify before the ceremony slice.
+
+**Grok's groupthink verdict, kept whole:** "unification as a substitute
+for the state machine" — a true boolean (no two concurrent writers;
+stop is simpler than handoff) gets stretched until it answers questions
+it does not (admission order, ack truth, who may say `birth_anchor`).
+Nouns — *spool, FULL, stop* — are how the last unanimous council
+certified "fails at 0 ms."
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE

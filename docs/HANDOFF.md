@@ -12,6 +12,23 @@ with binding conditions:
 The admission-protocol slice absorbs all three and is now ONE design;
 nothing else ships to the ledger before it. Everything below stands.
 
+**Grok rejoined as a FOURTH seat (owner-requested; its 402 cleared) and
+sustained two overturns against the 3-0**, both re-verified in the tree:
+(1) the spool serves NON-OWNER surfaces only — in-daemon producers stay
+on `owner_write_turn` (no daemon-down client exists for them); (2)
+reconcile `--apply` is unwelded from the birth outage — it writes
+ordinary `system_event` rows with no authority fields and becomes an
+owner-client. Q2 upheld with a corrected invariant ("ack durability must
+never exceed commit durability" — today's ack is the returned turn_id
+itself, and the birth anchor would currently commit under NORMAL while
+the genesis row is MORE durable). Ten new verified traps for the
+admission slice are in the rulings doc §fourth-seat — including: stop
+FREES the latch (lease = eager latch at claim), lease-before-migrate,
+spool must live under `memory/` (ProtectSystem=strict + PrivateTmp),
+web does not stop when the daemon stops (Wants= not Requires=),
+dependency-aware drain, and one same-day fix already landed
+(`_marker_already_written` now opens `mode=ro`).
+
 Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes,
 `MAEZ_LEDGER_WRITES` unset, `MAEZ_S1_PHASE_TRUTH` unset. The daemon is
 active. Nothing this session changed that, and nothing should until the
