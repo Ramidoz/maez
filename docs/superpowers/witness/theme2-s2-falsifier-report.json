@@ -1,0 +1,86 @@
+{
+  "witness": "theme2-s2-falsifier",
+  "replaces": "U5 (council ruling 2026-08-23: booleans, never p99)",
+  "ran_at": 1787536401.5545301,
+  "duration_s": 8.2,
+  "n": 20000,
+  "scratch": "/tmp/theme2_s2_falsifier_0l2df2vv",
+  "sqlite_version": "3.53.4",
+  "verdict": "GREEN",
+  "arms": {
+    "F1_exactly_once_byte_exact": {
+      "submitted": 20000,
+      "acked": 20000,
+      "explicit_fail": 0,
+      "db_rows": 20000,
+      "unique_indexes": 20000,
+      "all_indexes_exactly_once": true,
+      "payloads_byte_exact_vs_oracle": true,
+      "chain_positions_contiguous": true,
+      "integrity_check": "ok",
+      "journal_mode": "wal",
+      "green": true
+    },
+    "F2_nonowner_exclusion": {
+      "nonowner_rows_in_db": 0,
+      "attempts": [
+        {
+          "written": 0,
+          "dropped": 50
+        },
+        {
+          "written": 0,
+          "dropped": 50
+        },
+        {
+          "written": 0,
+          "dropped": 50
+        },
+        {
+          "written": 0,
+          "dropped": 50
+        }
+      ],
+      "all_attempts_dropped_not_silent": true,
+      "dead_letter_rows": 200,
+      "green": true
+    },
+    "F3_checkpoint_honesty": {
+      "busy_flag_with_pinning_reader": 1,
+      "busy_flag_after_reader_closed": 0,
+      "wal_bytes_after_truncate": 0,
+      "green": true,
+      "note": "returned-row checked, not merely 'SQL ran'; a pinning reader makes TRUNCATE report busy=1, which is honest, not a failure"
+    },
+    "F5_pragma_license": {
+      "journal_mode": "wal",
+      "synchronous": 1,
+      "green": true,
+      "licensed_claim": "SIGKILL/process-crash recovery certified. Power-loss/OS-crash durability NOT certified: synchronous=NORMAL may roll back a committed WAL transaction on power loss (SQLite documented semantics). Widening to FULL is an owner decision."
+    },
+    "F4_sigkill_recovery": {
+      "cycles": 8,
+      "kills_delivered": 4,
+      "acked": 32000,
+      "explicit_fail": 0,
+      "unknown_after_kill": 0,
+      "unknown_resolved_present": 0,
+      "unknown_resolved_absent": 0,
+      "ACKED_BUT_MISSING": [],
+      "duplicates": [],
+      "stray_indexes": [],
+      "integrity_check": "ok",
+      "all_indexes_complete_after_recovery": true,
+      "green": true,
+      "note": "acked = turn_id returned AND ack fsynced before the kill; every acked index must survive. unknown = killed between submit and ack \u2014 present-exactly-once or absent are both honest; a retry protocol may only resubmit via the same identity (admission-protocol gap, recorded)."
+    },
+    "PC_positive_controls": {
+      "bare_library_probe": "REFUSED ledger writer (MAEZ_LEDGER_WRITES enabled) requires SQLite >= 3.51.3 (WAL-reset fix); this process is linked against 3.46.1. Refusing \u2014 a concurrent WAL writer on this version risks the exact corruption the vendor build exists to prevent.",
+      "bare_refused_naming_3513": true,
+      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_0l2df2vv/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
+      "held_latch_refused_naming_owner": true,
+      "green": true
+    }
+  },
+  "licensed_claim": "Under the shipped single-owner topology on the vendored library: deterministic appends land exactly once and byte-exact; non-owner writers cannot reach the DB and their payloads are never silently lost; the chain stays contiguous and the DB passes integrity_check under checkpoint pressure and repeated owner SIGKILL. NOT certified: power-loss durability (synchronous=NORMAL), malicious-author resistance, and any topology other than the one that ships."
+}

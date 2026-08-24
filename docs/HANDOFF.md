@@ -1,100 +1,104 @@
-# Handoff — 2026-08-23. Read this before the older handoff.
+# Handoff — 2026-08-23 (evening). Supersedes the morning handoff.
 
 Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes,
 `MAEZ_LEDGER_WRITES` unset, `MAEZ_S1_PHASE_TRUTH` unset. The daemon is
-active. Nothing here changes that, and nothing should until the owner says so.
+active. Nothing this session changed that, and nothing should until the
+owner says so. Everything below landed flag-dormant.
 
-## Do these three first. They are independent of every open design question.
+## What this session did (commits 37664bc, 62d07db, + witness/docs)
 
-Theme 2's claim is "the ledger cannot omit or misdate a life". **It is false
-today**, and no witness — green or red — can make it true while these stand:
+**The three defects.** Each verified by execution before fixing:
 
-1. **`core/ledger/writer.py:612-620`** — the only production write path wraps
-   `w.write_turn(...)` in `except Exception` → log a warning → `return None`.
-   Every write silently drops on any error, including `SQLITE_BUSY`. Omission
-   is currently a caught exception.
-2. **`core/ledger/model_reply_persistence.py:86`** — bare
-   `sqlite3.connect(db_path)` then `commit()`: no `busy_timeout`, no
-   `BEGIN IMMEDIATE`. Fails at 0 ms under contention.
-3. **`core/infra/sqlite_runtime.py:84`** — `require_fixed()` exists and is
-   **never called**. Reporting the linked SQLite version at boot is not the
-   same as refusing to run on a vulnerable one. Call it at writer construction.
+1. `try_write_turn`'s silent-drop catch-all — FIXED. Failed ENABLED
+   writes now dead-letter the full payload (per-process fsynced sidecar,
+   pre-attempt identity, refused/failed classification) and log at
+   ERROR; a lost payload is named LOST at CRITICAL. Never raises; the
+   reply path ships regardless; the unborn path is byte-identical.
+   `dead_letter_status()` is the machine-readable health predicate
+   (unwired into cockpit/status — open item).
+2. The "fails at 0 ms under contention" marker-write defect — **the
+   claim was FALSE**. A live probe showed Python's `sqlite3.connect`
+   default `timeout=5.0` already busy-waits (1.53 s, then succeeded).
+   Three unanimous seats and the prior handoff carried the error.
+   Landed as documented hardening only. The REAL adjacent defect —
+   marker turn + meta row in two transactions ⇒ duplicate one-time
+   markers across the crash window — is FIXED atomically via
+   `write_turn(meta_marker_keys=...)`, write-once inside the txn.
+3. `require_fixed()` never called — FIXED: an ENABLED `LedgerWriter`
+   refuses to construct on SQLite < 3.51.3; disabled construction is
+   unchanged (dormancy preserved). Proven by subprocess tests with and
+   without the vendored library.
 
-All three were found by the U5 design council and verified in the code, not
-accepted on assertion.
+**Topology (council-reviewed, second three-seat round).** One serialized
+owner, structural not conventional:
 
-## The U5 ruling: unanimous, three independent seats — DO NOT BUILD U5 AS FROZEN
+- **Owner latch**: an ENABLED writer flocks `<db>.ownerlock` for its
+  lifetime; a second concurrent enabled writer refuses at construction,
+  across processes, SIGKILL-safe. There is deliberately NO second
+  rollout flag — the fresh council rejected it because a two-flag
+  matrix keeps the banned two-writer state reachable by configuration.
+- **Owner singleton** (`core/ledger/owner.py`): daemon claims ownership
+  in `start()` (env-pid, dual-module-safe); first enabled write lazily
+  constructs ONE long-lived writer; flag re-read per write (emergency
+  brake); environmental failures self-heal. `try_write_turn` routes to
+  the singleton in the owner process; a non-owner under a live owner
+  dead-letters — never a second concurrent writer, never silent.
+- **Transport NOT built.** The morning handoff said "enqueue through the
+  /message rail." The council REJECTED that as specified: the daemon's
+  Flask server is single-threaded (`make_server` without `threaded=True`)
+  and `/message` runs LLM synthesis inline — appends would queue behind
+  inference. Candidate replacements (client-local durable spool vs
+  dedicated bounded socket) are recorded, undecided, in
+  `docs/superpowers/witness/theme2-s2-implementation-council.md`.
 
-Full rulings retained: `docs/superpowers/witness/theme2-s2-u5-council-finding.md`
-(seat 1, with the verified code citations), `…-seat2.txt` (Codex), `…-seat3.txt`.
+**U5 replaced by a falsifier.** `theme2_s2_falsifier.py` — boolean arms,
+never p99: exactly-once/byte-exact vs an independent oracle; non-owner
+exclusion under a live owner; checkpoint honesty (returned busy flag
+checked under a pinning reader); repeated owner SIGKILL at a
+deterministic ack-log barrier with recovery-by-identity and
+ACKED_BUT_MISSING as the named lethal class; pragma license (NORMAL ⇒
+process-crash recovery certified, power-loss NOT); positive controls
+that must trip for the RIGHT reason. First full run (n=20000): **GREEN**
+— `theme2-s2-falsifier-report.json`. It went RED twice during
+development on real gaps (pre-claim window; duplicate-on-recovery),
+which is the evidence it can fail.
 
-**Why not.** U5 would certify two concurrent WAL writers — a topology
-production does not run and the project's own standing rule forbids.
-`writer.py:603` builds and closes a connection PER WRITE, so the
-`threading.Lock` at :209 serializes nothing and the class docstring is false
-for the only live path. Production is ≥3 processes (daemon, maez-web,
-`cli/maez_chat.py:804`) with unbounded connections. The SQLite defect is a WAL
-**reset** defect and closing the last connection resets the WAL — so per-write
-churn MAXIMISES the hazard while U5's two long-lived writers MINIMISE it. A
-green U5 would understate exposure while appearing to certify it.
+## The next slice, before transport, replay, or birth
 
-Also: SQLite's own team reports that ordinary stress could not reproduce the
-defect; special instrumentation was required. 1000 ordinary exchanges prove
-nothing about it. And the deepest objection, from seat 3: *even perfectly
-executed, green certifies latency under benign conditions, not
-non-corruption. Green is fully compatible with unsafe.*
+**Admission protocol** (the second council's groupthink finding): the
+schema has no submission identity — only writer-minted `turn_id` — so
+exactly-once cannot yet be enforced by construction, and replayed
+dead-letters would be misdated unless replay stamps reconstruction
+provenance (canon-governs-canon). Slice = schema identity (UNIQUE
+submission id) + typed enqueue + provenance-stamped replay organ. Design
+constraints and candidate transports are in the council synthesis doc.
 
-**Ship instead:** one serialized ledger owner — the daemon holding ONE
-long-lived `LedgerWriter` behind one process-wide lock. Web
-(`skills/web_interface.py:6824`), CLI (`cli/maez_chat.py:804`) and
-`model_reply_persistence.py` enqueue through the `/message` rail that already
-exists at `daemon/maez_daemon.py:12971` (the cockpit proxy already uses it).
-**Keep WAL** — readers are `mode=ro` and want reader/writer concurrency;
-reject WAL2 (not mainline, not in 3.53.4). Under one writer the reset defect
-does not apply even on 3.46.1, so the vendored build becomes defence-in-depth
-rather than the load-bearing guarantee.
+## Open items (full list in the council synthesis doc)
 
-Nearly free right now: 0-byte ledger, writes flag unset everywhere. Nothing to
-migrate, no writer to disturb. It deletes U5, O-6's latch blocker, and the
-standing WAL-rule tension in one move.
+- Pre-claim window: latch is only taken at first enabled write; consider
+  eager latch at claim time.
+- `birth_ceremony.py` / `reconcile.py` construct writers directly; under
+  a live daemon they now REFUSE via the latch. Birth must stop the
+  daemon or route through the owner — ceremony needs explicit treatment.
+- `synchronous=NORMAL` power-loss license; FULL is an owner decision.
+- Owner checkpoint/WAL-growth policy unshipped.
+- PRE-EXISTING red on main (not this session):
+  `test_no_bare_sqlite_connect.py` fails 3 tests naming ~9 files
+  (consent, consolidation, governance, span_reader, two scripts, one
+  frozen witness artifact). Untouched deliberately.
 
-**Replace U5 with a falsifier, not a statistic.** Tens of thousands of
-deterministic appends (payload = f(index)) through the REAL topology; verify
-every row present exactly once and byte-exact; `PRAGMA integrity_check`;
-forced `wal_checkpoint(TRUNCATE)` under concurrent write load; then repeatedly
-SIGKILL a writer mid-batch and verify recovery — crash recovery is where WAL
-defects live. Never p99: safety claims are booleans and booleans have no
-percentiles. If a timing component survives, kill on MAX over a hard budget
-with CLOCK_MONOTONIC, and assert the positive control tripped for the RIGHT
-REASON (refusal at ≈5000 ms), not merely that it tripped.
+## Standing directives (unchanged, plus one new)
 
-## The T5 arc is CLOSED. Do not restart it.
-
-Protocol **v7.12**. Rounds 25-33 found ~50 defects; that proved the method
-worked AND that it is finished. The closure ritual is replaced by a dated risk
-register of disclaimed classes, reopened only on a producer-interface change
-or on the flag being un-dormanted. §0.4's licensed claim is adopted
-unconditionally and states plainly that PASS does not establish authenticity
-against a malicious evidence author and does not certify any clause no test
-exercises. Two known open items are recorded, not hidden, in
-`theme2-s1-clause-coverage.md`.
-
-Current evidence: `witness/evidence/discriminator-2026-08-23-r32/`, all clauses
-PASS. Four superseded evidence sets are retained and fail on purpose.
-
-## Standing directives
-
-- **Always convene the council; two agreeing seats are not a quorum.** Tell
-  each seat what the others concluded and instruct it to ATTACK them. Ask
-  "where is the groupthink?" — it produced the best finding of the day. See
-  memory `use-the-council-when-unsure` for how to reach each seat.
-- Codex blocks on adversarial phrasing ("forgery", "attack"); describe work
-  accurately as negative-testing. Two blocks = lane closed for that framing;
-  do not keep rewording to slip a refusal.
-- Ox Alpha via `opencode run --model <codename>`; codenames ROTATE, ask which.
-  Run from a small scratch dir, never the repo. Grok: HTTP 402, out of credit.
-- `pkill -f` MATCHES MY OWN COMMAND LINE — it killed my shell twice today and
-  the aborted commands' side effects looked like three unrelated bugs. Resolve
-  PIDs and kill by number.
-- `inotify_add_watch ... No space left on device` is NOT a full disk. The
-  watch limit was raised to 524288 today (`sysctl`, may not persist).
+- **Execute council claims before encoding them.** A unanimous
+  three-seat finding ("fails at 0 ms") was falsified by a 30-line probe.
+  Unanimity is not execution.
+- Always convene the council; two agreeing seats are not a quorum; tell
+  each seat to attack the others; ask "where is the groupthink?"
+- Codex blocks on adversarial phrasing; describe work as
+  negative-testing. Ox Alpha codenames rotate (`opencode/x-preview-f-free`
+  on 2026-08-23); run it from a scratch dir, never the repo. Grok: 402.
+- `pkill -f` matches your own command line — resolve PIDs, kill by
+  number. inotify "No space left" is the watch limit, not the disk.
+- Never run test discovery against the live tree; run named test files
+  with `LD_LIBRARY_PATH=vendor/sqlite/lib`.
+- T5/S1 arc remains CLOSED at protocol v7.12. Do not restart it.
