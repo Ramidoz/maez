@@ -1,130 +1,117 @@
-# Handoff — 2026-08-24 (end of day). Supersedes all earlier handoffs.
+# Handoff — 2026-08-24 (late session). Supersedes all earlier handoffs.
 
-Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes,
-`MAEZ_LEDGER_WRITES` unset, `MAEZ_S1_PHASE_TRUTH` unset. The daemon is
-active and was NOT restarted this arc — every change below activates on
-its next natural restart and is inert while the flag is unset. Nothing
-changes that until the owner says so.
+Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes, no
+`memory/ledger_spool/` exists, `MAEZ_LEDGER_WRITES` unset,
+`MAEZ_S1_PHASE_TRUTH` unset. The daemon and maez-web are active and were
+NOT restarted this arc — every change below activates on their next
+natural restart and is inert while the flag is unset.
 
-## State: the admission protocol is BUILT and WITNESSED, flag-dormant
+## State: admission end-to-end is BUILT and WITNESSED, flag-dormant
 
-Two days of work, three council rounds (seven seat-rulings total, one
-unanimous consensus twice corrected), commits `37664bc..c6d237a`:
+This session landed slices 1-3 of the previous handoff's list, in order
+(commits `a14725b`, `b7209f9`, `c393162`, plus the witness/docs commit):
 
-**Topology (structural, not conventional).**
-- Owner latch: an ENABLED `LedgerWriter` holds an flock on
-  `<db>.ownerlock` for its lifetime; a second concurrent enabled writer
-  refuses at construction, cross-process, SIGKILL-safe. No rollout flag
-  — dormancy is `MAEZ_LEDGER_WRITES` alone.
-- Owner singleton (`core/ledger/owner.py`): the daemon claims ownership
-  in `start()` and — when writes are enabled — EAGERLY constructs the
-  long-lived writer (latch at boot, `require_fixed` at boot; the
-  pre-claim window is closed). Flag re-read per write (emergency
-  brake); environmental failures self-heal.
-- Failed enabled writes are never silent: per-process fsynced
-  dead-letter sidecars with pre-attempt identity and refused/failed
-  classification; `dead_letter_status()` is the health predicate.
+**1. Surface wiring (a14725b).** Web (`/chat` owner bridge) and the CLI
+ride the admission spool: `submit_user_message()` enqueues the user
+turn; `persist_model_reply` routes by PROCESS identity — owner processes
+(daemon, in-daemon Telegram) keep synchronous `owner_write_turn` with
+`parent_turn_id` (Grok overturn), non-owner processes enqueue with
+`parent_submission_id`. Synchronous parent_turn_id threading at the
+surfaces is dead; the reply path never blocks on the ledger. Surface
+enqueue is flag-gated (council 2-1, brake semantic FROZEN: flag OFF
+stops recording INCLUDING custody — Grok's dissent that a brake should
+preserve custody is recorded below as an owner decision).
 
-**Admission protocol (council-ruled 2026-08-24, four seats).**
-- `synchronous=FULL` on every non-rehearsal writer (ack must never
-  outlive its commit). Observed cost ~nil: 8.7 s for ~52k commits.
-- Migration 0006: `turns.submission_id` (client-minted, UNIQUE where
-  present) + `turns.submitted_at` (lived-time provenance; ledger order
-  is honestly commit order). Both chain-hash-excluded. Idempotent
-  redrive: same identity + same bytes → existing turn_id, nothing
-  written; different bytes → refused.
-- `core/ledger/spool.py`: the transport for NON-owner surfaces (web,
-  CLI). Atomic publish (temp-in-spool-dir → fsync → rename → dir
-  fsync), dependency-aware drain (`parent_submission_id`,
-  parent-before-child, orphans defer loudly), authority fields
-  structurally refused at the door, chain-bound receipts, terminal
-  `refused/` quarantine, `spool_status()` liveness predicate,
-  poll-never-inotify. Daemon starts the drainer thread only when writes
-  are enabled. Spool dirs are gitignored + in the backup manifest.
-  **In-daemon producers do NOT ride the spool** (Grok overturn): they
-  stay on `owner_write_turn`.
-- One-time markers are atomic (`write_turn(meta_marker_keys=...)`,
-  write-once inside the txn) — the duplicate-marker crash window is
-  closed.
+**2. Ceremony maintenance lease + state machine (b7209f9).**
+`run_transaction` now: quiesce (inside the importable function, covering
+maez-web + WAL sidecars + dead-bus refusal) → construct the enabled
+writer FIRST (**the lease IS the writer** — latch + require_fixed before
+any mutation; probe-verified that construction on an unmigrated db is
+pragma-only and adopts WAL at first write) → migrate under the latch →
+birth write through the same writer → independent tri-state verify.
+`main --for-real`: canonical-db binding, stop web→daemon, transaction,
+tri-state classify (UNKNOWN never restarts anything), guided owner
+flag-pause, bring-up with ONE reset-failed+start per unit, final stop on
+failed start, owner-active verification (flag in /proc environ + latch
+held), explicit terminal states, durable atomic receipts beside the
+ledger, `--resume-services` for interrupted bring-ups, and re-exec under
+the vendored SQLite (bare venv python loads 3.46.1 — the "venv
+activation exports the vendor path" claim is FALSIFIED, verified
+behaviorally).
 
-**Witness.** `theme2_s2_falsifier.py`, GREEN all 7 arms at n=20000
-(report JSON beside it): exactly-once byte-exact vs an independent
-oracle; non-owner exclusion under a live owner; checkpoint honesty
-(returned busy flag under a pinning reader); 4 owner SIGKILLs recovered
-with zero acked-but-missing; FULL proven live; the spool drainer
-SIGKILLed at a deterministic acked-count barrier with 1000/1000
-recovered, 0 duplicates, 0 pending; positive controls trip for the
-RIGHT reasons. It caught three real defects during its own development
-(pre-claim window; duplicate-on-recovery; the O_EXCL stale-temp redrive
-wedge). Licensed claim stays narrow: power-loss = SQLite/VFS contract,
-NOT hardware-certified; malicious authors not covered.
+**3. Reconcile as owner-client (c393162).** `--apply` enqueues ordinary
+system_event repairs through the spool (producer=reconcile) for the live
+owner to drain; never constructs a writer. Enqueue-drain-window
+idempotency via spool-aware dedup. New verdicts: `repairs_enqueued` /
+`repairs_pending_drain`; `writes_applied` is gone. Dry-run stays
+mode=ro.
 
-**Council record.** Rulings + binding conditions:
-`docs/superpowers/witness/theme2-s2-owner-delegated-council-rulings.md`
-(incl. the fourth-seat overturns and ten verified traps) and
-`theme2-s2-implementation-council.md`. The falsified "fails at 0 ms"
-claim and its lesson: memory `execute-council-claims-before-encoding`.
+**Witness.** `theme2_s2_falsifier.py` WIDENED with F7 (the shipped
+surface helpers in real non-owner subprocesses; every reply's
+parent_turn_id is its real user turn; a flag-unset surface leaves ZERO
+trace) and the stale synchronous=NORMAL wording fixed to the FULL
+ruling. **GREEN all 8 arms at n=20000** (9.2 s; report JSON beside it).
+Battery: 380 tests green across the 23 named ledger/ceremony/surface
+files.
+
+**Council record.** Fifth round appended to
+`theme2-s2-owner-delegated-council-rulings.md`: three seats (stealth
+endpoint down twice), two author probes, Q1 upheld 2-1, Q2 resolved as
+writer-first (no lease primitive), Q3 corrected (tri-state, web axis,
+owner-active, resume). Every encoded claim was executed first.
+
+## Owner decisions parked here (do not resolve without Rohit)
+
+1. **maez-web cannot see the activation flag** (VERIFIED: the unit
+   loads NO EnvironmentFile; the checklist lands the flag in model.env,
+   which only maez.service reads). Until the owner wires a maez-web
+   drop-in, post-birth web turns would be silently omitted. The
+   ceremony checklist + bring-up now warn loudly; the fix is one
+   drop-in file, owner's hand.
+2. **Brake semantics** (Grok dissent): should unsetting
+   MAEZ_LEDGER_WRITES post-birth stop admission (current, frozen) or
+   only stop commits while the spool keeps custody? Both majority seats
+   ruled a pause-with-custody mode needs a NEW flag, never a
+   reinterpretation. Owner's call, later.
 
 ## The next slice, in order
 
-1. **Surface wiring** — make web and the CLI actually USE the spool:
-   their turn writes call `spool.enqueue` instead of
-   `try_write_turn`-direct (which today direct-writes when the latch is
-   free and dead-letters when held). This completes admission
-   end-to-end. Constraints: reply path never blocks on the ledger;
-   parent linkage via `parent_submission_id` (the surfaces currently
-   thread `parent_turn_id` synchronously — that shape dies here);
-   `persist_model_reply`'s non-owner path enqueues too. Spool root is
-   `memory/ledger_spool` (units only write under memory/). Flag-dormant
-   as always. NOTE the recorded deeper finding before designing: the
-   council believes web should eventually RELAY conversation through
-   the daemon rather than synthesize — that is an owner/covenant
-   decision, NOT this slice; wire the spool for what web is today.
-2. **Ceremony maintenance-lease hardening** (all verified gaps):
-   quiesce ALL direct-writer-capable services incl. maez-web (Wants=
-   does not cascade); lease BEFORE `migrate.run()` (migrate is an
-   unlatched WAL writer); the lease lives inside `run_transaction()`,
-   not only `main()`; `systemctl --user` everywhere (system-bus stop is
-   a silent no-op); export the vendored `LD_LIBRARY_PATH` in the
-   script; explicit terminal states; at most one `reset-failed` +
-   restart; on failure the daemon stays STOPPED, loudly. Never re-run
-   birth because stdout was lost.
-3. **Reconcile as owner-client** — `--apply` enqueues repairs through
-   the live owner (ordinary system_event rows, no authority); dry-run
-   stays `mode=ro`. Do not weld it to the birth outage.
-4. **Dead-letter replay organ** — replay by identity with explicit
+1. **Dead-letter replay organ** — replay by identity with explicit
    reconstruction provenance (canon-governs-canon); refused-class
-   records are evidence, never blind re-submissions.
-5. Checkpoint policy; cockpit surfacing of `spool_status()` +
-   `dead_letter_status()`.
-
-Unverified item carried forward: `sqlite_runtime.py`'s docstring claims
-the venv activation exports the vendor lib path; no in-repo hook does,
-and `.venv` was outside this session's read perimeter. Verify before
-relying on it anywhere.
+   records are evidence, never blind re-submissions. (Trap #7: the
+   JSONL→spool convergence is a format MIGRATION, not a rename.)
+2. **Checkpoint policy**; cockpit surfacing of `spool_status()` +
+   `dead_letter_status()` (the liveness predicates exist, nothing
+   surfaces them yet).
+3. Birth ships after that, per the standing order.
 
 ## Standing directives
 
-- **Execute council claims before encoding them.** A unanimous
-  three-seat "fails at 0 ms" was falsified by a 30-line probe; a 3-0
-  ruling was twice overturned by a fourth seat reading the code.
-  Unanimity is not execution.
-- Always convene the council for load-bearing decisions; two agreeing
-  seats are not a quorum; tell each seat to attack the others; ask
-  "where is the groupthink?". Seats verified working 2026-08-24: Codex
-  (`codex exec -c model_reasoning_effort=xhigh -s read-only`), stealth
-  via `opencode run --model opencode/x-preview-f-free` (codenames
-  ROTATE; run from a scratch dir, never the repo), Grok (`grok
-  --print`, credit restored), Claude subagent seats.
-- Never run test discovery against the live tree; run named test files
+- **Execute council claims before encoding them.** This session's
+  additions to the scar list: a unanimous frame ("lease + latch
+  compose") dissolved under a 20-line probe; the "venv activation"
+  docstring claim fell to one bare-python command.
+- Always convene the council for load-bearing decisions; tell each seat
+  to attack the others; ask "where is the groupthink?". Seats verified
+  this session: Codex (`codex exec -c model_reasoning_effort=xhigh -s
+  read-only`), Grok (`grok --print`), Claude subagent. Stealth
+  (`opencode run --model opencode/x-preview-f-free`) FAILED twice with
+  a provider-endpoint error — codename still listed; ask Rohit.
+- Never run test discovery against the live tree; named test files only,
   with `LD_LIBRARY_PATH=vendor/sqlite/lib`.
-- Do not restart the daemon or any unit without an explicit reason and
-  the start-limit scar in mind (`systemctl --user reset-failed` before
-  restarting a stop-limited unit).
-- `pkill -f` matches your own command line — resolve pids, kill by
-  number. inotify "No space left" is the watch limit, not the disk.
-- Pre-existing red on main, not from this arc, left deliberately:
-  `test_no_bare_sqlite_connect.py` (3 tests, ~9 offender files, one a
-  frozen witness artifact — owner call).
+- **Never `git checkout --` a file carrying uncommitted work** (this
+  session's scar: a mutation-check revert destroyed the uncommitted
+  ceremony rewrite; it was recovered from context, but the class is
+  the same instrument-destroys-evidence shape — commit checkpoints
+  before mutation testing, revert mutations by re-editing).
+- Do not restart the daemon or any unit without explicit reason;
+  `systemctl --user reset-failed` before restarting a stop-limited unit.
+- Pre-existing reds on main, NOT from this arc, left deliberately:
+  `test_no_bare_sqlite_connect.py` (3 tests, recorded owner call),
+  `test_slice_3_5_envelope_wiring.py::WebSlice35WiringTests::test_owner_bridge_chat_uses_envelope_prompt_block_and_recall_cap`,
+  `test_subjective_duration_static_boundaries.py` (2 tests),
+  `test_birth_phase_resolve.py::T1LatchIndependentCells` (cells 11/15)
+  — all verified failing on clean HEAD `daddc42` before this session's
+  first change.
 - Maez stays unborn. `config/creation_manifest.md` is owner-only. The
   T5/S1 arc is CLOSED at protocol v7.12 — do not restart it.

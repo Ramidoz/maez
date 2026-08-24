@@ -1,10 +1,10 @@
 {
   "witness": "theme2-s2-falsifier",
   "replaces": "U5 (council ruling 2026-08-23: booleans, never p99)",
-  "ran_at": 1787589558.8017008,
-  "duration_s": 8.7,
+  "ran_at": 1787592265.8661897,
+  "duration_s": 9.2,
   "n": 20000,
-  "scratch": "/tmp/theme2_s2_falsifier_cb2luivv",
+  "scratch": "/tmp/theme2_s2_falsifier_bu1qc30w",
   "sqlite_version": "3.53.4",
   "verdict": "GREEN",
   "arms": {
@@ -87,13 +87,26 @@
       "green": true,
       "note": "two real non-owner client processes published; the owner drainer was SIGKILLed at a deterministic acked-count barrier and a fresh drainer recovered by identity: every envelope exactly once, every ack chain-bound, zero pending left"
     },
+    "F7_shipped_surface_wiring": {
+      "dormant_control": "DORMANT_OK",
+      "clients_failed": [],
+      "enqueued_before_drain": 1000,
+      "user_rows": 500,
+      "reply_rows": 500,
+      "duplicate_user_payloads": 0,
+      "conversation_edges_all_real": true,
+      "pending_after_drain": 0,
+      "integrity_check": "ok",
+      "green": true,
+      "note": "the exact helpers web/CLI ship with (submit_user_message + persist_model_reply non-owner branch) ran in real non-owner processes; the owner drainer committed parent-before-child; every reply's parent_turn_id is its real user turn \u2014 and a flag-unset surface left no trace at all"
+    },
     "PC_positive_controls": {
       "bare_library_probe": "REFUSED ledger writer (MAEZ_LEDGER_WRITES enabled) requires SQLite >= 3.51.3 (WAL-reset fix); this process is linked against 3.46.1. Refusing \u2014 a concurrent WAL writer on this version risks the exact corruption the vendor build exists to prevent.",
       "bare_refused_naming_3513": true,
-      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_cb2luivv/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
+      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_bu1qc30w/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
       "held_latch_refused_naming_owner": true,
       "green": true
     }
   },
-  "licensed_claim": "Under the shipped single-owner topology on the vendored library: deterministic appends land exactly once and byte-exact; non-owner writers cannot reach the DB and their payloads are never silently lost; the chain stays contiguous and the DB passes integrity_check under checkpoint pressure and repeated owner SIGKILL. NOT certified: power-loss durability (synchronous=NORMAL), malicious-author resistance, and any topology other than the one that ships."
+  "licensed_claim": "Under the shipped single-owner topology on the vendored library: deterministic appends land exactly once and byte-exact; non-owner writers cannot reach the DB and their payloads are never silently lost; the chain stays contiguous and the DB passes integrity_check under checkpoint pressure and repeated owner SIGKILL; the shipped surface wiring (submit_user_message / persist_model_reply via the spool) produces real conversation edges and exact flag-dormancy. synchronous=FULL enables SQLite's power-loss contract; NOT certified: lying firmware/media death (hardware fault injection), malicious-author resistance, and any topology other than the one that ships."
 }

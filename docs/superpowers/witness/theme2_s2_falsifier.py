@@ -34,11 +34,11 @@ Arms (each a boolean verdict; any RED fails the run):
       (exactly once) or absent — but the DB row count must equal
       acked + a subset of unacked, and no index may appear twice.
       The lethal case — acked but absent after recovery — is RED.
-  F5  pragma license: journal_mode == wal and synchronous == NORMAL are
-      asserted, and the claim is NARROWED accordingly in the verdict:
-      SIGKILL/process-crash recovery is certified; power-loss/OS-crash
-      durability is NOT (SQLite may roll back a committed WAL txn under
-      synchronous=NORMAL on power loss).
+  F5  pragma license: journal_mode == wal and synchronous == FULL are
+      asserted (council ruling 2026-08-24: the ack must never outlive
+      its commit), and the claim stays narrow: SQLite's power-loss
+      contract is enabled, but lying firmware/media death are not
+      certified — that needs hardware fault injection.
   PC  positive control (rail-native, not a staged second-writer BUSY):
       an enabled writer in a process WITHOUT the vendored library must
       REFUSE for the RIGHT REASON (its message names 3.51.3), and a
@@ -164,6 +164,70 @@ def run_spool_client_child(spool_root: str, producer: str,
     print("CLIENT_DONE")
 
 
+def run_surface_client_child(db: str, producer: str,
+                             start: int, end: int) -> None:
+    """The SHIPPED surface path — exactly what web/CLI now call: a
+    user_message via submit_user_message, then the audited reply via
+    persist_model_reply's non-owner branch, linked by submission id."""
+    sys.path.insert(0, str(_REPO))
+    from core.ledger.model_reply_persistence import (
+        build_model_reply_audit_verdict,
+        persist_model_reply,
+        submit_user_message,
+    )
+
+    for i in range(start, end):
+        sid = submit_user_message(db, payload_for(i), surface=producer)
+        assert sid, "enabled surface submit must return a submission id"
+        persist_model_reply(
+            db_path=db,
+            raw_text=f"reply-{payload_for(i)}",
+            surface=producer,
+            parent_submission_id=sid,
+            model_id="falsifier",
+            prompt_material={"i": i},
+            soul_material="falsifier-soul",
+            evidence_envelope={"claimable": [], "forbidden": []},
+            audit_verdict=build_model_reply_audit_verdict(
+                surface=producer, audit_ran=True, changed_output=False,
+            ),
+        )
+    print("SURFACE_CLIENT_DONE")
+
+
+def run_dormant_surface_child(db: str) -> None:
+    """Dormancy control: with MAEZ_LEDGER_WRITES absent the surface
+    helpers must leave NO trace — no spool file, no directory."""
+    sys.path.insert(0, str(_REPO))
+    assert "MAEZ_LEDGER_WRITES" not in os.environ
+    from core.ledger import spool
+    from core.ledger.model_reply_persistence import (
+        build_model_reply_audit_verdict,
+        persist_model_reply,
+        submit_user_message,
+    )
+
+    sid = submit_user_message(db, "dormant probe", surface="dormant7")
+    persist_model_reply(
+        db_path=db,
+        raw_text="dormant reply",
+        surface="dormant7",
+        parent_submission_id=None,
+        model_id="falsifier",
+        prompt_material={},
+        soul_material="falsifier-soul",
+        evidence_envelope={"claimable": [], "forbidden": []},
+        audit_verdict=build_model_reply_audit_verdict(
+            surface="dormant7", audit_ran=True, changed_output=False,
+        ),
+    )
+    root = spool.default_spool_root(db)
+    if sid is None and not os.path.exists(root):
+        print("DORMANT_OK")
+    else:
+        print(f"DORMANT_VIOLATION sid={sid!r} root_exists={os.path.exists(root)}")
+
+
 def run_drainer_child(spool_root: str, db: str) -> None:
     sys.path.insert(0, str(_REPO))
     from core.ledger import owner, spool
@@ -283,6 +347,13 @@ def main() -> int:
     if opts.role == "spool_client":
         spool_root, producer, start, end = opts.args
         run_spool_client_child(spool_root, producer, int(start), int(end))
+        return 0
+    if opts.role == "surface_client":
+        db_, producer, start, end = opts.args
+        run_surface_client_child(db_, producer, int(start), int(end))
+        return 0
+    if opts.role == "dormant_surface":
+        run_dormant_surface_child(opts.args[0])
         return 0
     if opts.role == "drainer":
         run_drainer_child(opts.args[0], opts.args[1])
@@ -596,6 +667,101 @@ def main() -> int:
         ),
     }
 
+    # ---- F7: the SHIPPED surface wiring end-to-end. Real non-owner
+    # subprocesses use the exact helpers web/CLI call
+    # (submit_user_message + persist_model_reply's non-owner branch);
+    # the owner drainer commits; every conversation edge must be REAL
+    # (reply.parent_turn_id == its user turn's id), and a flag-unset
+    # surface must leave zero trace (dormancy control).
+    surface_dir = Path(scratch) / "surface"
+    surface_dir.mkdir()
+    db7 = str(surface_dir / "ledger.db")
+    migrate.run(db7)
+    root7 = spool_mod.default_spool_root(db7)
+
+    dormant_env = _child_env()
+    dormant_env.pop("MAEZ_LEDGER_WRITES", None)
+    dormant_p = subprocess.Popen(
+        [sys.executable, __file__, "--role", "dormant_surface", db7],
+        env=dormant_env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    dormant_out, dormant_err = dormant_p.communicate(timeout=300)
+
+    n7 = 250  # pairs per client; 2 clients -> 500 users + 500 replies
+    surface_clients = [
+        _spawn("surface_client", db7, "webish7", "0", str(n7)),
+        _spawn("surface_client", db7, "clish7", str(n7), str(2 * n7)),
+    ]
+    client_errs = []
+    for c in surface_clients:
+        out7, err7 = c.communicate(timeout=900)
+        if "SURFACE_CLIENT_DONE" not in out7:
+            client_errs.append(err7[-500:])
+    enqueued7 = spool_mod.spool_status(root7)["pending_total"]
+    d7 = _spawn("drainer", root7, db7)
+    d7.communicate(timeout=900)
+
+    conn7 = sqlite3.connect(f"file:{db7}?mode=ro", uri=True)
+    try:
+        users7 = dict(conn7.execute(
+            "SELECT raw_text, turn_id FROM turns"
+            " WHERE turn_kind='user_message'"
+            " AND surface IN ('webish7','clish7')"
+        ).fetchall())
+        replies7 = conn7.execute(
+            "SELECT raw_text, parent_turn_id FROM turns"
+            " WHERE turn_kind='model_reply'"
+            " AND surface IN ('webish7','clish7')"
+        ).fetchall()
+        user_dupes7 = conn7.execute(
+            "SELECT raw_text, COUNT(*) c FROM turns"
+            " WHERE turn_kind='user_message'"
+            " AND surface IN ('webish7','clish7')"
+            " GROUP BY raw_text HAVING c > 1"
+        ).fetchall()
+        integrity7 = conn7.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        conn7.close()
+    edges_real = (
+        len(replies7) == 2 * n7
+        and all(
+            raw.startswith("reply-")
+            and parent is not None
+            and users7.get(raw[len("reply-"):]) == parent
+            for raw, parent in replies7
+        )
+    )
+    status7 = spool_mod.spool_status(root7)
+    verdicts["F7_shipped_surface_wiring"] = {
+        "dormant_control": dormant_out.strip(),
+        "clients_failed": client_errs,
+        "enqueued_before_drain": enqueued7,
+        "user_rows": len(users7),
+        "reply_rows": len(replies7),
+        "duplicate_user_payloads": len(user_dupes7),
+        "conversation_edges_all_real": edges_real,
+        "pending_after_drain": status7["pending_total"],
+        "integrity_check": integrity7,
+        "green": (
+            dormant_out.strip() == "DORMANT_OK"
+            and not client_errs
+            and enqueued7 == 4 * n7
+            and len(users7) == 2 * n7
+            and not user_dupes7
+            and edges_real
+            and status7["pending_total"] == 0
+            and integrity7 == "ok"
+        ),
+        "note": (
+            "the exact helpers web/CLI ship with (submit_user_message + "
+            "persist_model_reply non-owner branch) ran in real non-owner "
+            "processes; the owner drainer committed parent-before-child; "
+            "every reply's parent_turn_id is its real user turn — and a "
+            "flag-unset surface left no trace at all"
+        ),
+    }
+
     # ---- PC: positive controls must trip for the RIGHT reason.
     probe_db = str(Path(scratch) / "probe.db")
     migrate.run(probe_db)
@@ -641,9 +807,13 @@ def main() -> int:
             "byte-exact; non-owner writers cannot reach the DB and their "
             "payloads are never silently lost; the chain stays contiguous "
             "and the DB passes integrity_check under checkpoint pressure "
-            "and repeated owner SIGKILL. NOT certified: power-loss "
-            "durability (synchronous=NORMAL), malicious-author resistance, "
-            "and any topology other than the one that ships."
+            "and repeated owner SIGKILL; the shipped surface wiring "
+            "(submit_user_message / persist_model_reply via the spool) "
+            "produces real conversation edges and exact flag-dormancy. "
+            "synchronous=FULL enables SQLite's power-loss contract; NOT "
+            "certified: lying firmware/media death (hardware fault "
+            "injection), malicious-author resistance, and any topology "
+            "other than the one that ships."
         ),
     }
     print(json.dumps(report, indent=2))

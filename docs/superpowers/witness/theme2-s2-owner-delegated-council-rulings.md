@@ -228,6 +228,79 @@ it does not (admission order, ack truth, who may say `birth_anchor`).
 Nouns — *spool, FULL, stop* — are how the last unanimous council
 certified "fails at 0 ms."
 
+## Fifth round (2026-08-24, surface-wiring + lease council): three seats, two author probes, one verified deployment hole
+
+Convened for the admission slice's two load-bearing decisions. Seats:
+Codex (xhigh, read-only repo), Grok (brief-only), Claude subagent
+(read-only repo); the stealth endpoint was down twice (provider error) —
+recorded, not papered over. Every load-bearing claim below was
+re-executed by the implementing author before encoding.
+
+**Executed probes (author, before the council ran):**
+- Same-process flock conflict: a second `LOCK_EX|LOCK_NB` on a different
+  fd of the same ownerlock, same process, is REFUSED — so a "lease" held
+  as a separate flock cannot coexist with the writer's latch.
+- Bare `.venv/bin/python` loads SQLite 3.46.1 (corruption window); the
+  carried "venv activation exports the vendor path" claim is FALSIFIED
+  behaviorally. Only LD_LIBRARY_PATH=vendor/sqlite/lib gets 3.53.4.
+- Design-D mechanism: an enabled LedgerWriter constructs on a
+  NONEXISTENT db (pragmas only), survives `migrate.run()` on a second
+  connection, adopts WAL at first write, commits, integrity ok.
+
+**Q1 — surfaces gate spool enqueue on MAEZ_LEDGER_WRITES: UPHELD 2-1**
+(Codex + Claude vs Grok). Custody-first would let pre-birth
+conversations drain into the ledger at birth as lived autobiography.
+The brake semantic is now FROZEN in the helper docstring: flag OFF
+stops recording INCLUDING custody. Grok's dissent — the brake should
+stop commits, not admission; gate enqueue on `is_born` instead — is
+recorded as an OWNER decision (it reinterprets the flag's covenant
+meaning; both majority seats said a pause-with-custody mode would need
+a NEW flag, never a reinterpretation).
+
+**VERIFIED deployment hole (Claude seat found it; author re-verified in
+the unit files): `maez-web.service` loads NO EnvironmentFile** — only
+inline Environment= lines — while the ceremony checklist lands the flag
+in `model.env`, which only `maez.service` reads. As wired today,
+post-birth web turns would be SILENTLY OMITTED from admission forever.
+Now named in the ceremony checklist, the bring-up warning, and the
+handoff; wiring the flag into a maez-web drop-in is the owner's hand.
+
+**Q2 — lease/latch composition: A (module-global registry) and C
+(release-reacquire) rejected by all three seats.** A re-walks the
+dual-module-identity scar and makes latch-skipping ambient authority;
+Grok additionally showed A fails CLOSED under dual identity (birth dies
+with the latch held) — wrong in a different direction. C reopens
+trap 3; honest correction (Claude seat): its failure mode is loud
+refusal, not silent corruption — rejected anyway, with the right
+reason recorded. RULING ENCODED: **the lease IS the writer** —
+run_transaction constructs the enabled writer FIRST (latch +
+require_fixed before any mutation), migrate runs under the latch,
+the birth write goes through the same writer. No new API, no bypass
+knob; ordinary `LedgerWriter` semantics untouched. Honest caveat: a
+future migration that assumes exclusive file access would break this
+silently — if that ever lands, fall back to the lease-object shape
+(Codex): `maintenance_lease(db).open_writer()`, fd never exposed,
+no LOCK_UN, PID-bound.
+
+**Q3 — terminal states: direction upheld, machine corrected and
+encoded:** tri-state commit classification (`is_born()` maps corrupt to
+False and CANNOT classify; only readable+intact+no-anchor proves
+NOT_COMMITTED; UNKNOWN never authorizes a restart); web is its own
+axis (COMMITTED_WEB_DOWN); 'active' is not owner-active (verify flag in
+the daemon's /proc environ + ownerlock held); Restart=on-failure means
+a failed start ends with a final stop; --resume-services unstrands
+COMMITTED_SERVICES_DOWN without ever re-entering the transaction;
+re-exec (not env export — a placebo for a loaded libsqlite) with
+second-execution re-verify.
+
+**Where the groupthink was (merged):** one token overloaded per layer —
+one flag asked to mean birth+custody+brake; one fd asked to mean
+exclusion+authority; one boolean `is_born` asked to mean commit
+certainty; one systemd 'active' asked to mean ownership. Each got
+split. And the frame itself: "how do lease and latch compose?"
+presupposed two primitives — the executed probe showed the best
+composition is that there is only one.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE
