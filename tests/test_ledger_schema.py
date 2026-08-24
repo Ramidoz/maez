@@ -210,6 +210,13 @@ class TurnsTableTests(unittest.TestCase):
         ("audit_trace_label", "TEXT", False, "NULL"),
         ("audit_trace_value_schema", "INTEGER", False, "NULL"),
         ("audit_trace_metadata_shape", "INTEGER", False, "NULL"),
+        # Admission-protocol slice (migration 0006): client-minted
+        # submission identity (UNIQUE where present — see index census)
+        # and lived-time provenance. Both excluded from chain-hash
+        # canonical bytes; identity is for dedupe, the chain is for
+        # integrity.
+        ("submission_id", "TEXT", False, None),
+        ("submitted_at", "REAL", False, None),
     ]
 
     def test_columns(self):
@@ -500,6 +507,12 @@ class IndexesTests(unittest.TestCase):
         ("idx_turns_parent", "turns", ["parent_turn_id"], "parent_turn_id IS NOT NULL"),
         ("idx_turns_model", "turns", ["model_id", "timestamp"], "model_id IS NOT NULL"),
         ("idx_turns_chain_position", "turns", ["chain_position"], None),
+        (
+            "idx_turns_submission_id",
+            "turns",
+            ["submission_id"],
+            "submission_id IS NOT NULL",
+        ),
         (
             "idx_turns_audit_trace",
             "turns",

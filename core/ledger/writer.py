@@ -340,9 +340,20 @@ class LedgerWriter:
         lifecycle_stage: str | None = None,
         birth_anchor: bool = False,
         meta_marker_keys: list[str] | tuple[str, ...] | None = None,
+        submission_id: str | None = None,
+        submitted_at: float | None = None,
         taint_labels: list[str] | tuple[str, ...] | set[str],
         privacy_access: str,
     ) -> str | None:
+        # Admission identity (migration 0006): optional, UNIQUE where
+        # present. A redrive with the same identity AND the same payload
+        # bytes returns the existing turn_id (idempotent commit); the
+        # same identity with different bytes is refused — an identity
+        # collision is never silently resolved.
+        if submission_id is not None and (
+            not isinstance(submission_id, str) or not submission_id.strip()
+        ):
+            raise ValueError("submission_id must be a non-empty string")
         # One-time markers: each named meta key is set to the new turn_id
         # INSIDE the write transaction, and refused (rolling back the turn
         # row) if already set. This is what makes "the marker turn and the
@@ -590,6 +601,12 @@ class LedgerWriter:
                             audit_trace_metadata_shape,
                         ]
                     )
+                if submission_id is not None:
+                    cols.append("submission_id")
+                    values.append(submission_id)
+                if submitted_at is not None:
+                    cols.append("submitted_at")
+                    values.append(float(submitted_at))
                 placeholders = ",".join("?" for _ in cols)
 
                 conn.execute(
@@ -647,6 +664,31 @@ class LedgerWriter:
                 # conn.commit() is a no-op; transaction control is
                 # via SQL statements.
                 conn.execute("COMMIT")
+            except sqlite3.IntegrityError as e:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                if submission_id is not None and "submission_id" in str(e):
+                    existing = conn.execute(
+                        "SELECT turn_id, raw_text FROM turns"
+                        " WHERE submission_id = ?",
+                        (submission_id,),
+                    ).fetchone()
+                    if existing is not None:
+                        if existing[1] == raw_text:
+                            _LOGGER.info(
+                                "idempotent redrive: submission_id=%r already"
+                                " committed as %s; writing nothing",
+                                submission_id, existing[0],
+                            )
+                            return existing[0]
+                        raise ValueError(
+                            f"submission_id {submission_id!r} already"
+                            " committed with DIFFERENT payload bytes —"
+                            " identity collision refused"
+                        ) from e
+                raise
             except Exception:
                 try:
                     conn.execute("ROLLBACK")

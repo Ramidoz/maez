@@ -74,6 +74,11 @@ _CHAIN_HASH_EXCLUDE = (
     "audit_trace_value_schema",
     "audit_trace_metadata_shape",
     "chain_position",
+    # Admission-protocol slice (migration 0006, 2026-08-24): identity is
+    # for dedupe and lived-time is provenance; the chain is for
+    # integrity. Excluding them keeps every pre-0006 chain valid.
+    "submission_id",
+    "submitted_at",
 )
 
 
