@@ -1,10 +1,10 @@
 {
   "witness": "theme2-s2-falsifier",
   "replaces": "U5 (council ruling 2026-08-23: booleans, never p99)",
-  "ran_at": 1787536401.5545301,
-  "duration_s": 8.2,
+  "ran_at": 1787589558.8017008,
+  "duration_s": 8.7,
   "n": 20000,
-  "scratch": "/tmp/theme2_s2_falsifier_0l2df2vv",
+  "scratch": "/tmp/theme2_s2_falsifier_cb2luivv",
   "sqlite_version": "3.53.4",
   "verdict": "GREEN",
   "arms": {
@@ -54,9 +54,9 @@
     },
     "F5_pragma_license": {
       "journal_mode": "wal",
-      "synchronous": 1,
+      "synchronous": 2,
       "green": true,
-      "licensed_claim": "SIGKILL/process-crash recovery certified. Power-loss/OS-crash durability NOT certified: synchronous=NORMAL may roll back a committed WAL transaction on power loss (SQLite documented semantics). Widening to FULL is an owner decision."
+      "licensed_claim": "SIGKILL/process-crash recovery certified. synchronous=FULL: SQLite's power-loss contract is ENABLED (commit fsync before ack). NOT certified: lying storage firmware, media failure \u2014 true power-loss certification needs hardware fault injection this witness does not perform."
     },
     "F4_sigkill_recovery": {
       "cycles": 8,
@@ -74,10 +74,23 @@
       "green": true,
       "note": "acked = turn_id returned AND ack fsynced before the kill; every acked index must survive. unknown = killed between submit and ack \u2014 present-exactly-once or absent are both honest; a retry protocol may only resubmit via the same identity (admission-protocol gap, recorded)."
     },
+    "F6_spool_exactly_once_across_drainer_kill": {
+      "enqueued": 1000,
+      "drainer_killed_mid_drain": true,
+      "db_rows_with_identity": 1000,
+      "duplicate_submission_ids": 0,
+      "pending_after_recovery": 0,
+      "refused": 0,
+      "receipts": 1000,
+      "payloads_byte_exact_vs_oracle": true,
+      "integrity_check": "ok",
+      "green": true,
+      "note": "two real non-owner client processes published; the owner drainer was SIGKILLed at a deterministic acked-count barrier and a fresh drainer recovered by identity: every envelope exactly once, every ack chain-bound, zero pending left"
+    },
     "PC_positive_controls": {
       "bare_library_probe": "REFUSED ledger writer (MAEZ_LEDGER_WRITES enabled) requires SQLite >= 3.51.3 (WAL-reset fix); this process is linked against 3.46.1. Refusing \u2014 a concurrent WAL writer on this version risks the exact corruption the vendor build exists to prevent.",
       "bare_refused_naming_3513": true,
-      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_0l2df2vv/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
+      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_cb2luivv/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
       "held_latch_refused_naming_owner": true,
       "green": true
     }

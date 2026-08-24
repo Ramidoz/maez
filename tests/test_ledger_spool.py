@@ -255,6 +255,43 @@ class SpoolTests(unittest.TestCase):
         self.assertEqual(len(_turns(db)), 0)
 
 
+class StaleTempFileTests(unittest.TestCase):
+    """Falsifier catch #3 (2026-08-24 full run): SIGKILL inside a receipt
+    publish leaves a stale .tmp- file; with O_EXCL the redrive then hits
+    FileExistsError forever — the envelope can never ack and the drainer
+    spins for eternity. A stale temp from a dead process must never
+    wedge recovery: temp names are unique per submission, so truncating
+    a leftover is always safe."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+
+    def tearDown(self):
+        ledger_owner._reset_for_tests()
+
+    def test_stale_receipt_tmp_does_not_wedge_redrive(self):
+        db, root = _fresh("staletmp")
+        sid = spool.enqueue(
+            root, producer="web", turn_kind="user_message",
+            raw_text="killed mid-ack", kwargs={"surface": "web_owner", **_STAMP},
+        )
+        # Simulate the crashed drainer: a half-written receipt temp file.
+        acked_dir = Path(root) / "web" / "acked"
+        acked_dir.mkdir(parents=True, exist_ok=True)
+        (acked_dir / f".tmp-{sid}.receipt.json").write_text('{"torn')
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            spool.drain_once(root, db)
+            report = spool.drain_once(root, db)
+        self.assertEqual(
+            spool.spool_status(root)["pending_total"], 0,
+            "a stale temp file from a dead process must not wedge redrive",
+        )
+        self.assertTrue((acked_dir / f"{sid}.json").exists())
+        self.assertEqual(len(_turns(db)), 1)
+        self.assertEqual(report["acked"], 0, "second pass had nothing to do")
+
+
 class DrainerLoopTests(unittest.TestCase):
     def setUp(self):
         ledger_owner._reset_for_tests()

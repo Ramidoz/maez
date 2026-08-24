@@ -150,6 +150,33 @@ def run_nonowner_child(db: str, start: int, end: int) -> None:
     print(json.dumps(outcomes))
 
 
+def run_spool_client_child(spool_root: str, producer: str,
+                           start: int, end: int) -> None:
+    sys.path.insert(0, str(_REPO))
+    from core.ledger import spool
+
+    for i in range(start, end):
+        spool.enqueue(
+            spool_root, producer=producer, turn_kind="user_message",
+            raw_text=payload_for(i),
+            kwargs={"surface": f"spool_{producer}", **_STAMP},
+        )
+    print("CLIENT_DONE")
+
+
+def run_drainer_child(spool_root: str, db: str) -> None:
+    sys.path.insert(0, str(_REPO))
+    from core.ledger import owner, spool
+
+    owner.claim_ownership(db)  # eager latch
+    while True:
+        spool.drain_once(spool_root, db)
+        if spool.spool_status(spool_root)["pending_total"] == 0:
+            break
+        time.sleep(0.02)
+    print("DRAINER_DONE")
+
+
 def run_version_probe_child(db: str) -> None:
     sys.path.insert(0, str(_REPO))
     from core.ledger.writer import LedgerWriter
@@ -252,6 +279,13 @@ def main() -> int:
         return 0
     if opts.role == "version_probe":
         run_version_probe_child(opts.args[0])
+        return 0
+    if opts.role == "spool_client":
+        spool_root, producer, start, end = opts.args
+        run_spool_client_child(spool_root, producer, int(start), int(end))
+        return 0
+    if opts.role == "drainer":
+        run_drainer_child(opts.args[0], opts.args[1])
         return 0
 
     # ---------------------------------------------------------------- harness
@@ -378,12 +412,15 @@ def main() -> int:
     verdicts["F5_pragma_license"] = {
         "journal_mode": state["journal_mode"],
         "synchronous": sync_mode,
-        "green": state["journal_mode"] == "wal" and sync_mode == 1,
+        # Council ruling Q2 (2026-08-24): FULL (=2), unconditionally.
+        # The ack (returned turn_id) must never outlive its commit.
+        "green": state["journal_mode"] == "wal" and sync_mode == 2,
         "licensed_claim": (
-            "SIGKILL/process-crash recovery certified. Power-loss/OS-crash "
-            "durability NOT certified: synchronous=NORMAL may roll back a "
-            "committed WAL transaction on power loss (SQLite documented "
-            "semantics). Widening to FULL is an owner decision."
+            "SIGKILL/process-crash recovery certified. synchronous=FULL: "
+            "SQLite's power-loss contract is ENABLED (commit fsync before "
+            "ack). NOT certified: lying storage firmware, media failure — "
+            "true power-loss certification needs hardware fault injection "
+            "this witness does not perform."
         ),
     }
     owner_mod._reset_for_tests()
@@ -472,6 +509,90 @@ def main() -> int:
             "submit and ack — present-exactly-once or absent are both "
             "honest; a retry protocol may only resubmit via the same "
             "identity (admission-protocol gap, recorded)."
+        ),
+    }
+
+    # ---- F6: spool exactly-once across a drainer SIGKILL.
+    db6 = str(Path(scratch) / "falsifier_spool.db")
+    migrate.run(db6)
+    spool_root = str(Path(scratch) / "spool")
+    n6 = 1000
+    clients = [
+        _spawn("spool_client", spool_root, "webish", "0", str(n6 // 2)),
+        _spawn("spool_client", spool_root, "clish", str(n6 // 2), str(n6)),
+    ]
+    for c in clients:
+        c.communicate(timeout=600)
+    from core.ledger import spool as spool_mod
+    enqueued = spool_mod.spool_status(spool_root)["pending_total"]
+
+    def _acked_total() -> int:
+        s = spool_mod.spool_status(spool_root)
+        return sum(p["acked"] for p in s["producers"].values())
+
+    d1 = _spawn("drainer", spool_root, db6)
+    # Deterministic barrier: kill only once acks prove mid-drain.
+    kill_deadline = time.monotonic() + 300
+    drainer_killed = False
+    while time.monotonic() < kill_deadline and d1.poll() is None:
+        if _acked_total() >= 150:
+            d1.send_signal(signal.SIGKILL)
+            d1.wait(timeout=60)
+            drainer_killed = True
+            break
+        time.sleep(0.01)
+    if not drainer_killed and d1.poll() is None:
+        d1.communicate(timeout=600)
+    d2 = _spawn("drainer", spool_root, db6)
+    d2.communicate(timeout=600)
+
+    conn6 = sqlite3.connect(f"file:{db6}?mode=ro", uri=True)
+    try:
+        sub_rows = conn6.execute(
+            "SELECT submission_id, raw_text FROM turns"
+            " WHERE submission_id IS NOT NULL"
+        ).fetchall()
+        dup_subs = conn6.execute(
+            "SELECT submission_id, COUNT(*) c FROM turns"
+            " WHERE submission_id IS NOT NULL"
+            " GROUP BY submission_id HAVING c > 1"
+        ).fetchall()
+        integrity6 = conn6.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        conn6.close()
+    status6 = spool_mod.spool_status(spool_root)
+    receipts = 0
+    for prod_dir in Path(spool_root).iterdir():
+        receipts += len(list((prod_dir / "acked").glob("*.receipt.json")))
+    payload_ok6 = all(
+        raw == payload_for(int(raw.split("-")[2].split(":")[0]))
+        for _sid, raw in sub_rows
+    )
+    verdicts["F6_spool_exactly_once_across_drainer_kill"] = {
+        "enqueued": enqueued,
+        "drainer_killed_mid_drain": drainer_killed,
+        "db_rows_with_identity": len(sub_rows),
+        "duplicate_submission_ids": len(dup_subs),
+        "pending_after_recovery": status6["pending_total"],
+        "refused": sum(p["refused"] for p in status6["producers"].values()),
+        "receipts": receipts,
+        "payloads_byte_exact_vs_oracle": payload_ok6,
+        "integrity_check": integrity6,
+        "green": (
+            enqueued == n6
+            and drainer_killed                # the control must fire
+            and len(sub_rows) == n6
+            and not dup_subs
+            and status6["pending_total"] == 0
+            and receipts == n6
+            and payload_ok6
+            and integrity6 == "ok"
+        ),
+        "note": (
+            "two real non-owner client processes published; the owner "
+            "drainer was SIGKILLed at a deterministic acked-count barrier "
+            "and a fresh drainer recovered by identity: every envelope "
+            "exactly once, every ack chain-bound, zero pending left"
         ),
     }
 

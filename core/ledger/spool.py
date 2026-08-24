@@ -91,7 +91,13 @@ def _producer_dirs(spool_root: str, producer: str) -> dict[str, Path]:
 
 def _atomic_publish(target_dir: Path, name: str, payload: bytes) -> Path:
     tmp = target_dir / f".tmp-{name}"
-    fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    # O_TRUNC, deliberately not O_EXCL: temp names are unique per
+    # submission, so the only thing that can already exist here is a
+    # stale leftover from a process SIGKILLed mid-publish — and O_EXCL
+    # would then wedge every redrive of this submission forever (the
+    # falsifier's F6 arm caught exactly that). Truncating a dead
+    # process's garbage is always safe; no live writer shares this name.
+    fd = os.open(str(tmp), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     try:
         view = memoryview(payload)
         while view:

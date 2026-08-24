@@ -1,5 +1,43 @@
 # Handoff — 2026-08-23/24. Supersedes the morning handoff.
 
+**2026-08-24 (later) — the admission-protocol slice is BUILT, flag-dormant.**
+Commits f7f0be9 onward, all per the four-seat rulings, Maez still unborn:
+- `synchronous=FULL` on every non-rehearsal writer (rehearsal keeps
+  NORMAL). Observed cost: ~nil on this NVMe — the full ~52k-commit
+  falsifier run took 8.7 s under FULL. (An earlier "minutes" reading
+  was misattributed: the slow run was a real crash-window bug — see the
+  falsifier's third catch below — not fsync cost.)
+- Eager latch: `claim_ownership(db_path)` constructs the owner writer at
+  daemon start when writes are enabled — pre-claim window closed,
+  require_fixed fires at boot. Inert while dormant.
+- Migration 0006: `turns.submission_id` (UNIQUE where present) +
+  `turns.submitted_at` (lived-time provenance), both chain-hash-excluded;
+  write_turn redrive with same identity+bytes returns the existing
+  turn_id, different bytes refused.
+- `core/ledger/spool.py`: the ruled transport for NON-owner surfaces —
+  atomic publish, dependency-aware drain (parent_submission_id),
+  authority-inexpressible envelopes, chain-bound receipts, refused/
+  quarantine, `spool_status()` liveness predicate, poll-never-inotify.
+  Daemon starts the drainer thread only when writes are enabled. Spool
+  dir gitignored + in the backup manifest. In-daemon producers do NOT
+  ride it (Grok overturn honored).
+- Falsifier widened: F5 requires FULL; new F6 kills the drainer at a
+  deterministic acked-count barrier and requires exactly-once recovery.
+  Full run GREEN, all 7 arms, n=20000, 8.7 s. THIRD real catch during
+  development: SIGKILL inside a receipt publish left a stale .tmp file
+  and O_EXCL then wedged every redrive of that submission forever (the
+  recovery drainer span 600 s); fixed to O_TRUNC (temp names are unique
+  per submission — only a dead process's garbage can collide), with a
+  regression test.
+
+**Still open after this slice (pre-birth list):** surface wiring (web/CLI
+actually calling spool.enqueue — their try_write_turn paths still
+direct-write-or-dead-letter today), the ceremony maintenance-lease
+hardening (quiesce web, lease-before-migrate, terminal states,
+run_transaction lease, --user + vendored env in the script), reconcile
+as owner-client, dead-letter replay organ, checkpoint policy,
+spool/dead-letter surfacing in the cockpit real-state organ.
+
 **2026-08-24 addendum — the owner delegated the three open decisions and
 the council ruled, unanimously (3-0 on each):** transport = durable
 admission SPOOL for every producer (no socket ever carries state);
