@@ -45,7 +45,12 @@ def tearDownModule():
 
 
 def _fresh_ledger(name: str) -> str:
-    path = Path(_TEST_DB_DIR) / f"{name}_ledger_{os.urandom(4).hex()}.db"
+    # One directory per ledger: the admission spool root derives from the
+    # ledger's parent dir, so sharing a parent would share spool state
+    # (and the enqueue-dedup) across unrelated tests.
+    base = Path(_TEST_DB_DIR) / f"{name}_{os.urandom(4).hex()}"
+    base.mkdir()
+    path = base / "ledger.db"
     migrate.run(str(path))
     return str(path)
 
@@ -223,7 +228,7 @@ class EraGateTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         self.assertEqual(result["verdict"], "clean")
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
         self.assertEqual(result["ledger_era_starts_at"], 1000.0)
 
 
@@ -240,7 +245,7 @@ class CleanReconciliationTests(unittest.TestCase):
         for k in ("audit_log", "fabrication_events",
                   "pending_cards", "self_mod_dialogs"):
             self.assertEqual(result["orphans_found"][k], [])
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
     def test_pre_era_rows_filtered_out(self):
         ledger = _fresh_ledger("clean_pre")
@@ -258,7 +263,7 @@ class CleanReconciliationTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         self.assertEqual(result["verdict"], "clean")
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
     def test_post_era_with_matching_ledger_clean(self):
         ledger = _fresh_ledger("clean_match")
@@ -279,7 +284,7 @@ class CleanReconciliationTests(unittest.TestCase):
             _existing_writer_with_fk(ledger, "self_mod_dialog_id", s)
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         self.assertEqual(result["verdict"], "clean")
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
 
 # ============ State B detect ============
@@ -294,7 +299,7 @@ class OrphanDetectionTests(unittest.TestCase):
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         self.assertEqual(result["verdict"], "orphans_found")
         self.assertEqual(result["orphans_found"]["audit_log"], [orphan_id])
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
     def test_one_orphan_per_db(self):
         ledger = _fresh_ledger("orphan_each")
@@ -311,21 +316,59 @@ class OrphanDetectionTests(unittest.TestCase):
         self.assertEqual(result["orphans_found"]["fabrication_events"], [f])
         self.assertEqual(result["orphans_found"]["pending_cards"], [p])
         self.assertEqual(result["orphans_found"]["self_mod_dialogs"], [s])
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
 
-# ============ State B repair ============
+# ============ State B repair (owner-client since 2026-08-24) ============
 
 class OrphanRepairTests(unittest.TestCase):
-    def test_apply_repairs_audit_log(self):
+    """Grok overturn 2 (council 2026-08-24): reconcile --apply is an
+    OWNER-CLIENT — repairs are ordinary schema-legal system_event rows
+    with FK kwargs and no authority, so they enqueue through the live
+    owner's admission spool instead of constructing a direct writer
+    (which would refuse against a live daemon's latch, or worse, take
+    the latch while the daemon is down)."""
+
+    def setUp(self):
+        from core.ledger import owner as ledger_owner
+
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def _drain(self, ledger: str) -> None:
+        from core.ledger import owner as ledger_owner
+        from core.ledger import spool
+
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            spool.drain_once(spool.default_spool_root(ledger), ledger)
+
+    def test_apply_enqueues_never_writes_directly(self):
+        from core.ledger import spool
+
         ledger = _fresh_ledger("repair_audit")
         ext = _make_external_quartet("repair_audit")
         _seed_ledger_era(ledger, 0.0)
         orphan = _seed_external_row(ext["audit_log_db_path"], "audit_log", "ts", 1.0)
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(result["verdict"], "repaired")
-        self.assertEqual(result["writes_applied"], 1)
+        self.assertEqual(result["verdict"], "repairs_enqueued")
+        self.assertEqual(result["repairs_enqueued"], 1)
+        rows = _all_turns(ledger)
+        self.assertEqual(
+            [r for r in rows if r["turn_id"] != "genesis"], [],
+            "apply must not write the ledger — the owner drains",
+        )
+        pending = (
+            Path(spool.default_spool_root(ledger)) / "reconcile" / "pending"
+        )
+        envs = [json.loads(p.read_text()) for p in pending.iterdir()
+                if not p.name.startswith(".tmp-")]
+        self.assertEqual(len(envs), 1)
+        self.assertEqual(envs[0]["kwargs"]["audit_log_id"], orphan)
+
+        # After the owner drains, the repair row is real and chain-good.
+        self._drain(ledger)
         rows = _all_turns(ledger)
         synthetic = [r for r in rows
                      if r["turn_kind"] == "system_event"
@@ -345,7 +388,7 @@ class OrphanRepairTests(unittest.TestCase):
         )
         self.assertEqual(chain.verify_chain(rows), [])
 
-    def test_apply_repairs_multiple_orphans(self):
+    def test_apply_enqueues_multiple_orphans(self):
         ledger = _fresh_ledger("repair_multi")
         ext = _make_external_quartet("repair_multi")
         _seed_ledger_era(ledger, 0.0)
@@ -355,8 +398,9 @@ class OrphanRepairTests(unittest.TestCase):
         s = _seed_external_row(ext["self_mod_dialogs_db_path"], "self_mod_dialogs", "created_at", 4.0)
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(result["verdict"], "repaired")
-        self.assertEqual(result["writes_applied"], 4)
+        self.assertEqual(result["verdict"], "repairs_enqueued")
+        self.assertEqual(result["repairs_enqueued"], 4)
+        self._drain(ledger)
         rows = _all_turns(ledger)
         self.assertEqual(len([r for r in rows if r["audit_log_id"] == a]), 1)
         self.assertEqual(len([r for r in rows if r["fabrication_event_id"] == f]), 1)
@@ -364,7 +408,9 @@ class OrphanRepairTests(unittest.TestCase):
         self.assertEqual(len([r for r in rows if r["self_mod_dialog_id"] == s]), 1)
         self.assertEqual(chain.verify_chain(rows), [])
 
-    def test_idempotent_second_run(self):
+    def test_idempotent_across_the_enqueue_drain_window(self):
+        """A second apply BEFORE the owner drains must not double-enqueue
+        (the orphan census cannot see queued repairs — the spool can)."""
         ledger = _fresh_ledger("repair_idem")
         ext = _make_external_quartet("repair_idem")
         _seed_ledger_era(ledger, 0.0)
@@ -372,10 +418,17 @@ class OrphanRepairTests(unittest.TestCase):
         _seed_external_row(ext["fabrication_log_db_path"], "fabrication_events", "ts", 2.0)
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             first = reconcile.reconcile(ledger, dry_run=False, **ext)
-            self.assertEqual(first["writes_applied"], 2)
+            self.assertEqual(first["repairs_enqueued"], 2)
             second = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(second["writes_applied"], 0)
-        self.assertEqual(second["verdict"], "clean")
+        self.assertEqual(second["repairs_enqueued"], 0)
+        self.assertEqual(second["verdict"], "repairs_pending_drain")
+        self._drain(ledger)
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            third = reconcile.reconcile(ledger, dry_run=False, **ext)
+        self.assertEqual(third["repairs_enqueued"], 0)
+        self.assertEqual(third["verdict"], "clean")
+        rows = [r for r in _all_turns(ledger) if r["turn_id"] != "genesis"]
+        self.assertEqual(len(rows), 2, "exactly one repair row per orphan")
 
 
 # ============ State C detect ============
@@ -437,7 +490,7 @@ class WritesFlagGateTests(unittest.TestCase):
         with patch.dict(os.environ, scrubbed, clear=True):
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         self.assertEqual(result["verdict"], "clean")
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
 
 
 # ============ Default + chain ============
@@ -453,7 +506,7 @@ class DefaultDryRunTests(unittest.TestCase):
             result = reconcile.reconcile(ledger, **ext)  # dry_run default
         after = _all_turns(ledger)
         self.assertEqual(len(before), len(after))
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
         self.assertEqual(result["verdict"], "orphans_found")
 
 
@@ -481,7 +534,20 @@ class ChainIntegrityAcrossReconciliationTests(unittest.TestCase):
         _seed_external_row(ext["fabrication_log_db_path"], "fabrication_events", "ts", 2.0)
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(result["writes_applied"], 2)
+        self.assertEqual(result["repairs_enqueued"], 2)
+        self.assertEqual(
+            len(_all_turns(ledger)), before_count,
+            "apply enqueues; only the owner's drain commits",
+        )
+        # Drain as the owner: the repairs join the chain cleanly.
+        from core.ledger import owner as ledger_owner
+        from core.ledger import spool
+
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            spool.drain_once(spool.default_spool_root(ledger), ledger)
         after_rows = _all_turns(ledger)
         self.assertEqual(len(after_rows), before_count + 2)
         appended = after_rows[before_count:]
@@ -548,8 +614,8 @@ class LowEraGuardTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(result["verdict"], "repaired")
-        self.assertEqual(result["writes_applied"], 1)
+        self.assertEqual(result["verdict"], "repairs_enqueued")
+        self.assertEqual(result["repairs_enqueued"], 1)
 
     def test_low_era_force_override_works(self):
         """force_low_era=True bypasses the guard."""
@@ -564,8 +630,8 @@ class LowEraGuardTests(unittest.TestCase):
             result = reconcile.reconcile(
                 ledger, dry_run=False, force_low_era=True, **ext
             )
-        self.assertEqual(result["verdict"], "repaired")
-        self.assertEqual(result["writes_applied"], 51)
+        self.assertEqual(result["verdict"], "repairs_enqueued")
+        self.assertEqual(result["repairs_enqueued"], 51)
 
     def test_high_era_no_guard(self):
         """Realistic era (>= 2001) doesn't trigger the guard."""
@@ -578,8 +644,8 @@ class LowEraGuardTests(unittest.TestCase):
             )
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             result = reconcile.reconcile(ledger, dry_run=False, **ext)
-        self.assertEqual(result["verdict"], "repaired")
-        self.assertEqual(result["writes_applied"], 51)
+        self.assertEqual(result["verdict"], "repairs_enqueued")
+        self.assertEqual(result["repairs_enqueued"], 51)
 
     def test_low_era_dry_run_unaffected(self):
         """Guard only applies to --apply mode; dry-run always works."""
@@ -594,7 +660,7 @@ class LowEraGuardTests(unittest.TestCase):
             result = reconcile.reconcile(ledger, dry_run=True, **ext)
         # Should NOT raise; dry-run reports orphans without writing.
         self.assertEqual(result["verdict"], "orphans_found")
-        self.assertEqual(result["writes_applied"], 0)
+        self.assertEqual(result["repairs_enqueued"], 0)
         self.assertEqual(len(result["orphans_found"]["audit_log"]), 51)
 
 

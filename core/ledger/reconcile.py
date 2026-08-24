@@ -6,7 +6,16 @@ Implements the §6.2 reconciliation contract: walk the four external
 dependent DBs (audit_log, fabrication_events, pending_cards,
 self_mod_dialogs), find post-era rows that have no matching FK
 reference in the ledger ``turns`` table, and (optionally) repair the
-gap by appending synthetic ``system_event`` turns through the writer.
+gap with synthetic ``system_event`` turns.
+
+OWNER-CLIENT since 2026-08-24 (council Grok overturn 2): repairs are
+ordinary schema-legal rows with FK kwargs and no authority, so apply
+mode ENQUEUES them through the admission spool for the live owner to
+drain — it never constructs a direct writer (which would refuse against
+a live daemon's latch, or worse, take the latch while the daemon is
+down). Dry-run stays a pure ``mode=ro`` reader. Reconcile is unwelded
+from the birth outage: taking the companion offline to stitch orphan
+audit ids is an outage sized to the wrong problem.
 
 State C (was_rewritten=1 with no claims) is detected and reported but
 never auto-repaired in this slice — claim extraction is slice 4.
@@ -16,8 +25,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-
-from core.ledger import writer
 
 __all__ = ["reconcile"]
 
@@ -205,60 +212,93 @@ def reconcile(
             f"force_low_era=True to override (CLI: --force-low-era)."
         )
 
-    writes_applied = 0
+    repairs_enqueued = 0
     if not dry_run and total_orphans > 0:
-        w = writer.LedgerWriter(ledger_db_path)
-        try:
-            if not w.is_enabled():
-                # Defensive; we already checked the env above, but the
-                # writer's view of the flag is the authoritative one.
-                raise RuntimeError(
-                    "MAEZ_LEDGER_WRITES is not enabled per LedgerWriter."
+        from core.ledger import spool
+
+        spool_root = spool.default_spool_root(ledger_db_path)
+        for table, ts_col, fk_col, key in _FK_MAP:
+            ext_db = ext_paths[key]
+            post_era = _post_era_rows(ext_db, table, ts_col, era_ts)
+            row_by_id = {int(row["id"]): row for row in post_era}
+            for orphan_id in orphans[key]:
+                # Enqueue-drain window idempotency: the orphan census
+                # cannot see queued repairs (they are not committed
+                # yet), so a second apply before the owner drains would
+                # double-enqueue. The spool can see them — skip any
+                # orphan whose repair is already pending or refused.
+                if _repair_already_enqueued(spool_root, fk_col, orphan_id):
+                    continue
+                source_ts = row_by_id.get(orphan_id, {}).get("ts")
+                raw_text = json.dumps(
+                    {
+                        "event": "orphan_dependent_row",
+                        "reason": (
+                            "ledger_write_missing_after_crash_or_legacy_write"
+                        ),
+                        "source_db": key,
+                        "source_id": orphan_id,
+                        "source_table": table,
+                        "source_ts": source_ts,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
-            for table, ts_col, fk_col, key in _FK_MAP:
-                ext_db = ext_paths[key]
-                post_era = _post_era_rows(ext_db, table, ts_col, era_ts)
-                row_by_id = {int(row["id"]): row for row in post_era}
-                for orphan_id in orphans[key]:
-                    source_ts = row_by_id.get(orphan_id, {}).get("ts")
-                    raw_text = json.dumps(
-                        {
-                            "event": "orphan_dependent_row",
-                            "reason": (
-                                "ledger_write_missing_after_crash_or_legacy_write"
-                            ),
-                            "source_db": key,
-                            "source_id": orphan_id,
-                            "source_table": table,
-                            "source_ts": source_ts,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    kwargs = {fk_col: orphan_id}
-                    tid = w.write_turn(
-                        "system_event",
-                        raw_text,
-                        surface="system",
-                        raw_surface="ledger_reconciliation",
-                        taint_labels=["self_generated"],
-                        privacy_access="public",
-                        **kwargs,
-                    )
-                    if tid is not None:
-                        writes_applied += 1
-        finally:
-            w.close()
+                spool.enqueue(
+                    spool_root,
+                    producer="reconcile",
+                    turn_kind="system_event",
+                    raw_text=raw_text,
+                    kwargs={
+                        "surface": "system",
+                        "raw_surface": "ledger_reconciliation",
+                        "taint_labels": ["self_generated"],
+                        "privacy_access": "public",
+                        fk_col: orphan_id,
+                    },
+                )
+                repairs_enqueued += 1
 
     if dry_run:
         verdict = "orphans_found" if total_orphans > 0 else "clean"
+    elif repairs_enqueued > 0:
+        verdict = "repairs_enqueued"
+    elif total_orphans > 0:
+        # Every orphan's repair is already sitting in the spool waiting
+        # for the owner's drainer — honest state, not "clean".
+        verdict = "repairs_pending_drain"
     else:
-        verdict = "repaired" if writes_applied > 0 else "clean"
+        verdict = "clean"
 
     return {
         "ledger_era_starts_at": era_ts,
         "orphans_found": orphans,
         "state_c_turns": state_c,
-        "writes_applied": writes_applied,
+        "repairs_enqueued": repairs_enqueued,
         "verdict": verdict,
     }
+
+
+def _repair_already_enqueued(
+    spool_root: str, fk_col: str, orphan_id: int
+) -> bool:
+    """Is a repair for (fk_col, orphan_id) already sitting in the
+    reconcile producer's spool (pending or terminally refused)? Acked
+    entries need no check: their commit makes the row referenced, so the
+    orphan census already excludes them."""
+    for state in ("pending", "refused"):
+        directory = Path(spool_root) / "reconcile" / state
+        if not directory.is_dir():
+            continue
+        for envelope_path in directory.glob("*.json"):
+            if envelope_path.name.startswith(".tmp-") or (
+                envelope_path.name.endswith(".error.json")
+            ):
+                continue
+            try:
+                envelope = json.loads(envelope_path.read_text())
+            except (ValueError, OSError):
+                continue
+            if (envelope.get("kwargs") or {}).get(fk_col) == orphan_id:
+                return True
+    return False

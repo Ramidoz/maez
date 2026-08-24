@@ -173,7 +173,10 @@ class DryRunDefaultTests(_Tmp):
 
 
 class ApplyModeTests(_Tmp):
-    def test_apply_with_writes_enabled_writes(self):
+    def test_apply_enqueues_through_the_owner_never_writes_directly(self):
+        # Owner-client contract (council 2026-08-24, Grok overturn 2):
+        # --apply enqueues ordinary system_event repairs through the
+        # admission spool; only the owner's drainer touches SQLite.
         _seed_ledger_via_migrate(self.ledger_db, era=ERA_TS)
         self._seed_clean_externals()
         _seed_external_row(self.audit_db, "audit_log", "ts", ERA_TS + 1.0)
@@ -183,12 +186,36 @@ class ApplyModeTests(_Tmp):
                    env_extra={"MAEZ_LEDGER_WRITES": "1"})
         self.assertEqual(res.returncode, 0,
             msg=f"stderr={res.stderr!r} stdout={res.stdout!r}")
-        after = _count_turns(self.ledger_db)
-        self.assertGreater(after, before)
-        # Idempotency: a follow-up dry-run finds nothing.
+        self.assertEqual(_count_turns(self.ledger_db), before,
+            "--apply must not open the ledger; the owner drains")
+        from core.ledger import spool
+
+        pending = (Path(spool.default_spool_root(self.ledger_db))
+                   / "reconcile" / "pending")
+        envelopes = [p for p in pending.iterdir()
+                     if not p.name.startswith(".tmp-")]
+        self.assertEqual(len(envelopes), 2)
+        # Orphans remain visible to a dry-run until the owner drains.
+        res_pending = _run(self._full_args())
+        self.assertEqual(res_pending.returncode, 1)
+        # Drain as the owner, then a dry-run comes back clean.
+        from unittest.mock import patch as _patch
+
+        from core.ledger import owner as ledger_owner
+
+        ledger_owner._reset_for_tests()
+        try:
+            with _patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+                ledger_owner.claim_ownership()
+                spool.drain_once(
+                    spool.default_spool_root(self.ledger_db), self.ledger_db
+                )
+        finally:
+            ledger_owner._reset_for_tests()
+        self.assertEqual(_count_turns(self.ledger_db), before + 2)
         res2 = _run(self._full_args())
-        self.assertEqual(res2.returncode, 0)
-        self.assertEqual(_count_turns(self.ledger_db), after)
+        self.assertEqual(res2.returncode, 0,
+            msg=f"stderr={res2.stderr!r} stdout={res2.stdout!r}")
 
     def test_apply_without_writes_flag_exits_2(self):
         _seed_ledger_via_migrate(self.ledger_db, era=ERA_TS)

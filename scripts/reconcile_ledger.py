@@ -13,12 +13,15 @@ Usage:
         --self-mod-dialogs SMOD_DB \\
         [--apply] [--json] [--quiet]
 
-Default mode is dry-run (no writes). Pass --apply to perform synthetic
-``system_event`` writes for each detected orphan; --apply additionally
-requires ``MAEZ_LEDGER_WRITES=1`` in the environment.
+Default mode is dry-run (no writes, ``mode=ro`` reads only). Pass
+--apply to ENQUEUE a synthetic ``system_event`` repair for each detected
+orphan through the admission spool — the live owner (daemon) drains and
+commits them; this CLI never opens the ledger for writing (owner-client
+contract, council 2026-08-24). --apply additionally requires
+``MAEZ_LEDGER_WRITES=1`` in the environment.
 
 Exit codes:
-    0 = clean (no orphans, or all repaired with --apply)
+    0 = clean (no orphans, or repairs enqueued/pending with --apply)
     1 = orphans found in dry-run mode (operator must --apply)
     2 = error (DB missing/malformed/era missing/MAEZ_LEDGER_WRITES off)
     3 = state_c turns detected (only if no higher-priority signal)
@@ -76,7 +79,7 @@ def _print_human(result: dict) -> None:
     total = sum(len(v) for v in orph.values())
     print(
         f"Reconciliation: era={result['ledger_era_starts_at']:.6f}, "
-        f"orphans={total}, writes_applied={result['writes_applied']}, "
+        f"orphans={total}, repairs_enqueued={result['repairs_enqueued']}, "
         f"verdict={result['verdict']}"
     )
     for key in ("audit_log", "fabrication_events",
