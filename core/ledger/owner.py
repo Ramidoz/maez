@@ -142,6 +142,47 @@ def owner_write_turn(
             return None
 
 
+def owner_commit(
+    db_path: str,
+    turn_kind: str,
+    raw_text: str | None,
+    **kwargs,
+) -> tuple[str, object]:
+    """Serialized commit with a CLASSIFIED outcome, for the spool drainer.
+
+    Returns ('acked', turn_id) | ('refused', error) | ('failed', error).
+    The distinction owner_write_turn cannot express (it returns None for
+    both) is load-bearing here: a refusal is quarantined terminally,
+    a failure stays pending for redrive. Never raises.
+    """
+    global _writer, _writer_db_path
+
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    with _lock:
+        if not ledger_writes_enabled():
+            return ("failed", RuntimeError("ledger writes disabled"))
+        try:
+            w = _ensure_writer_locked(db_path)
+        except Exception as e:
+            return ("failed", e)
+        try:
+            tid = w.write_turn(turn_kind, raw_text, **kwargs)
+        except _REFUSAL_ERRORS as e:
+            return ("refused", e)
+        except Exception as e:
+            try:
+                w.close()
+            except Exception:
+                pass
+            _writer = None
+            _writer_db_path = None
+            return ("failed", e)
+        if tid is None:
+            return ("failed", RuntimeError("writer returned no turn_id"))
+        return ("acked", tid)
+
+
 def _reset_for_tests() -> None:
     """Close and forget the singleton and unclaim ownership. Tests only."""
     global _writer, _writer_db_path, _constructions

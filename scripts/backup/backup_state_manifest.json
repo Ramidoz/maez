@@ -355,6 +355,13 @@
       "comment": "Ledger dead-letter sidecars: failed enabled writes preserved verbatim for replay/reconcile. Life bytes outside the chain until replayed; weakest-archive rule applies."
     },
     {
+      "type": "directory",
+      "path": "memory/ledger_spool",
+      "required": false,
+      "class": "required_continuity",
+      "comment": "Admission spool: durable submission envelopes, receipts, and refused quarantine. Admitted-not-yet-drained life; a restore that omits it omits life (council trap #6, 2026-08-24)."
+    },
+    {
       "type": "sqlite_db",
       "path": "memory/lived_episodes.db",
       "required": false,

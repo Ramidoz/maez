@@ -13,6 +13,9 @@ memory/*.db
 # git must not (private life text would become an accidental commit).
 memory/*.deadletter.*.jsonl
 memory/*.ownerlock
+# Admission spool: durable submission envelopes + receipts = life-bytes
+# in flight. Backed up (manifest), never committed.
+memory/ledger_spool/
 memory/egress_telemetry.key
 memory/drive_curiosity_master.key
 memory/chroma/

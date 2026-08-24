@@ -11944,6 +11944,34 @@ class MaezDaemon:
                 "dead-letter until that is resolved",
                 exc_info=True,
             )
+        # Spool drainer: the owner-side loop that commits non-owner
+        # surfaces' (web, CLI) durable submissions. Flag-gated — with
+        # writes dormant no thread even starts; when live, drain_once is
+        # crash-safe by design (redrive-by-identity), so a daemon-thread
+        # teardown at exit cannot lose an admitted entry.
+        try:
+            from core.ledger.writes_flag import ledger_writes_enabled
+
+            if ledger_writes_enabled():
+                import threading as _threading
+
+                from core.ledger.spool import run_drainer as _run_drainer
+
+                self._ledger_spool_stop = _threading.Event()
+                self._ledger_spool_thread = _threading.Thread(
+                    target=_run_drainer,
+                    args=(
+                        str(MEMORY_DIR / "ledger_spool"),
+                        str(LEDGER_DB_PATH),
+                        self._ledger_spool_stop,
+                    ),
+                    name="ledger-spool-drainer",
+                    daemon=True,
+                )
+                self._ledger_spool_thread.start()
+                logger.info("ledger spool drainer started")
+        except Exception:
+            logger.error("ledger spool drainer failed to start", exc_info=True)
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 
