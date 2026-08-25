@@ -31,7 +31,8 @@ from core.ledger.writer import (
     _report_dropped_write,
 )
 
-__all__ = ["claim_ownership", "this_process_is_owner", "owner_write_turn"]
+__all__ = ["claim_ownership", "this_process_is_owner", "owner_write_turn",
+           "live_writer_connection"]
 
 _LOGGER = logging.getLogger("core.ledger.owner")
 
@@ -96,6 +97,18 @@ def _ensure_writer_locked(db_path: str) -> LedgerWriter:
 
 def this_process_is_owner() -> bool:
     return os.environ.get(_OWNER_PID_ENV, "") == str(os.getpid())
+
+
+def live_writer_connection(db_path: str):
+    """The owner's live connection for this db, or None.
+
+    READ-ONLY use by health surfaces: per-connection PRAGMA state (e.g.
+    ``wal_autocheckpoint``) can only be read truthfully from the
+    connection that actually holds it. Never write through this.
+    """
+    if _writer is None or _writer_db_path != db_path:
+        return None
+    return getattr(_writer, "_conn", None)
 
 
 def owner_write_turn(

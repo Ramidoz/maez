@@ -736,28 +736,57 @@ class LedgerWriter:
 #:     returned busy. On the owner's serialized connection that stalls
 #:     the life-admission rail.
 #: So the writer issues NO checkpoint. What ships instead is visibility:
-#: the cockpit compares live WAL bytes against this derived ceiling, so
-#: a pinned reader is seen rather than discovered by a full disk.
+#: the cockpit compares live WAL bytes against this ceiling, so a WAL
+#: that stops being reclaimed is seen rather than discovered by a full
+#: disk. That signal proves SHAPE, never CAUSE: a pinning reader does
+#: it, and so does a single very large transaction.
 #: Explicitly NOT in scope (this is checkpointing, never compaction —
 #: standing ruling: compaction waits for verified binding + backup):
 #: VACUUM, page reclamation, journal_mode or wal_autocheckpoint changes,
 #: and any manual handling of the -wal/-shm sidecars.
-def wal_ceiling_bytes(db_path: str) -> int:
-    """Expected steady-state WAL high-water mark, DERIVED not guessed:
-    ``page_size * wal_autocheckpoint``. A live WAL far above this is the
-    signature of a reader pinning the snapshot, not of a busy Maez."""
+def wal_ceiling_bytes(db_path: str, *, conn: sqlite3.Connection | None = None) -> int:
+    """Expected steady-state WAL high-water mark, or 0 when unknowable.
+
+    ``page_size * wal_autocheckpoint``. Third-seat correction
+    (2026-08-24, executed): ``wal_autocheckpoint`` is a PER-CONNECTION
+    setting, not a database property — reading it from a fresh
+    connection always reports the compile-time default, so an owner that
+    had disabled checkpointing (a genuinely unbounded WAL) would still
+    be reported as bounded. Pass ``conn`` — the connection that actually
+    checkpoints — whenever one exists; without it this returns the
+    default, which is the truth only while nothing changed it.
+
+    Returns 0 for a missing, empty or unreadable ledger: an unborn
+    0-byte db has no ceiling, and publishing one would be a fabricated
+    number on a real-state surface.
+
+    A WAL far above this proves the file is large. It does NOT prove
+    WHY: a reader pinning the snapshot does it, and so does one very
+    large transaction (this project's own Ruling 2 recommends batching
+    replay churn into large transactions). Shape, never cause.
+    """
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error:
+        if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+            return 0
+    except OSError:
         return 0
+    own = conn is None
+    if own:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return 0
     try:
         page = conn.execute("PRAGMA page_size").fetchone()[0]
         pages = conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
-        return int(page) * int(pages) if page and pages else 0
+        # pages <= 0 means automatic checkpointing is OFF: there is no
+        # ceiling to report, and 0 is how this says "unknown".
+        return int(page) * int(pages) if page and pages and int(pages) > 0 else 0
     except (sqlite3.Error, TypeError, ValueError):
         return 0
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def dead_letter_path(db_path: str) -> str:

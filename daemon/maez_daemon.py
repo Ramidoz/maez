@@ -2812,18 +2812,21 @@ def _ledger_admission_health(daemon) -> dict:
     dead = dead_letter_status(db)
     spool = spool_status(default_spool_root(db))
     # WAL visibility (council round eight): SQLite's automatic
-    # checkpointing IS the policy, so nothing here truncates. What the
-    # surface adds is the ONE thing the default cannot handle — a reader
-    # pinning the snapshot, which grows the WAL without bound and which
-    # an explicit TRUNCATE cannot fix (it returns busy). The ceiling is
-    # derived from the db so a healthy WAL sitting AT its ceiling never
-    # signals; only a real excursion does. Deliberately its own flag:
-    # `attention` means omitted life, and a fat WAL is not that.
+    # checkpointing IS the policy, so nothing here truncates. The
+    # surface reports SHAPE, never CAUSE — a WAL far above its ceiling
+    # means frames stopped being reclaimed, which a pinning reader does
+    # and so does one very large transaction. Third seat executed the
+    # false positive: a big txn with zero readers pins the WAL high
+    # permanently. The ceiling ships with the number so a healthy WAL
+    # sitting AT its ceiling never signals; ceiling 0 means unknowable
+    # (unborn/unreadable db, or checkpointing disabled) and never
+    # signals either. Its own flag: `attention` means omitted life.
     try:
         wal_bytes = os.path.getsize(db + "-wal")
     except OSError:
         wal_bytes = 0
-    ceiling = wal_ceiling_bytes(db)
+    from core.ledger.owner import live_writer_connection
+    ceiling = wal_ceiling_bytes(db, conn=live_writer_connection(db))
     wal_excursion = bool(ceiling and wal_bytes > ceiling * _WAL_EXCURSION_FACTOR)
     thread = getattr(daemon, "_ledger_spool_thread", None)
     drainer_alive = bool(thread.is_alive()) if thread is not None else None

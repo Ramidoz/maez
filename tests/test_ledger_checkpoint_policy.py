@@ -58,9 +58,14 @@ class CheckpointPolicyTests(unittest.TestCase):
         """Both seats ruled: add no checkpoint behavior. A future slice
         that adds one must change this test deliberately, not by
         accident."""
+        # Repo root from THIS file, never a hardcoded path: run from a
+        # git worktree, an absolute path reads main's copy and passes
+        # while the worktree adds a checkpoint (the recorded
+        # worktree-floor confound).
+        repo = Path(__file__).resolve().parents[1]
         for rel in ("core/ledger/writer.py", "core/ledger/owner.py",
                     "core/ledger/spool.py", "daemon/maez_daemon.py"):
-            src = Path("/home/rohit/maez") / rel
+            src = repo / rel
             self.assertNotIn(
                 "wal_checkpoint", src.read_text(),
                 f"{rel} must not issue checkpoints: SQLite's automatic "
@@ -84,14 +89,40 @@ class CheckpointPolicyTests(unittest.TestCase):
             finally:
                 w.close()
 
-    def test_wal_ceiling_is_derived_not_hardcoded(self):
+    def test_ceiling_tracks_the_connection_that_actually_checkpoints(self):
+        """Third seat, executed: wal_autocheckpoint is a PER-CONNECTION
+        setting, not a database property. Reading it from a fresh
+        connection always reports the compile-time default — so an owner
+        that disabled checkpointing (genuinely unbounded WAL) would still
+        be reported as bounded. The old test asserted `== page * 1000`,
+        pinning the very constant it was named for."""
         db = _fresh("ceiling")
-        conn = sqlite3.connect(db)
-        try:
-            page = conn.execute("PRAGMA page_size").fetchone()[0]
-        finally:
-            conn.close()
-        self.assertEqual(wal_ceiling_bytes(db), page * 1000)
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = LedgerWriter(db)
+            try:
+                w._conn.execute("PRAGMA wal_autocheckpoint=0")
+                self.assertEqual(
+                    wal_ceiling_bytes(db, conn=w._conn), 0,
+                    "checkpointing disabled on the live connection means "
+                    "there IS no ceiling; reporting one is a lie",
+                )
+                w._conn.execute("PRAGMA wal_autocheckpoint=250")
+                page = w._conn.execute("PRAGMA page_size").fetchone()[0]
+                self.assertEqual(
+                    wal_ceiling_bytes(db, conn=w._conn), page * 250
+                )
+            finally:
+                w.close()
+
+    def test_ceiling_is_unknown_for_an_unborn_or_missing_ledger(self):
+        """A 0-byte ledger is not a 4 MB ceiling. The live tree is 0
+        bytes today, so this is the value the cockpit actually shows."""
+        base = Path(_TEST_DIR) / f"unborn_{os.urandom(4).hex()}"
+        base.mkdir()
+        empty = base / "ledger.db"
+        empty.touch()
+        self.assertEqual(wal_ceiling_bytes(str(empty)), 0)
+        self.assertEqual(wal_ceiling_bytes(str(base / "absent.db")), 0)
 
     def test_the_default_actually_bounds_the_wal(self):
         """F_bound, in-process: the claim the whole policy rests on."""
