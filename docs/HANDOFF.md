@@ -172,8 +172,19 @@ uses.
 
 ## The next slice, in order
 
-1. **Dead-letter replay — APPLY half** (classifier landed in c5e35bc).
-   Remaining and CONTESTED, do not build on one seat's word: the
+1. **Dead-letter replay — APPLY half. BLOCKED by the seventh council
+   round; do NOT build until the eight standing blocks in the rulings
+   doc are answered** (tool_result requires a parent; append-only means
+   "bind the parent later" is false; `parent_submission_id` becomes a
+   real `parent_turn_id` so it is not an ordering-only hook; two lawful
+   taint combinations are unrepresentable for the companion; default
+   life views cannot filter the replay marker; dead-letter `ts` is
+   custody time not lived time; body/companion crash-completeness;
+   consent must bind to the reviewed census, not a global boolean).
+   The classifier half landed (c5e35bc) and was then repaired against
+   eight Codex findings (2591e35) — including its strongest attack, the
+   UNVERIFIED-read-as-ABSENT fail-open.
+   Design shape agreed so far, still CONTESTED in the parts above: the
    three-valued parent compile (dead-letter `parent_turn_id` → resolve
    the parent row → if it carries a `submission_id`, set the envelope's
    `parent_submission_id` and let the drainer mint a NEW genuine edge —

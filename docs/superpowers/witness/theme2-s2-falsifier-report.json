@@ -1,10 +1,10 @@
 {
   "witness": "theme2-s2-falsifier",
   "replaces": "U5 (council ruling 2026-08-23: booleans, never p99)",
-  "ran_at": 1787620566.487563,
-  "duration_s": 9.1,
+  "ran_at": 1787628448.909289,
+  "duration_s": 9.3,
   "n": 20000,
-  "scratch": "/tmp/theme2_s2_falsifier_kkl6xiuz",
+  "scratch": "/tmp/theme2_s2_falsifier_sht8lxtm",
   "sqlite_version": "3.53.4",
   "verdict": "GREEN",
   "arms": {
@@ -104,7 +104,7 @@
     "PC_positive_controls": {
       "bare_library_probe": "REFUSED ledger writer (MAEZ_LEDGER_WRITES enabled) requires SQLite >= 3.51.3 (WAL-reset fix); this process is linked against 3.46.1. Refusing \u2014 a concurrent WAL writer on this version risks the exact corruption the vendor build exists to prevent.",
       "bare_refused_naming_3513": true,
-      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_kkl6xiuz/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
+      "held_latch_probe": "REFUSED ledger /tmp/theme2_s2_falsifier_sht8lxtm/probe.db already has a live owner; refusing a second concurrent writer \u2014 enqueue through the owner instead",
       "held_latch_refused_naming_owner": true,
       "green": true
     }

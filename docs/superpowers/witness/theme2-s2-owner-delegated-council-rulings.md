@@ -358,6 +358,87 @@ code (14 RED → GREEN), falsifier re-run GREEN 8/8:**
   marker fix the process now honestly routes as non-owner; whether the
   daemon should hard-fail at boot instead is an open lifecycle item.
 
+## Seventh round (2026-08-24, dead-letter replay organ): two seats, apply half BLOCKED
+
+Seats: Grok (brief-only) and Codex (xhigh, repo, on an amended design
+Grok had already reshaped). The Claude subagent seat died on a session
+limit — recorded, not papered over. Stealth stayed down.
+
+**Grok reshaped the design before it was built.** Its frame: the first
+proposal "refuses to compile, then invents trust at the wrong layer to
+avoid compiling" — it would strip the one relational fact that made a
+reply a reply, then hand every `enqueue` caller the authority the
+admission door refuses by name. Accepted amendments: parent edges
+COMPILE into the spool's native `parent_submission_id` (three-valued);
+no trusted params on `enqueue` (a reconstruction-only seam instead); no
+replay-state JSON (a third ledger that desyncs); never overwrite a
+published filename; byte identity demoted from gate to SIGNAL
+("withholding loses speech — an equal crime to duplicating it, with a
+different victim"); split clocks; and replayed SPEECH consent-gated
+separately because auto-re-admitting a months-old `model_reply` "is a
+birth, not a retry".
+
+**Grok also forced a prerequisite, now shipped (7b7acb2):**
+`owner_write_turn` persists its pre-attempt `attempt_id` as the row's
+`submission_id`. Without it the organ is "permanently heuristic" —
+"did this commit?" answerable only by byte archaeology.
+
+**Codex then ruled the amended design FIX FIRST / BLOCK**, and its
+strongest attack landed on the classifier already shipped: it converted
+UNVERIFIED db state into ABSENT and called the record replayable, so an
+apply built on top would duplicate committed life exactly when the
+organ knows least. Eight findings fixed under test (2591e35).
+
+**Codex falsified a claim THIS DOC's author had recorded as executed
+fact.** The handoff asserted "all replay raw_surface options validate;
+the organ-eats-itself fear is falsified." The probe behind it noticed
+the caller override in `CALLER_ALLOWED_TAINT_LABEL_SETS` and then
+tested only rows whose labels come from the DEFAULT map — every case
+except the one where the override bites. Re-executed: `user_message` +
+`self_generated` + `raw_surface="x6_rehearsal"` COMMITS; change only
+`raw_surface` to `"dead_letter_replay"` and the writer REFUSES. The
+corrected rule: the reconstructed BODY preserves turn_kind, surface,
+raw_surface (including None), taint_labels and privacy_access EXACTLY;
+only a content-light COMPANION carries the replay marker.
+
+**Standing BLOCKS on the apply half — do not build past these:**
+1. `tool_result` REQUIRES `parent_turn_id` (writer.py:73), so "legacy
+   parent without identity → replay unparented" is not universal.
+2. Turns are append-only: "owner-review may bind the parent later" is
+   FALSE — approval must precede commit, or bind through a new
+   append-only relation.
+3. `parent_submission_id` is NOT an ordering-only hook: the drainer
+   converts it into a persisted `parent_turn_id` whose canonical
+   meaning is dialog continuity. Either own the companion as a real
+   provenance child, or add an envelope-only `drain_after_submission_id`
+   that never becomes a ledger edge. Payload prose cannot redefine a
+   stored column.
+4. Two lawful source taint combinations (`self_generated + tool_output
+   + third_party`, and the same plus `internet_derived`) are
+   UNREPRESENTABLE for a `system_event` companion under today's closed
+   vocabulary — so the companion must be hash-and-reference-only, or
+   the vocabulary gets deliberately extended with tests.
+5. Default life views cannot filter the replay marker: `span_reader`
+   consumes every row and `recent_turns` neither selects nor filters
+   `raw_surface`.
+6. Dead-letter `ts` is failure-custody time, NOT lived time — schema
+   canon defines `submitted_at` as when the event lived. Leave it null
+   or record an explicitly named `dead_lettered_at` proxy; future
+   writers should capture `attempted_at` before the first attempt.
+7. Crash-completeness: body and companion are two deterministic
+   artifacts; a crash after body commit but before companion enqueue
+   must enqueue the missing companion, not skip the record as
+   already_committed.
+8. Consent must bind to the reviewed census (target ledger, digests,
+   selected model_reply sids, apply run) — one global boolean would
+   authorize a class, not a decision.
+
+**Where the groupthink was (Codex, kept whole):** "treating nouns as
+proofs — a function named 'reconstructed' as private authority; a
+deterministic ID as complete idempotency; a dependency as
+non-genealogical ordering; a filename as verified state; a dead-letter
+timestamp as lived time; and 'failed' as proof the payload was valid."
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE
