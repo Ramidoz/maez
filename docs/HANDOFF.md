@@ -189,13 +189,33 @@ uses.
    `replay_codex3.txt` or re-run it; note it must be launched with
    `< /dev/null` or `codex exec` hangs forever on stdin (cost: ~2 h
    this session)**.
-   Already EXECUTED, do not re-derive: `raw_surface` is unconstrained
-   for taint (only one narrow caller override exists in
-   `CALLER_ALLOWED_TAINT_LABEL_SETS`), so all four replay-surface
-   options validate — the "organ eats itself" fear is FALSIFIED as a
-   mechanism; which surface to use is a covenant question, not a
-   constraint. `turns.timestamp` is REAL epoch, so the window
-   comparison is sound.
+   **CORRECTION (2026-08-24, Codex seat + re-executed): the earlier
+   "all replay surface options validate, the organ-eats-itself fear is
+   falsified" claim in this handoff was WRONG.** My probe noticed the
+   caller override in `CALLER_ALLOWED_TAINT_LABEL_SETS` and then tested
+   only rows whose labels come from the DEFAULT map — i.e. every case
+   except the one where the override bites. Re-executed counterexample:
+   a `user_message` with `taint_labels=["self_generated"]` and
+   `raw_surface="x6_rehearsal"` COMMITS (the override permits it);
+   change only `raw_surface` to `"dead_letter_replay"` and the writer
+   REFUSES — `taint_labels ['self_generated'] not allowed for caller
+   'dead_letter_replay'`. The writer passes `raw_surface or surface`
+   as caller authority into the closed taint validator
+   (writer.py:391), so overwriting the body's raw_surface CAN make the
+   replay refuse and dead-letter itself.
+   RULE, now executed: the reconstructed BODY preserves `turn_kind`,
+   `surface`, `raw_surface` (including `None`), `taint_labels` and
+   `privacy_access` EXACTLY. Only the COMPANION carries
+   `raw_surface="dead_letter_replay"`, and it should be content-light
+   (hash/reference only) — copying stripped kwargs into it makes its
+   truthful taint `original + self_generated`, and two lawful source
+   combinations are unrepresentable in the closed `system_event`
+   vocabulary today.
+   Still true and re-verified: `turns.timestamp` is REAL epoch, so the
+   window comparison is sound.
+   Lesson (the same one this repo keeps re-learning): a probe that
+   exercises only the general path does not falsify a claim about the
+   exception. The exception is where the universal stops being true.
 2. **Checkpoint policy** — the last pre-birth item.
 3. Birth ships after that, per the standing order.
 
