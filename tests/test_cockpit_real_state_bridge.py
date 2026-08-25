@@ -426,5 +426,76 @@ class TestLedgerAdmissionRealState(unittest.TestCase):
         )
 
 
+class TestWalExcursionVisibility(unittest.TestCase):
+    """Council round eight: ship no periodic checkpoint, ship VISIBILITY.
+    A WAL far above the derived autocheckpoint ceiling is the signature
+    of a reader pinning the snapshot — the one case that grows without
+    bound and that a TRUNCATE cannot fix. Both seats warned that a raw
+    gauge would page on the HEALTHY state (a steady ~4 MB WAL is
+    correct), so the surface carries the ceiling too, and the excursion
+    is its OWN signal: `attention` stays about omitted life."""
+
+    def _adm(self, db):
+        from daemon import maez_daemon as md
+        with mock.patch.object(md, "LEDGER_DB_PATH", db):
+            return _build_state_under_patches(_FakeDaemon())["ledger_admission"]
+
+    def test_surface_carries_wal_bytes_and_its_derived_ceiling(self):
+        import tempfile
+        from pathlib import Path
+
+        from core.ledger import migrate
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            migrate.run(str(db))
+            adm = self._adm(db)
+        self.assertIn("wal_bytes", adm)
+        self.assertGreater(
+            adm["wal_ceiling_bytes"], 0,
+            "the ceiling must be derived from the db, not guessed",
+        )
+        self.assertFalse(adm["wal_excursion"])
+        self.assertFalse(adm["attention"])
+
+    def test_healthy_wal_at_the_ceiling_is_not_an_excursion(self):
+        """The false-incident trap both seats named: a WAL sitting at the
+        autocheckpoint ceiling is SQLite working, not a problem."""
+        import tempfile
+        from pathlib import Path
+
+        from core.ledger import migrate
+        from core.ledger.writer import wal_ceiling_bytes
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            migrate.run(str(db))
+            Path(f"{db}-wal").write_bytes(b"\0" * wal_ceiling_bytes(str(db)))
+            adm = self._adm(db)
+        self.assertFalse(
+            adm["wal_excursion"],
+            "a WAL at its ceiling is the working state and must never "
+            "raise a signal",
+        )
+
+    def test_excursion_flags_without_claiming_omitted_life(self):
+        import tempfile
+        from pathlib import Path
+
+        from core.ledger import migrate
+        from core.ledger.writer import wal_ceiling_bytes
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            migrate.run(str(db))
+            Path(f"{db}-wal").write_bytes(
+                b"\0" * (wal_ceiling_bytes(str(db)) * 8)
+            )
+            adm = self._adm(db)
+        self.assertTrue(adm["wal_excursion"])
+        self.assertFalse(
+            adm["attention"],
+            "a pinned WAL is an operational excursion, NOT omitted life; "
+            "folding it into attention would blur what attention means",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

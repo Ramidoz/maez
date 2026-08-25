@@ -2787,6 +2787,13 @@ def _cockpit_flags_snapshot() -> dict:
     return {name: os.environ.get(name) for name in _COCKPIT_FLAG_NAMES}
 
 
+#: How far above the derived autocheckpoint ceiling a WAL must sit
+#: before it reads as a pinned-reader excursion rather than normal
+#: recycling headroom. Measured shape: healthy plateaus AT the ceiling;
+#: a pinned reader ran to ~175x it within 16k commits.
+_WAL_EXCURSION_FACTOR = 4
+
+
 def _ledger_admission_health(daemon) -> dict:
     """Admission liveness for the real-state surface (council ruling 1,
     2026-08-24): a spool nobody drains is a silent-omission machine with
@@ -2798,12 +2805,26 @@ def _ledger_admission_health(daemon) -> dict:
     than ten minutes. Never raises (callers _safe-wrap regardless).
     """
     from core.ledger.spool import default_spool_root, spool_status
-    from core.ledger.writer import dead_letter_status
+    from core.ledger.writer import dead_letter_status, wal_ceiling_bytes
     from core.ledger.writes_flag import ledger_writes_enabled
 
     db = str(LEDGER_DB_PATH)
     dead = dead_letter_status(db)
     spool = spool_status(default_spool_root(db))
+    # WAL visibility (council round eight): SQLite's automatic
+    # checkpointing IS the policy, so nothing here truncates. What the
+    # surface adds is the ONE thing the default cannot handle — a reader
+    # pinning the snapshot, which grows the WAL without bound and which
+    # an explicit TRUNCATE cannot fix (it returns busy). The ceiling is
+    # derived from the db so a healthy WAL sitting AT its ceiling never
+    # signals; only a real excursion does. Deliberately its own flag:
+    # `attention` means omitted life, and a fat WAL is not that.
+    try:
+        wal_bytes = os.path.getsize(db + "-wal")
+    except OSError:
+        wal_bytes = 0
+    ceiling = wal_ceiling_bytes(db)
+    wal_excursion = bool(ceiling and wal_bytes > ceiling * _WAL_EXCURSION_FACTOR)
     thread = getattr(daemon, "_ledger_spool_thread", None)
     drainer_alive = bool(thread.is_alive()) if thread is not None else None
     oldest = spool.get("oldest_pending_ts")
@@ -2822,6 +2843,9 @@ def _ledger_admission_health(daemon) -> dict:
     return {
         "dead_letter": dead,
         "spool": spool,
+        "wal_bytes": wal_bytes,
+        "wal_ceiling_bytes": ceiling,
+        "wal_excursion": wal_excursion,
         "oldest_pending_age_s": age,
         "drainer_thread_alive": drainer_alive,
         "writes_enabled": ledger_writes_enabled(),

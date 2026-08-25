@@ -722,6 +722,44 @@ class LedgerWriter:
 # ---------------------------------------------------------------------------
 
 
+#: SQLite's automatic checkpointing is the CHECKPOINT POLICY. Council
+#: round eight (2026-08-24, Codex + Grok, independently): ship no
+#: periodic checkpoint. Executed evidence behind that ruling:
+#:   * with no pinning reader the WAL PLATEAUS at the autocheckpoint
+#:     ceiling (1000 pages x page_size ~= 4.1 MB) and stays flat across
+#:     20,000 commits — there is no unbounded growth to prevent;
+#:   * the only unbounded case is a reader pinning the snapshot
+#:     (measured 4.17 MB -> 727 MB over 16,000 commits), and a periodic
+#:     TRUNCATE cannot fix it — it returns busy, honestly;
+#:   * TRUNCATE is not free: with a write lock genuinely held elsewhere
+#:     it consumed the owner's FULL busy_timeout (5,005 ms) and still
+#:     returned busy. On the owner's serialized connection that stalls
+#:     the life-admission rail.
+#: So the writer issues NO checkpoint. What ships instead is visibility:
+#: the cockpit compares live WAL bytes against this derived ceiling, so
+#: a pinned reader is seen rather than discovered by a full disk.
+#: Explicitly NOT in scope (this is checkpointing, never compaction —
+#: standing ruling: compaction waits for verified binding + backup):
+#: VACUUM, page reclamation, journal_mode or wal_autocheckpoint changes,
+#: and any manual handling of the -wal/-shm sidecars.
+def wal_ceiling_bytes(db_path: str) -> int:
+    """Expected steady-state WAL high-water mark, DERIVED not guessed:
+    ``page_size * wal_autocheckpoint``. A live WAL far above this is the
+    signature of a reader pinning the snapshot, not of a busy Maez."""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        page = conn.execute("PRAGMA page_size").fetchone()[0]
+        pages = conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+        return int(page) * int(pages) if page and pages else 0
+    except (sqlite3.Error, TypeError, ValueError):
+        return 0
+    finally:
+        conn.close()
+
+
 def dead_letter_path(db_path: str) -> str:
     """Sidecar file where this process's failed ENABLED writes are durably
     preserved. Per-process (pid suffix) so concurrent failing processes

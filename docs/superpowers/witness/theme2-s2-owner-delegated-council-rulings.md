@@ -439,6 +439,76 @@ deterministic ID as complete idempotency; a dependency as
 non-genealogical ordering; a filename as verified state; a dead-letter
 timestamp as lived time; and 'failed' as proof the payload was valid."
 
+## Eighth round (2026-08-24, checkpoint policy): the slice that shipped NO code
+
+Two seats (Codex xhigh w/ repo, Grok brief-only; the Claude subagent
+seat died on a session limit again). Both independently ruled: **ship no
+periodic checkpoint.** The proposal was falsified by its own numbers
+BEFORE any seat reported — the author's probe, run to answer the brief's
+own "attack the premise" question.
+
+**Executed evidence (all re-runnable):**
+- No pinning reader: the WAL PLATEAUS at 4.19 MB and stays flat across
+  20,000 commits. Grok supplied the arithmetic: 1000 pages x 4096 B is
+  the autocheckpoint ceiling — the plateau IS the default working.
+  There is no unbounded growth to prevent.
+- One pinned reader: 4.17 MB -> 727 MB over 16,000 commits (~45 KB per
+  commit), unbounded. `TRUNCATE` cannot fix it: returns busy=1.
+- `TRUNCATE` is NOT free. Uncontended it is 0.2 ms; with a write lock
+  genuinely held elsewhere it consumed the owner's FULL
+  `busy_timeout=5000` (measured 5,005 ms) and still returned busy. On
+  the owner's serialized connection that stalls the life-admission rail.
+  (The author's first contention probe was INVALID — the holder thread
+  died before taking the lock — and was redone. Recorded because a
+  wrong-but-plausible measurement is how this arc keeps getting bitten.)
+- `mode=ro` connections cannot checkpoint at all (disk I/O error), so
+  read-only consumers are structurally excluded.
+- The backup path uses SQLite's online backup API: it does not touch the
+  source WAL and copies completely, so `ledger.db-wal`'s absence from
+  the backup manifest is CORRECT, not a gap.
+
+**Grok's framing, kept:** the trigger is anti-correlated with
+effectiveness — it sleeps while the WAL is healthy and wakes only when
+its action cannot work. "You are proposing to take a write lock on the
+life thread to hide a file size SQLite is supposed to leave alone."
+**Codex's addition:** if physical size is ever shown to be harmful, the
+right tool is SQLite's built-in `journal_size_limit`, not a periodic
+blocking loop.
+
+**What shipped instead:** `wal_ceiling_bytes()` (DERIVED as
+page_size x wal_autocheckpoint, never hardcoded), the policy written
+into `writer.py` with its evidence and its refuse-list, a unit witness
+that the default actually bounds the WAL (goes RED if that ever stops
+being true), a witness that a pinned reader is what breaks the bound,
+and cockpit visibility: `wal_bytes` + `wal_ceiling_bytes` +
+`wal_excursion`. Both seats warned a raw gauge would page on the HEALTHY
+state, so the ceiling ships alongside the number and a WAL sitting AT
+its ceiling never signals. The excursion is its OWN flag — `attention`
+continues to mean omitted life, and a fat WAL is not that.
+
+**Seat disagreement, recorded not resolved:** Grok wanted a new
+falsifier arm (`F_bound`); Codex ruled no new arm is needed for a
+documentation-only policy. Landed as a unit-battery witness rather than
+a falsifier arm, so the claim is checked without lengthening every
+falsifier run. Both seats agreed the one arm NOT to write is another
+that merely re-proves TRUNCATE works.
+
+**Refuse-list for this slice (merged):** no VACUUM/page reclamation, no
+`journal_mode` or `wal_autocheckpoint` changes, no manual handling of
+the -wal/-shm sidecars, no waiting checkpoint modes, no checkpoint
+telemetry written INTO the ledger (it would generate the very WAL
+activity it reports), no treating checkpoint success as binding or
+backup freshness, and no `last_checkpoint` field — it would falsely
+imply knowledge of SQLite's automatic checkpoints.
+
+**Where the groupthink was:** equating visible file size with live WAL
+debt; calling an existing background thread "free"; treating an honest
+busy=1 as operationally harmless; treating the advisory owner latch as
+global SQLite authority; and debating three manual checkpoint modes
+before asking whether the default already solved the problem. Codex's
+summary: the 4 MB file is SQLite's reusable scratchpad, not an
+accumulating pile of unprocessed life.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE
