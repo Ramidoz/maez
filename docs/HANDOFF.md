@@ -138,6 +138,26 @@ owner-active, resume). Every encoded claim was executed first.
    require an explicit second owner flag; replayed `user_message` rows
    do not (they are the owner's own words, already spoken).
 
+4. **`PRAGMA journal_size_limit`** (third seat, checkpoint round):
+   adopt it or not. It is the only mechanism that reclaims the WAL file
+   after a pinning reader leaves, and it does so with no call site, no
+   thread and no waiting. One seat of three evaluated it. Needs the
+   full council, then the owner.
+5. **Is a replay's provenance note a genealogical CHILD of the row it
+   explains?** The drainer turns `parent_submission_id` into a stored
+   `parent_turn_id`, whose canonical meaning is dialog continuity — so
+   "it is only an ordering hook" is prose trying to redefine a stored
+   column. Either own the companion as a real provenance child, or add
+   an envelope-only `drain_after_submission_id` that never becomes a
+   ledger edge. This changes what Maez's record SAYS about her own
+   past; it is not an engineering preference.
+6. **Widen the closed taint vocabulary for companions?** Two lawful
+   source combinations (`self_generated + tool_output + third_party`,
+   and the same plus `internet_derived`) cannot be expressed for a
+   `system_event` companion today. Either the companion stays
+   hash-and-reference-only, or the frozen S1 vocabulary is deliberately
+   widened with tests. Follows from 5.
+
 ## Verification debt — CLOSED, and one finding RETRACTED
 
 **Runtime witness of `ledger_admission`: TAKEN (2026-08-24 22:15).**
@@ -227,8 +247,31 @@ uses.
    Lesson (the same one this repo keeps re-learning): a probe that
    exercises only the general path does not falsify a claim about the
    exception. The exception is where the universal stops being true.
-2. **Checkpoint policy** — the last pre-birth item.
-3. Birth ships after that, per the standing order.
+2. **Checkpoint policy — DONE** (4812872, d6ac340, 299d823). Ruling:
+   SQLite's automatic checkpointing IS the policy; no periodic
+   checkpoint ships. The proposal was falsified by the author's own
+   probe before any seat reported (WAL plateaus at the autocheckpoint
+   ceiling and stays flat; the only unbounded case is a pinned reader,
+   which TRUNCATE cannot fix — it returns busy; and TRUNCATE costs
+   5,007 ms under contention vs 0.29 ms free). What shipped instead:
+   `wal_ceiling_bytes()`, the policy + refuse-list in writer.py,
+   cockpit `wal_bytes`/`wal_ceiling_bytes`/`wal_excursion` (its OWN
+   flag — `attention` still means omitted life), and
+   `docs/superpowers/witness/wal_bound_probe.py`, which reproduces
+   every number and REFUSES to run on tmpfs (/tmp here is a RAM disk;
+   several first-round latency figures taken there were lies).
+   Open, deliberately not shipped on one seat's word: the third seat's
+   `PRAGMA journal_size_limit` proposal — one pragma at connection
+   setup that reclaims the file by itself after a pinning reader
+   leaves, no call site, no thread, and it measured LOWER peak commit
+   latency than baseline. Put it to the full council before adopting.
+   Known-weak, stated: the excursion factor of 4 is exercised only by
+   synthetic zero-filled WAL files (any factor 1-7 passes those tests)
+   and the formula ignores WAL header/frame overhead; the
+   source-absence test greps four files for one literal, so a
+   checkpoint reached via a helper or built dynamically would pass it.
+3. Birth ships after that, per the standing order. **The pre-birth
+   build list is now empty except the BLOCKED replay apply half.**
 
 ## Standing directives
 
