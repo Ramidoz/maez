@@ -47,10 +47,14 @@ from pathlib import Path
 
 from core.ledger.writer import _json_safe
 
+#: ``enqueue_reconstructed`` is DELIBERATELY absent: it accepts a
+#: caller-chosen identity, lived time, producer and parent, so it is a
+#: reconstruction-only seam for the dead-letter replay organ, not public
+#: API (Codex seat 2026-08-24: "'private reconstruction seam' exported
+#: publicly in __all__" — a name is not an authority boundary).
 __all__ = [
     "default_spool_root",
     "enqueue",
-    "enqueue_reconstructed",
     "drain_once",
     "spool_status",
 ]

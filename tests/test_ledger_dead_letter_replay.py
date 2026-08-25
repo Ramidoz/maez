@@ -218,5 +218,100 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(report["counts"]["replayable"], 1)
 
 
+class CodexValidationTests(unittest.TestCase):
+    """Codex council seat (2026-08-24) on the shipped classifier. Its
+    strongest attack: the classifier converted UNVERIFIED db state into
+    ABSENT and then called the record replayable — so an APPLY built on
+    top would duplicate committed life exactly when the organ knows
+    least."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def test_unreadable_db_is_unverified_never_replayable(self):
+        db = _fresh("unverified")
+        rec = _write_record(db)
+        # A file that opens as SQLite but cannot be queried.
+        Path(db).write_bytes(b"not a database, but it exists" * 8)
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(
+            row["disposition"], "unverified",
+            "DB state that cannot be read is UNKNOWN, not ABSENT — "
+            "replaying here could duplicate committed life",
+        )
+
+    def test_missing_db_is_unverified_not_replayable(self):
+        db = _fresh("nodb")
+        rec = _write_record(db)
+        Path(db).unlink()
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(row["disposition"], "unverified")
+
+    def test_divergent_duplicate_ids_are_an_identity_conflict(self):
+        db = _fresh("conflict")
+        rec = _write_record(db, raw_text="version A")
+        other = Path(f"{db}.deadletter.9999.jsonl")
+        other.write_text(json.dumps(
+            {**rec, "pid": 9999, "raw_text": "version B",
+             "category": "refused"}, sort_keys=True) + "\n")
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(
+            row["disposition"], "identity_conflict",
+            "two DIFFERENT payloads under one identity are evidence, "
+            "never a silent first-file-wins replay",
+        )
+
+    def test_unknown_category_is_not_replayable(self):
+        db = _fresh("unknown_cat")
+        rec = _write_record(db, category="something_new")
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(row["disposition"], "unknown_category")
+
+    def test_missing_category_is_not_replayable(self):
+        db = _fresh("no_cat")
+        rec = _write_record(db)
+        path = Path(f"{db}.deadletter.4242.jsonl")
+        env = json.loads(path.read_text().splitlines()[0])
+        env.pop("category")
+        path.write_text(json.dumps(env, sort_keys=True) + "\n")
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(row["disposition"], "unknown_category")
+
+    def test_mixed_timestamp_types_never_raise(self):
+        db = _fresh("mixed_ts")
+        _write_record(db, ts=1.0)
+        _write_record(db, ts="2026-01-01T00:00:00")
+        try:
+            report = _classify(db)
+        except Exception as exc:  # noqa: BLE001 — that is the defect
+            self.fail(f"classify must never raise; got {exc!r}")
+        self.assertEqual(len(report["records"]), 2)
+
+    def test_same_identity_under_another_producer_is_already_enqueued(self):
+        """An envelope carrying this identity anywhere in the spool means
+        the submission is published; the producer label is not a
+        namespace."""
+        db = _fresh("cross_producer")
+        rec = _write_record(db)
+        spool.enqueue_reconstructed(
+            spool.default_spool_root(db),
+            submission_id=rec["event_id"],
+            submitted_at=rec["ts"],
+            producer="web_owner",
+            turn_kind=rec["turn_kind"],
+            raw_text=rec["raw_text"],
+            kwargs=dict(rec["kwargs"]),
+        )
+        row = _by_id(_classify(db))[rec["event_id"]]
+        self.assertEqual(row["disposition"], "already_enqueued")
+
+    def test_reconstruction_seam_is_not_public_api(self):
+        """'private reconstruction seam' must be mechanism, not prose:
+        it accepts arbitrary identity, lived time, producer and parent,
+        so it must not sit in the module's public surface."""
+        self.assertNotIn("enqueue_reconstructed", spool.__all__)
+
+
 if __name__ == "__main__":
     unittest.main()

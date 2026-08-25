@@ -56,10 +56,51 @@ WINDOW_S = 300.0
 _PRODUCER = "dead_letter_replay"
 
 
+def _published_anywhere(spool_root: str, submission_id: str) -> str | None:
+    """Is this identity published under ANY producer? The producer label
+    is a directory name, not a namespace: the schema UNIQUE is on the
+    submission_id alone, so an envelope carrying this identity anywhere
+    means the submission is already published (Codex seat, 2026-08-24 —
+    scanning only our own producer classified a cross-producer duplicate
+    as replayable)."""
+    from core.ledger import spool
+
+    root = Path(spool_root)
+    if not root.is_dir():
+        return None
+    for producer_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        state = spool._submission_exists(
+            spool_root, producer_dir.name, submission_id
+        )
+        if state:
+            return f"{producer_dir.name}/{state}"
+    return None
+
+
+#: The payload fields that make two records under one identity the SAME
+#: submission. Divergence in any of them is an identity conflict, not a
+#: duplicate — first-file-wins would silently pick one version of a life.
+_IDENTITY_FIELDS = ("turn_kind", "raw_text", "category", "kwargs")
+
+
+def _same_submission(a: dict, b: dict) -> bool:
+    def key(record: dict):
+        return json.dumps(
+            {f: record.get(f) for f in _IDENTITY_FIELDS},
+            sort_keys=True, default=str,
+        )
+
+    return key(a) == key(b)
+
+
 def _records(db_path: str) -> tuple[list[dict], int]:
     """Every dead-letter record across all pid sidecars, deduped by
-    identity (a redrive that failed twice is ONE record), plus the torn
-    line count."""
+    identity, plus the torn line count.
+
+    A redrive that failed twice with the SAME payload is one record. Two
+    DIFFERENT payloads under one identity are a conflict (flagged on the
+    record), never a silent first-file-wins pick.
+    """
     from core.ledger.writer import dead_letter_glob
 
     seen: dict[str, dict] = {}
@@ -81,24 +122,44 @@ def _records(db_path: str) -> tuple[list[dict], int]:
                 torn += 1
                 continue
             record.setdefault("source_file", path)
-            seen.setdefault(event_id, record)
+            prior = seen.get(event_id)
+            if prior is None:
+                seen[event_id] = record
+            elif not _same_submission(prior, record):
+                prior["identity_conflict"] = True
+                prior.setdefault("conflicting_sources", []).append(path)
     return list(seen.values()), torn
 
 
-def _db_view(db_path: str, wanted_ids: set[str]) -> tuple[dict, list]:
-    """(identity → turn_id, [(turn_kind, raw_text, timestamp)]).
+def _db_view(db_path: str, wanted_ids: set[str]) -> tuple[dict, list, bool]:
+    """(identity → turn_id, [(turn_kind, raw_text, timestamp)], verified).
+
+    ``verified`` is False whenever the ledger could not be READ — missing
+    file, unopenable, unqueryable, wrong schema. Codex council seat
+    (2026-08-24), the strongest attack on the first cut: this function
+    used to swallow those errors and return empty membership, which the
+    caller then read as "no committed row exists" and classified
+    replayable. Converting UNVERIFIED into ABSENT is exactly how an
+    apply path duplicates committed life at the moment it knows least.
 
     mode=ro: the classifier runs in ANY process and must never perform
     WAL recovery or an autocheckpoint as a stray writer.
     """
     committed: dict[str, str] = {}
     rows: list = []
-    if not Path(db_path).exists() or Path(db_path).stat().st_size == 0:
-        return committed, rows
+    try:
+        if not Path(db_path).exists():
+            return committed, rows, False
+        if Path(db_path).stat().st_size == 0:
+            # A 0-byte ledger is the known-good pre-init state: nothing
+            # was ever written, so absence is PROVEN, not assumed.
+            return committed, rows, True
+    except OSError:
+        return committed, rows, False
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
-        return committed, rows
+        return committed, rows, False
     try:
         for turn_id, sid in conn.execute(
             "SELECT turn_id, submission_id FROM turns"
@@ -111,10 +172,10 @@ def _db_view(db_path: str, wanted_ids: set[str]) -> tuple[dict, list]:
             " WHERE chain_position > 0"
         ).fetchall()
     except sqlite3.Error:
-        return committed, rows
+        return {}, [], False
     finally:
         conn.close()
-    return committed, rows
+    return committed, rows, True
 
 
 def classify(db_path: str) -> dict:
@@ -123,15 +184,21 @@ def classify(db_path: str) -> dict:
 
     records, torn = _records(db_path)
     wanted = {r["event_id"] for r in records}
-    committed, rows = _db_view(db_path, wanted)
+    committed, rows, db_verified = _db_view(db_path, wanted)
 
     by_payload: dict[tuple, list[float]] = {}
     for turn_kind, raw_text, ts in rows:
         by_payload.setdefault((turn_kind, raw_text), []).append(ts)
 
+    def _sort_key(record: dict) -> float:
+        # Never raises: a record carrying a string/None ts must not
+        # blow up the whole census by poisoning sorted()'s comparisons.
+        ts = record.get("ts")
+        return float(ts) if isinstance(ts, (int, float)) else 0.0
+
     spool_root = spool.default_spool_root(db_path)
     out: list[dict] = []
-    for record in sorted(records, key=lambda r: r.get("ts") or 0):
+    for record in sorted(records, key=_sort_key):
         event_id = record["event_id"]
         entry = {
             "event_id": event_id,
@@ -145,19 +212,41 @@ def classify(db_path: str) -> dict:
         )
         entry["byte_twin_exists"] = bool(twin_times)
 
-        if record.get("category") == "refused":
+        published = _published_anywhere(spool_root, event_id)
+        if record.get("identity_conflict"):
+            entry["disposition"] = "identity_conflict"
+            entry["conflicting_sources"] = record.get("conflicting_sources")
+            entry["reason"] = (
+                "two different payloads share this identity; picking one "
+                "would silently choose a version of a life"
+            )
+        elif record.get("category") == "refused":
             entry["disposition"] = "refused_evidence"
             entry["reason"] = (
                 "the admission door judged these bytes; re-submitting "
                 "them would invert the refusal"
             )
+        elif record.get("category") != "failed":
+            # Only 'failed' is a replay candidate. An unknown or absent
+            # category is not a licence — it is an unread record.
+            entry["disposition"] = "unknown_category"
+            entry["reason"] = (
+                f"category {record.get('category')!r} is not a known "
+                "replay class; only 'failed' is a candidate"
+            )
         elif event_id in committed:
             entry["disposition"] = "already_committed"
             entry["turn_id"] = committed[event_id]
-        elif spool._submission_exists(spool_root, _PRODUCER, event_id):
+        elif published:
             entry["disposition"] = "already_enqueued"
-            entry["spool_state"] = spool._submission_exists(
-                spool_root, _PRODUCER, event_id
+            entry["spool_state"] = published
+        elif not db_verified:
+            # UNVERIFIED is not ABSENT. Without a readable ledger we
+            # cannot prove this record did not already commit.
+            entry["disposition"] = "unverified"
+            entry["reason"] = (
+                "the ledger could not be read, so committed-membership "
+                "is unknown; replaying here could duplicate a life"
             )
         else:
             record_ts = record.get("ts")
