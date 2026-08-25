@@ -777,6 +777,15 @@ def wal_ceiling_bytes(db_path: str, *, conn: sqlite3.Connection | None = None) -
         except sqlite3.Error:
             return 0
     try:
+        # The file must actually BE a readable WAL-mode database. A
+        # corrupt file and a journal_mode=delete database both answered
+        # PRAGMA page_size happily and were handed a plausible 4 MB
+        # ceiling for a WAL policy that does not apply to them (Codex
+        # validation, executed). Prove the mode before reporting.
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        if str(mode).lower() != "wal":
+            return 0
+        conn.execute("SELECT count(*) FROM sqlite_schema").fetchone()
         page = conn.execute("PRAGMA page_size").fetchone()[0]
         pages = conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
         # pages <= 0 means automatic checkpointing is OFF: there is no

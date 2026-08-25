@@ -439,7 +439,15 @@ deterministic ID as complete idempotency; a dependency as
 non-genealogical ordering; a filename as verified state; a dead-letter
 timestamp as lived time; and 'failed' as proof the payload was valid."
 
-## Eighth round (2026-08-24, checkpoint policy): the slice that shipped NO code
+## Eighth round (2026-08-24, checkpoint policy): no checkpoint shipped
+
+**Heading corrected after validation.** This was first written as
+"the slice that shipped NO code" and described as documentation-only.
+That was false: it shipped a runtime helper (`wal_ceiling_bytes`) and
+cockpit behavior. What it did NOT ship is a checkpoint. Codex's
+validation lane caught the overstatement; the distinction matters
+because "shipped no code" is the kind of claim that stops the next
+reader from looking.
 
 Two seats (Codex xhigh w/ repo, Grok brief-only; the Claude subagent
 seat died on a session limit again). Both independently ruled: **ship no
@@ -447,13 +455,23 @@ periodic checkpoint.** The proposal was falsified by its own numbers
 BEFORE any seat reported — the author's probe, run to answer the brief's
 own "attack the premise" question.
 
-**Executed evidence (all re-runnable):**
+**Executed evidence — now genuinely re-runnable:**
+`docs/superpowers/witness/wal_bound_probe.py` reproduces every number
+below. It did not exist when these figures were first recorded, and
+"all re-runnable" was therefore an overstatement (Codex validation).
+The harness refuses to run on tmpfs, because /tmp on this host is a
+RAM disk where fsync is free and every latency figure taken there is
+a lie — several of the first-round numbers were.
 - No pinning reader: the WAL PLATEAUS at 4.19 MB and stays flat across
   20,000 commits. Grok supplied the arithmetic: 1000 pages x 4096 B is
   the autocheckpoint ceiling — the plateau IS the default working.
   There is no unbounded growth to prevent.
-- One pinned reader: 4.17 MB -> 727 MB over 16,000 commits (~45 KB per
-  commit), unbounded. `TRUNCATE` cannot fix it: returns busy=1.
+- One pinned reader: unbounded growth (harness, 6,000 commits: 4.16 MB
+  -> 271 MB, 65x). `TRUNCATE` cannot fix it: returns busy=1 having
+  reclaimed nothing.
+- A LARGE TRANSACTION with ZERO readers does it too (harness: 10.4 MB).
+  So WAL size proves SHAPE, never CAUSE — and the first version of
+  this ruling asserted the cause. Corrected.
 - `TRUNCATE` is NOT free. Uncontended it is 0.2 ms; with a write lock
   genuinely held elsewhere it consumed the owner's FULL
   `busy_timeout=5000` (measured 5,005 ms) and still returned busy. On

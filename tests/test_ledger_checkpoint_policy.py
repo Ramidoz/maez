@@ -124,6 +124,31 @@ class CheckpointPolicyTests(unittest.TestCase):
         self.assertEqual(wal_ceiling_bytes(str(empty)), 0)
         self.assertEqual(wal_ceiling_bytes(str(base / "absent.db")), 0)
 
+    def test_no_ceiling_for_corrupt_or_non_wal_databases(self):
+        """Codex validation, executed: a corrupt file and a
+        journal_mode=delete database both answered PRAGMA page_size and
+        were handed a plausible 4 MB ceiling for a WAL policy that does
+        not apply to them. A fabricated number on a real-state surface
+        is worse than no number."""
+        base = Path(_TEST_DIR) / f"badshape_{os.urandom(4).hex()}"
+        base.mkdir()
+        corrupt = base / "corrupt.db"
+        corrupt.write_bytes(b"definitely not sqlite" * 40)
+        self.assertEqual(wal_ceiling_bytes(str(corrupt)), 0)
+
+        rollback = base / "rollback.db"
+        conn = sqlite3.connect(str(rollback))
+        try:
+            conn.execute("PRAGMA journal_mode=delete")
+            conn.execute("CREATE TABLE t(x)")
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(
+            wal_ceiling_bytes(str(rollback)), 0,
+            "a rollback-journal db has no WAL ceiling to report",
+        )
+
     def test_the_default_actually_bounds_the_wal(self):
         """F_bound, in-process: the claim the whole policy rests on."""
         db = _fresh("bound")
