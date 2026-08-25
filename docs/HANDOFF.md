@@ -138,21 +138,37 @@ owner-active, resume). Every encoded claim was executed first.
    require an explicit second owner flag; replayed `user_message` rows
    do not (they are the owner's own words, already spoken).
 
-## Verification debt — carried, NOT closed
+## Verification debt — CLOSED, and one finding RETRACTED
 
-- **No runtime witness of `ledger_admission`.** The daemon restarted at
-  20:10 and its loaded file contains the change (mtime 14:25 < start
-  20:10) — activation by file+ordering, which this repo's own rule says
-  is NOT a witness. `/internal/cockpit/state` refuses both the maez-web
-  drop-in token AND the daemon's own exec-time `/proc/PID/environ`
-  value, so the runtime read could not be taken. Take it next session
-  via a token route that is actually sanctioned.
-- **NEW FINDING, unverified consequence: the maez-web and maez.service
-  internal-channel tokens DIVERGE** (compared by hash; the s7-proxy
-  drop-in comment claims `model.env` is the source of truth). If real,
-  the cockpit real-state proxy is broken on the live host right now —
-  which is where the new `ledger_admission` panel lives. Diagnose
-  before trusting any cockpit reading.
+**Runtime witness of `ledger_admission`: TAKEN (2026-08-24 22:15).**
+Through the real cockpit path — `GET http://127.0.0.1:11437/api/v1/
+daemon/state`, web proxying to the daemon's `/internal/cockpit/state` —
+the live daemon (pid 2772, booted 20:10) returned:
+
+    ledger_admission = {attention: false, writes_enabled: false,
+      dead_letter: {files: 0, rows: 0, bytes: 0, oldest_ts: null},
+      spool: {pending_total: 0, producers: {}, oldest_pending_ts: null},
+      drainer_thread_alive: null, oldest_pending_age_s: null}
+
+Every value is the honest unborn state, including
+`drainer_thread_alive: null` (the drainer thread only starts when
+writes are enabled). This is the in-memory read, not a file trace.
+
+**RETRACTED: the "internal-channel tokens diverge" finding was WRONG.**
+The hash comparison was real but irrelevant: BOTH `maez.service` and
+`maez-web` call `load_secrets_for_process()` at import, which purges
+secret-named env vars and repopulates them from the credential store —
+overwriting whatever the unit's `EnvironmentFile`/drop-in supplied. So
+both processes converge on the SAME runtime token and the channel works
+(proved by the successful proxy call above). The unit-file values are
+cosmetic at runtime. My intermediate "the daemon purges the token"
+hypothesis was ALSO wrong and was falsified by its own evidence: the
+daemon logs a warning whenever a token is presented while `os.environ`
+has none, and that warning has zero occurrences — the token is present,
+it is simply a different (credential-store) value than the one the unit
+files carry. Lesson: an out-of-band probe with the wrong key proved
+nothing about the sanctioned path; test the path the system actually
+uses.
 
 ## The next slice, in order
 
