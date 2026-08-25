@@ -47,7 +47,13 @@ from pathlib import Path
 
 from core.ledger.writer import _json_safe
 
-__all__ = ["default_spool_root", "enqueue", "drain_once", "spool_status"]
+__all__ = [
+    "default_spool_root",
+    "enqueue",
+    "enqueue_reconstructed",
+    "drain_once",
+    "spool_status",
+]
 
 _LOGGER = logging.getLogger("core.ledger.spool")
 
@@ -193,6 +199,68 @@ def enqueue(
                     ensure_ascii=True) + "\n").encode("utf-8"),
     )
     return submission_id
+
+
+def _submission_exists(spool_root: str, producer: str,
+                       submission_id: str) -> str | None:
+    """Which state dir already holds this submission, if any."""
+    for state in _STATES:
+        d = Path(spool_root) / producer / state
+        if (d / f"{submission_id}.json").exists():
+            return state
+    return None
+
+
+def enqueue_reconstructed(
+    spool_root: str,
+    *,
+    submission_id: str,
+    submitted_at: float,
+    producer: str,
+    turn_kind: str,
+    raw_text: str | None,
+    kwargs: dict,
+    parent_submission_id: str | None = None,
+) -> bool:
+    """Publish a RECONSTRUCTED submission carrying a pre-existing identity
+    and its original lived time. Returns False if that identity is
+    already published (never overwrite: a filename rewrite races an
+    in-flight drain).
+
+    Deliberately NOT optional parameters on :func:`enqueue` (Grok council
+    seat, 2026-08-24): teaching the public door to accept a caller-chosen
+    ``submission_id``/``submitted_at`` would hand every caller exactly
+    the authority the admission door refuses by name, protected only by
+    a docstring. Reconstruction is a distinct act with a distinct
+    entry point, used by the dead-letter replay organ alone.
+
+    The envelope is otherwise ordinary: the admission door still
+    validates it, the digest still covers it, and authority kwargs are
+    still refused at drain.
+    """
+    if not isinstance(submission_id, str) or not submission_id.strip():
+        raise ValueError("reconstructed submission_id must be a non-empty string")
+    if _submission_exists(spool_root, producer, submission_id):
+        return False
+    envelope = {
+        "submission_id": submission_id,
+        "producer": producer,
+        "seq": time.time_ns(),
+        "submitted_at": submitted_at,
+        "turn_kind": turn_kind,
+        "raw_text": raw_text,
+        "kwargs": _json_safe(kwargs),
+        "parent_submission_id": parent_submission_id,
+    }
+    envelope["payload_digest"] = _envelope_digest(envelope)
+    dirs = _producer_dirs(spool_root, producer)
+    _atomic_publish(
+        dirs["pending"],
+        f"{submission_id}.json",
+        (json.dumps(envelope, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=True) + "\n").encode("utf-8"),
+    )
+    return True
 
 
 def _quarantine(dirs: dict[str, Path], path: Path, error: str) -> None:
