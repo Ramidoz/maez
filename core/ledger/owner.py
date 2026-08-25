@@ -125,6 +125,14 @@ def owner_write_turn(
 
     # Attempt identity minted before any attempt — see try_write_turn.
     attempt_id = uuid.uuid4().hex
+    # ...and PERSISTED on the committed row (2026-08-24 replay council):
+    # without it, "did this dead-letter record actually commit?" is
+    # answerable only by byte archaeology, and a timeout-after-commit
+    # would look identical to a genuine loss. With it, the dead-letter
+    # event_id and the row's submission_id are the same key — an exact
+    # lookup — and an owner redrive is idempotent by identity.
+    # An explicit submission_id (the spool drainer's) always wins.
+    kwargs.setdefault("submission_id", attempt_id)
 
     with _lock:
         if not ledger_writes_enabled():

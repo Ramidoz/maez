@@ -175,5 +175,73 @@ class SubmissionIdentityTests(unittest.TestCase):
         )
 
 
+class OwnerWritePersistsIdentityTests(unittest.TestCase):
+    """Replay prerequisite (Grok seat, 2026-08-24): owner_write_turn mints
+    an attempt_id BEFORE the attempt and puts it in the dead-letter
+    record — but never persisted it on the committed row. That gap is
+    what makes 'did this dead letter actually commit?' answerable only by
+    byte archaeology. Persisting the same identity makes it an exact
+    lookup, and makes owner writes idempotent under redrive."""
+
+    def setUp(self):
+        from core.ledger import owner as ledger_owner
+
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def test_owner_write_persists_a_submission_identity(self):
+        import sqlite3
+
+        from core.ledger import owner as ledger_owner
+
+        db = _fresh_db("owner_identity")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            tid = ledger_owner.owner_write_turn(
+                db, "user_message", "owner speech",
+                surface="telegram_text",
+                taint_labels=["owner_utterance"],
+                privacy_access="public",
+            )
+        self.assertIsNotNone(tid)
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            sid = conn.execute(
+                "SELECT submission_id FROM turns WHERE turn_id = ?", (tid,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertTrue(
+            sid, "an owner-committed row must carry the attempt identity "
+                 "so a dead-letter record can be resolved exactly",
+        )
+
+    def test_explicit_submission_id_is_not_overridden(self):
+        """The spool drainer passes its own identity — the owner path must
+        never clobber it."""
+        import sqlite3
+
+        from core.ledger import owner as ledger_owner
+
+        db = _fresh_db("owner_identity_explicit")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            ledger_owner.claim_ownership()
+            tid = ledger_owner.owner_write_turn(
+                db, "user_message", "from the spool",
+                surface="web_owner",
+                submission_id="spool-minted-identity",
+                taint_labels=["owner_utterance"],
+                privacy_access="public",
+            )
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            sid = conn.execute(
+                "SELECT submission_id FROM turns WHERE turn_id = ?", (tid,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(sid, "spool-minted-identity")
+
+
 if __name__ == "__main__":
     unittest.main()
