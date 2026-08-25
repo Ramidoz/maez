@@ -2,14 +2,22 @@
 
 Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes, no
 `memory/ledger_spool/` exists, `MAEZ_LEDGER_WRITES` unset,
-`MAEZ_S1_PHASE_TRUTH` unset. The daemon and maez-web are active and were
-NOT restarted this arc — every change below activates on their next
-natural restart and is inert while the flag is unset.
+`MAEZ_S1_PHASE_TRUTH` unset.
+
+**The host power-cycled mid-session** (owner-initiated
+`systemd-logind: The system will power off now!` at 14:57, host off ~5 h,
+boot at 20:09 — NOT a test-triggered reboot; verified in `journalctl
+-b -1`). So the daemon and maez-web restarted at 20:10 and now run every
+change below. They remain inert while the flag is unset. Casualty: `/tmp`
+is a tmpfs and was wiped, taking one in-flight council seat's output
+with it.
 
 ## State: admission end-to-end is BUILT and WITNESSED, flag-dormant
 
-This session landed slices 1-3 of the previous handoff's list, in order
-(commits `a14725b`, `b7209f9`, `c393162`, plus the witness/docs commit):
+This session landed slices 1-3 of the previous handoff's list plus the
+cockpit surfacing and the replay organ's read-only half — commits
+`a14725b`, `b7209f9`, `c393162`, `65da3b6`, `f3d4242`, `43d85d7`,
+`7b7acb2`, `c5e35bc`:
 
 **1. Surface wiring (a14725b).** Web (`/chat` owner bridge) and the CLI
 ride the admission spool: `submit_user_message()` enqueues the user
@@ -45,6 +53,42 @@ owner to drain; never constructs a writer. Enqueue-drain-window
 idempotency via spool-aware dedup. New verdicts: `repairs_enqueued` /
 `repairs_pending_drain`; `writes_applied` is gone. Dry-run stays
 mode=ro.
+
+**4. Cockpit admission liveness (43d85d7).** `_build_cockpit_state` now
+carries `ledger_admission`: `dead_letter_status()`, `spool_status()`,
+oldest-pending age, drainer-thread liveness, `writes_enabled`, and one
+loud `attention` boolean (any dead-lettered rows, OR pending envelopes
+with no live drainer, OR pending older than 10 min). This closes council
+ruling 1's "a spool nobody drains is a silent-omission machine" clause.
+**Runtime witness NOT taken** — see the verification debt below.
+
+**5. Owner writes persist their attempt identity (7b7acb2).**
+`owner_write_turn` already minted `attempt_id` BEFORE the attempt and
+stamped it into the dead-letter record, but never onto the committed
+row. It now `setdefault`s `submission_id=attempt_id` (an explicit
+drainer-supplied id always wins). Consequence: the dead-letter
+`event_id` and the row's `submission_id` are the SAME key, so
+"did this record actually commit?" is an exact lookup instead of byte
+archaeology — the prerequisite Grok's seat demanded, without which
+replay is "permanently heuristic". Owner redrives also become
+idempotent through migration 0006's UNIQUE.
+
+**6. Dead-letter replay — CLASSIFIER HALF ONLY (c5e35bc).**
+`core/ledger/dead_letter_replay.classify()` is a pure read (a test
+asserts it does not even create a directory). Dispositions in decision
+order: `refused_evidence` → `already_committed` (exact, via #5) →
+`already_enqueued` → `possibly_committed` (byte-identical row of the
+same kind within `WINDOW_S`=300 s: the pre-identity timeout-after-commit
+shape, withheld for OWNER REVIEW) → `replayable`. Byte identity is a
+SIGNAL not an identity: a twin OUTSIDE the window flags
+`byte_twin_exists` and stays replayable, because withholding the
+owner's second "ok" loses speech — an equal crime to duplicating it,
+with a different victim. Torn lines counted, never guessed; duplicate
+`event_id`s across pid sidecars collapse to one record. Also lands
+`spool.enqueue_reconstructed()`: a reconstruction-ONLY entry point
+(NOT optional params on `enqueue`, which would hand every caller the
+authority the door refuses by name) that refuses to overwrite an
+already-published filename.
 
 **Witness.** `theme2_s2_falsifier.py` WIDENED with F7 (the shipped
 surface helpers in real non-owner subprocesses; every reply's
@@ -87,16 +131,56 @@ owner-active, resume). Every encoded claim was executed first.
    only stop commits while the spool keeps custody? Both majority seats
    ruled a pause-with-custody mode needs a NEW flag, never a
    reinterpretation. Owner's call, later.
+3. **Consent gate for replayed SPEECH.** Grok's replay seat: auto
+   re-admitting a dead-lettered `model_reply` months later "is a birth,
+   not a retry" — `MAEZ_LEDGER_WRITES` is a write lock, not consent.
+   Proposal (unbuilt, awaiting the owner): replayed `model_reply` rows
+   require an explicit second owner flag; replayed `user_message` rows
+   do not (they are the owner's own words, already spoken).
+
+## Verification debt — carried, NOT closed
+
+- **No runtime witness of `ledger_admission`.** The daemon restarted at
+  20:10 and its loaded file contains the change (mtime 14:25 < start
+  20:10) — activation by file+ordering, which this repo's own rule says
+  is NOT a witness. `/internal/cockpit/state` refuses both the maez-web
+  drop-in token AND the daemon's own exec-time `/proc/PID/environ`
+  value, so the runtime read could not be taken. Take it next session
+  via a token route that is actually sanctioned.
+- **NEW FINDING, unverified consequence: the maez-web and maez.service
+  internal-channel tokens DIVERGE** (compared by hash; the s7-proxy
+  drop-in comment claims `model.env` is the source of truth). If real,
+  the cockpit real-state proxy is broken on the live host right now —
+  which is where the new `ledger_admission` panel lives. Diagnose
+  before trusting any cockpit reading.
 
 ## The next slice, in order
 
-1. **Dead-letter replay organ** — replay by identity with explicit
-   reconstruction provenance (canon-governs-canon); refused-class
-   records are evidence, never blind re-submissions. (Trap #7: the
-   JSONL→spool convergence is a format MIGRATION, not a rename.)
-2. **Checkpoint policy**; cockpit surfacing of `spool_status()` +
-   `dead_letter_status()` (the liveness predicates exist, nothing
-   surfaces them yet).
+1. **Dead-letter replay — APPLY half** (classifier landed in c5e35bc).
+   Remaining and CONTESTED, do not build on one seat's word: the
+   three-valued parent compile (dead-letter `parent_turn_id` → resolve
+   the parent row → if it carries a `submission_id`, set the envelope's
+   `parent_submission_id` and let the drainer mint a NEW genuine edge —
+   "a delayed child, not a backdated marriage"; legacy parent without
+   identity → unparented + provenance + owner review; missing parent →
+   evidence only), the companion provenance event (one per replayed
+   turn, deterministic sid, ordering-via-parent_submission_id declared
+   a DRAIN HOOK not a genealogy claim), the split clocks (body
+   `submitted_at` = dead-letter ts, companion = replay time, never
+   backdated), the consent gate above, and dry-run/apply modes with an
+   exclusive apply lock. A Codex seat on the amended design was
+   relaunched at the end of this session — **check
+   `replay_codex3.txt` or re-run it; note it must be launched with
+   `< /dev/null` or `codex exec` hangs forever on stdin (cost: ~2 h
+   this session)**.
+   Already EXECUTED, do not re-derive: `raw_surface` is unconstrained
+   for taint (only one narrow caller override exists in
+   `CALLER_ALLOWED_TAINT_LABEL_SETS`), so all four replay-surface
+   options validate — the "organ eats itself" fear is FALSIFIED as a
+   mechanism; which surface to use is a covenant question, not a
+   constraint. `turns.timestamp` is REAL epoch, so the window
+   comparison is sound.
+2. **Checkpoint policy** — the last pre-birth item.
 3. Birth ships after that, per the standing order.
 
 ## Standing directives
@@ -108,9 +192,16 @@ owner-active, resume). Every encoded claim was executed first.
 - Always convene the council for load-bearing decisions; tell each seat
   to attack the others; ask "where is the groupthink?". Seats verified
   this session: Codex (`codex exec -c model_reasoning_effort=xhigh -s
-  read-only`), Grok (`grok --print`), Claude subagent. Stealth
-  (`opencode run --model opencode/x-preview-f-free`) FAILED twice with
-  a provider-endpoint error — codename still listed; ask Rohit.
+  read-only` — **must redirect `< /dev/null`; without it the process
+  blocks on stdin forever, printing only "Reading additional input from
+  stdin..."**), Grok (`grok --print`). Claude subagent seats worked
+  early then died on a session limit. Stealth (`opencode run --model
+  opencode/x-preview-f-free`) FAILED with a provider-endpoint error —
+  codename still listed; ask Rohit.
+- **A design-stage council review is NOT implementation validation.**
+  This session's rulings shaped the build; only when the finished DIFFS
+  went back to Codex did 3 CRITICALs surface. Run the second lane on
+  the diffs, every time.
 - Never run test discovery against the live tree; named test files only,
   with `LD_LIBRARY_PATH=vendor/sqlite/lib`.
 - **Never `git checkout --` a file carrying uncommitted work** (this
