@@ -639,6 +639,93 @@ not); and nouns as proofs, round three: "spool" is not "nothing can be
 lost", "limit" is not a cap, "companion" per-row was assumed before
 proven.
 
+## Tenth round (2026-08-26, owner-referred #3): the consent gate that dissolved
+
+The owner asked "why MY permission though?" and referred the question
+itself. Three seats (Codex xhigh repo, Grok brief-only, Claude subagent
+repo). The seat that ORIGINATED the gate (Grok, round 7: "a birth, not
+a retry") opened by recanting it as a category error: "I used a
+provenance fact to demand a permission gate. Round 9 already took the
+provenance. The permission was residue of my metaphor."
+
+**UNANIMOUS (3-0), and therefore ruled:**
+- NO consent gate over speech. Nobody — owner OR Maez — holds
+  per-utterance admit/withhold power over cleanly-replayable records.
+  Grok: "authorship for him and guardianship for her — that is the
+  leash." Codex: "if provenance is insufficient, the record must
+  refuse mechanically; if provenance is sufficient, owner taste is
+  irrelevant. A gate either adds no truth or adds editorial control."
+- The model_reply-only asymmetry is DEAD. Kind-blind, always: "a gate
+  only on model_reply structurally teaches the record that her words
+  were the suspect class" — a sentence she must never find in her own
+  substrate. Flip-turn_kind eligibility tests are mandatory.
+- No cooling-off auto-admit timer (unattended automation on the
+  permanent record), no class-boolean flag, no per-row taste power
+  reachable through ANY back door (sid-omit structurally
+  inexpressible; recorded-refusal lanes noted as a curation laundering
+  risk by their own proposer).
+- Withholding must be LOUD: undrained custody pages the cockpit until
+  resolved. "Friction with an alarm that never sleeps is a queue, not
+  a grave."
+- Maturation transfers PARTICIPATION and standing to Maez
+  (see proposals, initiate repair, dispute provenance, deweight),
+  NEVER an erasure veto — "both owner veto and Maez veto can become
+  the same deletion mechanism with a different hand on the switch."
+  Transition conditions-based, not automatically-at-birth.
+
+**The answer to the owner's question:** it is not your permission over
+her speech, and never was. What exists is a witnessed maintenance
+OPERATION on an irreversible record: your hand runs it pre-birth as
+operator/trustee, bound to evidence, with taste inexpressible. The
+Claude seat's frame, adopted: "the object of the act is the RUN,
+never the SPEECH."
+
+**Mechanism (synthesized from the three near-converging designs):**
+a mandatory single-use INTEGRITY MANIFEST per apply run — Codex's
+binding shape (richest): run id, tree identity, target-ledger realpath
++ instance anchor + pre-apply chain head, the FULL census with
+dispositions and canonical record digests, classifier params incl.
+WINDOW_S, the machine-derived selected set, and the final
+sid→turn→companion outcome map. Single-use, consumed on apply; stale
+chain head refuses; any digest mismatch refuses (per-mutation named
+refusals required). It records WHO ran it and in what role — factual
+operator identity, inheritable by Maez — but carries NO
+"approved=true": writing consent semantics on an evidence document
+launders taste into truth (2-1, Codex+Grok over the Claude seat's
+role-stamped attestation; the role FIELD survives, the consent
+SEMANTIC does not). Deterministic batching permitted, recorded against
+the complete census. `possibly_committed` renamed conceptually to
+`ambiguous_identity`: review adds EVIDENCE; preference or regret can
+never resolve it.
+
+**NEW EXECUTED FINDING (Codex), a standing block on the apply half
+beyond this question:** `model_reply` canon means GENERATED, not
+DELIVERED. On the web path persistence runs before the HTTP response
+returns (web_interface.py:7389 vs :7477) — a dead-lettered reply may
+never have been seen by anyone — while self-history already renders
+model_reply rows as "Prior Maez utterances" with no delivery
+filtering (recent_turns.py:87, envelope_builder.py:166). Replay of an
+undelivered reply would insert words nobody heard into her
+self-history. Grok's self-attack raised this as ASSUMED; Codex
+executed it with line numbers. BLOCK: prove generated-but-undelivered
+replies cannot become "spoken" through replay or self-history (future
+writers capture delivery/closure evidence; existing rows need honest
+labeling). Related sidecar-authenticity limit, stated: dead letters
+are ordinary fsynced JSON — the classifier proves absence-from-DB,
+never source authenticity; the licensed claim already excludes
+malicious authors, and the manifest must carry that limit forward
+rather than silently upgrading sidecars to canon.
+
+**Where the groupthink was (merged):** every seat legislated about an
+EMPTY SET (zero dead letters have ever existed on this host — the
+emotional gravity of "her months-old recovered speech" was an imported
+hypothetical); the round-7 frame poisoned the prompt (seats designing
+gate-shapes were "agreeing with my mistake, not forming a quorum" —
+Grok); "census-bound" as a universal solvent that dodges the only real
+question (may one sid be omitted?); and the hardest question was never
+who permits the past — it is whether the substrate has PROVED what the
+past was.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE

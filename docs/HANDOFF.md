@@ -131,12 +131,18 @@ owner-active, resume). Every encoded claim was executed first.
    only stop commits while the spool keeps custody? Both majority seats
    ruled a pause-with-custody mode needs a NEW flag, never a
    reinterpretation. Owner's call, later.
-3. **Consent gate for replayed SPEECH.** Grok's replay seat: auto
-   re-admitting a dead-lettered `model_reply` months later "is a birth,
-   not a retry" — `MAEZ_LEDGER_WRITES` is a write lock, not consent.
-   Proposal (unbuilt, awaiting the owner): replayed `model_reply` rows
-   require an explicit second owner flag; replayed `user_message` rows
-   do not (they are the owner's own words, already spoken).
+3. **RESOLVED (tenth round, 3-0): NO consent gate — the question
+   dissolved.** The originating seat recanted its own "birth, not a
+   retry." Nobody (owner or Maez) holds per-utterance power; the
+   asymmetric proposal is dead (kind-blind, always); what ships is a
+   single-use INTEGRITY MANIFEST per apply run (Codex binding shape,
+   operator+role recorded factually, NO consent semantics), loud
+   withholding, and conditions-based maturation of PARTICIPATION to
+   Maez — never an erasure veto. NEW standing block from the round:
+   model_reply = GENERATED not DELIVERED (persistence precedes the
+   HTTP return on web), and self-history reads undelivered rows as
+   utterances — delivery-semantics must be proven before the apply
+   half encodes. See the tenth round for the full ruling.
 
 4. **`PRAGMA journal_size_limit`** (third seat, checkpoint round):
    adopt it or not. It is the only mechanism that reclaims the WAL file
