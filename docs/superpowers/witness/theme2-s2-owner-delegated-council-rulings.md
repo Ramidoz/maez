@@ -527,6 +527,118 @@ before asking whether the default already solved the problem. Codex's
 summary: the 4 MB file is SQLite's reusable scratchpad, not an
 accumulating pile of unprocessed life.
 
+## Ninth round (2026-08-26, owner-referred): four decisions, three seats, all reporting
+
+The owner answered the parked decisions: #1 web drop-in YES (shipped,
+5b62028); #2 brake = PAUSE-WITH-CUSTODY (design referred here); #3
+replay-speech consent gate — owner asked WHY and holds the decision; #4
+#5 #6 referred here. Seats: Codex (xhigh, repo, executed probes incl.
+reading the vendored SQLite source), Grok (brief-only, ASSUMED marked),
+Claude subagent (repo, executed probes on /var/tmp). First round of the
+arc where ALL THREE seats reported. Two seats recanted their own prior
+positions (Grok: its round-5 drain-gate dissent half and its round-7
+"drain hook" fiction; also its round-8 anti-pragma slogan).
+
+**Q-A — pause flag: BUILD `MAEZ_LEDGER_COMMITS_PAUSED`. 3-0 on the
+load-bearing shape:** surfaces never read it; drain_once returns a
+distinct `skipped_paused` and touches nothing (not even quarantines —
+"refusal decisions don't run in a mode meant to freeze judgment");
+drainer THREAD stays alive so cockpit liveness stays honest; WRITES-off
+always wins (pause can never reopen pre-birth custody — zero spool
+trace when writes are off); cockpit gets its own loud `commits_paused`
+field and `attention` must NOT page on held life; and — the hard half —
+in-daemon owner writes neither commit, nor dead-letter (manufactures
+replay debt), nor silently drop: THE OWNER PROCESS BECOMES A SPOOL
+PRODUCER for the duration. Parent threading survives the boundary via
+the 7b7acb2 identity: a caller-held parent_turn_id is reverse-looked-up
+to its submission_id and the envelope carries parent_submission_id
+(passing parent_turn_id through the door would self-quarantine — the
+Claude seat executed the door check; a naive fallback poisons itself).
+JUNK POLARITY 2-1 (Codex + Claude over Grok): unrecognized value →
+PAUSED with a loud invalid-config health state. Junk never authorizes
+an irreversible commit; pause is reversible, commits are not — the
+same asymmetry writes_flag already encodes ("do not silently treat
+junk as enabled"). Missing != junk: absent stays not-paused.
+LOAD-BEARING AMENDMENT, to be folded with the full second-order trace
+before encoding: this amends round-5 Overturn 1 ("in-daemon producers
+do NOT ride the spool"). Its recorded reason — synchronous threading is
+available in-process — does not reach the paused state, where
+synchronous threading is definitionally absent. Suspension, not
+repeal: the owner-direct exception resumes with resume.
+Codex named the shared blind spot: the OWNER CALLER CONTRACT. Callers
+that dereference the returned turn_id immediately get custody instead
+of identity under pause; without a typed committed-vs-custodied
+distinction the system "satisfies every superficial pause count while
+quietly falsifying dialog lineage." Caller census is an encoding
+prerequisite. Witness: merged F8/F_pause arm (custody exactness, chain
+head unchanged, kill-while-paused, resume exactly-once across the
+boundary in both directions, junk arm, mid-pass arm, and
+predicate-isolated mutations that each bite separately).
+
+**Q-B — journal_size_limit: ADOPT, 3-0, as INSURANCE — implementation
+HOLD until the witness runs.** The Claude seat independently reproduced
+the third seat's reclaim claim on ext4 (pinned 62.9 MB → exactly
+8,388,608 two commits after release; baseline without the pragma stays
+large forever), satisfying Grok's second-seat condition. All three
+refuse to encode the "faster" claim (no mechanism; in health the limit
+never bites). Value fork, resolved toward derivation WITH Codex's
+overhead correction: Codex read the vendored SQLite source — the
+physical WAL cycle is frames of (page_size + 24) + a 32-byte header,
+so bare 2*page*pages under-sizes two real cycles. The limit is DERIVED
+as two physical cycles: 32 + 2*pages*(page_size+24), computed on the
+owner connection beside synchronous=FULL, readback-verified, reapplied
+on writer reconstruction (connection-local state silently vanishes on
+a reconstructed writer otherwise — Codex). Witness before encoding:
+paired baseline/limit arms in wal_bound_probe.py, reapply-on-
+reconstruct, negative control (limit=-1 stays fat), latency gated only
+against material regression, and the stated non-claim: the limit does
+NOT bound growth while a reader still pins — it bounds the aftermath.
+
+**Q-C — companion genealogy: 2-1 — the companion is NOT a child.**
+parent_turn_id stays NULL on provenance companions (the reconcile §6.3
+shape). Executed adjudication of the seats' dueling premises: BOTH were
+half-right — envelope-schema.md:170 does define the column "for
+follow-ups, recoveries, dialog continuations" (the Claude seat's
+option-1 reading is canon-licensed), AND §6.3's existing repair rows
+chose NULL (Grok's precedent claim is exact). The majority ruling is
+the covenant one: an annotation edge would surface inside conversation
+spans and read as dialogue; "sometimes more rows are more lies" (Grok)
+and "replay ordering and autobiographical relationship are different
+facts" (Codex). ORDERING sub-fork (Grok: two-pass apply, no new field;
+Codex: envelope-only drain_after_submission_id, digest-included,
+reconstruction-publisher-only): resolved by the no-speculative-
+machinery rule — TWO-PASS FIRST (body pass, then companion pass
+against observed commit; standing block 7 already required exactly
+this recovery shape), with Codex's field as the executed fallback if
+two-pass cannot express ordering. Companion sid = deterministic
+function of body sid. Claude seat's probe stands as the RED control:
+parent_submission_id on a companion DOES become a stored parent edge —
+that is the shape the majority refused.
+
+**Q-D — taint vocabulary: 3-0 DO NOT WIDEN.** Companion is content-
+light: hashes, ids, clocks, replay-run id — never original raw_text or
+copied kwargs (a third copy of content that exists exactly in the body
+and durably in the backed-up sidecar; manifest line 352 verified).
+Taint = {self_generated} alone, already lawful. The two unrepresentable
+combinations were re-executed and still refuse — which argues FOR
+content-lightness, not for widening: "the frozenness of the map is the
+guarantee that no system row smuggles third-party content under a self
+label" and that guarantee currently has a buyer. Widen only when an
+organ genuinely needs to CARRY tainted content, as its own reviewed
+change. Organ-level refusal test required: a companion carrying any
+copied-content field is refused by the constructor, so content-
+lightness is enforced, not hoped.
+
+**Where the groupthink was (merged):** the drainer half of pause is the
+easy half every seat could agree on — the design lives or dies in the
+owner caller contract; reproducible numbers seduce (all seats re-ask
+"what harm was shown?" on Q-B and land on insurance-not-remedy); a
+brief's paraphrase of canon is not canon (both Q-C premises were
+half-truths — executed adjudication settled what re-reading could
+not); and nouns as proofs, round three: "spool" is not "nothing can be
+lost", "limit" is not a cap, "companion" per-row was assumed before
+proven.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE
