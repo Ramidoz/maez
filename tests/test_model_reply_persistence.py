@@ -21,7 +21,9 @@ from unittest.mock import patch
 
 
 os.environ["MAEZ_TEST_MODE"] = "1"
-_REPO = Path("/home/rohit/maez")
+#: Derived from THIS FILE, never hardcoded — a pinned absolute path
+#: grades every worktree and CI clone against the live tree.
+_REPO = Path(__file__).resolve().parents[1]
 _TEST_DB_DIR = tempfile.mkdtemp(prefix="maez_test_model_reply_persistence_")
 
 
@@ -198,7 +200,21 @@ class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
                       body[persist_idx - 250:persist_idx])
         self.assertIn("parent_turn_id=_user_msg_turn_id", window)
         self.assertIn("parent_submission_id=_user_msg_submission_id", window)
-        self.assertIn("surface=source", window)
+        # The daemon now resolves its free-form caller string through
+        # the body surface registry, so the persistence call takes the
+        # RESOLVED kwargs. The old assertion still passed after that
+        # change only because an unrelated audit call inside this
+        # 850-char window also spells "surface=source" (Codex boundary
+        # walk B7, 2026-08-27) — it was green while asserting something
+        # false about the call it names.
+        self.assertIn("**_reply_surface_kwargs", window)
+        # NOT assertNotIn("surface=source") over this window: the
+        # audit-verdict call inside it legitimately passes surface=source,
+        # and that is a CONTENT field in audit_verdict_json, not the
+        # ledger's surface column. Conflating the two is what made the
+        # old assertion pass while naming the wrong call. The ledger
+        # argument's provenance is traced properly, per call site, by
+        # tests/test_body_surface_registry.py::DaemonSeamTests.
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn('"autobiographical_continuity_turning_on"', window)
         self.assertIn("build_model_reply_audit_verdict", window)

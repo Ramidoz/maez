@@ -82,6 +82,46 @@ class IdentifiersOnlyTests(unittest.TestCase):
                         names.add(key.value.lower())
         return names
 
+    #: The COMPLETE set of names this module may define. An allowlist,
+    #: not a denylist: forbidding words only stops the semantics someone
+    #: thought to name. Codex's boundary walk (B5, 2026-08-27) executed
+    #: three additions that the word-based check accepted —
+    #: OWNER_FACING_SURFACES, is_owner_facing(), and a SurfaceProfile
+    #: class carrying prose. All three are new top-level names, so this
+    #: single rule catches all three, and anything else nobody predicted.
+    ALLOWED_MODULE_NAMES = frozenset({
+        "REGISTERED", "ALIASED", "UNREGISTERED",
+        "SURFACE_IDS", "ACCEPTED_LABELS",
+        "SurfaceRef", "resolve", "ledger_pair",
+    })
+
+    def test_registry_defines_nothing_beyond_the_allowlist(self):
+        tree = ast.parse(Path(inspect.getsourcefile(reg)).read_text())
+        defined = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                defined.add(node.name)
+            elif isinstance(node, ast.Assign):
+                defined.update(t.id for t in node.targets
+                               if isinstance(t, ast.Name))
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                defined.add(node.target.id)
+        extra = defined - self.ALLOWED_MODULE_NAMES
+        self.assertEqual(
+            extra, set(),
+            f"the registry defines {sorted(extra)}, which is not in the "
+            "allowlist. Adding anything here is a claim about what a "
+            "surface IS — identifiers only (owner ruling 2026-08-27). If "
+            "the addition is genuinely an identifier, adjudicate it by "
+            "name in ALLOWED_MODULE_NAMES.",
+        )
+        missing = self.ALLOWED_MODULE_NAMES - defined
+        self.assertEqual(
+            missing, set(),
+            f"the allowlist names {sorted(missing)} which the module no "
+            "longer defines — two-sided, so the list cannot go stale",
+        )
+
     def test_registry_module_defines_no_semantic_field(self):
         tree = ast.parse(Path(inspect.getsourcefile(reg)).read_text())
         bound = self._bound_names(tree)
@@ -97,26 +137,6 @@ class IdentifiersOnlyTests(unittest.TestCase):
                     "MEANS. Identifiers only; Maez learns the rest through "
                     "its own loops (owner ruling 2026-08-27)",
                 )
-
-    def test_no_prose_can_live_in_the_registry_data(self):
-        """Every string in a module-level assignment is identifier-shaped.
-
-        This is the structural half: forbidding known field NAMES only
-        stops the semantics someone thought to name. Forbidding prose in
-        the data stops the rest — a description cannot hide in a value
-        if no value may contain a space or a capital letter.
-        """
-        tree = ast.parse(Path(inspect.getsourcefile(reg)).read_text())
-        for node in tree.body:
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                    self.assertRegex(
-                        sub.value, r"^[a-z0-9_]*$",
-                        f"module-level registry data holds {sub.value!r}; "
-                        "identifiers only, never prose",
-                    )
 
     def test_every_identifier_is_a_name_the_body_already_emits(self):
         """We repair a duplicate; we do not author a vocabulary.
@@ -301,6 +321,7 @@ def _census_surface_literals() -> dict[str, list[str]]:
                     for a in node.names:
                         if a.name in reg_apis:
                             aliases[a.asname or a.name] = a.name
+            bindings = _string_bindings(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -311,8 +332,13 @@ def _census_surface_literals() -> dict[str, list[str]]:
                 where = f"{path.relative_to(root)}:{node.lineno}"
                 for kw in node.keywords:
                     if kw.arg == "surface":
+                        value = None
                         if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                            found.setdefault(kw.value.value, []).append(where)
+                            value = kw.value.value
+                        elif isinstance(kw.value, ast.Name):
+                            value = bindings.get(kw.value.id)
+                        if value is not None:
+                            found.setdefault(value, []).append(where)
                     elif kw.arg == "kwargs" and isinstance(kw.value, ast.Dict):
                         for k, v in zip(kw.value.keys, kw.value.values):
                             if (isinstance(k, ast.Constant) and k.value == "surface"
@@ -320,6 +346,35 @@ def _census_surface_literals() -> dict[str, list[str]]:
                                     and isinstance(v.value, str)):
                                 found.setdefault(v.value, []).append(where)
     return found
+
+
+
+def _string_bindings(tree: ast.AST) -> dict[str, str]:
+    """name -> string value, for simple single-assignment bindings.
+
+    Without this the census records the EXPRESSION (`_cli_surface`) and
+    never its value, so changing `_cli_surface = "cli"` to
+    `"rogue_surface"` left every guard green — executed by the Codex
+    boundary walk (B4, 2026-08-27). A name bound to two different string
+    literals is dropped rather than guessed: ambiguity must not be
+    resolved into a false census entry.
+    """
+    seen: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if not (isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            ambiguous.add(target.id)
+            continue
+        if target.id in seen and seen[target.id] != node.value.value:
+            ambiguous.add(target.id)
+        seen[target.id] = node.value.value
+    return {k: v for k, v in seen.items() if k not in ambiguous}
 
 
 reg_apis = frozenset({
@@ -471,21 +526,92 @@ class DaemonSeamTests(unittest.TestCase):
                     '"unknown"',
                 )
 
-    def test_daemon_resolves_through_the_body_registry(self):
-        src = (_repo_root() / "daemon/maez_daemon.py").read_text()
-        self.assertIn("from core.body.surface_registry import", src)
-        calls = _ledger_calls_in("daemon/maez_daemon.py", "handle_message")
-        surfaces = {surf for _api, surf in calls if surf}
-        self.assertTrue(
-            surfaces,
-            "no surface argument found at the daemon's ledger writes",
-        )
-        for surf in surfaces:
-            with self.subTest(surface=surf):
-                self.assertIn(
-                    "_surface", surf,
-                    "the surface must come from the resolved pair",
+    def test_daemon_surface_provenance_traces_to_the_resolver(self):
+        """Every ledger admission's surface must come FROM the resolver.
+
+        The first version of this guard only checked that the unparsed
+        expression contained the substring "_surface", which a wrong
+        resolver input or a fabricated local would satisfy (Codex
+        boundary walk B7). This traces provenance: names unpacked from
+        `_surface_ledger_pair(source)`, and kwargs dicts built from
+        those names, are the only accepted sources.
+        """
+        tree = ast.parse((_repo_root() / "daemon/maez_daemon.py").read_text())
+        target = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "handle_message":
+                target = node
+                break
+        self.assertIsNotNone(target)
+
+        resolved: set[str] = set()
+        resolver_calls = 0
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            value, tgt = node.value, node.targets[0]
+            if (isinstance(value, ast.Call)
+                    and getattr(value.func, "id", None) == "_surface_ledger_pair"):
+                resolver_calls += 1
+                self.assertEqual(
+                    [ast.unparse(a) for a in value.args], ["source"],
+                    "the resolver must be fed handle_message's own caller "
+                    "string, not some other value",
                 )
+                if isinstance(tgt, ast.Tuple):
+                    resolved.update(e.id for e in tgt.elts
+                                    if isinstance(e, ast.Name))
+        self.assertGreater(resolver_calls, 0,
+                           "handle_message no longer resolves its surface")
+
+        # kwargs dicts whose "surface" entry is one of the resolved names
+        kwarg_dicts: set[str] = set()
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            tgt, value = node.targets[0], node.value
+            if isinstance(tgt, ast.Name) and isinstance(value, ast.Dict):
+                for k, v in zip(value.keys, value.values):
+                    if (isinstance(k, ast.Constant) and k.value == "surface"
+                            and isinstance(v, ast.Name) and v.id in resolved):
+                        kwarg_dicts.add(tgt.id)
+
+        aliases = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name in reg_apis:
+                        aliases[a.asname or a.name] = a.name
+        checked = 0
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            canonical = aliases.get(name, name if name in reg_apis else None)
+            if canonical in (None, "enqueue", "enqueue_reconstructed"):
+                continue
+            checked += 1
+            direct = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            splats = {ast.unparse(kw.value) for kw in node.keywords if kw.arg is None}
+            if "surface" in direct:
+                self.assertIsInstance(direct["surface"], ast.Name)
+                self.assertIn(
+                    direct["surface"].id, resolved,
+                    f"{canonical} takes a surface that did not come from the "
+                    "resolver",
+                )
+            else:
+                self.assertTrue(
+                    splats & kwarg_dicts,
+                    f"{canonical} at line {node.lineno} supplies no surface "
+                    "traceable to the resolver",
+                )
+        self.assertGreaterEqual(
+            checked, 3,
+            "handle_message had three ledger admissions; the guard must see "
+            "all of them",
+        )
 
     def test_handle_message_still_defaults_source_to_unknown(self):
         """Pins the hole this closes. If the default ever becomes a real
@@ -535,6 +661,157 @@ def _ledger_calls_in(rel: str, func_name: str) -> list[tuple[str, str | None]]:
                            else ast.unparse(kw.value))
         out.append((canonical, surface))
     return out
+
+
+class FlagOffKeySetTests(unittest.TestCase):
+    """Flag-off must not introduce an explicit `raw_surface: None`.
+
+    Codex boundary walk B1 (2026-08-27) executed the counterexample: the
+    daemon's direct user-write branch passed `raw_surface=None`, and
+    `try_write_turn` forwards its kwargs VERBATIM into the dead-letter
+    record on failure while paused custody copies them into a spool
+    envelope — so a key that is merely present-and-null changes the
+    dead-letter key set and the envelope digest even with the registry
+    off. "Byte-identical when off" has to mean the key is ABSENT.
+    """
+
+    def test_daemon_omits_raw_surface_rather_than_passing_none(self):
+        src = (_repo_root() / "daemon/maez_daemon.py").read_text()
+        tree = ast.parse(src)
+        target = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "handle_message":
+                target = node
+                break
+        self.assertIsNotNone(target, "handle_message not found")
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "raw_surface":
+                    self.fail(
+                        "handle_message passes raw_surface explicitly at line "
+                        f"{node.lineno}; it must be omitted when None so the "
+                        "flag-off dead-letter/custody payload keeps today's "
+                        "exact key set",
+                    )
+
+    def test_model_reply_kwargs_omits_the_key_entirely_when_none(self):
+        from core.ledger import model_reply_persistence as mrp
+
+        kwargs = mrp._model_reply_kwargs(
+            surface="cli", raw_surface=None, model_id="m",
+            prompt_material={}, soul_material="", evidence_envelope=None,
+            audit_verdict={}, memory_read_ids=None, audit_trace_label=None,
+            audit_trace_value_schema=None, audit_trace_metadata_shape=None,
+            audit_trace_lineage=None,
+        )
+        self.assertNotIn("raw_surface", kwargs)
+        with_raw = mrp._model_reply_kwargs(
+            surface="telegram_text", raw_surface="telegram_surface",
+            model_id="m", prompt_material={}, soul_material="",
+            evidence_envelope=None, audit_verdict={}, memory_read_ids=None,
+            audit_trace_label=None, audit_trace_value_schema=None,
+            audit_trace_metadata_shape=None, audit_trace_lineage=None,
+        )
+        self.assertEqual(with_raw["raw_surface"], "telegram_surface")
+
+
+class SpoolBoundaryTests(unittest.TestCase):
+    """Where the registry's totality stops being the substrate's.
+
+    Codex boundary walk B6 (2026-08-27): `resolve` admits labels the
+    spool's producer-name rules then refuse. This test does not assert
+    the spool is right — it PINS the boundary so the registry's
+    docstring cannot quietly regrow the overclaim, and so the day
+    someone registers a slash-bearing id, it fails here first.
+    """
+
+    def test_every_registered_label_is_a_legal_spool_producer(self):
+        from core.ledger import spool
+
+        for label in sorted(reg.ACCEPTED_LABELS):
+            with self.subTest(label=label):
+                self.assertNotIn("/", label)
+                self.assertFalse(label.startswith("."))
+                self.assertTrue(label.strip(), "an empty/blank producer "
+                                "publishes into the spool root, where drain "
+                                "does not look")
+                self.assertNotIn("\x00", label)
+                self.assertLess(len(label), 200)
+        self.assertTrue(hasattr(spool, "_producer_dirs"))
+
+    def test_registry_docstring_does_not_reclaim_substrate_wide_totality(self):
+        doc = reg.__doc__ or ""
+        self.assertIn(
+            "WHERE THAT PROMISE STOPS", doc,
+            "the module must keep naming the custody door where its "
+            "never-lose-speech promise ends",
+        )
+
+
+class SeamEntrySurfaceTests(unittest.TestCase):
+    """Labels that reach the ledger THROUGH the daemon seam.
+
+    The literal census cannot see these: `handle_message(source="UI")`
+    is not a ledger call, but its `source` becomes the row's surface via
+    the resolver. Codex boundary walk B3 (2026-08-27) found it. Making
+    them visible here is the point — an unregistered second spelling
+    must be NAMED, not merely absent.
+    """
+
+    #: Seam labels deliberately NOT registered, each with the reason.
+    #: `UI` and `cockpit` are two names for the SAME /message route
+    #: (flag-selected branches of one Flask endpoint) — the same shape as
+    #: the telegram duplicate this slice closed. They are NOT aliased,
+    #: because unlike telegram the two labels carry a BEHAVIOURAL
+    #: difference: cockpit is excluded from M1_ALLOWED_PROMOTION_SOURCES
+    #: while UI historically bypassed that. Co-reference of the endpoint
+    #: is not co-reference of the behaviour, and "labels prove shape, not
+    #: support". Aliasing them is a decision with its own council.
+    KNOWN_UNREGISTERED_SEAM_LABELS = {
+        "UI": "legacy /message branch; same route as cockpit but differing "
+              "promotion rules — alias needs its own council",
+        "unknown": "handle_message's own default when a caller names nothing",
+    }
+
+    def test_seam_entry_labels_are_registered_or_named(self):
+        tree = ast.parse((_repo_root() / "daemon/maez_daemon.py").read_text())
+        found = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if name != "handle_message":
+                continue
+            for kw in node.keywords:
+                if kw.arg == "source" and isinstance(kw.value, ast.Constant):
+                    if isinstance(kw.value.value, str):
+                        found[kw.value.value] = node.lineno
+            for arg in node.args[1:2]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    found[arg.value] = node.lineno
+        for label, line in sorted(found.items()):
+            with self.subTest(label=label):
+                self.assertTrue(
+                    label in reg.ACCEPTED_LABELS
+                    or label in self.KNOWN_UNREGISTERED_SEAM_LABELS,
+                    f"{label!r} enters the ledger through the daemon seam at "
+                    f"maez_daemon.py:{line} but is neither registered nor "
+                    "named as a known-unregistered spelling",
+                )
+
+    def test_named_seam_labels_have_not_gone_stale(self):
+        """Two-sided: a reason kept for a label nobody emits is a lie
+        about the body, same as a missing one."""
+        src = (_repo_root() / "daemon/maez_daemon.py").read_text()
+        for label in self.KNOWN_UNREGISTERED_SEAM_LABELS:
+            with self.subTest(label=label):
+                self.assertIn(
+                    f'"{label}"', src,
+                    "this label is no longer anywhere in the daemon",
+                )
 
 
 if __name__ == "__main__":

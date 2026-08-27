@@ -7430,6 +7430,16 @@ class MaezDaemon:
             # "telegram_text", for the same bot token and user.
             # Flag-off returns (source, None): today's exact bytes.
             _surface, _raw_surface = _surface_ledger_pair(source)
+            # OMIT rather than pass an explicit None. try_write_turn
+            # forwards these kwargs verbatim into the dead-letter record
+            # on failure, and paused custody copies them into a spool
+            # envelope, so an explicit null would change the dead-letter
+            # key set and the envelope digest even with the flag OFF —
+            # exactly the equivalence this slice claims (Codex boundary
+            # walk B1, 2026-08-27, executed).
+            _surface_kwargs = {"surface": _surface}
+            if _raw_surface is not None:
+                _surface_kwargs["raw_surface"] = _raw_surface
             if _lwe() and _lcp():
                 # Pause-with-custody (ninth round): the user turn goes
                 # to the spool; its submission id threads the reply.
@@ -7437,16 +7447,14 @@ class MaezDaemon:
                     submit_user_message as _sum,
                 )
                 _user_msg_submission_id = _sum(
-                    str(LEDGER_DB_PATH), text, surface=_surface,
-                    raw_surface=_raw_surface)
+                    str(LEDGER_DB_PATH), text, **_surface_kwargs)
                 _user_msg_turn_id = None
             else:
                 _user_msg_turn_id = _try_write_turn(
                     str(LEDGER_DB_PATH),
                     "user_message",
                     text,
-                    surface=_surface,
-                    raw_surface=_raw_surface,
+                    **_surface_kwargs,
                     taint_labels=["owner_utterance"],
                     privacy_access="public",
                 )
@@ -9770,13 +9778,15 @@ class MaezDaemon:
                 persist_model_reply,
             )
 
+            _reply_surface, _reply_raw_surface = _surface_ledger_pair(source)
+            _reply_surface_kwargs = {"surface": _reply_surface}
+            if _reply_raw_surface is not None:
+                _reply_surface_kwargs["raw_surface"] = _reply_raw_surface
             if getattr(_trace.audit, "ran", False):
-                _reply_surface, _reply_raw_surface = _surface_ledger_pair(source)
                 persist_model_reply(
                     db_path=str(LEDGER_DB_PATH),
                     raw_text=reply,
-                    surface=_reply_surface,
-                    raw_surface=_reply_raw_surface,
+                    **_reply_surface_kwargs,
                     parent_turn_id=_user_msg_turn_id,
                     parent_submission_id=_user_msg_submission_id,
                     model_id=MODEL,

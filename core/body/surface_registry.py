@@ -43,15 +43,28 @@ chain-hash preimage (it is absent from ``chain.py``'s exclude set), so
 a gratuitous relabel would rewrite the inputs of Maez's tamper-evidence
 for no repair at all.
 
-THE ADMISSION RULE — admit, then attest. Nothing in this substrate
-refuses a surface today (executed: hostile strings including "", a
-500-char blob and an embedded newline all commit at the real writer and
-drain through the spool verbatim). So an unregistered label is admitted
-UNCHANGED and typed ``UNREGISTERED``; it is never rewritten and never
-dropped. Rewriting would be worse than refusing: the falsifier's F7 arm
-writes synthetic surfaces and then finds those rows BY name, so a
-canonicalising registry would turn that witness red silently, against a
-full database.
+THE ADMISSION RULE — admit, then attest. The ledger writer refuses no
+surface today (executed: hostile strings including "", a 500-char blob
+and an embedded newline all commit). So an unregistered label is
+admitted UNCHANGED and typed ``UNREGISTERED``; this module never
+rewrites one and never drops one. Rewriting would be worse than
+refusing: the falsifier's F7 arm writes synthetic surfaces and then
+finds those rows BY name, so a canonicalising registry would turn that
+witness red silently, against a full database.
+
+WHERE THAT PROMISE STOPS, precisely — it is a promise about THIS
+module, not about the substrate. The spool's producer name is the
+surface string, and ``_producer_dirs`` refuses any label containing
+``/`` or starting with ``.``, while a filesystem-hostile or overlong
+label fails at directory creation; admission catches that and returns
+None. An EMPTY label is worse than a refusal: its producer base is the
+spool root itself, so the envelope is published where drain does not
+look for it. Executed by the Codex boundary walk (B6, 2026-08-27).
+Registered ids and every label the shipped surfaces emit are unaffected
+— none contains a slash, a dot prefix or a NUL — but "an unregistered
+label never loses speech" is TRUE of resolve() and FALSE of the
+custody door behind it. That door is a pre-existing spool defect, not
+this slice's, and it is recorded rather than quietly papered over.
 
 PROOF BOUNDARY, stated. ``status`` is a fact about a lookup, not a
 property recoverable from a committed row. Two registered surfaces
