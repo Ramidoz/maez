@@ -107,6 +107,7 @@ from core.body.camera_presence_state import (
     CameraPresenceState,
     resolve_camera_presence_state,
 )
+from core.body.surface_registry import ledger_pair as _surface_ledger_pair
 from core.body.desktop_presence_state import (
     DesktopPresenceState,
     sample_desktop_presence,
@@ -7419,6 +7420,16 @@ class MaezDaemon:
                 ledger_commits_paused as _lcp,
                 ledger_writes_enabled as _lwe,
             )
+            # Continuity spine slice 1: `source` is a FREE-FORM caller
+            # string (this method's own default is the literal
+            # "unknown"), and it lands in a column that sits inside the
+            # chain-hash preimage. Resolving it through the body's
+            # surface registry is what stops one limb reaching the
+            # record under two names — the vendored adapter says
+            # "telegram_surface" where the legacy path says
+            # "telegram_text", for the same bot token and user.
+            # Flag-off returns (source, None): today's exact bytes.
+            _surface, _raw_surface = _surface_ledger_pair(source)
             if _lwe() and _lcp():
                 # Pause-with-custody (ninth round): the user turn goes
                 # to the spool; its submission id threads the reply.
@@ -7426,14 +7437,16 @@ class MaezDaemon:
                     submit_user_message as _sum,
                 )
                 _user_msg_submission_id = _sum(
-                    str(LEDGER_DB_PATH), text, surface=source)
+                    str(LEDGER_DB_PATH), text, surface=_surface,
+                    raw_surface=_raw_surface)
                 _user_msg_turn_id = None
             else:
                 _user_msg_turn_id = _try_write_turn(
                     str(LEDGER_DB_PATH),
                     "user_message",
                     text,
-                    surface=source,
+                    surface=_surface,
+                    raw_surface=_raw_surface,
                     taint_labels=["owner_utterance"],
                     privacy_access="public",
                 )
@@ -9758,10 +9771,12 @@ class MaezDaemon:
             )
 
             if getattr(_trace.audit, "ran", False):
+                _reply_surface, _reply_raw_surface = _surface_ledger_pair(source)
                 persist_model_reply(
                     db_path=str(LEDGER_DB_PATH),
                     raw_text=reply,
-                    surface=source,
+                    surface=_reply_surface,
+                    raw_surface=_reply_raw_surface,
                     parent_turn_id=_user_msg_turn_id,
                     parent_submission_id=_user_msg_submission_id,
                     model_id=MODEL,

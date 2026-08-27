@@ -67,6 +67,37 @@ def ledger_commits_paused() -> bool:
     return True
 
 
+def surface_registry_enabled() -> bool:
+    """True when surface labels are resolved through the body registry.
+
+    MAEZ_SURFACE_REGISTRY — continuity spine slice 1 (2026-08-27). OFF
+    is exactly today's behaviour: whatever string the caller handed in
+    goes into ``surface`` and ``raw_surface`` stays NULL. ON resolves
+    the label through ``core.body.surface_registry`` first, which
+    closes the one-limb-two-names duplicate (``telegram_surface`` and
+    ``telegram_text`` are one configured Telegram endpoint) while
+    leaving registered and unregistered labels byte-identical.
+
+    Polarity follows the writes flag, not the pause flag: absent or
+    junk → DISABLED. This switch changes what lands in ``surface``,
+    which sits inside the chain-hash preimage, so an unrecognized value
+    must never turn it on — fail away from the irreversible act, which
+    here is the write, not the abstention.
+    """
+    raw = os.environ.get("MAEZ_SURFACE_REGISTRY", "")
+    stripped = raw.strip().lower()
+    if stripped in _TRUE_VALUES:
+        return True
+    if stripped in _FALSE_VALUES:
+        return False
+    _LOGGER.warning(
+        "MAEZ_SURFACE_REGISTRY has unrecognized value %r; treating as "
+        "disabled. Use '1' or 'true' to enable.",
+        raw,
+    )
+    return False
+
+
 def commits_paused_flag_invalid() -> bool:
     """True when the pause flag holds an unrecognized value (which fails
     closed to paused). Surfaced so a typo is distinguishable from an

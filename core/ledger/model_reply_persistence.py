@@ -124,6 +124,7 @@ def submit_user_message(
     raw_text: str,
     *,
     surface: str,
+    raw_surface: str | None = None,
 ) -> str | None:
     """Durably admit one surface user_message through the spool.
 
@@ -152,6 +153,9 @@ def submit_user_message(
             raw_text=raw_text,
             kwargs={
                 "surface": surface,
+                # Present only when it differs from the identity, so a
+                # flag-off envelope is byte-identical to today's.
+                **({"raw_surface": raw_surface} if raw_surface else {}),
                 "taint_labels": ["owner_utterance"],
                 "privacy_access": "public",
             },
@@ -187,6 +191,7 @@ def build_model_reply_audit_verdict(
 def _model_reply_kwargs(
     *,
     surface: str,
+    raw_surface: str | None = None,
     model_id: str,
     prompt_material: Any,
     soul_material: Any,
@@ -202,7 +207,7 @@ def _model_reply_kwargs(
     contract cannot fork by transport. Parent linkage is deliberately
     NOT here: it is parent_turn_id on the owner path and
     parent_submission_id on the envelope."""
-    return {
+    kwargs = {
         "surface": surface,
         "model_id": model_id,
         "prompt_hash": _sha256_material(prompt_material),
@@ -217,6 +222,13 @@ def _model_reply_kwargs(
         "taint_labels": ["self_generated"],
         "privacy_access": "public",
     }
+    # OMITTED when None rather than written as an explicit null: with
+    # the surface registry off, the envelope kwargs must stay exactly
+    # the shape that ships today, because the whole-envelope digest and
+    # the replay organ's causation predicate both read this dict.
+    if raw_surface is not None:
+        kwargs["raw_surface"] = raw_surface
+    return kwargs
 
 
 def persist_model_reply(
@@ -224,6 +236,7 @@ def persist_model_reply(
     db_path: str,
     raw_text: str,
     surface: str,
+    raw_surface: str | None = None,
     parent_turn_id: str | None = None,
     parent_submission_id: str | None = None,
     model_id: str,
@@ -311,6 +324,7 @@ def persist_model_reply(
                 raw_text=raw_text,
                 kwargs=_model_reply_kwargs(
                     surface=surface,
+                    raw_surface=raw_surface,
                     model_id=model_id,
                     prompt_material=prompt_material,
                     soul_material=soul_material,
@@ -353,6 +367,7 @@ def persist_model_reply(
             parent_turn_id=parent_turn_id,
             **_model_reply_kwargs(
                 surface=surface,
+                raw_surface=raw_surface,
                 model_id=model_id,
                 prompt_material=prompt_material,
                 soul_material=soul_material,
