@@ -413,8 +413,9 @@ def run_transaction(
         # Codex validation F3 (reproduced): consume-once must mean
         # EXECUTE-once. Within the freshness window, a birthed-then-
         # deleted ledger would otherwise re-birth on the same consumed
-        # artifact. The durable execution marker (written after the
-        # birth commit, below) refuses a second execution by name.
+        # artifact. The durable execution marker (claimed below AFTER
+        # every refusal gate and BEFORE the first mutation) refuses a
+        # second execution by name.
         _marker = (
             Path(db_path).parent
             / "birth_ceremony_receipts"
