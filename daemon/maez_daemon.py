@@ -2807,6 +2807,7 @@ def _ledger_admission_health(daemon) -> dict:
     from core.ledger.spool import default_spool_root, spool_status
     from core.ledger.writer import dead_letter_status, wal_ceiling_bytes
     from core.ledger.writes_flag import (
+        commits_paused_flag_invalid,
         ledger_commits_paused,
         ledger_writes_enabled,
     )
@@ -2861,6 +2862,7 @@ def _ledger_admission_health(daemon) -> dict:
         "drainer_thread_alive": drainer_alive,
         "writes_enabled": ledger_writes_enabled(),
         "commits_paused": paused,
+        "commits_paused_flag_invalid": commits_paused_flag_invalid(),
         "attention": attention,
     }
 

@@ -350,6 +350,7 @@ def drain_once(spool_root: str, db_path: str) -> dict:
 
     root = Path(spool_root)
     acked = refused = failed = 0
+    paused_mid = False
     entries: list[tuple[dict, Path, dict[str, Path]]] = []
     if root.is_dir():
         for producer_dir in sorted(p for p in root.iterdir() if p.is_dir()):
@@ -357,6 +358,13 @@ def drain_once(spool_root: str, db_path: str) -> dict:
             for path in sorted(dirs["pending"].iterdir()):
                 if path.name.startswith(".tmp-") or not path.name.endswith(".json"):
                     continue
+                if ledger_commits_paused():
+                    # Mid-scan pause freezes JUDGMENT too: quarantine
+                    # decisions must not run in a mode meant to stop
+                    # them (Codex validation #2). Everything unread
+                    # stays pending, untouched.
+                    paused_mid = True
+                    break
                 try:
                     env = json.loads(path.read_text(encoding="utf-8"))
                     sid = env["submission_id"]
@@ -411,6 +419,7 @@ def drain_once(spool_root: str, db_path: str) -> dict:
             if ledger_commits_paused():
                 # Re-read before EACH commit: a 2,000-entry backlog must
                 # stop within one entry of the owner's hand.
+                paused_mid = True
                 remaining.append((env, path, dirs))
                 continue
             outcome, detail = _owner.owner_commit(
@@ -448,6 +457,8 @@ def drain_once(spool_root: str, db_path: str) -> dict:
 
     report = {"acked": acked, "refused": refused,
               "deferred": len(entries), "failed": failed}
+    if paused_mid:
+        report["skipped_paused"] = True
     if report["deferred"]:
         _LOGGER.warning(
             "spool drain deferred %d entries (unsatisfied parents or "

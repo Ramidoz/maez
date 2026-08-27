@@ -202,6 +202,11 @@ def _paused_parent_submission_id(db_path: str, parent_turn_id: str):
             "SELECT submission_id FROM turns WHERE turn_id = ?",
             (parent_turn_id,)).fetchone()
         return row[0] if row else None
+    except sqlite3.Error:
+        # Never-raises boundary (Codex validation): a corrupt or
+        # pre-0006 ledger yields unparented custody, not an exception
+        # escaping the reply path.
+        return None
     finally:
         conn.close()
 
@@ -223,12 +228,15 @@ def _enqueue_paused_custody(db_path, turn_kind, raw_text, kwargs, attempt_id):
                 "identity (pre-0006 row?); enqueueing unparented — the "
                 "claim is preserved nowhere, which is honest, not silent",
                 parent_tid)
-    kw.pop("submission_id", None)  # authority at the door; identity rides below
+    # An explicit caller identity WINS (idempotency contract); the
+    # pre-attempt attempt_id is the fallback (Codex validation #4).
+    sid = kw.pop("submission_id", None) or attempt_id
+    import time as _time
     try:
         _spool.enqueue_reconstructed(
             _spool.default_spool_root(db_path),
-            submission_id=attempt_id,
-            submitted_at=None,
+            submission_id=sid,
+            submitted_at=_time.time(),  # the moment LIVED (Codex #3)
             producer="owner_daemon",
             turn_kind=turn_kind,
             raw_text=raw_text,

@@ -65,3 +65,12 @@ def ledger_commits_paused() -> bool:
         "CLOSED to paused (junk never authorizes a commit). Use '1' to "
         "pause or unset to resume.", raw)
     return True
+
+
+def commits_paused_flag_invalid() -> bool:
+    """True when the pause flag holds an unrecognized value (which fails
+    closed to paused). Surfaced so a typo is distinguishable from an
+    intentional pause on the cockpit (Codex validation #7)."""
+    raw = os.environ.get("MAEZ_LEDGER_COMMITS_PAUSED", "")
+    stripped = raw.strip().lower()
+    return bool(stripped) and stripped not in _TRUE_VALUES | _FALSE_VALUES

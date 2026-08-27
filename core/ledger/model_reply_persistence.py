@@ -271,12 +271,28 @@ def persist_model_reply(
 
     # Pause-with-custody (ninth round): a paused owner routes like a
     # non-owner — custody through the spool, linkage by submission id.
-    if not _owner.this_process_is_owner() or ledger_commits_paused():
+    # Flag-flip lane repair (Codex validation #1): a conversation that
+    # crossed a pause boundary holds only ONE of the two identities.
+    # The spool lane can translate a held parent_turn_id; the owner
+    # lane cannot use a submission id that may not be committed yet —
+    # so when only parent_submission_id exists, custody is the lane
+    # that preserves the edge.
+    if (
+        not _owner.this_process_is_owner()
+        or ledger_commits_paused()
+        or (parent_turn_id is None and parent_submission_id is not None)
+    ):
         # Non-owner surface: durable custody through the admission
         # spool. No SQLite open of any kind (the db may not even exist
         # yet — the envelope simply waits), no persistence marker
         # (meta_marker_keys is authority, structurally inexpressible
         # through the spool; the owner writes its own marker).
+        if parent_turn_id is not None and parent_submission_id is None:
+            translated = _owner._paused_parent_submission_id(
+                db_path, parent_turn_id)
+            if translated is not None:
+                parent_submission_id = translated
+                parent_turn_id = None
         if parent_turn_id is not None:
             _warn_once(
                 f"parent-turn-id-nonowner:{surface}",

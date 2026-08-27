@@ -186,5 +186,74 @@ class ResumeExactlyOnceTests(unittest.TestCase):
         self.assertEqual(len(_turns(db)), 4)
 
 
+class CodexValidationFixTests(unittest.TestCase):
+    """Codex validation round on the pause slice (DO-NOT-SHIP → fixed)."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+
+    def test_paused_custody_carries_lived_time(self):
+        db = _fresh("livedtime")
+        import time as _t
+        before = _t.time()
+        with patch.dict(os.environ, _PAUSED):
+            ledger_owner.claim_ownership()
+            ledger_owner.owner_write_turn(
+                db, "user_message", "now", surface="cli", **_STAMP)
+        pending = Path(spool.default_spool_root(db)) / "owner_daemon" / "pending"
+        env = [json.loads(p.read_text()) for p in pending.iterdir()
+               if not p.name.startswith(".tmp-")][0]
+        self.assertIsNotNone(env["submitted_at"],
+                             "null lived-time sorts before older entries "
+                             "and erases when the moment happened")
+        self.assertGreaterEqual(env["submitted_at"], before)
+
+    def test_midscan_pause_freezes_quarantine_judgment(self):
+        db = _fresh("midscan")
+        root = spool.default_spool_root(db)
+        # An authority-bearing envelope that WOULD be quarantined.
+        spool.enqueue(root, producer="web", turn_kind="system_event",
+                      raw_text="sneaky",
+                      kwargs={"surface": "web_owner", "birth_anchor": True,
+                              "taint_labels": ["self_generated"],
+                              "privacy_access": "public"})
+        with patch.dict(os.environ, _PAUSED):
+            ledger_owner.claim_ownership()
+            report = spool.drain_once(root, db)
+        self.assertEqual(report["refused"], 0,
+                         "pause freezes JUDGMENT too — no quarantines")
+        self.assertTrue(report.get("skipped_paused"))
+
+    def test_persist_reply_with_only_submission_parent_takes_custody_lane(self):
+        """Flag-flip repair: an in-pause user turn + post-resume reply
+        holds only parent_submission_id; the owner lane would orphan it,
+        so the router must choose custody."""
+        from core.ledger import model_reply_persistence as mrp
+
+        db = _fresh("fliplane")
+        root = spool.default_spool_root(db)
+        with patch.dict(os.environ, _PAUSED):
+            ledger_owner.claim_ownership()
+            sid = mrp.submit_user_message(db, "asked in pause", surface="telegram_text")
+        # pause lifts; reply arrives holding only the sid
+        with patch.dict(os.environ, _ON):
+            out = mrp.persist_model_reply(
+                db_path=db, raw_text="answered after resume",
+                surface="telegram_text", parent_turn_id=None,
+                parent_submission_id=sid, model_id="m",
+                prompt_material={}, soul_material="s",
+                evidence_envelope={"claimable": [], "forbidden": []},
+                audit_verdict={"verdict": "ok"})
+            self.assertIsNone(out)
+            report = spool.drain_once(root, db)
+        self.assertEqual(report["acked"], 2)
+        rows = _turns(db)
+        by_kind = {r["turn_kind"]: r for r in rows}
+        self.assertEqual(by_kind["model_reply"]["parent_turn_id"],
+                         by_kind["user_message"]["turn_id"],
+                         "the cross-boundary edge must be REAL")
+
+
 if __name__ == "__main__":
     unittest.main()
