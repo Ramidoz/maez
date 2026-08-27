@@ -584,6 +584,32 @@ class MintConsumeVerify(unittest.TestCase):
                 pass
         self.assertEqual(ctx.exception.reason, "consume_stale")
 
+    def test_forged_unverified_tap_refuses(self):
+        # user_verification=0 forged onto the row: the rail must refuse
+        # with owner_proof_missing — UV is load-bearing for this class.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        self._mint(run_id)
+        conn = _sqlite3.connect(self.store_path)
+        conn.execute(
+            "UPDATE s7_authorization_artifacts_v2 SET user_verification=0 "
+            "WHERE request_id=?",
+            (run_id,),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "owner_proof_missing")
+
     def test_disabled_credential_refuses(self):
         import sqlite3 as _sqlite3
 
