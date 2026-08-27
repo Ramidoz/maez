@@ -680,6 +680,152 @@ class MintConsumeVerify(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "already_born")
 
 
+def authorized_ceremony_fixture(td: Path, *, mode: str = "dry_run",
+                                owner_witness: str = "rohit",
+                                db_path: Path | None = None):
+    """Shared fixture for ceremony tests: a temp S7 store holding a
+    CONSUMED birth authorization bound to a temp ledger + manifest.
+    Returns kwargs for run_transaction plus the minted facts."""
+    from core.governance import birth_authorization as ba
+
+    td = Path(td)
+    root = td / "s7_1_webauthn"
+    store = _mint_ready_store(root)
+    manifest = td / "creation_manifest.md"
+    manifest.write_text("rehearsal letter — never the real manifest\n")
+    db_path = Path(db_path) if db_path is not None else td / "ledger.db"
+    run_id = ba.fresh_birth_run_id()
+    params = ba.birth_action_params(
+        ledger_db_realpath=str(db_path.resolve()),
+        creation_manifest_sha256=ba.read_manifest_sha256(manifest),
+        owner_witness=owner_witness,
+        mode=mode,
+    )
+    _printed, printer, prompt = _scripted_tap()
+    facts = ba.mint_and_consume_birth_authorization(
+        store_root=root,
+        run_id=run_id,
+        params=params,
+        verifier=_AdvancingVerifier(),
+        printer=printer,
+        prompt=prompt,
+    )
+    return {
+        "db_path": db_path,
+        "run_id": run_id,
+        "s7_store_path": store.db_path,
+        "manifest_path": manifest,
+        "owner_witness": owner_witness,
+    }, facts
+
+
+class CeremonyTransactionRail(unittest.TestCase):
+    """run_transaction itself now proves the receipt from the store."""
+
+    def setUp(self):
+        import tempfile
+
+        self._td = tempfile.TemporaryDirectory(dir="/var/tmp")
+        self.td = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_dry_run_births_with_resolved_facts_in_payload(self):
+        import json as _json
+        import sqlite3 as _sqlite3
+
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, facts = authorized_ceremony_fixture(self.td)
+        result = run_transaction(dry_run=True, **kwargs)
+        conn = _sqlite3.connect(kwargs["db_path"])
+        row = conn.execute(
+            "SELECT raw_text FROM turns WHERE turn_id=?",
+            (result["birth_turn_id"],),
+        ).fetchone()
+        conn.close()
+        payload = _json.loads(row[0])
+        self.assertEqual(payload["s7_artifact_id"], facts["s7_artifact_id"])
+        self.assertEqual(
+            payload["s7_rendered_text_hash"], facts["s7_rendered_text_hash"]
+        )
+        self.assertEqual(payload["ceremony_run_id"], kwargs["run_id"])
+        self.assertIn("s7_receipt_projection_sha256", payload)
+        self.assertNotIn("s7_receipt_ref", payload)
+
+    def test_importable_bypass_hits_the_rail(self):
+        # The A1 defect: importing run_transaction and passing an
+        # arbitrary ref no longer births anything. With no consumed
+        # authorization in the store, the transaction refuses BEFORE any
+        # ledger byte is written.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        kwargs["run_id"] = "birth-never-authorized"
+        with self.assertRaises(ba.BirthAuthorizationRefusal):
+            run_transaction(dry_run=True, **kwargs)
+        self.assertFalse(
+            kwargs["db_path"].exists(),
+            "a refused rail must leave zero ledger bytes",
+        )
+
+    def test_manifest_absence_blocks_structurally(self):
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        kwargs["manifest_path"].unlink()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "manifest_missing")
+        self.assertFalse(kwargs["db_path"].exists())
+
+    def test_manifest_edit_after_tap_refuses(self):
+        # The tap covered the letter's exact bytes; the transaction
+        # re-hashes reality.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        kwargs["manifest_path"].write_text("edited after the tap\n")
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "binding_mismatch")
+        self.assertFalse(kwargs["db_path"].exists())
+
+    def test_for_real_refuses_env_overrides_inside_the_function(self):
+        from unittest import mock
+
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_LEDGER_DB_PATH": "/decoy/ledger.db"}
+        ):
+            with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+                run_transaction(dry_run=False, **kwargs)
+        self.assertEqual(ctx.exception.reason, "env_override_in_for_real")
+
+    def test_dry_run_refuses_the_real_s7_store_path(self):
+        from unittest import mock
+
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        with mock.patch.object(
+            ba,
+            "canonical_s7_store_path",
+            return_value=Path(kwargs["s7_store_path"]),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                run_transaction(dry_run=True, **kwargs)
+        self.assertIn("real S7 store", str(ctx.exception))
+
+
 class EnvAndManifestGuards(unittest.TestCase):
     def test_env_override_class_refuses(self):
         from core.governance import birth_authorization as ba

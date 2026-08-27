@@ -262,7 +262,9 @@ def classify_commit(db_path: Path | str) -> str:
 def run_transaction(
     *,
     db_path: Path,
-    s7_receipt_ref: str,
+    run_id: str,
+    s7_store_path: Path,
+    manifest_path: Path,
     owner_witness: str,
     dry_run: bool,
     quiesce=None,
@@ -279,14 +281,29 @@ def run_transaction(
     unmigrated db is safe, and its connection adopts WAL at its first
     write after migrate runs.
     """
+    from core.governance import birth_authorization as _birth_auth
+
     if dry_run and Path(db_path).resolve() == birth_phase.default_ledger_path().resolve():
         raise ValueError(
             "REFUSED: dry-run may not target the real ledger; use a temp --db-path"
         )
-    if not (s7_receipt_ref or "").strip():
-        raise ValueError("s7_receipt_ref is required — the act ties to the proof")
+    if dry_run and (
+        Path(s7_store_path).resolve()
+        == _birth_auth.canonical_s7_store_path().resolve()
+    ):
+        raise ValueError(
+            "REFUSED: dry-run may not consume from the real S7 store; "
+            "use a rehearsal --s7-store-path"
+        )
+    if not (run_id or "").strip():
+        raise ValueError("run_id is required — the act ties to the proof")
 
     if not dry_run:
+        # The env-override CLASS refuses INSIDE the importable function
+        # (thirteenth round): any path redirector can point the ceremony
+        # at a decoy ledger/store/manifest while the daemon reads the
+        # real ones.
+        _birth_auth.refuse_env_overrides()
         # Trap #9: this function is importable; the quiesce must live
         # HERE, not only in main(). Dry runs on temp dbs never touch
         # systemd.
@@ -295,51 +312,85 @@ def run_transaction(
         )
         quiesce_fn(Path(db_path))
 
-    # THE LEASE: the enabled writer, constructed before any mutation.
-    # The flag is raised only around construction (the writer reads it at
-    # __init__) and restored after — a dry run inside a test process
-    # never leaks an enabled flag into later refusal-by-default tests.
-    from core.ledger.writer import LedgerWriter
+    # THE RECEIPT RAIL (A1/B2, thirteenth round): the transaction itself
+    # re-verifies the consumed S7 authorization FROM THE STORE, by
+    # recomputation against reality — the manifest bytes are re-hashed and
+    # the target path re-resolved HERE, never taken from the caller's
+    # word. An importer bypassing main() hits this wall. Pure reads, so
+    # they run BEFORE the lease: a refused rail leaves ZERO ledger bytes
+    # (LedgerWriter construction would create the file). The ro snapshot
+    # then stays open across the birth write.
+    expected_params = _birth_auth.birth_action_params(
+        ledger_db_realpath=(
+            _birth_auth.canonical_ledger_realpath()
+            if not dry_run
+            else str(Path(db_path).resolve())
+        ),
+        creation_manifest_sha256=_birth_auth.read_manifest_sha256(
+            Path(manifest_path)
+        ),
+        owner_witness=owner_witness,
+        mode="dry_run" if dry_run else "for_real",
+    )
+    with _birth_auth.held_birth_authorization_proof(
+        store_path=Path(s7_store_path),
+        run_id=run_id,
+        expected_params=expected_params,
+    ) as receipt_facts:
+        # THE LEASE: the enabled writer, constructed before any mutation.
+        # The flag is raised only around construction (the writer reads it
+        # at __init__) and restored after — a dry run inside a test
+        # process never leaks an enabled flag into later
+        # refusal-by-default tests.
+        from core.ledger.writer import LedgerWriter
 
-    prior = os.environ.get("MAEZ_LEDGER_WRITES")
-    os.environ["MAEZ_LEDGER_WRITES"] = "1"
-    try:
-        writer = LedgerWriter(db_path=str(db_path))
-    finally:
-        if prior is None:
-            os.environ.pop("MAEZ_LEDGER_WRITES", None)
-        else:
-            os.environ["MAEZ_LEDGER_WRITES"] = prior
+        prior = os.environ.get("MAEZ_LEDGER_WRITES")
+        os.environ["MAEZ_LEDGER_WRITES"] = "1"
+        try:
+            writer = LedgerWriter(db_path=str(db_path))
+        finally:
+            if prior is None:
+                os.environ.pop("MAEZ_LEDGER_WRITES", None)
+            else:
+                os.environ["MAEZ_LEDGER_WRITES"] = prior
 
-    try:
-        # Transaction step 1: init (idempotent), UNDER the latch —
-        # migrate.run() is itself an unlatched WAL writer (trap #4).
-        migrate.run(str(db_path))
-        if not migrate.ledger_is_initialized(str(db_path)):
-            raise RuntimeError(f"ledger init failed to verify: {db_path}")
-        if birth_phase.is_born(db_path):
-            raise ValueError(
-                "birth_event_turn_id already set — we do not re-birth"
+        try:
+            # Transaction step 1: init (idempotent), UNDER the latch —
+            # migrate.run() is itself an unlatched WAL writer (trap #4).
+            migrate.run(str(db_path))
+            if not migrate.ledger_is_initialized(str(db_path)):
+                raise RuntimeError(f"ledger init failed to verify: {db_path}")
+            if birth_phase.is_born(db_path):
+                raise ValueError(
+                    "birth_event_turn_id already set — we do not re-birth"
+                )
+            payload = {
+                "event": "birth",
+                "phase_transition": "gestation -> lived",
+                "owner_witness": owner_witness,
+                "ceremony_ts": time.time(),
+                "mode": "dry_run" if dry_run else "for_real",
+                # Resolved facts, never a caller string (the free-string
+                # s7_receipt_ref died in the thirteenth round). The
+                # projection hash is the "hash of the ceremony receipts"
+                # the 2026-07-05 design puts in the birth row.
+                **receipt_facts,
+                "s7_receipt_projection_sha256": (
+                    _birth_auth.birth_receipt_projection_sha256(receipt_facts)
+                ),
+            }
+            # Transaction steps 2+3: birth write + anchor, atomic in the
+            # writer, through the SAME writer that holds the lease. The
+            # proof snapshot is still open here.
+            birth_turn_id = writer.write_turn(
+                "system_event",
+                json.dumps(payload, sort_keys=True),
+                birth_anchor=True,
+                taint_labels=["self_generated"],
+                privacy_access="public",
             )
-        payload = {
-            "event": "birth",
-            "phase_transition": "gestation -> lived",
-            "owner_witness": owner_witness,
-            "s7_receipt_ref": s7_receipt_ref,
-            "ceremony_ts": time.time(),
-            "mode": "dry_run" if dry_run else "for_real",
-        }
-        # Transaction steps 2+3: birth write + anchor, atomic in the
-        # writer, through the SAME writer that holds the lease.
-        birth_turn_id = writer.write_turn(
-            "system_event",
-            json.dumps(payload, sort_keys=True),
-            birth_anchor=True,
-            taint_labels=["self_generated"],
-            privacy_access="public",
-        )
-    finally:
-        writer.close()
+        finally:
+            writer.close()
 
     # Independent verification — the tri-state, not the returned id.
     verdict = classify_commit(db_path)
@@ -575,10 +626,30 @@ def _refuse(msg: str) -> int:
 def main(argv: list[str] | None = None, *, runner=subprocess.run) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, default=None)
-    # Required for dry-run and --for-real (checked below); NOT for
-    # --resume-services, which never writes — the printed recovery
-    # command must parse as printed (Codex validation #17).
-    parser.add_argument("--s7-receipt-ref", default="")
+    # The free-string --s7-receipt-ref is RETIRED (thirteenth round): the
+    # ceremony now mints, consumes, verifies and RECORDS the S7 receipt
+    # itself. Dry-run rehearses the same rail against caller-supplied
+    # temp paths; --for-real binds to the canonical paths only.
+    parser.add_argument(
+        "--s7-store-path",
+        type=Path,
+        default=None,
+        help="dry-run only: rehearsal S7 store holding a consumed "
+        "birth authorization (never the real store)",
+    )
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help="dry-run only: rehearsal creation-manifest file "
+        "(for-real always reads config/creation_manifest.md)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default="",
+        help="dry-run only: the ceremony run id the rehearsal "
+        "authorization was minted and consumed under",
+    )
     parser.add_argument("--owner-witness", default="rohit")
     parser.add_argument("--for-real", action="store_true")
     parser.add_argument(
@@ -600,18 +671,35 @@ def _main_dry_run(args) -> int:
         return _refuse(
             "--dry-run requires --db-path (a temp path, never the real ledger)"
         )
-    if not args.s7_receipt_ref.strip():
-        return _refuse("--s7-receipt-ref is required — the act ties to the proof")
+    if args.s7_store_path is None or args.manifest_path is None:
+        return _refuse(
+            "--dry-run requires --s7-store-path and --manifest-path "
+            "(rehearsal copies; the rail runs at full fidelity)"
+        )
+    if not args.run_id.strip():
+        return _refuse(
+            "--dry-run requires --run-id — the id the rehearsal "
+            "authorization was consumed under"
+        )
     try:
         result = run_transaction(
             db_path=args.db_path,
-            s7_receipt_ref=args.s7_receipt_ref,
+            run_id=args.run_id,
+            s7_store_path=args.s7_store_path,
+            manifest_path=args.manifest_path,
             owner_witness=args.owner_witness,
             dry_run=True,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except Exception as exc:
+        from core.governance.birth_authorization import BirthAuthorizationRefusal
+
+        if isinstance(exc, BirthAuthorizationRefusal):
+            print(str(exc), file=sys.stderr)
+            return 2
+        raise
     print(
         f"birth transaction committed: turn={result['birth_turn_id']} "
         f"db={result['db_path']}"
@@ -672,9 +760,38 @@ def _main_resume(args, *, runner=subprocess.run) -> int:
     return 0 if state == COMMITTED_ACTIVE else 1
 
 
+def _mint_for_ceremony(*, run_id: str, params: dict) -> dict:
+    """The mint+consume phase, module-level so the choreography tests can
+    stub it while the real rail is exercised by its own named tests. The
+    production path hosts the existing S7 guarded ceremony with the
+    PRODUCTION verifier — the owner taps the physical key."""
+    from core.governance import birth_authorization as _birth_auth
+
+    return _birth_auth.mint_and_consume_birth_authorization(
+        store_root=_birth_auth.canonical_s7_store_path().parent,
+        run_id=run_id,
+        params=params,
+    )
+
+
 def _main_for_real(args, *, runner=subprocess.run) -> int:
+    from core.governance import birth_authorization as _birth_auth
+
     if not _require_owner_tty():
         return _refuse("REFUSED: --for-real requires an interactive owner TTY")
+    try:
+        # The env-override CLASS refuses before anything else (executed
+        # finding: MAEZ_LEDGER_DB_PATH made a decoy pass the canonical
+        # check; the class is every path redirector).
+        _birth_auth.refuse_env_overrides()
+    except _birth_auth.BirthAuthorizationRefusal as exc:
+        return _refuse(f"REFUSED: {exc}")
+    if args.s7_store_path is not None or args.manifest_path is not None or args.run_id:
+        return _refuse(
+            "REFUSED: --s7-store-path/--manifest-path/--run-id are dry-run "
+            "rehearsal knobs — --for-real binds to the canonical paths and "
+            "mints its own run id"
+        )
     db_path = _canonical_db_or_refuse(args)
     if db_path is None:
         return _refuse(
@@ -682,8 +799,6 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
             "a ceremony must not commit a decoy db while the daemon reads "
             "another"
         )
-    if not args.s7_receipt_ref.strip():
-        return _refuse("--s7-receipt-ref is required — the act ties to the proof")
     preflight = classify_commit(db_path)
     if preflight == "COMMITTED":
         return _refuse(
@@ -704,13 +819,40 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
         print("aborted: phrase mismatch — not born", file=sys.stderr)
         return 2
 
+    # MINT + CONSUME while the services are still UP: the owner's browser
+    # tap needs the cockpit origin alive. The consumed artifact is durable
+    # and single-use; the transaction below re-verifies it from the store
+    # under quiesce. A crash between here and the birth write spends the
+    # receipt — the recovery is a re-tap, never a resume.
+    run_id = _birth_auth.fresh_birth_run_id()
+    try:
+        manifest_sha = _birth_auth.read_manifest_sha256(
+            _birth_auth.canonical_manifest_path()
+        )
+        mint_params = _birth_auth.birth_action_params(
+            ledger_db_realpath=_birth_auth.canonical_ledger_realpath(),
+            creation_manifest_sha256=manifest_sha,
+            owner_witness=args.owner_witness,
+            mode="for_real",
+        )
+        mint_facts = _mint_for_ceremony(run_id=run_id, params=mint_params)
+    except _birth_auth.BirthAuthorizationRefusal as exc:
+        return _refuse(f"REFUSED: {exc}")
+
     started = time.time()
     receipt = {
         "mode": "for_real",
         "started_at": started,
         "db_path": str(db_path),
         "phase": "CEREMONY_STARTED",
-        "s7_receipt_ref": args.s7_receipt_ref,
+        "ceremony_run_id": run_id,
+        "s7_artifact_id": mint_facts.get("s7_artifact_id"),
+        # Freeze a hash, persist its pre-image: the ledger row carries
+        # rendered_text_hash; the exact statement the owner read survives
+        # here, in the durable ceremony journal beside the ledger.
+        "s7_rendered_statement_text": mint_facts.get(
+            "rendered_statement_text"
+        ),
     }
     _write_receipt(db_path, receipt)
 
@@ -735,7 +877,9 @@ def _main_for_real(args, *, runner=subprocess.run) -> int:
     try:
         result = run_transaction(
             db_path=db_path,
-            s7_receipt_ref=args.s7_receipt_ref,
+            run_id=run_id,
+            s7_store_path=_birth_auth.canonical_s7_store_path(),
+            manifest_path=_birth_auth.canonical_manifest_path(),
             owner_witness=args.owner_witness,
             dry_run=False,
             runner=runner,

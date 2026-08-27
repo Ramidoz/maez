@@ -1,6 +1,13 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
-"""Owner birth ceremony script tests."""
+"""Owner birth ceremony script tests.
+
+Thirteenth round: the free-string --s7-receipt-ref is dead. Every
+transaction here runs against a temp S7 store holding a real, consumed
+birth authorization (minted through the real ceremony service with the
+established fake-verifier duck-type) — see
+tests/test_birth_authorization_rail.py for the rail's own tests.
+"""
 from __future__ import annotations
 
 import fcntl
@@ -10,23 +17,68 @@ import sqlite3
 import subprocess
 import sys
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 from scripts.birth_ceremony import main, run_transaction
+from tests.test_birth_authorization_rail import authorized_ceremony_fixture
+
+
+def _dry_kwargs(td: Path, **kw):
+    """run_transaction kwargs for an authorized dry-run in ``td``."""
+    kwargs, _facts = authorized_ceremony_fixture(Path(td), **kw)
+    return kwargs
+
+
+def _for_real_patches(td: Path, db: Path):
+    """(kwargs, facts, ExitStack) — a consumed for-real authorization
+    bound to ``db``, with the canonical resolvers patched into ``td`` so
+    a test never touches the real ledger/store/manifest."""
+    kwargs, facts = authorized_ceremony_fixture(
+        Path(td), mode="for_real", db_path=db
+    )
+    stack = ExitStack()
+    stack.enter_context(
+        mock.patch(
+            "core.governance.birth_authorization.canonical_ledger_realpath",
+            return_value=str(Path(db).resolve()),
+        )
+    )
+    stack.enter_context(
+        mock.patch(
+            "core.governance.birth_authorization.canonical_s7_store_path",
+            return_value=Path(kwargs["s7_store_path"]),
+        )
+    )
+    stack.enter_context(
+        mock.patch(
+            "core.governance.birth_authorization.canonical_manifest_path",
+            return_value=Path(kwargs["manifest_path"]),
+        )
+    )
+    stack.enter_context(
+        mock.patch(
+            "core.governance.birth_authorization.fresh_birth_run_id",
+            return_value=kwargs["run_id"],
+        )
+    )
+    stack.enter_context(
+        mock.patch(
+            "scripts.birth_ceremony._mint_for_ceremony",
+            return_value=facts,
+        )
+    )
+    return kwargs, facts, stack
 
 
 class BirthTransactionDryRun(unittest.TestCase):
     def test_dry_run_births_a_temp_ledger(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            result = run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:test",
-                owner_witness="rohit",
-                dry_run=True,
-            )
+            kwargs = _dry_kwargs(td)
+            db = kwargs["db_path"]
+            result = run_transaction(dry_run=True, **kwargs)
             self.assertTrue(result["birth_turn_id"])
             conn = sqlite3.connect(db)
             meta = conn.execute(
@@ -40,36 +92,25 @@ class BirthTransactionDryRun(unittest.TestCase):
             self.assertEqual(meta, result["birth_turn_id"])
             payload = json.loads(row[0])
             self.assertEqual(payload["event"], "birth")
-            self.assertEqual(payload["s7_receipt_ref"], "s7:test")
+            # Resolved facts, never a caller string.
+            self.assertNotIn("s7_receipt_ref", payload)
+            self.assertTrue(payload["s7_artifact_id"].startswith("s7authz_"))
+            self.assertEqual(payload["ceremony_run_id"], kwargs["run_id"])
+            self.assertIn("s7_receipt_projection_sha256", payload)
             self.assertEqual(row[1], "gestation")  # the hinge row
 
     def test_double_run_refuses(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
+            kwargs = _dry_kwargs(td)
+            run_transaction(dry_run=True, **kwargs)
             with self.assertRaises(ValueError):
-                run_transaction(
-                    db_path=db,
-                    s7_receipt_ref="s7:t",
-                    owner_witness="rohit",
-                    dry_run=True,
-                )
+                run_transaction(dry_run=True, **kwargs)
 
     def test_no_first_person_content_in_birth_row(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
-            conn = sqlite3.connect(db)
+            kwargs = _dry_kwargs(td)
+            run_transaction(dry_run=True, **kwargs)
+            conn = sqlite3.connect(kwargs["db_path"])
             raw = conn.execute(
                 "SELECT raw_text FROM turns WHERE turn_id != 'genesis'"
             ).fetchone()[0]
@@ -79,30 +120,35 @@ class BirthTransactionDryRun(unittest.TestCase):
 
     def test_dry_run_without_db_path_exits_2(self):
         with mock.patch("sys.stderr") as stderr:
-            self.assertEqual(main(["--s7-receipt-ref", "s7:t"]), 2)
+            self.assertEqual(main([]), 2)
         stderr.write.assert_any_call(
             "--dry-run requires --db-path (a temp path, never the real ledger)"
         )
 
+    def test_dry_run_without_rail_paths_exits_2(self):
+        with TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            with mock.patch("sys.stderr") as stderr:
+                self.assertEqual(main(["--db-path", str(db)]), 2)
+        printed = "".join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn("--s7-store-path", printed)
+
     def test_dry_run_refuses_default_ledger_path(self):
         with TemporaryDirectory() as td:
-            default_db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
+            default_db = kwargs["db_path"]
             with mock.patch(
                 "scripts.birth_ceremony.birth_phase.default_ledger_path",
                 return_value=default_db,
             ):
                 with self.assertRaisesRegex(ValueError, "REFUSED.*real ledger"):
-                    run_transaction(
-                        db_path=default_db,
-                        s7_receipt_ref="s7:t",
-                        owner_witness="rohit",
-                        dry_run=True,
-                    )
+                    run_transaction(dry_run=True, **kwargs)
             self.assertFalse(default_db.exists())
 
     def test_dry_run_real_ledger_cli_exits_2(self):
         with TemporaryDirectory() as td:
-            default_db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
+            default_db = kwargs["db_path"]
             with mock.patch(
                 "scripts.birth_ceremony.birth_phase.default_ledger_path",
                 return_value=default_db,
@@ -110,10 +156,10 @@ class BirthTransactionDryRun(unittest.TestCase):
                 self.assertEqual(
                     main(
                         [
-                            "--s7-receipt-ref",
-                            "s7:t",
-                            "--db-path",
-                            str(default_db),
+                            "--db-path", str(default_db),
+                            "--s7-store-path", str(kwargs["s7_store_path"]),
+                            "--manifest-path", str(kwargs["manifest_path"]),
+                            "--run-id", kwargs["run_id"],
                         ]
                     ),
                     2,
@@ -125,13 +171,32 @@ class BirthTransactionDryRun(unittest.TestCase):
         with mock.patch("sys.stdin.isatty", return_value=False), mock.patch(
             "sys.stderr"
         ) as stderr:
-            self.assertEqual(
-                main(["--for-real", "--s7-receipt-ref", "s7:t"]),
-                2,
-            )
+            self.assertEqual(main(["--for-real"]), 2)
         stderr.write.assert_any_call(
             "REFUSED: --for-real requires an interactive owner TTY"
         )
+
+    def test_for_real_refuses_env_overrides_first(self):
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch.dict(
+            os.environ, {"MAEZ_DATA": "/decoy"}
+        ), mock.patch("sys.stderr") as stderr:
+            self.assertEqual(main(["--for-real"]), 2)
+        printed = "".join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn("env_override_in_for_real", printed)
+
+    def test_for_real_refuses_rehearsal_knobs(self):
+        with TemporaryDirectory() as td:
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "sys.stderr"
+            ) as stderr:
+                self.assertEqual(
+                    main(
+                        ["--for-real", "--s7-store-path", str(Path(td) / "s")]
+                    ),
+                    2,
+                )
+        printed = "".join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn("rehearsal", printed)
 
     def test_for_real_refuses_noncanonical_db_path(self):
         with TemporaryDirectory() as td:
@@ -144,10 +209,7 @@ class BirthTransactionDryRun(unittest.TestCase):
                 "sys.stderr"
             ) as stderr:
                 self.assertEqual(
-                    main(
-                        ["--for-real", "--s7-receipt-ref", "s7:t",
-                         "--db-path", str(decoy)]
-                    ),
+                    main(["--for-real", "--db-path", str(decoy)]),
                     2,
                 )
         printed = "".join(c.args[0] for c in stderr.write.call_args_list)
@@ -155,28 +217,23 @@ class BirthTransactionDryRun(unittest.TestCase):
 
     def test_env_flag_restored_after_writer_construction(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
             os.environ["MAEZ_LEDGER_WRITES"] = "0"
             self.addCleanup(os.environ.pop, "MAEZ_LEDGER_WRITES", None)
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
+            run_transaction(dry_run=True, **kwargs)
             self.assertEqual(os.environ.get("MAEZ_LEDGER_WRITES"), "0")
 
     def test_checklist_prints_remaining_manual_steps(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
             with mock.patch("sys.stdout") as stdout:
                 self.assertEqual(
                     main(
                         [
-                            "--s7-receipt-ref",
-                            "s7:t",
-                            "--db-path",
-                            str(db),
+                            "--db-path", str(kwargs["db_path"]),
+                            "--s7-store-path", str(kwargs["s7_store_path"]),
+                            "--manifest-path", str(kwargs["manifest_path"]),
+                            "--run-id", kwargs["run_id"],
                         ]
                     ),
                     0,
@@ -211,7 +268,7 @@ def _latch_probe(db: Path) -> bool:
 
 
 class MaintenanceLeaseTests(unittest.TestCase):
-    """Council ruling (this round, 3 seats + executed probes): the
+    """Council ruling (fifth round, 3 seats + executed probes): the
     enabled writer IS the lease. It constructs FIRST — the latch is held
     continuously from before migrate.run() (an unlatched WAL writer,
     trap #4) through the birth write. No release-reacquire window
@@ -221,7 +278,7 @@ class MaintenanceLeaseTests(unittest.TestCase):
         from core.ledger import migrate as migrate_mod
 
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
             seen: dict = {}
             orig_run = migrate_mod.run
 
@@ -230,12 +287,7 @@ class MaintenanceLeaseTests(unittest.TestCase):
                 return orig_run(db_path)
 
             with mock.patch.object(migrate_mod, "run", side_effect=probing_run):
-                run_transaction(
-                    db_path=db,
-                    s7_receipt_ref="s7:t",
-                    owner_witness="rohit",
-                    dry_run=True,
-                )
+                run_transaction(dry_run=True, **kwargs)
             self.assertTrue(
                 seen.get("latched_during_migrate"),
                 "migrate.run() must execute UNDER the owner latch — "
@@ -244,14 +296,9 @@ class MaintenanceLeaseTests(unittest.TestCase):
 
     def test_latch_released_after_transaction(self):
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
-            self.assertFalse(_latch_probe(db))
+            kwargs = _dry_kwargs(td)
+            run_transaction(dry_run=True, **kwargs)
+            self.assertFalse(_latch_probe(kwargs["db_path"]))
 
 
 class QuiesceInsideRunTransactionTests(unittest.TestCase):
@@ -263,6 +310,7 @@ class QuiesceInsideRunTransactionTests(unittest.TestCase):
 
         with TemporaryDirectory() as td:
             db = Path(td) / "ledger.db"
+            kwargs, _facts, stack = _for_real_patches(td, db)
             order: list[str] = []
             orig_run = migrate_mod.run
 
@@ -270,15 +318,13 @@ class QuiesceInsideRunTransactionTests(unittest.TestCase):
                 order.append("migrate")
                 return orig_run(db_path)
 
-            with mock.patch.object(
+            with stack, mock.patch.object(
                 migrate_mod, "run", side_effect=recording_migrate
             ):
                 run_transaction(
-                    db_path=db,
-                    s7_receipt_ref="s7:t",
-                    owner_witness="rohit",
                     dry_run=False,
                     quiesce=lambda path: order.append("quiesce"),
+                    **kwargs,
                 )
             self.assertEqual(
                 order[:2],
@@ -289,13 +335,11 @@ class QuiesceInsideRunTransactionTests(unittest.TestCase):
     def test_dry_run_does_not_quiesce(self):
         called: list = []
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
+            kwargs = _dry_kwargs(td)
             run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
                 dry_run=True,
                 quiesce=lambda path: called.append(path),
+                **kwargs,
             )
         self.assertEqual(called, [], "dry runs on temp dbs never touch systemd")
 
@@ -326,14 +370,9 @@ class CommitClassificationTests(unittest.TestCase):
         from scripts.birth_ceremony import classify_commit
 
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
-            self.assertEqual(classify_commit(db), "COMMITTED")
+            kwargs = _dry_kwargs(td)
+            run_transaction(dry_run=True, **kwargs)
+            self.assertEqual(classify_commit(kwargs["db_path"]), "COMMITTED")
 
     def test_garbage_file_is_unknown_never_not_committed(self):
         from scripts.birth_ceremony import classify_commit
@@ -496,8 +535,6 @@ class VendoredSqliteReexecTests(unittest.TestCase):
             [
                 str(repo / ".venv" / "bin" / "python"),
                 str(repo / "scripts" / "birth_ceremony.py"),
-                "--s7-receipt-ref",
-                "s7:t",
             ],
             capture_output=True,
             text=True,
@@ -517,7 +554,8 @@ class ForRealChoreographyTests(unittest.TestCase):
 
     def _run_main(self, td: Path, runner: FakeSystemctl, *, argv=None):
         canonical = td / "ledger.db"
-        with mock.patch(
+        kwargs, _facts, stack = _for_real_patches(td, canonical)
+        with stack, mock.patch(
             "scripts.birth_ceremony.birth_phase.default_ledger_path",
             return_value=canonical,
         ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
@@ -532,10 +570,7 @@ class ForRealChoreographyTests(unittest.TestCase):
         ), mock.patch(
             "scripts.birth_ceremony._latch_is_held", return_value=True
         ):
-            rc = main(
-                argv or ["--for-real", "--s7-receipt-ref", "s7:t"],
-                runner=runner,
-            )
+            rc = main(argv or ["--for-real"], runner=runner)
         return rc, canonical
 
     def _receipt(self, db: Path) -> dict:
@@ -561,6 +596,21 @@ class ForRealChoreographyTests(unittest.TestCase):
                 "web stops FIRST (it Wants= the daemon but survives it)",
             )
             self.assertEqual(stops[1][3], "maez.service")
+
+    def test_ceremony_receipt_persists_the_rendered_statement(self):
+        # Freeze a hash, persist its pre-image: the ledger row carries
+        # rendered_text_hash; the exact statement text survives in the
+        # durable ceremony journal.
+        with TemporaryDirectory() as td:
+            runner = FakeSystemctl(
+                {"maez.service": "active", "maez-web.service": "active"}
+            )
+            rc, db = self._run_main(Path(td), runner)
+            self.assertEqual(rc, 0)
+            receipt = self._receipt(db)
+            self.assertIn("S7 work-on-Maez authorization",
+                          receipt["s7_rendered_statement_text"])
+            self.assertTrue(receipt["ceremony_run_id"].startswith("birth-"))
 
     def test_daemon_start_failure_fails_toward_stopped(self):
         with TemporaryDirectory() as td:
@@ -662,14 +712,12 @@ class ForRealChoreographyTests(unittest.TestCase):
 
     def test_already_born_refuses_and_points_to_resume(self):
         with TemporaryDirectory() as td:
-            canonical = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=canonical,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=False,
-                quiesce=lambda p: None,
-            )
+            # Birth the canonical db FIRST (before mocking the default
+            # path, so the dry-run guard doesn't trip).
+            birth_kwargs = _dry_kwargs(Path(td) / "prebirth")
+            os.makedirs(Path(td) / "prebirth", exist_ok=True)
+            canonical = birth_kwargs["db_path"]
+            run_transaction(dry_run=True, **birth_kwargs)
             runner = FakeSystemctl()
             with mock.patch(
                 "scripts.birth_ceremony.birth_phase.default_ledger_path",
@@ -677,9 +725,7 @@ class ForRealChoreographyTests(unittest.TestCase):
             ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                 "sys.stderr"
             ) as stderr:
-                rc = main(
-                    ["--for-real", "--s7-receipt-ref", "s7:t"], runner=runner
-                )
+                rc = main(["--for-real"], runner=runner)
             self.assertEqual(rc, 2)
             printed = "".join(c.args[0] for c in stderr.write.call_args_list)
             self.assertIn("do not re-birth", printed.lower())
@@ -704,9 +750,7 @@ class ValidationRoundFixesTests(unittest.TestCase):
             ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                 "sys.stderr"
             ) as stderr:
-                rc = main(
-                    ["--for-real", "--s7-receipt-ref", "s7:t"], runner=runner
-                )
+                rc = main(["--for-real"], runner=runner)
             self.assertEqual(rc, 2)
             self.assertEqual(
                 runner.calls, [],
@@ -721,13 +765,9 @@ class ValidationRoundFixesTests(unittest.TestCase):
         from scripts.birth_ceremony import classify_commit
 
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=True,
-            )
+            kwargs = _dry_kwargs(td)
+            db = kwargs["db_path"]
+            run_transaction(dry_run=True, **kwargs)
             self.assertEqual(classify_commit(db), "COMMITTED")
             conn = sqlite3.connect(db)
             try:
@@ -762,11 +802,9 @@ class ValidationRoundFixesTests(unittest.TestCase):
         from scripts import birth_ceremony as bc
 
         with TemporaryDirectory() as td:
-            db = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=db, s7_receipt_ref="s7:t",
-                owner_witness="rohit", dry_run=True,
-            )
+            kwargs = _dry_kwargs(td)
+            db = kwargs["db_path"]
+            run_transaction(dry_run=True, **kwargs)
             runner = FakeSystemctl()
             pids = {"maez.service": 4242, "maez-web.service": 5555}
             with mock.patch(
@@ -792,10 +830,11 @@ class ValidationRoundFixesTests(unittest.TestCase):
         # deliberately stopped before the ceremony.
         with TemporaryDirectory() as td:
             canonical = Path(td) / "ledger.db"
+            kwargs, _facts, stack = _for_real_patches(Path(td), canonical)
             runner = FakeSystemctl(
                 {"maez.service": "active", "maez-web.service": "inactive"}
             )
-            with mock.patch(
+            with stack, mock.patch(
                 "scripts.birth_ceremony.birth_phase.default_ledger_path",
                 return_value=canonical,
             ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
@@ -804,9 +843,7 @@ class ValidationRoundFixesTests(unittest.TestCase):
                 "scripts.birth_ceremony.run_transaction",
                 side_effect=RuntimeError("transaction failed on purpose"),
             ):
-                rc = main(
-                    ["--for-real", "--s7-receipt-ref", "s7:t"], runner=runner
-                )
+                rc = main(["--for-real"], runner=runner)
             self.assertEqual(rc, 1)
             web_starts = [
                 c for c in runner.calls
@@ -837,7 +874,7 @@ class ValidationRoundFixesTests(unittest.TestCase):
             with self.assertRaisesRegex(QuiesceRefused, "(?i)probe|error"):
                 _assert_quiesced(db, runner=BrokenPgrep())
 
-    def test_resume_services_parses_without_receipt_ref(self):
+    def test_resume_services_parses_without_rail_args(self):
         # MINOR #17: the printed recovery command must parse as printed.
         with TemporaryDirectory() as td:
             canonical = Path(td) / "ledger.db"
@@ -870,24 +907,16 @@ class ResumeServicesTests(unittest.TestCase):
             ), mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                 "sys.stderr"
             ) as stderr:
-                rc = main(
-                    ["--resume-services", "--s7-receipt-ref", "s7:t"],
-                    runner=FakeSystemctl(),
-                )
+                rc = main(["--resume-services"], runner=FakeSystemctl())
             self.assertEqual(rc, 2)
             printed = "".join(c.args[0] for c in stderr.write.call_args_list)
             self.assertIn("COMMITTED", printed)
 
     def test_resume_brings_up_without_touching_the_transaction(self):
         with TemporaryDirectory() as td:
-            canonical = Path(td) / "ledger.db"
-            run_transaction(
-                db_path=canonical,
-                s7_receipt_ref="s7:t",
-                owner_witness="rohit",
-                dry_run=False,
-                quiesce=lambda p: None,
-            )
+            kwargs = _dry_kwargs(td)
+            canonical = kwargs["db_path"]
+            run_transaction(dry_run=True, **kwargs)
             runner = FakeSystemctl()
             with mock.patch(
                 "scripts.birth_ceremony.birth_phase.default_ledger_path",
@@ -905,10 +934,7 @@ class ResumeServicesTests(unittest.TestCase):
             ), mock.patch(
                 "scripts.birth_ceremony._latch_is_held", return_value=True
             ):
-                rc = main(
-                    ["--resume-services", "--s7-receipt-ref", "s7:t"],
-                    runner=runner,
-                )
+                rc = main(["--resume-services"], runner=runner)
             self.assertEqual(rc, 0)
             starts = [
                 c for c in runner.calls
