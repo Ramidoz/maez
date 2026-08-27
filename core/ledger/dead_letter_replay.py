@@ -70,6 +70,10 @@ __all__ = [
 #: treated as a possible pre-identity timeout-after-commit.
 WINDOW_S = 300.0
 
+import logging
+
+_LOGGER = logging.getLogger("core.ledger.dead_letter_replay")
+
 _PRODUCER = "dead_letter_replay"
 
 
@@ -1323,12 +1327,32 @@ def apply(db_path: str, manifest_path: str) -> dict:
         consumed_path = _consume_manifest(manifest_path, run_id)
 
         selected = manifest.get("selected") or {}
-        for sid in selected.get("bodies") or []:
+        body_ids = list(selected.get("bodies") or [])
+        companion_ids = list(selected.get("companions") or [])
+        # The outcome map is keyed by identity, so a sid appearing twice
+        # would silently overwrite its own outcome — one mutation
+        # reported, two attempted. A machine-derived selection cannot
+        # produce that (one record, one disposition), but the manifest is
+        # a FILE and this is the check that keeps "machine-derived" true
+        # of the document actually being applied.
+        seen_once = set()
+        duplicates = sorted(
+            {sid for sid in body_ids + companion_ids
+             if sid in seen_once or seen_once.add(sid)}
+        )
+        if duplicates:
+            raise ReplayRefusal(
+                "selected_set_not_unique",
+                f"the selected set names {duplicates} more than once; an "
+                "outcome map keyed by identity would report one mutation "
+                "and attempt two",
+            )
+        for sid in body_ids:
             outcomes[sid] = _apply_one_body(
                 db_path, spool_root, sid, live_census, live_records,
                 manifest_digests,
             )
-        for sid in selected.get("companions") or []:
+        for sid in companion_ids:
             outcomes[sid] = _apply_one_companion(
                 db_path, spool_root, sid, run_id, live_census, live_records,
                 manifest_digests, expect_disposition="companion_owed",
@@ -1337,15 +1361,41 @@ def apply(db_path: str, manifest_path: str) -> dict:
         # committed by the time this pass runs (a live drainer racing us)
         # is owed its companion NOW rather than next run. Against an
         # OBSERVED commit only — a body still pending is deferred, loudly.
-        for sid in selected.get("bodies") or []:
+        for sid in body_ids:
             if outcomes[sid].get("outcome") != "body_published":
                 continue
             outcomes[sid]["companion"] = _apply_one_companion(
                 db_path, spool_root, sid, run_id, live_census, live_records,
                 manifest_digests, expect_disposition=None,
             )
+        completed = True
     finally:
         os.close(lock_fd)
+        if not locals().get("completed") and locals().get("consumed_path"):
+            # A run that dies mid-apply has already published envelopes
+            # and already spent its manifest. Losing the outcome map on
+            # top of that would leave an irreversible maintenance
+            # operation with no record of what it did — the omission this
+            # whole theme exists to make impossible. Recovery is a NEW
+            # census either way; this is the evidence it starts from.
+            try:
+                _write_outcome_receipt(db_path, {
+                    "run_id": run_id,
+                    "manifest_consumed": consumed_path,
+                    "started_at": started_at,
+                    "finished_at": time.time(),
+                    "outcomes": outcomes,
+                    "counts": {},
+                    "incomplete": (
+                        "this run did not finish; the outcomes below are "
+                        "the mutations it had reached"
+                    ),
+                })
+            except Exception:  # noqa: BLE001 — never mask the real failure
+                _LOGGER.critical(
+                    "dead-letter replay run %s died AND could not write its "
+                    "partial outcome receipt; %d mutations are unrecorded",
+                    run_id, len(outcomes))
 
     report = {
         "run_id": run_id,

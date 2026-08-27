@@ -840,3 +840,71 @@ class TerminalRefusalTests(unittest.TestCase):
             is_ours,
             "an ack against a row of another kind must not read as our replay")
         self.assertIn("payload", why)
+
+
+class DormancyTests(unittest.TestCase):
+    """The census half must stay a pure read even now that an apply half
+    exists in the same module. Witnessed against the live unborn tree
+    (0-byte ledger, no spool, no manifest dir) and pinned here."""
+
+    def test_build_manifest_creates_nothing_on_an_unborn_ledger(self):
+        base = Path(_TEST_DIR) / f"unborn_{os.urandom(4).hex()}"
+        base.mkdir()
+        db = str(base / "ledger.db")
+        Path(db).touch()                       # 0 bytes: the unborn shape
+        before = sorted(p.name for p in base.iterdir())
+        census = R.classify(db)
+        manifest = R.build_manifest(db, role="owner_trustee")
+        self.assertEqual(census["records"], [])
+        self.assertEqual(manifest["selected"]["bodies"], [])
+        self.assertEqual(manifest["selected"]["companions"], [])
+        self.assertIsNone(manifest["target_ledger"]["instance_anchor"])
+        self.assertEqual(sorted(p.name for p in base.iterdir()), before,
+                         "the census half created something")
+        self.assertEqual(os.path.getsize(db), 0, "the ledger was touched")
+
+
+class PartialRunTests(unittest.TestCase):
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+        self.f = _Fixture("partial")
+        self.f.commit(text="anchor")
+
+    def test_duplicate_sid_in_the_selected_set_refuses(self):
+        """The outcome map is keyed by identity: a sid named twice would
+        report one mutation and attempt two."""
+        self.f.dead_letter(text="named twice")
+        m, path = self.f.manifest()
+        m["selected"]["bodies"] = m["selected"]["bodies"] * 2
+        Path(path).write_text(json.dumps(m), encoding="utf-8")
+        with self.assertRaises(R.ReplayRefusal) as cm:
+            R.apply(self.f.db, path)
+        self.assertEqual(cm.exception.name, "selected_set_not_unique")
+
+    def test_a_run_that_dies_mid_apply_still_leaves_its_outcome_map(self):
+        """The manifest is already spent and envelopes are already
+        published; losing the outcome map on top of that would leave an
+        irreversible operation with no record of what it did."""
+        self.f.dead_letter(text="first")
+        self.f.dead_letter(text="second")
+        m, path = self.f.manifest()
+        self.assertEqual(len(m["selected"]["bodies"]), 2)
+        real = R._apply_one_body
+        calls = {"n": 0}
+
+        def blow_up_on_the_second(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise KeyboardInterrupt("killed mid-run")
+            return real(*a, **kw)
+
+        with patch.object(R, "_apply_one_body", blow_up_on_the_second):
+            with self.assertRaises(KeyboardInterrupt):
+                R.apply(self.f.db, path)
+        receipts = list(Path(R.manifest_root(self.f.db)).glob("*.outcomes.json"))
+        self.assertEqual(len(receipts), 1)
+        report = json.loads(receipts[0].read_text())
+        self.assertIn("incomplete", report)
+        self.assertEqual(len(report["outcomes"]), 1,
+                         "the reached mutation must be recorded")
