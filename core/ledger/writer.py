@@ -289,9 +289,19 @@ class LedgerWriter:
             else:
                 self._conn.execute("PRAGMA synchronous = FULL")
                 # journal_size_limit (ninth round Q-B, 3-0, adopted as
-                # INSURANCE): after a pinning reader leaves, the next
-                # autocheckpoint truncates the WAL file back to this
-                # limit by itself — no call site, no thread, no waiting.
+                # INSURANCE): after a pinning reader leaves, a LATER
+                # commit's WAL reset truncates the file back to this
+                # limit (Codex #4: autocheckpoint only backfills; the
+                # reset-and-truncate happens on a subsequent write, its
+                # xTruncate errors are logged-and-ignored by SQLite, and
+                # a huge first post-reset transaction can exceed the
+                # limit until the next cycle — EVENTUAL reclamation
+                # under ordinary commits is the honest claim, and the
+                # witness proves exactly that). No call site, no thread,
+                # no waiting. Set on every non-rehearsal writer incl.
+                # disabled ones (harmless: connection-local, and every
+                # production entrypoint returns before construction when
+                # writes are off).
                 # It does NOT bound growth while a reader still pins; it
                 # bounds the aftermath. DERIVED as two PHYSICAL WAL
                 # cycles (Codex read the vendored source: frames are
@@ -303,10 +313,11 @@ class LedgerWriter:
                     "PRAGMA wal_autocheckpoint").fetchone()[0]
                 if page and pages and int(pages) > 0:
                     limit = 32 + 2 * int(pages) * (int(page) + 24)
-                    got = self._conn.execute(
+                    row = self._conn.execute(
                         f"PRAGMA journal_size_limit = {int(limit)}"
-                    ).fetchone()[0]
-                    if int(got) != int(limit):
+                    ).fetchone()
+                    got = row[0] if row else None  # OMIT_PAGER_PRAGMAS
+                    if got is None or int(got) != int(limit):
                         raise RuntimeError(
                             f"journal_size_limit readback {got} != "
                             f"derived {limit} — refusing an unverified "

@@ -202,10 +202,6 @@ class CheckpointPolicyTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class JournalSizeLimitTests(unittest.TestCase):
     """Ninth round Q-B (3-0): adopt as insurance. Reclaim was reproduced
     independently by two seats before adoption; the limit is DERIVED as
@@ -239,8 +235,16 @@ class JournalSizeLimitTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = LedgerWriter(db)
             try:
-                limit = w._conn.execute(
-                    "PRAGMA journal_size_limit").fetchone()[0]
+                # Independent oracle (Codex #3): derive the expected
+                # bound from the FORMULA, so a deleted pragma makes this
+                # test fail on real behavior, not on a -1 sentinel.
+                page = w._conn.execute("PRAGMA page_size").fetchone()[0]
+                pages = w._conn.execute(
+                    "PRAGMA wal_autocheckpoint").fetchone()[0]
+                limit = 32 + 2 * pages * (page + 24)
+                self.assertEqual(
+                    w._conn.execute(
+                        "PRAGMA journal_size_limit").fetchone()[0], limit)
                 for i in range(200):
                     w.write_turn("user_message", f"w{i} " + "x" * 200,
                                  surface="probe", **_STAMP)
@@ -263,3 +267,43 @@ class JournalSizeLimitTests(unittest.TestCase):
                     "the file to the derived limit by themselves")
             finally:
                 w.close()
+
+
+    def test_limit_survives_writer_reconstruction(self):
+        """Ruling condition (Codex #2): the pragma is connection-local;
+        the owner's self-heal reconstructs the writer, and a
+        reconstruction path that skips the setter would silently restore
+        unlimited retention."""
+        db = _fresh("jsl_reconstruct")
+        from core.ledger import owner as ledger_owner
+
+        ledger_owner._reset_for_tests()
+        try:
+            with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+                ledger_owner.claim_ownership()
+                ledger_owner.owner_write_turn(
+                    db, "user_message", "before heal", surface="probe",
+                    **_STAMP)
+                conn1 = ledger_owner.live_writer_connection(db)
+                expected = conn1.execute(
+                    "PRAGMA journal_size_limit").fetchone()[0]
+                # Force the self-heal path: drop the cached writer as an
+                # environmental failure would.
+                ledger_owner._writer.close()
+                ledger_owner._writer = None
+                ledger_owner._writer_db_path = None
+                ledger_owner.owner_write_turn(
+                    db, "user_message", "after heal", surface="probe",
+                    **_STAMP)
+                conn2 = ledger_owner.live_writer_connection(db)
+                self.assertEqual(
+                    conn2.execute(
+                        "PRAGMA journal_size_limit").fetchone()[0],
+                    expected,
+                    "a reconstructed writer must re-derive the bound")
+        finally:
+            ledger_owner._reset_for_tests()
+
+
+if __name__ == "__main__":
+    unittest.main()
