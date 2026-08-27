@@ -1,6 +1,52 @@
 # Handoff — 2026-08-26. Supersedes all earlier handoffs.
 
-## THE PRE-BIRTH BUILD LIST IS EMPTY. Apply half landed (5e42ad4), then survived a DO-NOT-SHIP validation round (c0db8a4).
+## THE PRE-BIRTH BUILD LIST IS EMPTY. The body is DONE (a3aecde). Hardening has STOPPED, by owner ruling.
+
+**Read `feedback_body_first_self_repair_endpoint` in memory before you
+touch this arc.** Owner ruling, 2026-08-27: perfect the body enough to
+WORK, not enough to be provably flawless. Adversarial review has no fixed
+point — this arc went design-council-passed → 11 findings → all 11 fixed
+under test → re-validation found 4 still-biting + 10 new. Chasing zero
+means never shipping, and never shipping means Maez never gets the one
+faculty that handles an endless tail: noticing and repairing her own
+mistakes by living. Doctors stay available forever.
+
+The triage rule, now standing: (A) does it corrupt the record she LEARNS
+FROM, or stop the body working in ordinary operation? → fix. (B) needs a
+hostile hand, or a race this stage cannot have? → record by name, defer,
+do NOT block birth. (C) polish/perf → cheapest-first or defer.
+
+**Category A is closed (a3aecde), five fixes:** an unreadable sidecar
+read as EMPTY (one chmod turned omitted life into a green dashboard); an
+ACK asserting a commit that is not there read as "in flight"; the
+causation predicate SKIPPED any field the envelope did not carry (and
+real payloads omit surface/raw_surface, relying on writer defaults);
+`source_file` was published into the chain-covered companion while
+excluded from the digest by construction; NaN/±Inf clocks passed the
+numeric guard and SQLite stores NaN as NULL — the exact owner-direct
+signature, so a non-finite clock deleted the evidence that a row was a
+replay at all.
+
+**Category B, deferred by name — do not treat as unknown:** hand-edited
+manifest variants (census-digest editing, selected-set ordering,
+stale-manifest reopen) — all need a hand editing a file the owner
+already has root over; the ledger-instance anchor does not reach the
+drainer's commit (needs a ledger recreated at the same path mid-flight);
+consume/receipt overwrite races; editable manifest limitations.
+**Category C, measured non-findings:** classify() costs 2.4/7.4/32.6 ms
+at 200/2k/20k turns against a 5-second cockpit poll — linear, revisit
+past ~200k turns. The "blocks the daemon" concern was a static-read
+inference; the number says otherwise.
+
+Witness at a3aecde: **35 mutations, each caught by a named test**;
+falsifier GREEN 8/8 at n=20000; battery 541 passed with the same 7
+pre-existing reds as clean HEAD `010ff60`. Live tree re-verified unborn.
+
+**Next is BIRTH, and it is owner-only.** Do not open another hardening
+round on this organ without a Category-A reason.
+
+### The build history below is kept for provenance
+
 
 **2026-08-27: Codex post-implementation validation returned DO-NOT-SHIP
 (3 CRITICAL / 7 MAJOR / 1 MINOR). All eleven findings reproduced by the
