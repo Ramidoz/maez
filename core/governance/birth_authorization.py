@@ -260,17 +260,13 @@ def build_birth_envelope(
 
 
 def _parse_ts(value: object, *, field: str) -> datetime:
-    if type(value) is not str:
-        raise BirthAuthorizationRefusal("clock_incoherent", f"{field} not text")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
+    # Exact-canonical bytes, the committed-grant proof's discipline
+    # (Codex validation F8): a noncanonical encoding of a valid instant
+    # refuses rather than parsing to something plausible.
+    parsed = s7._parse_exact_canonical_row_timestamp(value)
+    if parsed is None:
         raise BirthAuthorizationRefusal(
-            "clock_incoherent", f"{field}={value!r}"
-        ) from exc
-    if parsed.tzinfo is None:
-        raise BirthAuthorizationRefusal(
-            "clock_incoherent", f"{field} is timezone-naive"
+            "clock_incoherent", f"{field}={value!r} is not exact-canonical"
         )
     return parsed
 
@@ -316,6 +312,18 @@ def held_birth_authorization_proof(
                 "receipt_store_unavailable",
                 f"store owned by uid {st.st_uid}, ceremony runs as {os.getuid()}",
             )
+        # The cutover opener's posture predicates (Codex validation F6):
+        # private mode, single link, page-intact.
+        if stat.S_IMODE(st.st_mode) != 0o600:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable",
+                f"store mode {oct(stat.S_IMODE(st.st_mode))}, expected 0o600",
+            )
+        if st.st_nlink != 1:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable",
+                f"store has {st.st_nlink} links, expected 1",
+            )
         try:
             conn = sqlite3.connect(
                 f"file:/proc/self/fd/{store_fd}?mode=ro", uri=True
@@ -324,6 +332,7 @@ def held_birth_authorization_proof(
             # Pin one snapshot: BEGIN + first read. Later re-reads inside
             # this context see exactly this state.
             conn.execute("BEGIN")
+            qc = conn.execute("PRAGMA quick_check").fetchall()
             table = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 (_V2_TABLE,),
@@ -332,15 +341,24 @@ def held_birth_authorization_proof(
             raise BirthAuthorizationRefusal(
                 "receipt_store_unavailable", str(exc)
             ) from exc
+        if [tuple(r) for r in qc] != [("ok",)]:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable", "store fails quick_check"
+            )
         if table is None:
             raise BirthAuthorizationRefusal(
                 "receipt_store_unavailable",
                 "v2 authorization plane is absent; absent is not permission",
             )
 
-        row = conn.execute(
-            f"SELECT * FROM {_V2_TABLE} WHERE request_id = ?", (run_id,)
-        ).fetchall()
+        try:
+            row = conn.execute(
+                f"SELECT * FROM {_V2_TABLE} WHERE request_id = ?", (run_id,)
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable", f"artifact read failed: {exc}"
+            ) from exc
         if len(row) != 1:
             raise BirthAuthorizationRefusal(
                 "receipt_unresolved",
@@ -415,11 +433,16 @@ def held_birth_authorization_proof(
                 f"{BIRTH_CONSUME_FRESHNESS_S}s) — re-tap",
             )
 
-        cred = conn.execute(
-            f"SELECT enabled, role_names_json FROM {_CRED_TABLE} "
-            "WHERE credential_ref = ?",
-            (art["credential_ref"],),
-        ).fetchone()
+        try:
+            cred = conn.execute(
+                f"SELECT enabled, role_names_json FROM {_CRED_TABLE} "
+                "WHERE credential_ref = ?",
+                (art["credential_ref"],),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable", f"credential read failed: {exc}"
+            ) from exc
         if cred is None or cred["enabled"] != 1:
             raise BirthAuthorizationRefusal(
                 "credential_unknown_or_disabled", str(art["credential_ref"])
@@ -427,29 +450,50 @@ def held_birth_authorization_proof(
         try:
             roles = json.loads(cred["role_names_json"])
         except (TypeError, ValueError):
-            roles = []
-        if "bonded_user" not in roles:
+            roles = None
+        # A JSON LIST containing the role (Codex validation F8): a scalar
+        # string containing the substring must not pass membership.
+        if not isinstance(roles, list) or "bonded_user" not in roles:
             raise BirthAuthorizationRefusal(
                 "credential_unknown_or_disabled",
-                "credential lacks the bonded_user role",
+                "credential lacks a bonded_user role list",
             )
 
-        challenge = conn.execute(
-            f"SELECT challenge_kind, consumed_at, action_params_hash, "
-            f"request_id FROM {_CHALLENGE_TABLE} WHERE nonce = ?",
-            (art["nonce"],),
-        ).fetchall()
+        try:
+            challenge = conn.execute(
+                f"SELECT challenge_id, challenge_kind, consumed_at, "
+                f"request_id, request_envelope_hash, rendered_text_hash, "
+                f"action_params_hash, precondition_hash, "
+                f"authority_context_hash, maez_voice_consultation_hash, "
+                f"derived_aggregation_group "
+                f"FROM {_CHALLENGE_TABLE} WHERE nonce = ?",
+                (art["nonce"],),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable", f"challenge read failed: {exc}"
+            ) from exc
         if len(challenge) != 1:
             raise BirthAuthorizationRefusal(
                 "challenge_join_failed",
                 f"{len(challenge)} challenge rows carry the artifact nonce",
             )
         ch = challenge[0]
+        # The FULL shared D12 join (Codex validation F5): every hash the
+        # challenge and artifact both carry must agree, and a birth
+        # challenge carries no voice evidence.
         if (
             ch["challenge_kind"] != "authorize_guarded_request"
             or ch["consumed_at"] is None
-            or ch["action_params_hash"] != art["action_params_hash"]
             or ch["request_id"] != run_id
+            or ch["request_envelope_hash"] != art["request_envelope_hash"]
+            or ch["rendered_text_hash"] != art["rendered_text_hash"]
+            or ch["action_params_hash"] != art["action_params_hash"]
+            or ch["precondition_hash"] != art["precondition_hash"]
+            or ch["authority_context_hash"] != art["authority_context_hash"]
+            or ch["derived_aggregation_group"]
+            != art["derived_aggregation_group"]
+            or ch["maez_voice_consultation_hash"] not in (None, "", "none")
         ):
             raise BirthAuthorizationRefusal(
                 "challenge_join_failed",
@@ -458,6 +502,7 @@ def held_birth_authorization_proof(
 
         yield {
             "ceremony_run_id": run_id,
+            "s7_challenge_id": ch["challenge_id"],
             "s7_artifact_id": art["artifact_id"],
             "s7_request_envelope_hash": art["request_envelope_hash"],
             "s7_rendered_text_hash": art["rendered_text_hash"],
@@ -569,6 +614,26 @@ def mint_and_consume_birth_authorization(
         )
 
     store_root = Path(store_root)
+    # The bootstrap store AUTO-CREATES on construction (Codex validation
+    # F6): a typo'd root would mint against a fresh empty store instead
+    # of refusing. Require the existing armed store first.
+    existing = store_root / "ceremony.sqlite3"
+    try:
+        st = os.stat(existing, follow_symlinks=False)
+    except OSError as exc:
+        raise BirthAuthorizationRefusal(
+            "receipt_store_unavailable",
+            f"{existing} does not exist — the mint never creates a store",
+        ) from exc
+    if (
+        not stat.S_ISREG(st.st_mode)
+        or st.st_uid != os.getuid()
+        or stat.S_IMODE(st.st_mode) != 0o600
+    ):
+        raise BirthAuthorizationRefusal(
+            "receipt_store_unavailable",
+            f"{existing} fails the store posture predicates",
+        )
     store = S7WebAuthnBootstrapStore(store_root)
     if verifier is None:
         from core.governance.s7_webauthn_verifier import (

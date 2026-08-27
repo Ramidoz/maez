@@ -33,11 +33,15 @@ Hardening encoded here, each against a named, verified trap:
   second execution is still unfixed. In-process env export is a
   placebo — it cannot rebind an already-loaded libsqlite.
 
---dry-run (default): runs the full transaction against the given db path
-  (use a temp path; never the real ledger). No systemd contact.
---for-real: interactive TTY + typed phrase + --s7-receipt-ref, canonical
-  ledger path only. Stops both writer-capable units, runs the
-  transaction, classifies, brings services back up with at most ONE
+--dry-run (default): runs the full transaction against caller-supplied
+  temp paths (--db-path, --s7-store-path, --manifest-path, --run-id —
+  a rehearsal store holding a consumed birth authorization). Never the
+  real ledger or the real S7 store. No systemd contact.
+--for-real: interactive TTY + typed phrase, canonical paths only. Mints
+  and atomically consumes a REAL S7 birth authorization (owner taps the
+  physical key against the cockpit origin), stops both writer-capable
+  units, runs the transaction (which re-proves the consumed receipt from
+  the store), classifies, brings services back up with at most ONE
   reset-failed + start per unit, and fails toward daemon-STOPPED loudly.
 --resume-services: finishes the bring-up of an ALREADY-COMMITTED birth
   (crash after commit; COMMITTED_SERVICES_DOWN). Never writes.
@@ -283,7 +287,15 @@ def run_transaction(
     """
     from core.governance import birth_authorization as _birth_auth
 
-    if dry_run and Path(db_path).resolve() == birth_phase.default_ledger_path().resolve():
+    if dry_run and (
+        Path(db_path).resolve() == birth_phase.default_ledger_path().resolve()
+        or str(Path(db_path).resolve())
+        == _birth_auth.canonical_ledger_realpath()
+    ):
+        # BOTH resolvers (Codex validation F1, reproduced): with
+        # MAEZ_LEDGER_DB_PATH set, default_ledger_path() stops
+        # recognizing the real ledger — the env-blind canonical path
+        # must also refuse.
         raise ValueError(
             "REFUSED: dry-run may not target the real ledger; use a temp --db-path"
         )
@@ -304,9 +316,43 @@ def run_transaction(
         # at a decoy ledger/store/manifest while the daemon reads the
         # real ones.
         _birth_auth.refuse_env_overrides()
+        # Codex validation F2 (reproduced): the preimage names the
+        # canonical targets, but migrate/write would use the CALLER's
+        # paths — an importer could redirect the write while the receipt
+        # claims the canonical target. For-real binds all three.
+        mismatched = [
+            name
+            for name, got, want in (
+                (
+                    "db_path",
+                    str(Path(db_path).resolve()),
+                    _birth_auth.canonical_ledger_realpath(),
+                ),
+                (
+                    "s7_store_path",
+                    str(Path(s7_store_path).resolve()),
+                    str(_birth_auth.canonical_s7_store_path().resolve()),
+                ),
+                (
+                    "manifest_path",
+                    str(Path(manifest_path).resolve()),
+                    str(_birth_auth.canonical_manifest_path().resolve()),
+                ),
+            )
+            if got != want
+        ]
+        if mismatched:
+            raise _birth_auth.BirthAuthorizationRefusal(
+                "noncanonical_target_in_for_real",
+                f"{', '.join(mismatched)} differ from the canonical paths",
+            )
         # Trap #9: this function is importable; the quiesce must live
         # HERE, not only in main(). Dry runs on temp dbs never touch
-        # systemd.
+        # systemd. The `quiesce` parameter is a TEST SEAM: an importer
+        # substituting a no-op is a same-UID actor deliberately defeating
+        # its own safety check — inside the stated proof boundary
+        # (tamper-evidence, not tamper-prevention), and it cannot fake
+        # the receipt rail above/below this line.
         quiesce_fn = quiesce or (
             lambda path: _assert_quiesced(path, runner=runner)
         )
@@ -337,6 +383,32 @@ def run_transaction(
         run_id=run_id,
         expected_params=expected_params,
     ) as receipt_facts:
+        # Codex validation F3 (reproduced): consume-once must mean
+        # EXECUTE-once. Within the freshness window, a birthed-then-
+        # deleted ledger would otherwise re-birth on the same consumed
+        # artifact. The durable execution marker (written after the
+        # birth commit, below) refuses a second execution by name.
+        _marker = (
+            Path(db_path).parent
+            / "birth_ceremony_receipts"
+            / f"birth-executed-{receipt_facts['s7_artifact_id']}.json"
+        )
+        if _marker.exists():
+            raise _birth_auth.BirthAuthorizationRefusal(
+                "receipt_already_executed",
+                f"{_marker.name} exists — this authorization already "
+                "executed a birth transaction; re-tap for a new attempt",
+            )
+        # Codex validation F4: the signed NOT_COMMITTED precondition is
+        # re-classified at the transaction boundary, before any mutation.
+        _classification = classify_commit(db_path)
+        if _classification != "NOT_COMMITTED":
+            raise _birth_auth.BirthAuthorizationRefusal(
+                "preflight_not_unborn",
+                f"the target classifies {_classification} at the "
+                "transaction boundary — only a provably unborn ledger "
+                "enters the birth write",
+            )
         # THE LEASE: the enabled writer, constructed before any mutation.
         # The flag is raised only around construction (the writer reads it
         # at __init__) and restored after — a dry run inside a test
@@ -389,6 +461,35 @@ def run_transaction(
                 taint_labels=["self_generated"],
                 privacy_access="public",
             )
+            # Execution marker (F3), durable + fsynced, written the
+            # moment the birth commit exists. A crash BEFORE this line
+            # leaves a born ledger (the boundary classification refuses a
+            # re-run); a crash AFTER leaves the marker (the marker check
+            # refuses). Both accident paths are closed.
+            _marker.parent.mkdir(parents=True, exist_ok=True)
+            _tmp = _marker.parent / f".tmp-{_marker.name}"
+            _fd = os.open(_tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+            try:
+                os.write(
+                    _fd,
+                    json.dumps(
+                        {
+                            "birth_turn_id": birth_turn_id,
+                            "ceremony_run_id": run_id,
+                            "executed_at": time.time(),
+                        },
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                )
+                os.fsync(_fd)
+            finally:
+                os.close(_fd)
+            os.replace(_tmp, _marker)
+            _dir_fd = os.open(_marker.parent, os.O_RDONLY)
+            try:
+                os.fsync(_dir_fd)
+            finally:
+                os.close(_dir_fd)
         finally:
             writer.close()
 

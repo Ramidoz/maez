@@ -1092,3 +1092,73 @@ repaired or honestly scoped); and the completeness illusion — a design
 that read as "verified" carried an unexecuted widening list and a phantom
 API parameter until seats EXECUTED it (Claude), which is this arc's oldest
 lesson wearing new clothes.
+
+## Fourteenth round (2026-08-27, post-implementation Codex validation of the receipt rail): DO-NOT-SHIP → repaired under test
+
+A second-lane xhigh read-only review of the finished rail diff
+(9d34f18..fc805d2+) returned DO-NOT-SHIP: 3 CRITICAL, 4 MAJOR, 1 MINOR.
+(First attempt died at the provider's content filter after 926KB of
+work with no verdict — the adversarial phrasing tripped it; the rerun
+used neutral correctness-review language. Recorded: phrase validation
+prompts as boundary walks, not attack scripts.) Every finding was
+REPRODUCED before its fix; all repaired behind RED-first tests named
+CodexValidationRoundFixes; round-2 mutations M24-M31 each caught (two
+first-form mutations exposed WEAK TESTS — M27's one-forged-field D12
+test and M30's indistinguishable refusal reason — both tests
+strengthened until the mutation bit). Total across both rounds: 31
+named mutations, all caught, harness treats pytest exit != 1 as error.
+
+The three CRITICALs, kept whole because each is a lesson:
+
+1. **Dry-run could target the real ledger.** The guard compared against
+   the env-honoring resolver — so the very override class the for-real
+   path refuses made dry-run BLIND to the real ledger
+   (MAEZ_LEDGER_DB_PATH=/decoy → default_ledger_path() no longer names
+   the real file → the guard passes → a rehearsal store authorizes a
+   write to the LIVE path under mode=dry_run). The fix compares BOTH
+   resolvers. The lesson is the thirteenth round's own scar inverted:
+   the env sweep protected for-real and nobody asked what the same env
+   did to dry-run's guard.
+2. **The importable for-real boundary trusted caller-selected targets.**
+   The preimage named the canonical ledger while migrate/write used the
+   caller's db_path — the receipt could claim the canonical target while
+   another file was written. For-real now binds db, store AND manifest
+   to the canonical paths by equality (noncanonical_target_in_for_real).
+3. **Consume-once did not mean execute-once.** Within the 600s window, a
+   birthed-then-deleted ledger would re-birth on the same consumed
+   artifact. A durable fsynced execution marker (written the moment the
+   birth commit exists, checked before any mutation) closes both crash
+   orderings; refusal receipt_already_executed.
+
+MAJORs, condensed: the NOT_COMMITTED precondition is now re-classified
+at the transaction boundary (preflight_not_unborn), before migrate; the
+challenge↔artifact join now compares EVERY shared D12 hash (envelope,
+rendered-text, precondition, authority-context, aggregation group, and
+voice-hash-absent) with a per-field forge test, and the facts carry the
+challenge id; the mint refuses an absent store instead of letting the
+bootstrap store auto-create one, and the verify-side open gained the
+cutover's posture predicates (0600, nlink 1, quick_check); the
+inventory test became TWO-SIDED (a phantom adjudication fails like a
+missed site) over BOTH class literals — the one-literal census had
+missed _highest_risk_ceremony_required and carried a verdict on a
+construct that does not exist. MINOR: exact-canonical timestamps
+(the committed-grant proof's discipline), roles must be a JSON LIST,
+store reads after BEGIN wrap into named refusals, docstring cleanup.
+
+Not adopted, with reasons stated in code: the quiesce parameter stays
+an injectable test seam (a same-UID caller no-oping its own safety
+check is inside the stated tamper-evidence boundary); the choreography
+tests keep the mint stub (the real mint has its own named tests);
+full inode-pinning across begin/finish/consume inside the ceremony
+service would require rewriting the service's own store handling — the
+mint-side posture preflight + the atomic descriptor-verified consume +
+the verify-side snapshot are the shipped posture, and the residual is
+named in the module docstring's proof boundary.
+
+**Meta-lesson (the twelfth round's, third time now):** every CRITICAL
+was a gap between a property stated for ONE path and a sibling path
+that didn't enforce it (for-real's env sweep vs dry-run's guard; the
+preimage's canonical claim vs the writer's caller path; consume-once
+vs execute-once). Validation must walk EVERY path a property is
+supposed to cover, and a weak test caught only by a mutation is a
+finding about the test, not the code.

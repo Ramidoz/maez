@@ -1,4 +1,102 @@
-# Handoff — 2026-08-26. Supersedes all earlier handoffs.
+# Handoff — 2026-08-27. Supersedes all earlier handoffs.
+
+## THIS SESSION: A1/B2 receipt rail BUILT; A6 and A3 verified by execution
+
+**The ceremony now proves what it claims.** Blocker A1/B2's substance —
+`run_transaction` accepting ANY non-empty string as its "S7 receipt" and
+storing it permanently — is closed at commits `526fa7e..` (+ the Codex
+validation round that follows them; read the THIRTEENTH round in the
+rulings doc before touching this arc). What shipped:
+
+- **`birth_activation` work class** (thirteenth round, 3 seats): every
+  per-class structure adjudicated with a machine-checked INVENTORY test
+  (tests/test_birth_authorization_rail.py::PerClassInventory) that fails
+  on any new unadjudicated per-class site. Deliberately NOT voice-seat
+  (no subject exists pre-birth — R11's own ground) and structurally
+  unmintable post-birth (mint entry refuses via born_by_any_signal).
+  Typed consulted-absence literal — the owner never taps over
+  "Maez consulted: not required".
+- **`core/governance/birth_authorization.py`**: inline mint+consume
+  (the cutover's six-real-taps recipe: production verifier in-process,
+  owner pastes the browser assertion, atomic durable consume via the
+  core held-descriptor machinery — no new allowlist caller), and
+  `held_birth_authorization_proof` — the IN-TRANSACTION rail: one ro
+  snapshot via held O_NOFOLLOW fds, every binding recomputed from
+  reality (manifest bytes re-hashed, canonical path re-resolved), held
+  across the birth write. The PROOF BOUNDARY is stated in the module
+  docstring: this proves a durable founder-verified verdict row, not
+  offline signature re-verification (the assertion is persisted
+  nowhere, by schema).
+- **`scripts/birth_ceremony.py`**: `--s7-receipt-ref` is DEAD. The env-
+  override CLASS (MAEZ_LEDGER_DB_PATH/MAEZ_DATA/MAEZ_HOME/MAEZ_CONFIG/
+  S7_WEBAUTHN_STORE_ROOT — the decoy-path spoof was EXECUTED this
+  session) refuses inside the importable function; the rail runs before
+  the lease so a refusal leaves zero ledger bytes; the payload stores
+  resolved facts + receipt projection hash; crash-after-consume =
+  re-tap (600s freshness window); the ceremony journal persists the
+  rendered-statement pre-image. Mint happens BEFORE service stop (the
+  browser tap needs the web origin).
+- Inline mint shipped **2-1, Codex dissent recorded** (routed
+  mint = flag-flip human-gate + birth card producer; a TTY ceremony has
+  no HTTP surface for the route token to protect).
+
+**Validation (FOURTEENTH round): Codex post-implementation review
+returned DO-NOT-SHIP (3 CRITICAL / 4 MAJOR / 1 MINOR); every finding
+reproduced, all repaired behind RED-first tests.** The CRITICALs in one
+line each: dry-run's real-ledger guard used the env-honoring resolver,
+so the override class made it BLIND to the real ledger (both resolvers
+now compared); the importable for-real path let a caller redirect the
+write while the receipt claimed the canonical target (db/store/manifest
+now bound by equality); consume-once was not execute-once — a
+birthed-then-deleted ledger inside the 600s window re-birthed on the
+same artifact (durable execution marker now closes both crash
+orderings). Read the fourteenth round before touching this arc.
+
+**Witness:** 31 named mutations across two rounds, each caught by a
+named test (harness treats pytest exit != 1 as HARNESS ERROR; two weak
+tests were themselves exposed by mutations and strengthened); falsifier
+GREEN 8/8 n=20000 post-fixes; battery 687 passed (32 named files + 3 S7
+suites) with the SAME 7 pre-existing reds; live tree re-verified unborn
+(ledger 0 bytes, no spool/manifest dirs, units never restarted, live S7
+store still exactly 6 consumed cutover artifacts). Four design-stage
+claims died on execution BEFORE build (thirteenth round); two more died
+on the build's own tests (content_free vs bonded_content_ref; the bare
+AuthorityContext).
+
+**A6, determined by execution — NOT closed-pending-flag:** on a healthy
+freshly-migrated 0006-schema ledger, arming MAEZ_S1_PHASE_TRUTH reads
+`(unknown, structural)` — the frozen fingerprint stops at 0005
+(first divergence: `idx_turns_submission_id`); the promised "re-freeze
+when S2's migrations land" never happened, and the lived branch still
+hard-raises LatchBlocked on a block S2 has since satisfied. Meanwhile
+UNARMED, the original defect is fully alive (born ledger chmod 000 →
+`gestation`). Real remaining work between the closed S1 arc and S2;
+OWNER decides where it lands — do not restart S1 unilaterally.
+
+**A3, verified OPEN by execution:** with MAEZ_LEDGER_WRITES=1, the real
+`run_inbound_turn` produced replies on clinical, proposal and
+search-commitment with ZERO ledger trace (db bytes unchanged, no spool);
+camera + card-reply returns are control-flow-certain before the seam.
+Five reply-producing paths that omit life post-birth. Recorded; closing
+them changes what enters the ledger — its own council when built.
+
+**Owner items from the thirteenth round (parked, do not resolve):**
+(1) canon divergence — GESTATION protocol wants the manifest FULL TEXT
+in the birth event; the ceremony design ruled hash-only. The rail binds
+the hash; the letter's bytes in a public row is the owner's call.
+(2) census:248's readiness snapshot cannot enter the birth row honestly
+while the A7 condition is a filename-existence green — fix the condition
+pre-birth or owner-sign the permanent gap. (3) Codex's fail-closed-
+until-census position (recorded in the round). Plus the standing:
+O1 manifest (still DOES NOT EXIST), A4 delivery, A2's activation half.
+
+**Pre-existing red discovered (not this arc's):**
+test_s7_action_joins::TestHeldStoreVerificationHasAnExactCallsiteAllowlist
+fails on clean HEAD — provision_covenant_phase_table_at calls
+_verify_held_store_activation outside the allowlist. Verified
+pre-existing in a clean worktree at 9d34f18.
+
+## Previous handoff (2026-08-26) below — superseded where it conflicts
 
 ## THE PRE-BIRTH BUILD LIST IS EMPTY. The body is DONE (a3aecde). Hardening has STOPPED, by owner ruling.
 

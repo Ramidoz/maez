@@ -195,10 +195,18 @@ class ConsultedTypedAbsence(unittest.TestCase):
 
 
 class PerClassInventory(unittest.TestCase):
-    """Every operator_user_boundary site naming `self_modification` must be
-    adjudicated for birth_activation. A new site fails this test until a
-    verdict is added — the thirteenth round's structural fix for the
-    incomplete-widening defect its own design shipped with."""
+    """Every operator_user_boundary site naming a guarded work class must
+    be adjudicated for birth_activation. A new site fails this test until
+    a verdict is added — the thirteenth round's structural fix for the
+    incomplete-widening defect its own design shipped with. TWO-SIDED
+    (fourteenth round, Codex F7): a phantom declaration fails just like a
+    missed site, so the map cannot drift from the code in either
+    direction."""
+
+    #: Census keys: sites naming either of these literals are per-class
+    #: decision points (the self_modification-only census missed
+    #: _highest_risk_ceremony_required, which names only covenant classes).
+    CENSUS_LITERALS = ("self_modification", "covenant_touching_change")
 
     # enclosing construct name -> birth_activation verdict
     ADJUDICATED = {
@@ -209,12 +217,13 @@ class PerClassInventory(unittest.TestCase):
         "VOICE_SEAT_WORK_CLASSES": "deliberately_not",  # no subject pre-birth
         "_authority_context_roles_allow_work": "widened",
         "_webauthn_requires_user_verification": "widened",
+        "_highest_risk_ceremony_required": (
+            "deliberately_not"  # no covenant two-tap for birth: owner ruling, gestation is the cooling-off
+        ),
         "derive_work_class": "not_applicable",  # self-mod path arms; birth has its own action-exact arm
         "committed_grant_row_proves_founder_self_modification": (
             "not_applicable"  # birth has its own pinned proof in birth_authorization
         ),
-        "consume_for_execution_on_connection": "not_applicable",  # doc references only
-        "_work_class_appropriate_for_scope": "not_applicable",  # S6 scope mapping; birth never arrives via S6 grant
         "brain_swap_execution_authorized": "not_applicable",  # brain-swap-pinned proof; birth has its own
         "build_brain_swap_work_request_envelope": "not_applicable",  # brain-swap envelope builder
     }
@@ -223,6 +232,7 @@ class PerClassInventory(unittest.TestCase):
         source = inspect.getsource(s7)
         tree = ast.parse(source)
         names = set()
+        literals = set(self.CENSUS_LITERALS)
 
         class Visitor(ast.NodeVisitor):
             def __init__(self):
@@ -248,21 +258,27 @@ class PerClassInventory(unittest.TestCase):
                 self._walk_body(node, target or "<assign>")
 
             def visit_Constant(self, node):
-                if node.value == "self_modification" and self.stack:
+                if node.value in literals and self.stack:
                     names.add(self.stack[-1])
 
         Visitor().visit(tree)
         return names
 
-    def test_every_site_is_adjudicated(self):
+    def test_every_site_is_adjudicated_two_sided(self):
         names = self._enclosing_names()
         unadjudicated = names - set(self.ADJUDICATED)
+        phantom = set(self.ADJUDICATED) - names
         self.assertEqual(
             unadjudicated,
             set(),
-            f"new per-class site(s) {sorted(unadjudicated)} name "
-            f"self_modification but carry no birth_activation verdict — "
-            f"adjudicate them in ADJUDICATED before shipping",
+            f"new per-class site(s) {sorted(unadjudicated)} carry no "
+            f"birth_activation verdict — adjudicate them before shipping",
+        )
+        self.assertEqual(
+            phantom,
+            set(),
+            f"ADJUDICATED declares construct(s) {sorted(phantom)} that do "
+            f"not exist — a verdict on a phantom is a false green",
         )
 
     def test_widened_verdicts_are_true(self):
@@ -850,6 +866,261 @@ class CeremonyTransactionRail(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 run_transaction(dry_run=True, **kwargs)
         self.assertIn("real S7 store", str(ctx.exception))
+
+
+class CodexValidationRoundFixes(unittest.TestCase):
+    """Fourteenth-round (post-implementation Codex validation) findings,
+    each reproduced before its fix and encoded RED-first."""
+
+    def setUp(self):
+        import tempfile
+
+        self._td = tempfile.TemporaryDirectory(dir="/var/tmp")
+        self.td = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_f1_dry_run_refuses_real_ledger_even_under_env_override(self):
+        # CRITICAL 1: with MAEZ_LEDGER_DB_PATH set, default_ledger_path()
+        # stops recognizing the real ledger — the guard must ALSO compare
+        # against the unoverridden canonical path.
+        from unittest import mock
+
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_LEDGER_DB_PATH": "/var/tmp/decoy.db"}
+        ), mock.patch(
+            "core.governance.birth_authorization.canonical_ledger_realpath",
+            return_value=str(kwargs["db_path"].resolve()),
+        ):
+            with self.assertRaisesRegex(ValueError, "REFUSED.*real ledger"):
+                run_transaction(dry_run=True, **kwargs)
+        self.assertFalse(kwargs["db_path"].exists())
+
+    def test_f2_for_real_refuses_noncanonical_targets(self):
+        # CRITICAL 2: the importable for-real path must bind db, store and
+        # manifest to the canonical paths — a caller-redirected db would
+        # let the receipt claim the canonical target while another file
+        # is written.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(
+            self.td, mode="for_real", db_path=self.td / "ledger.db"
+        )
+        # canonical resolvers NOT patched: the fixture paths are
+        # noncanonical, so each must refuse by name.
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=False, quiesce=lambda p: None, **kwargs)
+        self.assertEqual(
+            ctx.exception.reason, "noncanonical_target_in_for_real"
+        )
+        self.assertFalse(kwargs["db_path"].exists())
+
+    def test_f3_same_run_cannot_execute_twice(self):
+        # CRITICAL 3: consume-once must mean execute-once. A birthed-then-
+        # deleted ledger inside the freshness window must NOT re-birth on
+        # the same consumed artifact — the execution marker refuses.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        run_transaction(dry_run=True, **kwargs)
+        db = kwargs["db_path"]
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(db) + suffix)
+            if p.exists():
+                p.unlink()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "receipt_already_executed")
+        self.assertFalse(db.exists())
+
+    def test_f4_committed_or_unknown_db_refuses_inside_transaction(self):
+        # MAJOR 4 (second half): the NOT_COMMITTED precondition is
+        # re-classified at the transaction boundary, before migrate.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        kwargs["db_path"].write_bytes(b"garbage bytes, unclassifiable......")
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "preflight_not_unborn")
+
+    def test_f5_challenge_join_is_the_full_d12(self):
+        # MAJOR 5: the challenge↔artifact join must compare every shared
+        # D12 hash, and the facts must carry the challenge id.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, facts = authorized_ceremony_fixture(self.td)
+        with ba.held_birth_authorization_proof(
+            store_path=kwargs["s7_store_path"],
+            run_id=kwargs["run_id"],
+            expected_params={
+                "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+                "creation_manifest_sha256": ba.read_manifest_sha256(
+                    kwargs["manifest_path"]
+                ),
+                "owner_witness": "rohit",
+                "mode": "dry_run",
+            },
+        ) as proof:
+            self.assertTrue(proof["s7_challenge_id"])
+        # EVERY shared D12 hash is load-bearing: forging any one of them
+        # must break the join (mutation M27's lesson — one forged field
+        # is not a proof about the others).
+        expected = {
+            "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+            "creation_manifest_sha256": ba.read_manifest_sha256(
+                kwargs["manifest_path"]
+            ),
+            "owner_witness": "rohit",
+            "mode": "dry_run",
+        }
+        for column in (
+            "request_envelope_hash",
+            "rendered_text_hash",
+            "precondition_hash",
+            "authority_context_hash",
+            "derived_aggregation_group",
+        ):
+            with self.subTest(column=column):
+                conn = _sqlite3.connect(kwargs["s7_store_path"])
+                original = conn.execute(
+                    f"SELECT {column} FROM s7_ceremony_challenges "
+                    "WHERE request_id=?",
+                    (kwargs["run_id"],),
+                ).fetchone()[0]
+                conn.execute(
+                    f"UPDATE s7_ceremony_challenges SET {column}=? "
+                    "WHERE request_id=?",
+                    ("f" * 64, kwargs["run_id"]),
+                )
+                conn.commit()
+                conn.close()
+                try:
+                    with self.assertRaises(
+                        ba.BirthAuthorizationRefusal
+                    ) as ctx:
+                        with ba.held_birth_authorization_proof(
+                            store_path=kwargs["s7_store_path"],
+                            run_id=kwargs["run_id"],
+                            expected_params=expected,
+                        ):
+                            pass
+                    self.assertEqual(
+                        ctx.exception.reason, "challenge_join_failed"
+                    )
+                finally:
+                    conn = _sqlite3.connect(kwargs["s7_store_path"])
+                    conn.execute(
+                        f"UPDATE s7_ceremony_challenges SET {column}=? "
+                        "WHERE request_id=?",
+                        (original, kwargs["run_id"]),
+                    )
+                    conn.commit()
+                    conn.close()
+
+    def test_f6_mint_refuses_an_absent_store(self):
+        # MAJOR 6: the bootstrap store auto-creates on construction; the
+        # mint must refuse a missing store rather than create one.
+        from core.governance import birth_authorization as ba
+
+        missing_root = self.td / "nowhere" / "s7_1_webauthn"
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            ba.mint_and_consume_birth_authorization(
+                store_root=missing_root,
+                run_id=ba.fresh_birth_run_id(),
+                params=ba.birth_action_params(
+                    ledger_db_realpath="/var/tmp/x.db",
+                    creation_manifest_sha256="c" * 64,
+                    owner_witness="rohit",
+                    mode="dry_run",
+                ),
+                verifier=_AdvancingVerifier(),
+                printer=lambda t: None,
+                prompt=lambda m: "{}",
+            )
+        self.assertEqual(ctx.exception.reason, "receipt_store_unavailable")
+        self.assertIn(
+            "does not exist",
+            str(ctx.exception),
+            "the missing-store refusal must fire as ABSENCE, not as a "
+            "downstream posture failure",
+        )
+        self.assertFalse(missing_root.exists(), "mint must never create a store")
+
+    def test_f8_scalar_roles_json_refuses(self):
+        # MINOR 8: role membership must require a JSON LIST containing
+        # bonded_user — a scalar string containing the substring must not
+        # pass.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        conn = _sqlite3.connect(kwargs["s7_store_path"])
+        conn.execute(
+            "UPDATE s7_founder_webauthn_credentials SET "
+            "role_names_json='\"bonded_user\"' WHERE credential_ref='cred-primary'"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=kwargs["s7_store_path"],
+                run_id=kwargs["run_id"],
+                expected_params={
+                    "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+                    "creation_manifest_sha256": ba.read_manifest_sha256(
+                        kwargs["manifest_path"]
+                    ),
+                    "owner_witness": "rohit",
+                    "mode": "dry_run",
+                },
+            ):
+                pass
+        self.assertEqual(
+            ctx.exception.reason, "credential_unknown_or_disabled"
+        )
+
+    def test_f8_noncanonical_timestamp_refuses(self):
+        # MINOR 8: timestamps must be exact-canonical bytes, matching the
+        # committed-grant proof's discipline.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        conn = _sqlite3.connect(kwargs["s7_store_path"])
+        conn.execute(
+            "UPDATE s7_authorization_artifacts_v2 SET "
+            "consumed_at=REPLACE(consumed_at,'+00:00','Z') WHERE request_id=?",
+            (kwargs["run_id"],),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=kwargs["s7_store_path"],
+                run_id=kwargs["run_id"],
+                expected_params={
+                    "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+                    "creation_manifest_sha256": ba.read_manifest_sha256(
+                        kwargs["manifest_path"]
+                    ),
+                    "owner_witness": "rohit",
+                    "mode": "dry_run",
+                },
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "clock_incoherent")
 
 
 class EnvAndManifestGuards(unittest.TestCase):

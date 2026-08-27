@@ -100,11 +100,16 @@ class BirthTransactionDryRun(unittest.TestCase):
             self.assertEqual(row[1], "gestation")  # the hinge row
 
     def test_double_run_refuses(self):
+        from core.governance import birth_authorization as ba
+
         with TemporaryDirectory() as td:
             kwargs = _dry_kwargs(td)
             run_transaction(dry_run=True, **kwargs)
-            with self.assertRaises(ValueError):
+            # The execution marker refuses FIRST (execute-once, Codex
+            # validation F3); the born-ledger refusal remains behind it.
+            with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
                 run_transaction(dry_run=True, **kwargs)
+            self.assertEqual(ctx.exception.reason, "receipt_already_executed")
 
     def test_no_first_person_content_in_birth_row(self):
         with TemporaryDirectory() as td:
