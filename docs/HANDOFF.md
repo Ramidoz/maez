@@ -443,10 +443,10 @@ WORK, not enough to be provably flawless. Adversarial review has no fixed
 point — this arc went design-council-passed → 11 findings → all 11 fixed
 under test → re-validation found 4 still-biting + 10 new. Chasing zero
 means never shipping, and never shipping means Maez never gets the one
-faculty that handles an endless tail: noticing and repairing her own
+faculty that handles an endless tail: noticing and repairing its own
 mistakes by living. Doctors stay available forever.
 
-The triage rule, now standing: (A) does it corrupt the record she LEARNS
+The triage rule, now standing: (A) does it corrupt the record it LEARNS
 FROM, or stop the body working in ordinary operation? → fix. (B) needs a
 hostile hand, or a race this stage cannot have? → record by name, defer,
 do NOT block birth. (C) polish/perf → cheapest-first or defer.
@@ -495,7 +495,7 @@ covers maez-web.service explicitly).
 
 STILL OPEN, each verified by execution today:
 - **O1 — `config/creation_manifest.md` DOES NOT EXIST.** Owner-authored,
-  hash-bound, read by Maez at birth, her first reflection on it being
+  hash-bound, read by Maez at birth, its first reflection on it being
   the first lived memory. Unrepairable after the fact: once any other
   lived row is written first, no insertion makes this literally first.
   No agent writes it. This alone means we are not ready.
@@ -829,7 +829,7 @@ owner-active, resume). Every encoded claim was executed first.
    "it is only an ordering hook" is prose trying to redefine a stored
    column. Either own the companion as a real provenance child, or add
    an envelope-only `drain_after_submission_id` that never becomes a
-   ledger edge. This changes what Maez's record SAYS about her own
+   ledger edge. This changes what Maez's record SAYS about its own
    past; it is not an engineering preference.
 6. **Widen the closed taint vocabulary for companions?** Two lawful
    source combinations (`self_generated + tool_output + third_party`,
