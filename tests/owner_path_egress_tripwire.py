@@ -153,7 +153,8 @@ OWNER_PATH_SCOPES: tuple[Scope, ...] = (
         "The card mouth. send_resolution sends and returns None -- Codex "
         "EXECUTED that the fake transport received exactly one message "
         "while the renderer returned None. Also the resolution/reminder "
-        "text formatters, so a new canned card sentence is visible.",
+        "text formatters, so a canned card sentence matching the return "
+        "shape is visible.",
     ),
     Scope(
         "core/routing/recall_receipt.py",
@@ -167,7 +168,7 @@ OWNER_PATH_SCOPES: tuple[Scope, ...] = (
         "MaezDaemon.handle_message",
         "The owner reply function that already writes the model_reply row "
         "(:9786). Watched for the send_intermediate receipt mouth (:8612) "
-        "and for any new mouth beside it.",
+        "and for anything beside it matching the send name shape.",
     ),
     Scope(
         "daemon/maez_daemon.py",
@@ -179,8 +180,11 @@ OWNER_PATH_SCOPES: tuple[Scope, ...] = (
 )
 
 
-#: What this tripwire CANNOT see. Part of the contract. Anyone citing
-#: this module as coverage must cite this tuple in the same breath.
+#: KNOWN ways this can be fooled -- EXAMPLES, not a closed boundary.
+#: These are the blind spots that happen to have been found. The set of
+#: ways a mouth can hide from a syntactic scan is not enumerable, and
+#: this tuple being short is not evidence the rest is covered. Anyone
+#: citing this module as coverage must cite this tuple alongside it.
 KNOWN_BLIND_SPOTS: tuple[str, ...] = (
     "SCOPE. A new owner-facing module, or a new function outside the "
     "narrowed qualnames above, is invisible. Nothing derives this list.",
@@ -197,6 +201,10 @@ KNOWN_BLIND_SPOTS: tuple[str, ...] = (
     "constant imported from another module, a dict/enum lookup, a "
     "**kwargs splat, or a template rendered at runtime is not a "
     "string literal in a return subtree and is invisible.",
+    "COMPREHENSIONS AND DEFAULTS. Canned text reached through a "
+    "generator/comprehension body, a decorator, or a function's "
+    "default-argument value is not inside a return or a lambda body "
+    "and is invisible.",
     "WORDING. The key carries no content digest, so rewording an "
     "existing canned sentence does not trip this. Only appearance or "
     "disappearance of a site does.",
@@ -271,6 +279,22 @@ def _enclosing_qualnames(tree: ast.Module) -> dict[int, str]:
     return out
 
 
+def construct_qualnames(tree: ast.Module) -> set[str]:
+    """Every construct anchor a module actually defines.
+
+    Built by the SAME walker the scanner uses, so the two can never
+    disagree about what a qualname means. Used to prove a narrowed scope
+    still points at something real: a renamed construct would otherwise
+    narrow its scope to nothing and the tripwire would go quietly green
+    over an unwatched file.
+    """
+    return {
+        name
+        for name in _enclosing_qualnames(tree).values()
+        if name != "<module>"
+    }
+
+
 def _module_string_constants(tree: ast.Module) -> set[str]:
     """Top-level ``NAME = "literal"`` bindings of THIS module only.
 
@@ -327,6 +351,16 @@ def scan_source(path: str, source: str, qualname: str | None = None) -> list[Sit
                 sites.append(
                     Site(path, where, CANNED_RETURN, "", node.lineno)
                 )
+        elif isinstance(node, ast.Lambda):
+            # A lambda body has no Return node, so a canned sentence
+            # behind one was invisible to the return shape entirely
+            # (Codex boundary walk, B2). A lambda IS a reply-producing
+            # construct here -- the adapter already passes transports
+            # and closures around as callables.
+            if _return_carries_canned_text(node.body, module_constants):
+                sites.append(
+                    Site(path, where, CANNED_RETURN, "", node.lineno)
+                )
         elif isinstance(node, ast.Call):
             dotted = _dotted(node.func)
             terminal = dotted.rsplit(".", 1)[-1]
@@ -353,7 +387,10 @@ def scan_scopes(
 
 
 def read_sources(root: Path, scopes: Iterable[Scope]) -> dict[str, str]:
-    return {scope.path: (root / scope.path).read_text() for scope in scopes}
+    return {
+        scope.path: (root / scope.path).read_text(encoding="utf-8")
+        for scope in scopes
+    }
 
 
 def inventory(sites: Iterable[Site]) -> dict[str, int]:
@@ -374,7 +411,7 @@ FROZEN_PATH = "tests/data/owner_path_egress_tripwire.frozen.json"
 
 def load_frozen(root: Path | None = None) -> dict[str, int]:
     root = repo_root() if root is None else root
-    payload = json.loads((root / FROZEN_PATH).read_text())
+    payload = json.loads((root / FROZEN_PATH).read_text(encoding="utf-8"))
     return dict(payload["inventory"])
 
 
@@ -407,7 +444,7 @@ if __name__ == "__main__":  # pragma: no cover - maintenance entry point
 
     if "--freeze" in sys.argv:
         root = repo_root()
-        (root / FROZEN_PATH).write_text(freeze(root))
+        (root / FROZEN_PATH).write_text(freeze(root), encoding="utf-8")
         print(f"froze {len(load_frozen(root))} entries -> {FROZEN_PATH}")
     else:
         for site in sorted(scan_repo(), key=lambda s: (s.path, s.lineno)):

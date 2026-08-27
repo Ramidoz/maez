@@ -57,9 +57,22 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from core.infra.sqlite_runtime import has_wal_reset_fix
 from core.ledger import migrate
 from core.ledger.taint_stamping import TaintStampingRefusal
 from core.ledger.writer import LedgerWriter, try_write_turn
+
+#: An ENABLED writer refuses to construct on a SQLite inside the
+#: WAL-reset corruption window (< 3.51.3) -- by design, so a process
+#: launched without the vendored library cannot write the life record on
+#: a vulnerable engine. Tests that need an enabled writer therefore
+#: CANNOT run there, and say so rather than failing as if the lane were
+#: broken. Run them with LD_LIBRARY_PATH=vendor/sqlite/lib.
+_needs_enabled_writer = unittest.skipUnless(
+    has_wal_reset_fix(),
+    "an enabled ledger writer requires SQLite >= 3.51.3 "
+    "(run with LD_LIBRARY_PATH=vendor/sqlite/lib)",
+)
 
 #: Probes live on /var/tmp, never /tmp: /tmp is a tmpfs here and a reboot
 #: mid-session has already taken one council seat's output with it.
@@ -133,6 +146,7 @@ class LaneIsInertWithoutTheBirthFlagTests(unittest.TestCase):
                     writer.close()
             self.assertEqual(lane.rows(), [])
 
+    @_needs_enabled_writer
     def test_the_witness_process_arms_the_flag_for_itself_not_for_the_body(self):
         """Womb-life practise: the flag is armed in THIS process only.
 
@@ -173,6 +187,7 @@ class A3RuledRowShapesRehearseTests(unittest.TestCase):
     nothing produces them yet.
     """
 
+    @_needs_enabled_writer
     def test_both_ruled_rows_commit_with_exact_bytes_and_a_parent(self):
         with TemporaryDirectory(dir=_PROBE_ROOT) as tmp:
             lane = _Lane(tmp)
@@ -221,6 +236,7 @@ class A3RuledRowShapesRehearseTests(unittest.TestCase):
             parent_b, owner_turn, "the organ row hangs off the owner's turn"
         )
 
+    @_needs_enabled_writer
     def test_system_event_structurally_refuses_generation_provenance(self):
         """The reason canned output is system_event and not model_reply.
 
@@ -253,6 +269,7 @@ class A3RuledRowShapesRehearseTests(unittest.TestCase):
 class LaneConstraintsOnTheA3BuildTests(unittest.TestCase):
     """The two constraints A3's build has to design around."""
 
+    @_needs_enabled_writer
     def test_try_write_turn_cannot_produce_a_rehearsal_row(self):
         """CONSTRAINT 1. The ruled write path and the mandatory witness
         are structurally incompatible as they stand.
@@ -295,6 +312,7 @@ class LaneConstraintsOnTheA3BuildTests(unittest.TestCase):
                 "the refused payload was neither written nor dead-lettered",
             )
 
+    @_needs_enabled_writer
     def test_the_rehearsal_surface_cannot_carry_the_owners_voice(self):
         """CONSTRAINT 2. A caller override REPLACES the default set.
 
@@ -348,6 +366,7 @@ class TheLaneCannotReachTheLifeRecordTests(unittest.TestCase):
                 )
             self.assertFalse(outside.exists())
 
+    @_needs_enabled_writer
     def test_a_production_writer_refuses_a_rehearsal_row(self):
         """The other direction: rehearsal rows cannot leak into a real
         ledger even if a caller stamps the stage by hand."""

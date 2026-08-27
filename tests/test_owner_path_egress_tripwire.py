@@ -18,7 +18,9 @@ None of this is evidence that the owner path is fully covered. See
 
 from __future__ import annotations
 
+import ast
 import json
+import os
 import textwrap
 import unittest
 from pathlib import Path
@@ -27,6 +29,7 @@ from tempfile import TemporaryDirectory
 from tests.owner_path_egress_tripwire import (
     CANNED_RETURN,
     FROZEN_PATH,
+    construct_qualnames,
     KNOWN_BLIND_SPOTS,
     OWNER_PATH_SCOPES,
     SEND,
@@ -89,12 +92,26 @@ class FrozenInventoryTests(unittest.TestCase):
             "the counts.",
         )
 
-    def test_the_frozen_file_is_exactly_what_the_generator_emits(self):
-        """Hand-editing the frozen file to go green is itself caught."""
-        on_disk = (repo_root() / FROZEN_PATH).read_text()
+    def test_the_frozen_file_is_byte_canonical_for_the_generator(self):
+        """The frozen file must be exactly the generator's output bytes.
+
+        What this catches is a NONCANONICAL edit -- wrong ordering,
+        wrong indentation, a stray key, CRLF. It does NOT catch a human
+        typing the byte-exact line the generator would have produced for
+        a site that really exists; nothing textual can (Codex boundary
+        walk, B5). The defence against that is the tree comparison
+        above, which reads the actual source.
+
+        Compared as BYTES. ``read_text()`` performs universal-newline
+        translation, so a CRLF-rewritten frozen file would compare equal
+        to the generator's LF output while the file on disk was not in
+        fact what the generator emits -- a claim of byte-identity that
+        was not byte-identity (Codex boundary walk, B5).
+        """
+        on_disk = (repo_root() / FROZEN_PATH).read_bytes()
         self.assertEqual(
             on_disk,
-            freeze(),
+            freeze().encode("utf-8"),
             "tests/data/owner_path_egress_tripwire.frozen.json is not "
             "byte-identical to what --freeze emits. It is MACHINE-DERIVED; "
             "regenerate it rather than editing it.",
@@ -234,6 +251,23 @@ class TripwireBitesTests(unittest.TestCase):
             {"f.py::receipt::canned_return::": 1},
         )
 
+    def test_canned_text_inside_a_lambda_body_is_seen(self):
+        """A lambda has no Return node at all.
+
+        Codex boundary walk, B2: a canned sentence behind a lambda was
+        invisible to the return shape. The live tree really contains
+        one -- skills/surface/maez_adapter.py wraps the card-reply mouth
+        in ``lambda: pipe.handle_reply(..., channel="telegram_text")``.
+        """
+        source = _src(
+            """
+            def a(o):
+                o.on_click(lambda: "canned from inside a lambda")
+            """
+        )
+        found = inventory(scan_source("f.py", source))
+        self.assertEqual(found.get("f.py::a::canned_return::"), 1)
+
     def test_the_constant_fold_does_not_cross_a_function_boundary(self):
         """Folding across boundaries invents sites. It is scoped, and the
         scoping is a promise this test holds it to."""
@@ -352,25 +386,136 @@ class ScopeHygieneTests(unittest.TestCase):
 
     def test_every_narrowed_qualname_actually_resolves(self):
         """A renamed construct would narrow the scope to NOTHING and the
-        tripwire would go quietly green over an unwatched file."""
+        tripwire would go quietly green over an unwatched file.
+
+        Checked by asking whether the construct EXISTS, not by comparing
+        site counts. An earlier version asserted the narrowed scan found
+        strictly fewer sites than the whole module, which is unsound: a
+        scope whose construct happens to contain every site in its file
+        is perfectly valid and would have gone red. It passed only by
+        accident of the current tree. Emptiness is not checked either --
+        a watched construct with no sites is honest, and the frozen
+        inventory records that absence.
+        """
         for scope in OWNER_PATH_SCOPES:
             if scope.qualname is None:
                 continue
             with self.subTest(scope=f"{scope.path}::{scope.qualname}"):
-                source = (repo_root() / scope.path).read_text()
-                whole = scan_source(scope.path, source)
-                narrowed = scan_source(scope.path, source, scope.qualname)
-                self.assertTrue(
-                    narrowed,
-                    f"{scope.qualname} matched no site in {scope.path} -- "
-                    "renamed or moved? The scope is watching nothing.",
+                tree = ast.parse((repo_root() / scope.path).read_text(encoding="utf-8"))
+                names = construct_qualnames(tree)
+                # Only the near-misses: dumping every construct in a
+                # 13k-line module is not a failure message anyone reads.
+                tail = scope.qualname.rsplit(".", 1)[-1]
+                nearby = sorted(
+                    n for n in names if tail[:12] in n or n.endswith(tail)
+                )[:8]
+                self.assertIn(
+                    scope.qualname,
+                    names,
+                    f"{scope.qualname} is not a construct in {scope.path} -- "
+                    "renamed or moved? The scope is watching NOTHING, and "
+                    "the tripwire would go quietly green over that file.\n"
+                    f"Nearest constructs: {nearby}",
                 )
-                self.assertLess(len(narrowed), len(whole))
+
+    def test_a_scope_holding_every_site_in_its_file_is_still_valid(self):
+        """The soundness case the old count-comparison got wrong.
+
+        Codex's boundary walk produced it: a construct that happens to
+        contain all of its file's sites is a perfectly good scope, and
+        the previous ``narrowed < whole`` assertion would have failed it.
+        """
+        source = _src(
+            """
+            class C:
+                def watched(self):
+                    return "the only site in this file"
+            """
+        )
+        whole = scan_source("f.py", source)
+        narrowed = scan_source("f.py", source, "C.watched")
+        self.assertEqual(len(narrowed), len(whole))
+        self.assertIn("C.watched", construct_qualnames(ast.parse(source)))
+
+    def test_a_renamed_construct_stops_resolving(self):
+        source = _src(
+            """
+            class C:
+                def renamed_away(self):
+                    return "still here, under another name"
+            """
+        )
+        names = construct_qualnames(ast.parse(source))
+        self.assertIn("C.renamed_away", names)
+        self.assertNotIn("C.watched", names)
+
+    def test_the_declared_scope_roster_is_exactly_this(self):
+        """Deleting a watched scope must be a deliberate, two-place act.
+
+        Codex's boundary walk: drop a scope from OWNER_PATH_SCOPES,
+        regenerate the frozen file, and every other check stays green --
+        the sites simply stop being watched and the inventory honestly
+        records the smaller world. Regeneration absorbs the deletion.
+        So the roster is pinned HERE, in the test, where regeneration
+        cannot reach it.
+        """
+        self.assertEqual(
+            tuple((s.path, s.qualname) for s in OWNER_PATH_SCOPES),
+            (
+                ("daemon/inbound_core.py", None),
+                ("skills/surface/maez_adapter.py", None),
+                ("skills/telegram_voice.py", "TelegramVoice._process_message"),
+                ("skills/approval_card.py", None),
+                ("core/routing/recall_receipt.py", None),
+                ("daemon/maez_daemon.py", "MaezDaemon.handle_message"),
+                (
+                    "daemon/maez_daemon.py",
+                    "MaezDaemon._run_health_server.message",
+                ),
+            ),
+            "The watched-scope roster changed. Adding a scope is good and "
+            "this list should follow it. REMOVING one narrows what the "
+            "build watches and cannot be done by regenerating the frozen "
+            "file -- say in the commit message why the path stopped "
+            "mattering.",
+        )
 
     def test_every_scope_carries_its_reason(self):
         for scope in OWNER_PATH_SCOPES:
             with self.subTest(path=scope.path):
                 self.assertGreater(len(scope.why), 60)
+
+    def test_freezing_survives_a_c_locale(self):
+        """Codex boundary walk, B5: ``read_text()`` without an explicit
+        encoding raised UnicodeDecodeError under LC_ALL=C PYTHONUTF8=0,
+        so the tripwire crashed rather than reporting, on a machine
+        configured differently from this one."""
+        import subprocess
+        import sys
+
+        env = {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PYTHONUTF8": "0",
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+        }
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, %r);"
+                "from tests.owner_path_egress_tripwire import freeze;"
+                "print(len(freeze()))" % str(repo_root()),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(repo_root()),
+        )
+        self.assertEqual(
+            proc.returncode, 0, f"freeze() failed under C locale:\n{proc.stderr}"
+        )
 
     def test_the_repo_root_is_not_pinned_to_the_live_tree(self):
         """The hermetic-sandbox scar.
@@ -395,7 +540,7 @@ class ScopeHygieneTests(unittest.TestCase):
             "tests/test_owner_path_egress_tripwire.py",
         ):
             with self.subTest(module=name):
-                tree = _ast.parse((repo_root() / name).read_text())
+                tree = _ast.parse((repo_root() / name).read_text(encoding="utf-8"))
                 offenders = [
                     (node.lineno, node.value)
                     for node in _ast.walk(tree)
@@ -416,27 +561,52 @@ class ScopeHygieneTests(unittest.TestCase):
         contents and proves the scan reflects THOSE bytes -- so a
         checkout other than the live one is graded honestly.
         """
+        def _chain(qualname: str | None) -> str:
+            if qualname is None:
+                return 'def only():\n    return "fake tree"\n'
+            # Rebuild the narrowed construct's dotted anchor as real
+            # nesting so the qualname resolves in the fake.
+            parts = qualname.split(".")
+            body = ""
+            for depth, part in enumerate(parts):
+                pad = "    " * depth
+                kw = "class" if depth == 0 and part[:1].isupper() else "def"
+                sig = "" if kw == "class" else "()"
+                body += f"{pad}{kw} {part}{sig}:\n"
+            return body + "    " * len(parts) + 'return "fake tree"\n'
+
+        # Scopes are grouped BY PATH before writing. Two scopes share
+        # daemon/maez_daemon.py, and writing them one-per-scope made the
+        # second clobber the first -- MaezDaemon.handle_message silently
+        # contributed zero sites while this test still passed on the
+        # aggregate (Codex boundary walk, B4).
+        by_path: dict[str, list[Scope]] = {}
+        for scope in OWNER_PATH_SCOPES:
+            by_path.setdefault(scope.path, []).append(scope)
+
         with TemporaryDirectory(dir="/var/tmp") as tmp:
             root = Path(tmp)
-            for scope in OWNER_PATH_SCOPES:
-                target = root / scope.path
+            for path, scopes in by_path.items():
+                target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if scope.qualname is None:
-                    body = 'def only():\n    return "fake tree"\n'
-                else:
-                    # Rebuild the narrowed construct's dotted anchor as
-                    # real nesting so the qualname resolves in the fake.
-                    parts = scope.qualname.split(".")
-                    body = ""
-                    for depth, part in enumerate(parts):
-                        pad = "    " * depth
-                        kw = "class" if depth == 0 and part[:1].isupper() else "def"
-                        sig = "" if kw == "class" else "()"
-                        body += f"{pad}{kw} {part}{sig}:\n"
-                    body += "    " * len(parts) + 'return "fake tree"\n'
-                target.write_text(body)
+                target.write_text(
+                    "\n".join(_chain(s.qualname) for s in scopes)
+                )
 
             found = inventory(scan_repo(root))
+            # EVERY scope must contribute, or the witness is vacuous for
+            # the ones that do not.
+            for scope in OWNER_PATH_SCOPES:
+                with self.subTest(scope=f"{scope.path}::{scope.qualname}"):
+                    self.assertTrue(
+                        scan_source(
+                            scope.path,
+                            (root / scope.path).read_text(encoding="utf-8"),
+                            scope.qualname,
+                        ),
+                        "this scope produced no site in the fake tree, so "
+                        "the hermetic witness proves nothing about it",
+                    )
 
         self.assertTrue(found, "the fake tree produced no sites at all")
         for key in found:
@@ -450,6 +620,23 @@ class ScopeHygieneTests(unittest.TestCase):
             found,
         )
 
+    def test_the_scanner_and_these_tests_resolve_the_same_repo(self):
+        """The subtler form of the hermetic scar (Codex boundary walk, B4).
+
+        ``repo_root()`` resolves from the SCANNER module's ``__file__``.
+        Copy these tests into another checkout while the scanner still
+        imports from the live tree, and the suite grades the LIVE tree
+        while appearing to test the copy. The two roots must be bound.
+        """
+        self.assertEqual(
+            Path(__file__).resolve().parents[1],
+            repo_root(),
+            "the test module and the scanner module resolve to DIFFERENT "
+            "repository roots -- the scanner is being imported from a "
+            "checkout other than the one holding these tests, so the "
+            "results describe a tree nobody is looking at",
+        )
+
 
 class FramingTests(unittest.TestCase):
     """The framing is load-bearing, so it is asserted, not just written.
@@ -460,16 +647,26 @@ class FramingTests(unittest.TestCase):
     """
 
     def _scanner_source(self) -> str:
-        return (repo_root() / "tests/owner_path_egress_tripwire.py").read_text()
+        return (repo_root() / "tests/owner_path_egress_tripwire.py").read_text(encoding="utf-8")
 
-    def test_the_module_disclaims_completeness_in_its_first_line(self):
+    def test_the_module_docstring_opens_by_disclaiming_completeness(self):
+        """Checked against the opening paragraph, which the previous
+        name claimed and did not inspect."""
         import tests.owner_path_egress_tripwire as mod
 
         doc = mod.__doc__ or ""
-        self.assertIn("THIS IS NOT A COMPLETENESS PROOF", doc)
+        opening = doc.split("\n\n", 2)[:2]
+        self.assertIn(
+            "THIS IS NOT A COMPLETENESS PROOF", "\n\n".join(opening)
+        )
         self.assertIn("TRIPWIRE", doc)
 
-    def test_the_module_makes_no_completeness_claim(self):
+    def test_the_module_avoids_a_denylist_of_completeness_phrases(self):
+        """A DENYLIST, not a proof of absence.
+
+        Passing means these particular phrasings are absent, not that no
+        completeness claim can be made in words nobody thought of. The
+        previous name asserted the stronger thing (Codex, B1)."""
         source = self._scanner_source().lower()
         for phrase in (
             "every egress",
@@ -490,14 +687,46 @@ class FramingTests(unittest.TestCase):
             with self.subTest(spot=spot[:40]):
                 self.assertGreater(len(spot), 60)
 
-    def test_the_named_blind_spots_cover_the_ways_this_can_be_fooled(self):
+    def test_the_named_blind_spots_are_exactly_these(self):
+        """Pinned by topic, because a keyword spot-check let one be
+        deleted silently.
+
+        A mutation removing the COMPREHENSIONS AND DEFAULTS entry passed
+        every other framing check: the count floor still held and the
+        five sampled keywords all survived. Losing a NAMED blind spot is
+        precisely the drift toward an implied completeness claim that
+        the eighteenth round warned about, so the roster is pinned.
+        Adding one trips this too -- that is intended; growing the list
+        is healthy and should be a deliberate, visible edit.
+        """
+        topics = tuple(spot.split(".", 1)[0] for spot in KNOWN_BLIND_SPOTS)
+        self.assertEqual(
+            topics,
+            (
+                "SCOPE",
+                "LIVENESS",
+                "NAME SHAPE",
+                "INDIRECTION",
+                "COMPREHENSIONS AND DEFAULTS",
+                "WORDING",
+                "SEMANTICS",
+                "NON-PYTHON MOUTHS",
+            ),
+        )
+
+    def test_the_named_blind_spots_mention_the_known_evasions(self):
+        """Keyword spot-check over the evasions already FOUND.
+
+        The set of ways a syntactic scan can be fooled is not
+        enumerable, so this cannot and does not claim coverage of it --
+        the previous name did (Codex, B1)."""
         joined = " ".join(KNOWN_BLIND_SPOTS).lower()
         for topic in ("scope", "runs", "getattr", "kwargs", "reword"):
             with self.subTest(topic=topic):
                 self.assertIn(topic, joined)
 
     def test_the_frozen_file_carries_the_disclaimer(self):
-        payload = json.loads((repo_root() / FROZEN_PATH).read_text())
+        payload = json.loads((repo_root() / FROZEN_PATH).read_text(encoding="utf-8"))
         note = payload["_"]
         self.assertIn("TRIPWIRE", note)
         self.assertIn("NOT a completeness proof", note)
