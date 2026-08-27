@@ -310,5 +310,440 @@ class BornRefusalAtMint(unittest.TestCase):
         store.put.assert_called_once_with(artifact)
 
 
+class _AdvancingVerifier:
+    """Duck-typed test verifier (the established recipe); advancing
+    sign_count so a second tap in one store trips no clone detection."""
+
+    def __init__(self):
+        self._count = 0
+
+    def dependency_state(self):
+        return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
+
+    def verify_authentication_response(self, **_kwargs):
+        self._count += 1
+        return {
+            "ok": True,
+            "credential_ref": "cred-primary",
+            "sign_count": self._count,
+            "user_presence": True,
+            "user_verification": True,
+        }
+
+
+def _credential_kwargs(ref: str, kind: str) -> dict:
+    return dict(
+        credential_ref=ref,
+        actor_handle_hmac="hmac:s7:founder:" + "a" * 64,
+        role_names=("bonded_user",),
+        public_key=f"public-key-{ref}",
+        sign_count=0,
+        rp_id="localhost",
+        origin="http://localhost:11437",
+        created_at="2026-08-27T09:00:00+00:00",
+        backup_credential=(kind == "backup"),
+        enabled=True,
+        credential_kind=kind,
+        label=f"{kind} key",
+        registration_challenge_id=f"challenge-{ref}",
+        attestation_format="packed",
+        aaguid="00112233-4455-6677-8899-aabbccddeeff",
+        authenticator_attachment="cross-platform",
+        backup_eligible=False,
+        backed_up=False,
+        transports=("usb",),
+        library_name="webauthn",
+        library_version="2.7.1",
+        sign_count_mode="advancing",
+        uv_capable=True,
+        uv_required_for_guarded=True,
+        distinct_device_confidence="confirmed_distinct",
+    )
+
+
+def _mint_ready_store(root: Path):
+    """Temp S7 store with 2 enabled bonded_user credentials + activated v2."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from s7_store_fixture import fresh_v2_store_at
+
+    from core.governance.s7_webauthn_bootstrap import (
+        FounderWebAuthnCredentialRecord,
+        S7WebAuthnBootstrapStore,
+    )
+
+    store = S7WebAuthnBootstrapStore(root)
+    store.store_credential(
+        FounderWebAuthnCredentialRecord.build(**_credential_kwargs("cred-primary", "primary"))
+    )
+    store.store_credential(
+        FounderWebAuthnCredentialRecord.build(**_credential_kwargs("cred-backup", "backup"))
+    )
+    fresh_v2_store_at(store.db_path)
+    return store
+
+
+def _scripted_tap():
+    """(printer, prompt) pair: the prompt echoes exactly what the gate
+    printed — challenge id, credential ref, params hash."""
+    import json as _json
+
+    printed = []
+
+    def printer(text):
+        printed.append(text)
+
+    def prompt(_msg):
+        gate = _json.loads(printed[-1])
+        template = gate["webauthn_finish_template"]
+        return _json.dumps(
+            {
+                "challenge_id": template["challenge_id"],
+                "credential_ref": template["credential_ref"],
+                "birth_action_params_sha256": template[
+                    "birth_action_params_sha256"
+                ],
+                "authentication_response": {"clientDataJSON": "assertion"},
+            }
+        )
+
+    return printed, printer, prompt
+
+
+class MintConsumeVerify(unittest.TestCase):
+    """The full rail against a temp store: real service, real store, real
+    consume — only the verifier is the established test duck-type."""
+
+    def setUp(self):
+        import tempfile
+
+        self._td = tempfile.TemporaryDirectory(dir="/var/tmp")
+        self.root = Path(self._td.name) / "s7_1_webauthn"
+        self.store = _mint_ready_store(self.root)
+        self.store_path = self.store.db_path
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _params(self, mode="dry_run"):
+        from core.governance import birth_authorization as ba
+
+        return ba.birth_action_params(
+            ledger_db_realpath="/var/tmp/probe-ledger.db",
+            creation_manifest_sha256="c" * 64,
+            owner_witness="rohit",
+            mode=mode,
+        )
+
+    def _mint(self, run_id, params=None):
+        from core.governance import birth_authorization as ba
+
+        _printed, printer, prompt = _scripted_tap()
+        return ba.mint_and_consume_birth_authorization(
+            store_root=self.root,
+            run_id=run_id,
+            params=params or self._params(),
+            verifier=_AdvancingVerifier(),
+            printer=printer,
+            prompt=prompt,
+        )
+
+    def test_happy_path_mint_consume_verify(self):
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        facts = self._mint(run_id)
+        self.assertTrue(facts["s7_artifact_id"].startswith("s7authz_"))
+        self.assertEqual(facts["ceremony_run_id"], run_id)
+        with ba.held_birth_authorization_proof(
+            store_path=self.store_path,
+            run_id=run_id,
+            expected_params=self._params(),
+        ) as proof:
+            self.assertEqual(proof["s7_artifact_id"], facts["s7_artifact_id"])
+            self.assertEqual(proof["s7_work_class"], "birth_activation")
+            self.assertEqual(
+                proof["s7_rendered_text_hash"], facts["s7_rendered_text_hash"]
+            )
+
+    def test_artifact_is_durably_consumed_single_use(self):
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        facts = self._mint(run_id)
+        conn = _sqlite3.connect(self.store_path)
+        row = conn.execute(
+            "SELECT consumed_at, consumed_by_request_id FROM "
+            "s7_authorization_artifacts_v2 WHERE artifact_id=?",
+            (facts["s7_artifact_id"],),
+        ).fetchone()
+        conn.close()
+        self.assertIsNotNone(row[0])
+        self.assertEqual(row[1], run_id)
+
+    def test_rehearsal_params_never_authorize_for_real(self):
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        self._mint(run_id, params=self._params(mode="dry_run"))
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(mode="for_real"),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "binding_mismatch")
+
+    def test_unknown_run_id_is_unresolved(self):
+        from core.governance import birth_authorization as ba
+
+        self._mint(ba.fresh_birth_run_id())
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id="birth-never-minted",
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "receipt_unresolved")
+
+    def test_forged_unconsumed_artifact_refuses(self):
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        facts = self._mint(run_id)
+        conn = _sqlite3.connect(self.store_path)
+        conn.execute(
+            "UPDATE s7_authorization_artifacts_v2 SET consumed_at=NULL, "
+            "consumed_by_request_id=NULL WHERE artifact_id=?",
+            (facts["s7_artifact_id"],),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "not_consumed")
+
+    def test_crashed_ceremony_artifact_refuses_a_rerun(self):
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        facts = self._mint(run_id)
+        # Simulate: a NEW run tries to ride the old consumed artifact by
+        # forging its request_id onto the new run id at lookup time — the
+        # store row still says consumed_by the OLD run.
+        rerun_id = ba.fresh_birth_run_id()
+        conn = _sqlite3.connect(self.store_path)
+        conn.execute(
+            "UPDATE s7_authorization_artifacts_v2 SET request_id=? "
+            "WHERE artifact_id=?",
+            (rerun_id, facts["s7_artifact_id"]),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=rerun_id,
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "run_identity_mismatch")
+
+    def test_stale_consume_refuses(self):
+        from datetime import datetime, timedelta, timezone
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        self._mint(run_id)
+        later = (
+            datetime.now(timezone.utc)
+            + timedelta(seconds=ba.BIRTH_CONSUME_FRESHNESS_S + 60)
+        ).replace(microsecond=0).isoformat()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(),
+                now=later,
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "consume_stale")
+
+    def test_disabled_credential_refuses(self):
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        self._mint(run_id)
+        conn = _sqlite3.connect(self.store_path)
+        conn.execute(
+            "UPDATE s7_founder_webauthn_credentials SET enabled=0 "
+            "WHERE credential_ref='cred-primary'"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(
+            ctx.exception.reason, "credential_unknown_or_disabled"
+        )
+
+    def test_broken_challenge_join_refuses(self):
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        run_id = ba.fresh_birth_run_id()
+        self._mint(run_id)
+        conn = _sqlite3.connect(self.store_path)
+        conn.execute(
+            "UPDATE s7_ceremony_challenges SET nonce='forged-nonce' "
+            "WHERE request_id=?",
+            (run_id,),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=self.store_path,
+                run_id=run_id,
+                expected_params=self._params(),
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "challenge_join_failed")
+
+    def test_paste_must_echo_the_printed_params_hash(self):
+        import json as _json
+
+        from core.governance import birth_authorization as ba
+
+        printed = []
+
+        def printer(text):
+            printed.append(text)
+
+        def bad_prompt(_msg):
+            gate = _json.loads(printed[-1])
+            template = gate["webauthn_finish_template"]
+            return _json.dumps(
+                {
+                    "challenge_id": template["challenge_id"],
+                    "credential_ref": template["credential_ref"],
+                    "birth_action_params_sha256": "0" * 64,
+                    "authentication_response": {"clientDataJSON": "x"},
+                }
+            )
+
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            ba.mint_and_consume_birth_authorization(
+                store_root=self.root,
+                run_id=ba.fresh_birth_run_id(),
+                params=self._params(),
+                verifier=_AdvancingVerifier(),
+                printer=printer,
+                prompt=bad_prompt,
+            )
+        self.assertEqual(ctx.exception.reason, "owner_presence_unattested")
+
+    def test_mint_refuses_when_born(self):
+        from unittest import mock
+
+        from core.governance import birth_authorization as ba
+
+        with mock.patch(
+            "core.governance.s7_consultation_exemption.born_by_any_signal",
+            return_value=True,
+        ):
+            with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+                self._mint(ba.fresh_birth_run_id())
+        self.assertEqual(ctx.exception.reason, "already_born")
+
+
+class EnvAndManifestGuards(unittest.TestCase):
+    def test_env_override_class_refuses(self):
+        from core.governance import birth_authorization as ba
+
+        for var in ba.FORBIDDEN_ENV_OVERRIDES:
+            with self.subTest(var=var):
+                with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+                    ba.refuse_env_overrides({var: "/decoy"})
+                self.assertEqual(
+                    ctx.exception.reason, "env_override_in_for_real"
+                )
+        ba.refuse_env_overrides({})  # clean env passes
+
+    def test_manifest_missing_refuses_never_writes(self):
+        import tempfile
+
+        from core.governance import birth_authorization as ba
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            target = Path(td) / "creation_manifest.md"
+            with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+                ba.read_manifest_sha256(target)
+            self.assertEqual(ctx.exception.reason, "manifest_missing")
+            self.assertFalse(target.exists(), "the rail must never author O1")
+
+    def test_manifest_empty_refuses(self):
+        import tempfile
+
+        from core.governance import birth_authorization as ba
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            target = Path(td) / "creation_manifest.md"
+            target.write_text("")
+            with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+                ba.read_manifest_sha256(target)
+            self.assertEqual(ctx.exception.reason, "manifest_empty")
+
+    def test_manifest_symlink_refuses(self):
+        import tempfile
+
+        from core.governance import birth_authorization as ba
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            real = Path(td) / "real.md"
+            real.write_text("owner words")
+            link = Path(td) / "creation_manifest.md"
+            link.symlink_to(real)
+            with self.assertRaises(ba.BirthAuthorizationRefusal):
+                ba.read_manifest_sha256(link)
+
+    def test_manifest_hash_is_byte_exact(self):
+        import hashlib
+        import tempfile
+
+        from core.governance import birth_authorization as ba
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            target = Path(td) / "creation_manifest.md"
+            target.write_bytes(b"the owner's letter\n")
+            self.assertEqual(
+                ba.read_manifest_sha256(target),
+                hashlib.sha256(b"the owner's letter\n").hexdigest(),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
