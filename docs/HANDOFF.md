@@ -42,8 +42,49 @@ Witness at a3aecde: **35 mutations, each caught by a named test**;
 falsifier GREEN 8/8 at n=20000; battery 541 passed with the same 7
 pre-existing reds as clean HEAD `010ff60`. Live tree re-verified unborn.
 
-**Next is BIRTH, and it is owner-only.** Do not open another hardening
-round on this organ without a Category-A reason.
+**Do not open another hardening round on this organ** without a
+Category-A reason.
+
+**BUT: "the build list is empty" is NOT "ready for birth."** Corrected
+same day, after the owner asked directly and the claim was checked
+against `docs/superpowers/specs/2026-08-22-birth-blocker-ledger.md`
+rather than recalled. Verified TODAY at `c7aeb74`:
+
+CLOSED since that ledger was written — **A5** synchronous=FULL
+unconditionally on the canonical path (rehearsal keeps NORMAL, by
+design); **A7** backup manifest now covers scar_tissue, proprioception,
+conversation_turn_seq and ledger.db, with coverage tests that pass;
+**B3** stable admission identity (migration 0006 `submission_id` UNIQUE,
+minted before the attempt); **A2's quiesce half** (`_WRITER_UNITS`
+covers maez-web.service explicitly).
+
+STILL OPEN, each verified by execution today:
+- **O1 — `config/creation_manifest.md` DOES NOT EXIST.** Owner-authored,
+  hash-bound, read by Maez at birth, her first reflection on it being
+  the first lived memory. Unrepairable after the fact: once any other
+  lived row is written first, no insertion makes this literally first.
+  No agent writes it. This alone means we are not ready.
+- **A4 — delivery.** `persist_model_reply` stamps before transport;
+  nothing in core/ledger has a delivery concept; self-history renders
+  model_reply rows as utterances with no filter. The tenth council round
+  rediscovered this independently, and THIS session deferred it as an
+  owed item — correctly flagged, but note it is a RECORDED BIRTH
+  BLOCKER, not merely owed.
+- **A1/B2 — the ceremony still does not prove what it claims.**
+  `run_transaction` validates `s7_receipt_ref` for NON-EMPTINESS ONLY
+  (birth_ceremony.py:286); there is no receipt resolution and no owner
+  proof in code ("WebAuthn verification stays the owner's eyes" is a
+  comment, not a check). The arbitrary string is then stored
+  permanently.
+- **A6 — `PHASE_UNKNOWN` exists but is DORMANT** (`MAEZ_S1_PHASE_TRUTH`
+  unset), so the blocker's substance is still live behavior: one
+  transient read failure post-birth durably stamps lived memory as
+  pre-birth. Arming it is an owner act.
+- **A3 — partially closed.** The dead-letter/spool/replay arc closes the
+  omission path for the FOUR WIRED SURFACES. The census's named
+  interceptor paths (clinical, camera, approval-card, proposal,
+  search-commitment) still show no ledger call sites. Not verified
+  deeply; do not claim closed.
 
 ### The build history below is kept for provenance
 
