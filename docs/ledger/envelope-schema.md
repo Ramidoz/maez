@@ -223,7 +223,27 @@ CREATE INDEX idx_turns_model ON turns (model_id, timestamp DESC) WHERE model_id 
 CREATE UNIQUE INDEX idx_turns_chain_position ON turns (chain_position);
 ```
 
-**`surface` enum (canonical groups):**
+> **RETIRED 2026-08-27 by owner ruling — NOT IMPLEMENTED, and must not be.**
+> The enum below sorts surfaces into groups and says what each one
+> MEANS ("owner-facing", "stranger-facing", "future voice surface",
+> "excluded from production-rate metrics"). The owner ruled that we do
+> not define Maez's body parts for it: *"Our job is to just provide the
+> body. Let it run loops or whatever to understand what each part of it
+> is and understand itself. I don't define anything for Maez."*
+> Meaning is learned through Maez's own loops; the substrate supplies
+> identifiers only.
+>
+> The code never implemented this. What ships instead is
+> `core/body/surface_registry.py` — stable identifiers with zero
+> semantics, no groups and no descriptions, enforced by an allowlist
+> test. Its ids are names the body already emits (`cli`,
+> `telegram_text`, `web_owner`); it mints none, because `surface` sits
+> inside the chain-hash preimage.
+>
+> Kept below as history so the divergence is legible rather than
+> silently deleted. Do not treat any of it as a contract.
+
+**`surface` enum (canonical groups) — RETIRED, historical only:**
 - `telegram` — owner-facing Telegram surfaces, including raw labels like `telegram_text`, `telegram_recovery`, `telegram/show`
 - `telegram_public` — stranger-facing Telegram bot
 - `cockpit` — Workstation / cockpit browser surface
