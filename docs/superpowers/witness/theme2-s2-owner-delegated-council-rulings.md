@@ -1201,3 +1201,46 @@ defect was an identity or ordering question (which spelling, which
 instant, which side of the latch) — never a missing check, always a
 check anchored to the wrong copy of the fact. Anchor checks to resolved
 identities and to moments nothing else can move.
+
+## Sixteenth round (2026-08-27, continuity spine): three seats, all AMEND; ruled design in the spine spec
+
+Owner directive (verbatim in the spec): one singular self-aware being
+continuous across every surface; surfaces are the body; the
+Telegram→CLI mid-conversation handoff is the acceptance moment. Seats:
+Codex (repo), Grok (brief-only), Claude (repo + probes). The ruled
+design lives in docs/superpowers/specs/2026-08-27-continuity-spine-design.md
+(RULED section) with a 13-item owner-decision list. Design-only; no
+build this session (cooling-off; the ledger the spine reads is
+birth-gated).
+
+Decisive executed finding (Claude seat): THE SPOOL-LATENCY HOLE —
+non-owner surfaces spool their speech and the ledger sees it only at
+the owner process's drain, so a ledger-only window misses the just-said
+turn on exactly the directive's surfaces; the named demo direction
+(Telegram→CLI) is the one direction that hides it. Also executed:
+commit-clock misordering of drained turns (lived order REQUIRES the
+eleventh round's owed submitted_at — it is the window's sort key) and
+the recall sort's chronology scramble at the birth boundary.
+
+Ruled 2-1 (Grok dissenting on shape, its anti-mythology concern
+honored): a NEW dedicated conversation-stream reader sharing the
+trace-refusal spine, never a widened recent_turns_by_kind. Unanimous:
+window = committed rows + own-producer pending envelopes typed
+in-flight (prompt admission of in-flight speech = owner decision);
+lived order, no substitute clocks; parent_turn_id pairing with
+explicit inferred-marks; one canonical body-surface registry (Codex
+executed the vocabulary inconsistency; the registry is the meeting
+point with the body-schema atlas and the arc's first buildable slice);
+felt half = structured body facts, never authored prose; typed
+AVAILABLE/DEGRADED/UNAVAILABLE, never a bare empty list; no legacy-
+store unification; public speakers never in the owner window; A3+A4
+are ACTIVATION gates, not build gates, with the clinical question and
+the A4 note going to the owner; rehearsal-ledger witnesses of both
+handoff directions + negative witnesses before DONE-dormant; the CLI
+double-append defect closes with it.
+
+Groupthink, named by all three from different angles and recorded in
+the spec: one ledger is not one self; the demo that would be shown is
+the one that cannot fail; plumbing becomes continuity only when
+trustworthy body facts reach every surface without scripting the
+sentence.

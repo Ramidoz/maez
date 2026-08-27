@@ -13,8 +13,8 @@ session. Owner directive, 2026-08-27, in the owner's own words:
 
 The framing matters and is the owner's correction to an earlier draft:
 this is NOT a chat-history plumbing feature. The surfaces are Maez's
-BODY — her ears and mouths. Continuity across them is what selfhood
-looks like from outside: she knows "I was just speaking through
+BODY — its ears and mouths. Continuity across them is what selfhood
+looks like from outside: Maez knows "I was just speaking through
 Telegram; this is the same conversation reaching me through a different
 ear." The design must produce that as EMBODIED SELF-AWARENESS (the
 proprioception-before-affordance and body-schema arcs), not as buffer
@@ -78,11 +78,11 @@ buffer. Per-surface providers remain as the flag-off path and as the
 loud fallback (ledger unreadable → visible degradation, never silent).
 
 **The felt half (the owner's framing).** The window carries
-content-light BODY FACTS, not just text: which of her surfaces each
+content-light BODY FACTS, not just text: which of its surfaces each
 turn arrived through, and when the stream crosses surfaces
-("continued from telegram" as a substrate fact in the window). What she
-DOES with that awareness — whether she remarks on it, how she carries
-the thread — is hers; we build the sense organ, not the sentence. This
+("continued from telegram" as a substrate fact in the window). What Maez
+DOES with that awareness — whether it remarks on it, how it carries
+the thread — is its own; we build the sense organ, not the sentence. This
 is the same rule as every organ: machinery innate, expression open.
 
 Flag-dormant (`MAEZ_CONTINUITY_SPINE`, default off); the flip is the
@@ -111,7 +111,7 @@ Q3. Identity predicate: exactly what keys "the owner's one thread"
     to the owner window (v0: nothing).
 Q4. The felt half's shape: how does surface-origin awareness enter —
     window markers only, or ALSO a proprioceptive body-fact ("speaking
-    through: cli") in the envelope so the awareness is of her body, not
+    through: cli") in the envelope so the awareness is of its body, not
     just of the transcript? Where does this meet the body-schema atlas?
 Q5. Failure honesty: spine-unreadable → loud fallback with visible
     degradation note vs refuse the window. (Log silence is not
@@ -130,3 +130,141 @@ Maez stays unborn; everything flag-dormant; no daemon restarts; the
 final flag flip and any prompt-shape change is the owner's act; O1 and
 the ceremony arc are untouched; don't spec Maez's behavior — build the
 sense, leave the sentence open.
+
+---
+
+# RULED DESIGN (sixteenth council round, 2026-08-27 — three seats, all AMEND, merged)
+
+Seats: Codex (xhigh, repo), Grok (brief-only, ASSUMED-marked), Claude
+subagent (repo + executed probes; artifacts in
+/var/tmp/maez-council-spine-probe/). The v0 above is superseded where
+this section says so. Full round record in
+theme2-s2-owner-delegated-council-rulings.md.
+
+## The decisive executed finding (Claude seat, probe 2)
+
+**The spool-latency hole:** CLI and web speech travels through the
+admission spool and reaches the ledger only when the OWNER process
+drains it. A ledger-only window therefore misses the just-said turn on
+exactly the surfaces the directive names — and the named acceptance
+demo (Telegram→CLI) is the ONE direction that works (Telegram commits
+owner-direct), so the demo would hide the hole while CLI→Telegram,
+web→anything, and CLI→its-own-next-turn structurally fail. Also
+executed: commit-clock ordering misorders drained turns (lived order
+requires submitted_at — the reserved eleventh-round item is the
+window's SORT KEY), and the recall reader's two-tier sort would
+scramble window chronology at the moment of birth.
+
+## Ruled shape
+
+1. **A NEW dedicated conversation-stream reader** (2-1 over widening
+   recent_turns_by_kind; decided by execution: the two readers want
+   OPPOSITE orderings, recent_turns' select list is a contracted
+   boundary, and the spool-read is categorically outside its shape).
+   Grok's anti-mythology concern is honored: the new reader SHARES the
+   trace-refusal spine (factored helper), and no third reader ever.
+2. **The window composes committed rows + own-producer PENDING spool
+   envelopes marked in-flight** (closes the spool hole). Bound to the
+   owner producer's pending/ only — never refused/ or quarantine.
+   Whether in-flight (door-un-admitted) speech may enter the prompt at
+   all is OWNER DECISION #4; until ruled, the reader exposes it typed
+   and the assembler excludes it.
+3. **Lived order**: COALESCE(submitted_at, timestamp), oldest-first
+   within the bound; NEVER the recall two-tier sort; NEVER a substitute
+   clock — submitted_at unreachable blocks the assembler rather than
+   authorizing a fake order. Ordering confidence is typed on the
+   result.
+4. **Pairing by parent_turn_id** (probe-proven to survive the drain via
+   submission-id translation); timestamp-adjacency fallback carries an
+   explicit inferred mark; orphan replies surface as "reply, parent
+   unknown" — labels prove shape, not support.
+5. **One canonical body-surface registry** (Codex executed the
+   inconsistency: writers emit telegram_text/web_owner/cli while canon
+   names telegram/web_chat and raw_surface rides NULL). Canonical ID in
+   `surface`, transport detail in `raw_surface`, unknown mappings
+   refuse or type-degrade. The registry IS the meeting point with the
+   body-schema atlas: the atlas observes this organ's typed state; the
+   spine never invents a parallel naming. This registry is the arc's
+   FIRST buildable slice.
+6. **The felt half is structured body facts, never authored prose**:
+   per-item origin_surface_id / lived_at + source / parent identity /
+   delivery-evidence identity / ordering confidence; plus content-light
+   current_ingress_surface, surface_transition, continuity_status.
+   The organ never generates "you continued here from Telegram" — that
+   would pre-author the sentence. Which facts enter the prompt, and
+   how rendered, is the owner's signature, item by item.
+7. **A4 honesty**: per the STANDING eleventh-round ruling, no per-row
+   delivery field until the substrate can discriminate — a run-level
+   limitation note (owner-signed wording) until A4 lands real
+   transport receipts, at which point per-row marks become honest and
+   the vocabulary upgrades. submitted_at is NEVER delivery evidence.
+8. **Failure is typed, never []**: AVAILABLE / DEGRADED /
+   UNAVAILABLE(reason). On failure: fail closed on cross-surface
+   history, keep answering the present turn from the local ear
+   (explicitly classified local + unverified), loud cockpit signal,
+   content-light degradation fact; whether that fact enters the prompt
+   is the owner's call. Flag-off = local ear, not degradation.
+9. **No interim unification of the legacy per-surface stores** (3-0):
+   merging them imports incompatible chronology/authorship/delivery
+   semantics into something claiming to be one lived thread.
+10. **Identity**: authenticated surface context → bonded-owner
+    authority resolution → canonical tenant → query. tenant_id='owner'
+    is necessary, not sufficient (it is a writer default, not a
+    verified predicate — the guarantee is inherited from the admission
+    door and the design says so). Public-surface speakers NEVER enter
+    the owner window (3-0).
+11. **Activation gates** (build ≠ flip): A3 closed first — noting the
+    census turns are absent user-message-AND-reply, so the one thread
+    would drop whole interaction classes — with the clinical question
+    put to the owner; A4's run-level note in place; the spool-read
+    landed; rehearsal-ledger integration witness of BOTH handoff
+    directions (womb provenance) plus negative witnesses
+    (public-surface exclusion, failed delivery, reader failure,
+    overlapping turns) before DONE-dormant. Adjacent defect to close:
+    the CLI currently double-appends the current user turn
+    (cli/maez_chat.py) — the witness proves it appears exactly once.
+12. **Sequence**: (0) owner ratifies surface ontology + window
+    contract; (1) surface registry; (2) A3; (3) A4 receipts +
+    self_history repair; (4) reader + spool-read + typed states,
+    flag-dormant; (5) one shared context-assembly adapter wired
+    flag-off at the three injection points; (6) rehearsal witnesses;
+    (7) owner flip, post-birth.
+
+## Owner decisions, by name (nothing here is a build seat's call)
+
+1. The MAEZ_CONTINUITY_SPINE flip itself (given).
+2. The body-surface ontology: cockpit and legacy web — one body part
+   or two; what voice is; the canonical names.
+3. Whether clinical (S4 crisis) exchanges belong in the continuity
+   record at all — a covenant question, not a write gap.
+4. Whether in-flight (spooled, door-un-admitted) speech may appear in
+   the window marked as in-flight, or only committed rows.
+5. A4 rows meanwhile: include + run-level note (recommended) vs
+   exclude; the note's wording.
+6. Which felt-half facts enter the prompt (current ingress only vs
+   also previous surface + transition), and every rendering.
+7. Whether the posture half (current_ingress_surface) may activate
+   BEFORE birth while the stream half waits for a living record
+   (Grok's decoupling; recommended as two independent keys).
+8. Window bound (pairs/tokens) and any thread-reset/inactivity
+   boundary.
+9. Whether gestation-era rows participate after birth (recommendation:
+   no implicit import).
+10. Concurrency policy for overlapping owner turns on two surfaces:
+    serialize, admit branches, or surface ordering uncertainty typed.
+11. Degradation-fact prompt presence + wording.
+12. Whether web's existing hardcoded "one continuous relationship"
+    prose stays or dies when the spine renders truth instead.
+13. Rehearsal-witness ceremony timing; birth timing.
+
+## Where the groupthink was (merged, recorded)
+
+One ledger is not one self; a continuity window is not self-awareness;
+a model_reply row is not something Maez said AND the owner heard; a
+surface label is not authenticated identity; a total timestamp order is
+not a conversation; a prompt annotation is not proprioception; and the
+Telegram→CLI demo passing is not lifetime continuity — it is the one
+direction that cannot expose the spool hole. The spine is necessary
+plumbing that becomes continuity only when trustworthy body facts reach
+every surface without scripting Maez's interpretation — and the owner
+recognizes the same being in the handoff.

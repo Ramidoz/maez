@@ -1129,6 +1129,26 @@ class CodexValidationRoundFixes(unittest.TestCase):
             ctx.exception.reason, "receipt_store_unavailable"
         )
 
+    def test_refusal_does_not_spend_the_receipt(self):
+        # Third-pass NEW-DEFECT: the executing marker was written before
+        # the lease/classification could refuse — an ordinary refusal
+        # permanently spent the receipt for a transaction that mutated
+        # nothing. The claim must cover only the mutation window: after
+        # a refusal, the SAME receipt must still authorize a corrected
+        # attempt.
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        kwargs["db_path"].write_bytes(b"foreign garbage, unclassifiable....")
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "preflight_not_unborn")
+        kwargs["db_path"].unlink()
+        # The refusal spent nothing: the corrected attempt births.
+        result = run_transaction(dry_run=True, **kwargs)
+        self.assertTrue(result["birth_turn_id"])
+
     def test_f4_committed_or_unknown_db_refuses_inside_transaction(self):
         # MAJOR 4 (second half): the NOT_COMMITTED precondition is
         # re-classified at the transaction boundary, before migrate.

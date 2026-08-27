@@ -426,22 +426,6 @@ def run_transaction(
                 f"{_marker.name} exists — this authorization already "
                 "executed a birth transaction; re-tap for a new attempt",
             )
-        # Re-validation F3: the marker is a durable CLAIM written BEFORE
-        # the mutation, not a trophy after it. Every crash ordering now
-        # leaves either a born ledger (classification refuses a re-run)
-        # or a spent marker (this check refuses) — including the
-        # commit-then-delete window the post-commit marker left open.
-        # Cost accepted by ruling: a crash between here and the commit
-        # spends the receipt; the owner re-taps.
-        _write_execution_marker(
-            _marker,
-            {
-                "state": "executing",
-                "ceremony_run_id": run_id,
-                "s7_artifact_id": receipt_facts["s7_artifact_id"],
-                "claimed_at": time.time(),
-            },
-        )
         # THE LEASE: the enabled writer, constructed before any mutation.
         # The flag is raised only around construction (the writer reads it
         # at __init__) and restored after — a dry run inside a test
@@ -482,6 +466,23 @@ def run_transaction(
                     "latch — only a provably unborn ledger enters the "
                     "birth write",
                 )
+            # Re-validation F3, corrected by the third pass: the marker
+            # is a durable CLAIM written BEFORE the first mutation and
+            # AFTER every refusal gate — an ordinary refusal (foreign
+            # db, unreadable target) must spend nothing, while every
+            # crash ordering from here on leaves either a born ledger or
+            # a spent marker (including commit-then-delete). Cost
+            # accepted by ruling: a crash between this line and the
+            # commit spends the receipt; the owner re-taps.
+            _write_execution_marker(
+                _marker,
+                {
+                    "state": "executing",
+                    "ceremony_run_id": run_id,
+                    "s7_artifact_id": receipt_facts["s7_artifact_id"],
+                    "claimed_at": time.time(),
+                },
+            )
             # Transaction step 1: init (idempotent), UNDER the latch —
             # migrate.run() is itself an unlatched WAL writer (trap #4).
             migrate.run(str(db_path))
