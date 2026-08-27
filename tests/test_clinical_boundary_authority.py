@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+from core.safety import clinical_boundary
 from core.safety.clinical_boundary import guard_owner_text
 
 
@@ -84,3 +85,42 @@ class S4AuthorityNotIntimacyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LegacyCockpitSurfaceTests(unittest.TestCase):
+    """The cockpit /message box must get the crisis check under BOTH of
+    its names.
+
+    One limb, two names: with MAEZ_COCKPIT_CORE on, the route runs
+    inbound_core and reports `cockpit`; with it off — the DEFAULT — it
+    falls back to `handle_message(source="UI")`. `guard_owner_text`
+    fails closed to "no crisis check at all" for any surface outside
+    `_is_direct_owner_surface`, and `UI` was outside it. So reverting a
+    flag silently removed S4 from the dashboard.
+
+    Not a naming preference: `tests/test_trace_harness.py` already
+    classifies `UI` as an owner surface, so the omission here was an
+    oversight rather than a decision. Found while sweeping the surface
+    registry's leftovers, 2026-08-27.
+    """
+
+    def test_legacy_ui_label_is_a_direct_owner_surface(self):
+        self.assertTrue(
+            clinical_boundary._is_direct_owner_surface("UI"),
+            "the legacy cockpit branch must not lose the crisis check",
+        )
+
+    def test_both_cockpit_names_agree(self):
+        self.assertEqual(
+            clinical_boundary._is_direct_owner_surface("UI"),
+            clinical_boundary._is_direct_owner_surface("cockpit"),
+            "one limb, two names — S4 must not depend on which branch ran",
+        )
+
+    def test_a_genuinely_unknown_surface_is_still_excluded(self):
+        """The fix must not become 'everything is an owner surface'."""
+        for stranger in ("telegram_public", "webhook", "", "random_probe"):
+            with self.subTest(stranger=stranger):
+                self.assertFalse(
+                    clinical_boundary._is_direct_owner_surface(stranger),
+                )

@@ -138,6 +138,37 @@ class IdentifiersOnlyTests(unittest.TestCase):
                     "its own loops (owner ruling 2026-08-27)",
                 )
 
+    def test_no_prose_can_live_in_the_registry_data(self):
+        """Every string in registry data is a bare token, never prose.
+
+        The structural half: forbidding known field NAMES only stops the
+        semantics someone thought to name; forbidding prose in the data
+        stops the rest, because a description cannot hide in a value
+        that may not contain whitespace.
+
+        Walks EVERY assignment, not just module-level ones — a class
+        body or a function-local dict is just as good a hiding place.
+
+        Uppercase is permitted because the body emits `UI` and this
+        registry mints no names of its own; whitespace is what actually
+        separates an identifier from a sentence. Restored 2026-08-27
+        after a block replacement silently deleted it while the commit
+        message claimed it had been strengthened — the edit that was
+        meant to widen it was a str.replace against text that no longer
+        existed, so it no-opped in silence.
+        """
+        tree = ast.parse(Path(inspect.getsourcefile(reg)).read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    self.assertRegex(
+                        sub.value, r"^[A-Za-z0-9_.\-]+$",
+                        f"registry data holds {sub.value!r}; identifiers "
+                        "only, never prose",
+                    )
+
     def test_every_identifier_is_a_name_the_body_already_emits(self):
         """We repair a duplicate; we do not author a vocabulary.
 
@@ -321,10 +352,7 @@ def _census_surface_literals() -> dict[str, list[str]]:
                     for a in node.names:
                         if a.name in reg_apis:
                             aliases[a.asname or a.name] = a.name
-            bindings = _string_bindings(tree)
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
+            for node, bindings in _scoped_calls(tree):
                 fn = node.func
                 name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
                 if aliases.get(name, name if name in reg_apis else None) is None:
@@ -349,19 +377,24 @@ def _census_surface_literals() -> dict[str, list[str]]:
 
 
 
-def _string_bindings(tree: ast.AST) -> dict[str, str]:
-    """name -> string value, for simple single-assignment bindings.
+def _string_bindings(scope: ast.AST) -> dict[str, str]:
+    """name -> string value for simple bindings IN ONE SCOPE.
 
-    Without this the census records the EXPRESSION (`_cli_surface`) and
-    never its value, so changing `_cli_surface = "cli"` to
-    `"rogue_surface"` left every guard green — executed by the Codex
-    boundary walk (B4, 2026-08-27). A name bound to two different string
-    literals is dropped rather than guessed: ambiguity must not be
-    resolved into a false census entry.
+    Without folding at all, the census recorded the EXPRESSION
+    (`_cli_surface`) and never its value, so changing
+    `_cli_surface = "cli"` to `"rogue_surface"` left every guard green
+    (Codex boundary walk B4). But folding over a WHOLE FILE is worse
+    than not folding: `handle_message`'s `surface=source` then resolves
+    against `source = "cockpit"` six thousand lines away in an unrelated
+    function, inventing a call site that does not exist. Found by the
+    build seat's own probe misfiring the same way, 2026-08-27.
+
+    A name bound to two different literals is dropped rather than
+    guessed: ambiguity must not be resolved into a false census entry.
     """
     seen: dict[str, str] = {}
     ambiguous: set[str] = set()
-    for node in ast.walk(tree):
+    for node in ast.walk(scope):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
@@ -375,6 +408,93 @@ def _string_bindings(tree: ast.AST) -> dict[str, str]:
             ambiguous.add(target.id)
         seen[target.id] = node.value.value
     return {k: v for k, v in seen.items() if k not in ambiguous}
+
+
+def _scoped_calls(tree: ast.Module):
+    """Yield (call, bindings) with bindings from the call's OWN function.
+
+    Module-level bindings are included as a fallback; a nested function's
+    own bindings win. Nothing crosses sideways between sibling functions,
+    which is the false-resolution this exists to prevent.
+    """
+    module_binds = _string_bindings_shallow(tree)
+
+    def walk(node, binds):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = dict(binds)
+                inner.update(_string_bindings(child))
+                yield from walk(child, inner)
+            else:
+                if isinstance(child, ast.Call):
+                    yield child, binds
+                yield from walk(child, binds)
+
+    yield from walk(tree, module_binds)
+
+
+def _string_bindings_shallow(tree: ast.Module) -> dict[str, str]:
+    """Module-level string bindings only — no descent into functions."""
+    seen: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if (isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            if target.id in seen and seen[target.id] != node.value.value:
+                ambiguous.add(target.id)
+            seen[target.id] = node.value.value
+        else:
+            ambiguous.add(target.id)
+    return {k: v for k, v in seen.items() if k not in ambiguous}
+
+
+
+def _census_seam_labels() -> dict[str, str]:
+    """Labels entering the ledger through the daemon seam, by AST.
+
+    Two entry points, both needed. `handle_message(source="UI")` is the
+    legacy branch; the unified branch reaches the same function through
+    `owner_surface_label=` on an inbound-core descriptor, so a census of
+    `handle_message` calls alone sees only half the body. Neither is a
+    ledger call, but both become the row's surface via the registry —
+    an id that only arrives this way would otherwise look like a
+    phantom.
+    """
+    found: dict[str, str] = {}
+    for tree_name in _PRODUCTION_TREES:
+        for path in sorted((_repo_root() / tree_name).rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            try:
+                tree = ast.parse(path.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node, binds in _scoped_calls(tree):
+                fn = node.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+                where = f"{path.relative_to(_repo_root())}:{node.lineno}"
+                for kw in node.keywords:
+                    if kw.arg not in ("source", "owner_surface_label"):
+                        continue
+                    if kw.arg == "source" and name != "handle_message":
+                        continue
+                    value = None
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        value = kw.value.value
+                    elif isinstance(kw.value, ast.Name):
+                        value = binds.get(kw.value.id)
+                    if value is not None:
+                        found[value] = where
+                if name == "handle_message":
+                    for arg in node.args[1:2]:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            found[arg.value] = where
+    return found
 
 
 reg_apis = frozenset({
@@ -417,7 +537,9 @@ class SurfaceCensusTests(unittest.TestCase):
                 )
 
     def test_no_phantom_ids_or_adjudications(self):
-        census = _census_surface_literals()
+        census = dict(_census_surface_literals())
+        for label, where in _census_seam_labels().items():
+            census.setdefault(label, []).append(where)
         for surface_id in reg.SURFACE_IDS:
             with self.subTest(surface_id=surface_id):
                 self.assertIn(
@@ -770,35 +892,19 @@ class SeamEntrySurfaceTests(unittest.TestCase):
     #: is not co-reference of the behaviour, and "labels prove shape, not
     #: support". Aliasing them is a decision with its own council.
     KNOWN_UNREGISTERED_SEAM_LABELS = {
-        "UI": "legacy /message branch; same route as cockpit but differing "
-              "promotion rules — alias needs its own council",
-        "unknown": "handle_message's own default when a caller names nothing",
+        "unknown": "handle_message's own default when a caller names nothing "
+                   "— deliberately NOT registered: it is the absence of a "
+                   "surface claim, not a limb",
     }
 
     def test_seam_entry_labels_are_registered_or_named(self):
-        tree = ast.parse((_repo_root() / "daemon/maez_daemon.py").read_text())
-        found = {}
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            fn = node.func
-            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
-            if name != "handle_message":
-                continue
-            for kw in node.keywords:
-                if kw.arg == "source" and isinstance(kw.value, ast.Constant):
-                    if isinstance(kw.value.value, str):
-                        found[kw.value.value] = node.lineno
-            for arg in node.args[1:2]:
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    found[arg.value] = node.lineno
-        for label, line in sorted(found.items()):
+        for label, where in sorted(_census_seam_labels().items()):
             with self.subTest(label=label):
                 self.assertTrue(
                     label in reg.ACCEPTED_LABELS
                     or label in self.KNOWN_UNREGISTERED_SEAM_LABELS,
                     f"{label!r} enters the ledger through the daemon seam at "
-                    f"maez_daemon.py:{line} but is neither registered nor "
+                    f"{where} but is neither registered nor "
                     "named as a known-unregistered spelling",
                 )
 
@@ -812,6 +918,86 @@ class SeamEntrySurfaceTests(unittest.TestCase):
                     f'"{label}"', src,
                     "this label is no longer anywhere in the daemon",
                 )
+
+
+class CensusScopingTests(unittest.TestCase):
+    """Constant folding must not cross function boundaries.
+
+    The first version folded over a whole FILE, so
+    `handle_message(surface=source)` resolved against `source =
+    "cockpit"` in an unrelated function ~6000 lines away — inventing a
+    call site that does not exist. Found when the build seat's own probe
+    made exactly that mistake (2026-08-27). Folding too eagerly is worse
+    than not folding: it produces confident false entries instead of
+    visible gaps.
+    """
+
+    SAMPLE = """
+label = "module_level"
+
+def alpha():
+    surf = "from_alpha"
+    write(surface=surf)
+
+def beta():
+    write(surface=surf)          # `surf` is NOT bound here
+    write(surface=label)         # module-level IS visible
+
+def gamma():
+    surf = "from_gamma"
+    def inner():
+        write(surface=surf)      # encloses gamma's binding
+    return inner
+"""
+
+    def _surfaces(self):
+        tree = ast.parse(self.SAMPLE)
+        out = {}
+        for call, binds in _scoped_calls(tree):
+            name = getattr(call.func, "id", None)
+            if name != "write":
+                continue
+            for kw in call.keywords:
+                if kw.arg == "surface" and isinstance(kw.value, ast.Name):
+                    out[call.lineno] = binds.get(kw.value.id)
+        return out
+
+    def test_a_sibling_functions_binding_never_leaks_sideways(self):
+        surfaces = self._surfaces()
+        alpha_line = self.SAMPLE.splitlines().index('    write(surface=surf)') + 1
+        self.assertEqual(surfaces[alpha_line], "from_alpha")
+        beta_line = [i + 1 for i, l in enumerate(self.SAMPLE.splitlines())
+                     if "NOT bound here" in l][0]
+        self.assertIsNone(
+            surfaces[beta_line],
+            "beta has no `surf`; resolving it from alpha would invent a "
+            "call site that does not exist",
+        )
+
+    def test_module_level_bindings_are_visible_and_nesting_encloses(self):
+        surfaces = self._surfaces()
+        lines = self.SAMPLE.splitlines()
+        mod_line = [i + 1 for i, l in enumerate(lines) if "module-level IS visible" in l][0]
+        self.assertEqual(surfaces[mod_line], "module_level")
+        inner_line = [i + 1 for i, l in enumerate(lines) if "encloses gamma" in l][0]
+        self.assertEqual(surfaces[inner_line], "from_gamma")
+
+    def test_the_real_daemon_seam_surface_stays_unresolved(self):
+        """`handle_message(surface=source)` must resolve to nothing —
+        `source` is a parameter, and the census should show a gap rather
+        than a borrowed value."""
+        tree = ast.parse((_repo_root() / "daemon/maez_daemon.py").read_text())
+        for call, binds in _scoped_calls(tree):
+            fn = call.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if name != "guard_owner_text":
+                continue
+            for kw in call.keywords:
+                if kw.arg == "surface" and isinstance(kw.value, ast.Name):
+                    self.assertIsNone(
+                        binds.get(kw.value.id),
+                        f"{kw.value.id!r} was resolved from another scope",
+                    )
 
 
 if __name__ == "__main__":

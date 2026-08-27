@@ -25,8 +25,17 @@ says the second spelling exists only "during parallel operation with
 the legacy path" and should be reconciled "when the old path is
 retired". The substrate documented its own deferred repair; this is it.
 
-WHY THAT ALIAS IS ALLOWED WHEN NAME-RESEMBLANCE IS NOT. An alias is an
-identity claim and needs a witness. This one has a mechanical one:
+THE SECOND DUPLICATE, same shape. The cockpit dashboard's one /message
+route records as ``cockpit`` or as ``UI`` depending on which branch a
+flag selects. That split had already cost something real: the S4
+clinical boundary fails closed for any surface outside its owner-surface
+allowlist, ``UI`` was outside it, and the fallback branch is the DEFAULT
+— so the crisis check silently disappeared from the dashboard whenever
+the flag was off. Fixed at the safety allowlist as well as here; one
+limb carrying two names is not a tidiness problem.
+
+WHY THESE ALIASES ARE ALLOWED WHEN NAME-RESEMBLANCE IS NOT. An alias is
+an identity claim and needs a witness. This one has a mechanical one:
 ``daemon/maez_daemon.py`` builds the vendored adapter from
 ``self.telegram.token`` and ``self.telegram.authorized_user`` — the
 SAME credentials as the legacy path, so both spellings denote one
@@ -88,6 +97,7 @@ UNREGISTERED = "unregistered"
 #: production ledger call site; none was minted here.
 SURFACE_IDS: tuple[str, ...] = (
     "cli",
+    "cockpit",
     "telegram_text",
     "web_owner",
 )
@@ -97,8 +107,14 @@ SURFACE_IDS: tuple[str, ...] = (
 #: A label absent from this map is UNREGISTERED, never guessed.
 ACCEPTED_LABELS: dict[str, str] = {
     "cli": "cli",
+    "cockpit": "cockpit",
     "telegram_text": "telegram_text",
     "web_owner": "web_owner",
+    # The cockpit /message route reports "cockpit" when MAEZ_COCKPIT_CORE
+    # is on and falls back to handle_message(source="UI") when it is off.
+    # ONE Flask route, two flag-selected branches — witnessed at the
+    # route, not inferred from the names, which share no prefix at all.
+    "UI": "cockpit",
     # Same bot token, same authorized user, same endpoint as the legacy
     # telegram_text path; witnessed in daemon bootstrap, not inferred
     # from the shared "telegram" prefix.

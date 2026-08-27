@@ -554,6 +554,14 @@ def _is_direct_owner_surface(surface: str) -> bool:
         "telegram_legacy",
         "telegram_surface",  # live Surface-V2 inbound label (maez_adapter.SURFACE_NAME)
         "cockpit",  # cockpit /message owner surface (SLICE 2 — S4 fires on cockpit owner path)
+        # SAME LIMB, SECOND NAME (2026-08-27). The cockpit /message route
+        # reports "cockpit" when MAEZ_COCKPIT_CORE is on and falls back to
+        # handle_message(source="UI") when it is off — and OFF is the
+        # default. guard_owner_text fails closed to no-crisis-check for any
+        # surface missing here, so reverting that flag silently removed S4
+        # from the dashboard. Not a new limb: tests/test_trace_harness.py
+        # already classifies "UI" as an owner surface.
+        "ui",
         "web_chat",
         "daemon",
         "direct",
