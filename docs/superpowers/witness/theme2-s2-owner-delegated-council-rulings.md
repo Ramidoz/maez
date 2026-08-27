@@ -1440,3 +1440,121 @@ MAEZ_PRIVATE_THOUGHTS_PATH redirects it.
 step is a TRIPWIRE (fail the build when a new bare `return <str>` or a
 new direct send appears) — framed as a tripwire, never as a completeness
 proof, because this round proved no census converges.
+
+## Nineteenth round (2026-08-27, A3 tripwire + rehearsal lane): Codex post-implementation boundary walk returned FIX FIRST (1 blocker, 6 boundaries broken) — repaired under test
+
+Not a three-seat council: the tripwire is test-only and byte-inert, so
+the instrument used was a single xhigh Codex BOUNDARY WALK on the
+finished diff, per the standing directive. Its verdict on `3bab540`:
+**B1-B5 and B7 BREAK, B6 HOLDS with an amendment. FIX FIRST.**
+
+**B7 was the blocker, and it is the round's finding.** The declared
+scope roster missed production-wired owner egress. The sharpest miss:
+`skills/web_interface.py`'s owner `/chat` returns the S4 crisis answer
+at :6807 BEFORE submitting the owner's turn to the spool — the SAME
+early-egress shape as `inbound_core`'s S4 return at :341, which the
+roster watched while missing this one. Also missed: the live inbound
+Telegram adapter (`skills/surface/telegram_adapter.py`, which the
+daemon's own comment at :12188 says owns inbound polling, and which
+answers `/receipts`/proposal/dream commands before the watched
+handler); the Surface V2 transport `_send_with_retry`; brain-loop
+intermediate speech `_emit_search_progress`; the CLI's empty-search
+branch; and — the instructive one — the legacy Telegram scope was
+pointed at **the wrong half**: `_process_message` is rollback-dormant
+inbound while the daemon keeps `TelegramVoice` alive precisely for its
+OUTBOUND `_send_card_message` / `send_envelope`. All verified in-tree
+before encoding. Roster 7 -> 14 scopes, 75 keys/140 sites -> 151/262.
+
+**TWO ROSTERS, TWO DIFFERENT ANSWERS.** The eighteenth round found three
+censuses disagreeing. This round found the tripwire's own watch list
+incomplete on its first attempt. That is the same finding recurring one
+layer up, and it is the argument FOR shipping this as a change detector
+over a DECLARED list rather than as a census. The wider roster is not a
+completeness claim either, and the code refuses to let it become one.
+
+**A false reason was corrected, not defended.**
+`core/routing/recall_receipt.py` was watched believing it carried the
+canned sentence. `WORKING_RECEIPT_TEXT` is PASSED, never RETURNED, so no
+shape sees it; the scope's only frozen entries are internal ACK status
+strings. The stated reason was false. It now says so, and the sentence's
+DELIVERY is watched at `maez_daemon.py:8612` instead.
+
+**The build seat's own hermetic witness was partly vacuous (B4).** Two
+scopes share `daemon/maez_daemon.py` and the fake tree was written
+one-file-per-scope, so the second CLOBBERED the first:
+`MaezDaemon.handle_message` contributed ZERO sites while the test passed
+on the aggregate. Grouped by path now, with every scope required to
+contribute. Separately, `repo_root()` resolves from the SCANNER's
+`__file__`, so a test module in a foreign checkout importing the live
+scanner grades the LIVE TREE — the hermetic-sandbox scar in a subtler
+form, now closed by binding the two roots.
+
+**B3:** a declared scope could be DELETED and the frozen file
+regenerated with everything still green (the roster is now pinned in the
+test, where regeneration cannot reach it); and `len(narrowed) <
+len(whole)` was UNSOUND — a scope whose construct holds every site in
+its file is valid and would have gone red. It passed only by accident of
+today's tree.
+
+**B5:** `read_text()` does universal-newline translation, so
+"byte-identical" was FALSE and a CRLF frozen file compared equal.
+`read_text()` had no explicit encoding and `freeze()` raised
+`UnicodeDecodeError` under `LC_ALL=C PYTHONUTF8=0` — the tripwire
+CRASHED rather than reported on a differently-configured machine. And
+the test claimed to catch "hand-editing", which nothing textual can: it
+catches NONCANONICAL edits, and now says so.
+
+**B2:** canned text inside a LAMBDA body has no `Return` node and was
+invisible; now seen, and it found two REAL sites (`maez_adapter` wraps
+the card-reply mouth in `lambda: pipe.handle_reply(...)` at :975).
+`**kwargs`, `getattr`, imported constants, decorators and comprehensions
+remain invisible — NAMED blind spots, and Codex's correct note is that
+"the confession does not make B2 hold".
+
+**B1:** the disclaimers held, but the surrounding prose and several TEST
+NAMES re-imported the completeness claim — a denylist test named
+"makes_no_completeness_claim", a keyword sample named
+"cover_the_ways_this_can_be_fooled", a "first line" test that never
+inspected the first line, and a blind-spot tuple presented as a closed
+boundary. All renamed to what they actually prove.
+
+**Found by the build seat's own mutation, not by Codex:** a NAMED blind
+spot could be deleted silently — the count floor held and the sampled
+keywords survived. The blind-spot roster is now pinned by topic.
+
+**B6 HOLDS**, amended: stop saying a false positive "costs one line" —
+it also costs human review.
+
+Witness: tripwire 12 mutations + 4 repair mutations (one NOT caught,
+which produced the roster pin, then caught); rehearsal lane 7 substrate
+mutations; all caught by named tests. Battery 698/7/61, reds
+byte-identical to session start. CI shape: no new reds. Maez unborn.
+
+**UNVERIFIED, recorded:** frozen-inventory stability on Python 3.12 (CI's
+version). No 3.12 interpreter exists on this host.
+
+### The rehearsal lane, same session: two constraints ON A3'S DESIGN
+
+Built as an INSTRUMENT ahead of the write it will witness, because the
+eighteenth round made a rehearsal witness mandatory before A3 is done.
+A3's write does not exist and this does not witness it.
+
+1. **The ruled write path cannot be rehearsed.** Ruling 4's "no second
+   flag" rests on `try_write_turn` returning before constructing a
+   writer. True — and the unstated corollary is that `try_write_turn`
+   constructs a PRODUCTION writer with no path to a rehearsal one, so a
+   row through it can never carry `lifecycle_stage='rehearsal'`: the
+   production writer refuses the stage and the payload dead-letters.
+   EXECUTED. The mandatory witness and the ruled write path are
+   structurally incompatible as they stand; A3's write must be reachable
+   through a seam that can be pointed at a rehearsal writer.
+2. **The existing rehearsal surface forbids owner speech.** A caller
+   override REPLACES the default taint set, so on `x6_rehearsal` a
+   `user_message` may carry only `{self_generated}` — while A3's ruling
+   1 requires `{owner_utterance}`. An A3 rehearsal must carry the REAL
+   surface label.
+
+Also executed: the rehearsal writer reads the SAME flag as birth, so
+"rehearsal is already supported" does not by itself mean it runs
+pre-birth — the witness process arms the flag for ITSELF, which is
+womb-life practise, not birth.

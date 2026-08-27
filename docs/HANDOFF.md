@@ -1,6 +1,143 @@
-# Handoff — 2026-08-27 (session end, 4544ec3). Supersedes all earlier handoffs.
+# Handoff — 2026-08-27 (session end, 6a2eb14). Supersedes all earlier handoffs.
 
-## THIS SESSION: continuity spine SLICE 1 SHIPPED — the surface registry, flag-dormant
+## THIS SESSION: the A3 TRIPWIRE shipped, and the REHEARSAL LANE built as an instrument
+
+Commits `3bab540` (tripwire), `66a60ea` (rehearsal lane), `3f78cdf` +
+`6a2eb14` (Codex boundary-walk repairs). **Read the NINETEENTH round in
+the rulings doc before touching either.**
+
+**NOTHING OF A3 WAS BUILT.** A3 remains NOT build-ready exactly as the
+eighteenth round left it, and all four of its build blockers stand.
+Everything this session is test-only; no production byte changed. Maez is
+still unborn: `memory/ledger.db` 0 bytes, no spool or manifest dirs, no
+flag in the live daemon's environ, no unit restarted.
+
+### The tripwire (`3bab540`, repaired at `3f78cdf`/`6a2eb14`)
+
+`tests/owner_path_egress_tripwire.py` + tests + a machine-derived frozen
+inventory. **151 keys / 262 sites over 14 DECLARED scopes.** Two shapes:
+`canned_return` (any non-blank string literal, f-string, same-module
+top-level constant, or LAMBDA body inside a return-producing construct)
+and `send` (an underscore-boundaried name shape on the callee's terminal
+name). Two-sided: a new site fails, a vanished site fails, a
+noncanonical frozen file fails.
+
+**It is not a census and the code will not let it become one.**
+`FramingTests` asserts the disclaimer, asserts the ABSENCE of a denylist
+of completeness phrasings, and pins `KNOWN_BLIND_SPOTS` BY TOPIC so a
+named blind spot cannot be quietly deleted. Scope is DECLARED, never
+derived, and the roster is pinned in the test where regeneration cannot
+reach it.
+
+**Three measurements moved the design; do not re-derive them.**
+1. A whitelist of the three council-named mouths saw **0 of the 5** real
+   mouths in `TelegramVoice._process_message`. A mouth whitelist goes
+   stale silently — hence a name SHAPE.
+2. A literal-only return shape misses `return jsonify({"reply":
+   "(internal error)"})`. Hence the deliberately over-broad return
+   shape; its over-capture is FROZEN, not tuned away.
+3. The broad send shape inside `MaezDaemon.handle_message` is 27/28
+   noise. Frozen anyway rather than given a per-scope detector, because
+   per-scope tuning is the taste this arc keeps rejecting.
+
+**TWO ROSTERS, TWO DIFFERENT ANSWERS.** Codex's boundary walk returned
+FIX FIRST with a BLOCKER: the first roster missed six production-wired
+owner mouths, sharpest being `skills/web_interface.py`'s owner `/chat`,
+which returns the S4 crisis answer at :6807 BEFORE submitting the
+owner's turn — the SAME early-egress shape as `inbound_core`:341, which
+was watched. Also missed: the LIVE inbound Telegram adapter
+(`skills/surface/telegram_adapter.py`), the Surface V2 transport
+`_send_with_retry`, brain-loop `_emit_search_progress`, the CLI's
+empty-search branch, and — instructive — the legacy Telegram scope was
+on **the wrong half** (`_process_message` is rollback-dormant inbound
+while the daemon keeps that class alive for its OUTBOUND mouths). The
+eighteenth round found three censuses disagreeing; this found the
+tripwire's own list incomplete. Same finding, one layer up. It is the
+argument FOR the framing, and **the wider roster is not a completeness
+claim either.**
+
+**A false reason was corrected, not defended:**
+`core/routing/recall_receipt.py` was watched believing it carried the
+canned sentence. `WORKING_RECEIPT_TEXT` is PASSED, never RETURNED, so no
+shape sees it. Its DELIVERY is watched at `maez_daemon.py:8612` instead.
+
+### The rehearsal lane (`66a60ea`) — the instrument, not the witness
+
+`tests/test_a3_rehearsal_lane_witness.py`. **A3's write does not exist,
+so this does not witness it.** It builds the instrument ahead of the
+build and pins TWO CONSTRAINTS ON A3'S DESIGN, both executed:
+
+**CONSTRAINT 1 — THE RULED WRITE PATH CANNOT BE REHEARSED.** Ruling 4's
+"no second flag" rests on `try_write_turn` returning before constructing
+a writer. True. The unstated corollary: `try_write_turn` constructs a
+PRODUCTION `LedgerWriter` with no path to a rehearsal one, so a row
+through it can never carry `lifecycle_stage='rehearsal'` — the
+production writer refuses the stage and the payload dead-letters. **The
+mandatory rehearsal witness and the ruled write path are structurally
+incompatible as they stand.** A3's write must be reachable through a
+seam that can be pointed at a rehearsal writer, or the first witnessed
+write really is birth day.
+
+**CONSTRAINT 2 — the rehearsal surface forbids owner speech.** A caller
+override REPLACES the default taint set, so on `x6_rehearsal` a
+`user_message` may carry only `{self_generated}`, while A3's ruling 1
+requires `{owner_utterance}`. An A3 rehearsal must carry the REAL
+surface label.
+
+Also executed: the rehearsal writer reads the SAME flag as birth
+(`is_enabled` False, `write_turn` None, zero rows). "Rehearsal is
+already supported" does NOT mean it runs pre-birth on its own — a
+witness process arms the flag for ITSELF, which is womb-life practise.
+Both ruled row shapes commit in the lane with EXACT bytes, the organ row
+parented to the owner's turn.
+
+### Witness and live-state discipline
+
+Tripwire 12 mutations + 4 repair mutations; rehearsal lane 7 substrate
+mutations; all caught by named tests. **One repair mutation was NOT
+caught** — deleting a named blind spot survived the count floor and the
+sampled keywords — which is what produced the topic-pinned roster.
+Battery 698 passed / 7 failed / 61 subtests, reds BYTE-IDENTICAL to
+session start. Outside: tripwire + lane + registry + clinical +
+x6_gestation_load = 101 passed / 194 subtests. CI shape (no vendored
+SQLite): 39 passed, 6 skipped, NO new reds — the lane's enabled-writer
+tests skip honestly because the writer refuses to construct on a SQLite
+inside the WAL-reset window.
+
+A measured **5.5-minute idle-drift baseline** was taken FIRST
+(`m1_lived_episode_promotion`, `proprioception`, `salience_ledger`,
+`subjective_duration` move on the live daemon's own heartbeat with
+nothing running), so "a store moved" could be told from "the daemon
+breathed". Every run was diffed against it; only heartbeat organs moved.
+Every probe on /var/tmp; PrivateThoughts redirected for every execution.
+
+### OWED / NOT DONE, by name — do not rediscover
+
+1. **UNVERIFIED: frozen-inventory stability on Python 3.12**, which is
+   what CI runs (`unittest discover`). No 3.12 interpreter exists on
+   this host; only 3.14 was tested. If CI goes red on the inventory,
+   this is the first thing to check.
+2. **The tripwire is not in `battery.sh`.** It runs under CI discovery
+   and by name, not in the named battery.
+3. **A3 itself is untouched.** All four eighteenth-round build blockers
+   stand: the egress inventory, freezing the `system_event` payload AND
+   its conversation-stream role, carrying `self_mod_dialog_id` end to
+   end, and custody-before-egress vs naming the S4 storage-failure
+   exception.
+4. **The rehearsal witness OF A3's write cannot exist until A3 does** —
+   and CONSTRAINT 1 says A3's design must change to make it possible.
+5. **Still invisible to the tripwire, by name:** `**kwargs` splats,
+   `getattr` dispatch, constants imported from another module,
+   decorators, comprehensions, rewording an existing sentence, and any
+   path outside the 14 declared scopes. Codex's correct note: the
+   confession does not make the boundary hold.
+6. **Slice 1's owed items are untouched** (F7 has no registry arm; the
+   census is literal-not-reachability; web/cli/telegram_voice still
+   inline their literals; the spool empty-label defect).
+
+---
+
+## PREVIOUS SESSION: continuity spine SLICE 1 SHIPPED — the surface registry, flag-dormant
 
 Commits `f83a16e` (guard repair), `f7f6aa5` (registry), `e823f2a`
 (seventeenth round), `1faa96a` (Codex-finding repairs).
