@@ -3639,6 +3639,7 @@ class TelegramVoice:
                 return response
 
         _telegram_user_msg_turn_id = None
+        _telegram_user_msg_submission_id = None
         _telegram_ledger_db_path = None
         _telegram_surface = "telegram_text"
         try:
@@ -3646,17 +3647,32 @@ class TelegramVoice:
                 default_ledger_db_path as _default_ledger_db_path,
             )
             from core.ledger.writer import try_write_turn as _try_write_turn
+            from core.ledger.writes_flag import (
+                ledger_commits_paused as _lcp,
+                ledger_writes_enabled as _lwe,
+            )
 
             _telegram_ledger_db_path = _default_ledger_db_path()
             if _telegram_ledger_db_path:
-                _telegram_user_msg_turn_id = _try_write_turn(
-                    _telegram_ledger_db_path,
-                    "user_message",
-                    user_text,
-                    surface=_telegram_surface,
-                    taint_labels=["owner_utterance"],
-                    privacy_access="public",
-                )
+                if _lwe() and _lcp():
+                    # Pause-with-custody (ninth round): spool custody;
+                    # the submission id threads the reply.
+                    from core.ledger.model_reply_persistence import (
+                        submit_user_message as _sum,
+                    )
+                    _telegram_user_msg_submission_id = _sum(
+                        _telegram_ledger_db_path, user_text,
+                        surface=_telegram_surface)
+                    _telegram_user_msg_turn_id = None
+                else:
+                    _telegram_user_msg_turn_id = _try_write_turn(
+                        _telegram_ledger_db_path,
+                        "user_message",
+                        user_text,
+                        surface=_telegram_surface,
+                        taint_labels=["owner_utterance"],
+                        privacy_access="public",
+                    )
         except Exception as _ledger_user_exc:
             logger.debug(
                 "telegram_text user_message ledger persistence skipped: %s",
@@ -4235,6 +4251,7 @@ class TelegramVoice:
                     raw_text=reply,
                     surface="telegram_text",
                     parent_turn_id=_telegram_user_msg_turn_id,
+                    parent_submission_id=_telegram_user_msg_submission_id,
                     model_id=MODEL,
                     prompt_material={
                         "messages": messages,

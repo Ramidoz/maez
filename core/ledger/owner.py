@@ -147,9 +147,22 @@ def owner_write_turn(
     # An explicit submission_id (the spool drainer's) always wins.
     kwargs.setdefault("submission_id", attempt_id)
 
+    from core.ledger.writes_flag import ledger_commits_paused
+
     with _lock:
         if not ledger_writes_enabled():
             return None
+        if ledger_commits_paused():
+            # Pause-with-custody (ninth round, 3-0): the owner process
+            # becomes a spool PRODUCER. No commit, no dead-letter (pause
+            # is not a failure; dead-lettering manufactures replay debt
+            # for a consent-shaped organ), no silent drop. This SUSPENDS
+            # round-5 Overturn 1 — its reason (synchronous threading is
+            # available in-process) does not reach a paused ledger,
+            # where synchronous threading is definitionally absent. The
+            # owner-direct exception resumes with resume.
+            return _enqueue_paused_custody(
+                db_path, turn_kind, raw_text, kwargs, attempt_id)
         try:
             _ensure_writer_locked(db_path)
         except Exception as e:
@@ -171,6 +184,63 @@ def owner_write_turn(
                 _writer = None
                 _writer_db_path = None
             return None
+
+
+def _paused_parent_submission_id(db_path: str, parent_turn_id: str):
+    """Reverse lookup turn_id → submission_id (exact, via the 7b7acb2
+    identity) so a caller-held pre-pause parent threads through the
+    spool's native grammar. Passing parent_turn_id through the door
+    would self-quarantine (it is an authority kwarg)."""
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT submission_id FROM turns WHERE turn_id = ?",
+            (parent_turn_id,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _enqueue_paused_custody(db_path, turn_kind, raw_text, kwargs, attempt_id):
+    """Custody for an in-daemon write while commits are paused. Returns
+    None (the caller contract is turn_id-or-None; a submission id is
+    never returned where a turn id is expected). Never raises."""
+    from core.ledger import spool as _spool
+
+    kw = dict(kwargs)
+    parent_sid = None
+    parent_tid = kw.pop("parent_turn_id", None)
+    if parent_tid is not None:
+        parent_sid = _paused_parent_submission_id(db_path, parent_tid)
+        if parent_sid is None:
+            _LOGGER.warning(
+                "paused custody: parent turn %s has no submission "
+                "identity (pre-0006 row?); enqueueing unparented — the "
+                "claim is preserved nowhere, which is honest, not silent",
+                parent_tid)
+    kw.pop("submission_id", None)  # authority at the door; identity rides below
+    try:
+        _spool.enqueue_reconstructed(
+            _spool.default_spool_root(db_path),
+            submission_id=attempt_id,
+            submitted_at=None,
+            producer="owner_daemon",
+            turn_kind=turn_kind,
+            raw_text=raw_text,
+            kwargs=kw,
+            parent_submission_id=parent_sid,
+        )
+    except Exception as e:  # noqa: BLE001 — custody failure must be LOUD
+        _LOGGER.critical(
+            "paused custody enqueue FAILED for %s (kind=%r): %r — this "
+            "write has no home; resume and retry, or the moment is lost",
+            attempt_id, turn_kind, e)
+    return None
 
 
 def owner_commit(

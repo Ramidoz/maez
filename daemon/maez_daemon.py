@@ -2806,7 +2806,10 @@ def _ledger_admission_health(daemon) -> dict:
     """
     from core.ledger.spool import default_spool_root, spool_status
     from core.ledger.writer import dead_letter_status, wal_ceiling_bytes
-    from core.ledger.writes_flag import ledger_writes_enabled
+    from core.ledger.writes_flag import (
+        ledger_commits_paused,
+        ledger_writes_enabled,
+    )
 
     db = str(LEDGER_DB_PATH)
     dead = dead_letter_status(db)
@@ -2836,10 +2839,15 @@ def _ledger_admission_health(daemon) -> dict:
         if isinstance(oldest, (int, float))
         else None
     )
+    paused = ledger_commits_paused()
+    # Pause-with-custody (ninth round): attention means OMITTED life.
+    # Held life under an owner-declared pause is a queue, not a grave —
+    # dead-lettered rows still page (they are omitted regardless).
     attention = bool(
         dead.get("rows")
         or (
-            spool.get("pending_total")
+            not paused
+            and spool.get("pending_total")
             and (drainer_alive is not True or (age is not None and age > 600))
         )
     )
@@ -2852,6 +2860,7 @@ def _ledger_admission_health(daemon) -> dict:
         "oldest_pending_age_s": age,
         "drainer_thread_alive": drainer_alive,
         "writes_enabled": ledger_writes_enabled(),
+        "commits_paused": paused,
         "attention": attention,
     }
 
@@ -7357,17 +7366,31 @@ class MaezDaemon:
         # and returns None). The returned turn_id (if any) is captured
         # for future use as parent_turn_id when slice 2.5c plumbs the
         # model_reply turn (gated on slice 3 evidence-envelope work).
+        _user_msg_submission_id = None
         try:
             from core.ledger.writer import try_write_turn as _try_write_turn
-
-            _user_msg_turn_id = _try_write_turn(
-                str(LEDGER_DB_PATH),
-                "user_message",
-                text,
-                surface=source,
-                taint_labels=["owner_utterance"],
-                privacy_access="public",
+            from core.ledger.writes_flag import (
+                ledger_commits_paused as _lcp,
+                ledger_writes_enabled as _lwe,
             )
+            if _lwe() and _lcp():
+                # Pause-with-custody (ninth round): the user turn goes
+                # to the spool; its submission id threads the reply.
+                from core.ledger.model_reply_persistence import (
+                    submit_user_message as _sum,
+                )
+                _user_msg_submission_id = _sum(
+                    str(LEDGER_DB_PATH), text, surface=source)
+                _user_msg_turn_id = None
+            else:
+                _user_msg_turn_id = _try_write_turn(
+                    str(LEDGER_DB_PATH),
+                    "user_message",
+                    text,
+                    surface=source,
+                    taint_labels=["owner_utterance"],
+                    privacy_access="public",
+                )
         except Exception:
             # Belt-and-suspenders: try_write_turn is already exception-
             # safe, but a broken core.ledger import path must never
@@ -9694,6 +9717,7 @@ class MaezDaemon:
                     raw_text=reply,
                     surface=source,
                     parent_turn_id=_user_msg_turn_id,
+                    parent_submission_id=_user_msg_submission_id,
                     model_id=MODEL,
                     prompt_material={
                         "messages": messages,

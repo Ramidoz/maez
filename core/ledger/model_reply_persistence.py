@@ -267,8 +267,11 @@ def persist_model_reply(
         return None
 
     from core.ledger import owner as _owner
+    from core.ledger.writes_flag import ledger_commits_paused
 
-    if not _owner.this_process_is_owner():
+    # Pause-with-custody (ninth round): a paused owner routes like a
+    # non-owner — custody through the spool, linkage by submission id.
+    if not _owner.this_process_is_owner() or ledger_commits_paused():
         # Non-owner surface: durable custody through the admission
         # spool. No SQLite open of any kind (the db may not even exist
         # yet — the envelope simply waits), no persistence marker

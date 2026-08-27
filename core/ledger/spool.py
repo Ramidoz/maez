@@ -333,11 +333,20 @@ def drain_once(spool_root: str, db_path: str) -> dict:
     or {"...0, "skipped_disabled": True} while writes are dormant.
     """
     from core.ledger import owner as _owner
-    from core.ledger.writes_flag import ledger_writes_enabled
+    from core.ledger.writes_flag import (
+        ledger_commits_paused,
+        ledger_writes_enabled,
+    )
 
     if not ledger_writes_enabled():
         return {"acked": 0, "refused": 0, "deferred": 0,
                 "skipped_disabled": True}
+    if ledger_commits_paused():
+        # Pause-with-custody (ninth round): touch NOTHING — no commits,
+        # no refusals, no quarantines. Refusal decisions do not run in a
+        # mode meant to freeze judgment. Pending stays pending.
+        return {"acked": 0, "refused": 0, "deferred": 0,
+                "skipped_paused": True}
 
     root = Path(spool_root)
     acked = refused = failed = 0
@@ -399,6 +408,11 @@ def drain_once(spool_root: str, db_path: str) -> dict:
                     remaining.append((env, path, dirs))  # defer this pass
                     continue
                 kwargs["parent_turn_id"] = parent_tid
+            if ledger_commits_paused():
+                # Re-read before EACH commit: a 2,000-entry backlog must
+                # stop within one entry of the owner's hand.
+                remaining.append((env, path, dirs))
+                continue
             outcome, detail = _owner.owner_commit(
                 db_path,
                 env.get("turn_kind"),

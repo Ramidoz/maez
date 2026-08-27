@@ -726,6 +726,35 @@ question (may one sid be omitted?); and the hardest question was never
 who permits the past — it is whether the substrate has PROVED what the
 past was.
 
+## Amendment trace — Overturn 1 suspended under pause (fold-second-order, 2026-08-26)
+
+The pause slice amends a frozen ruling; per the fold rule the trace is
+explicit: (1) AMENDED CLAIM: round-5 Overturn 1, "in-daemon producers
+do NOT ride the spool." (2) ITS RECORDED REASON: in-process producers
+have synchronous threading (a live turn_id) and a second in-process
+durability domain is waste. (3) WHAT CHANGED: the owner ruled
+pause-with-custody; under pause there IS no synchronous threading —
+commits are forbidden, so the reason's premise is absent by
+definition. (4) SHAPE OF THE AMENDMENT: SUSPENSION, not repeal —
+`owner_write_turn` routes to spool custody ONLY while
+`ledger_commits_paused()`; the owner-direct exception resumes with
+resume. (5) SECOND-ORDER CHECK: does anything downstream depend on
+Overturn 1 being unconditional? Executed census: every in-daemon
+consumer of the returned turn_id already tolerates None (the
+writes-disabled path returns None today); parent threading under pause
+travels as parent_submission_id via the 7b7acb2 identity (pre-pause
+parents reverse-looked-up; both-paused pairs threaded at the two call
+sites via submit_user_message). (6) WHAT THE AMENDMENT MUST NOT TOUCH:
+normal-operation routing (unchanged, witnessed by the untouched
+surface-wiring battery); WRITES-off semantics (still zero custody —
+tested). (7) WITNESS: tests/test_ledger_commits_pause.py — custody not
+commit, no dead-letter, parent translation across the boundary, resume
+exactly-once, writes-off wins. (8) RESIDUE, stated: a paused custody
+enqueue that itself fails has no home — logged CRITICAL, named as the
+moment's possible loss; and pre-0006 parents (no submission identity)
+enqueue unparented with a WARNING — the claim is preserved nowhere,
+which is honest, not silent.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE

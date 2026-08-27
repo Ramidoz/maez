@@ -37,3 +37,31 @@ def ledger_writes_enabled() -> bool:
         raw,
     )
     return False
+
+
+def ledger_commits_paused() -> bool:
+    """True when the owner has paused COMMITS (custody continues).
+
+    MAEZ_LEDGER_COMMITS_PAUSED — ninth council round (2026-08-26),
+    owner-ruled pause-with-custody. A NEW flag, never a reinterpretation
+    of MAEZ_LEDGER_WRITES (round-5 binding): writes-off still wins and
+    means no recording INCLUDING custody.
+
+    Polarity (2-1, Codex+Claude over Grok): absent/false-like → NOT
+    paused (a forgotten drop-in must never silently pause life). An
+    unrecognized non-empty value → PAUSED, loudly: junk must never
+    authorize an irreversible commit — pause is reversible, commits are
+    not. The inverse of this module's writes-flag junk rule, for the
+    same reason: fail away from the irreversible act.
+    """
+    raw = os.environ.get("MAEZ_LEDGER_COMMITS_PAUSED", "")
+    stripped = raw.strip().lower()
+    if stripped in _TRUE_VALUES:
+        return True
+    if stripped in _FALSE_VALUES:
+        return False
+    _LOGGER.warning(
+        "MAEZ_LEDGER_COMMITS_PAUSED has unrecognized value %r; failing "
+        "CLOSED to paused (junk never authorizes a commit). Use '1' to "
+        "pause or unset to resume.", raw)
+    return True

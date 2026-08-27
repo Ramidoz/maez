@@ -191,10 +191,13 @@ class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertGreater(persist_idx, audit_idx)
         self.assertGreater(store_idx, persist_idx)
 
-        window = body[persist_idx:persist_idx + 700]
+        # Window widened 700→850 for the pause-with-custody threading
+        # line (parent_submission_id, ninth round 2026-08-26).
+        window = body[persist_idx:persist_idx + 850]
         self.assertIn('if getattr(_trace.audit, "ran", False):',
                       body[persist_idx - 250:persist_idx])
         self.assertIn("parent_turn_id=_user_msg_turn_id", window)
+        self.assertIn("parent_submission_id=_user_msg_submission_id", window)
         self.assertIn("surface=source", window)
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn('"autobiographical_continuity_turning_on"', window)
