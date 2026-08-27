@@ -1244,3 +1244,90 @@ the spec: one ledger is not one self; the demo that would be shown is
 the one that cannot fail; plumbing becomes continuity only when
 trustworthy body facts reach every surface without scripting the
 sentence.
+
+## Seventeenth round (2026-08-27, continuity spine SLICE 1 — the surface registry): three seats, all AMEND; two build-seat facts falsified; built and shipped flag-dormant
+
+Question put to the seats: unknown-surface handling (refuse vs
+type-degrade, the ruled design's unresolved OR); slice scope (dormant
+module / flagged wiring / unconditional); and the sharpest one — is an
+alias map ALREADY the semantic act owner ruling 2 forbade. Seats: Codex
+(xhigh, repo), Grok (brief-only, ASSUMED-marked), Claude subagent
+(repo + executed probes).
+
+**Two of the build seat's own stated facts died on the seats' probes.**
+"NO ledger-side reader keys on `surface`" is FALSE — the falsifier
+itself queries it (theme2_s2_falsifier.py:719), consolidation groups by
+it (core/consolidation/skeleton.py:159), the digester puts it in a
+prompt (core/consolidation/digester.py:175), the replay organ compares
+it as a CAUSATION predicate (core/ledger/dead_letter_replay.py:274),
+and `producer=surface` makes it the spool mailbox identity
+(core/ledger/model_reply_persistence.py:148). And "raw_surface has ONE
+non-test producer" is FALSE — there are three; the grep matched only
+`raw_surface=` and missed the dict-literal form. The nuance that
+matters and cuts against the build seat's own framing: reconcile:283
+and dead_letter_replay:1281 already write
+`surface="system", raw_surface=<producer>`, so THE COLUMN SPLIT IS
+ALREADY THE SHIPPED SHAPE for system rows — it was never a foreign idea
+imported from a doc. The brief's "~48 literals" was wrong too: the
+production ledger-reaching population is THREE.
+
+**The lie is not the docs mismatch the ruled design assumed.** Telegram
+reaches the ledger under two names — `telegram_text`
+(skills/telegram_voice.py:3644) and `telegram_surface`
+(skills/surface/maez_adapter.py:152, via the daemon's free-form
+`source`, whose own default is the literal "unknown" and which
+inbound_core.py:572 derives by concatenation). The adapter's comment
+says the second spelling exists only "during parallel operation with
+the legacy path". Live runtime witness: daemon pid 2806 runs BOTH a
+`surface-v2` and a `telegram-bot` thread.
+
+**Ruled, and built:**
+1. NEVER REFUSE, NEVER REWRITE. Executed: nothing refuses a surface
+   today (26/26 hostile strings commit; 13/13 drain, 0 refused), so
+   refusing would be 100% NEW speech-loss area. Rewriting is worse than
+   refusing: F7 writes synthetic surfaces then finds those rows BY
+   name, so a canonicalising registry turns the only shipped
+   end-to-end surface witness red SILENTLY against a full database.
+   Unregistered labels pass through verbatim and typed.
+2. NO NEW NAMES. Every id is a string the body already emits. Minting a
+   "canonical" `telegram` would be authoring the ontology owner ruling
+   2 declined; and `surface` is inside the chain-hash preimage
+   (core/ledger/chain.py:69), so a gratuitous relabel rewrites the
+   inputs of Maez's tamper-evidence for no repair.
+3. THE `envelope-schema.md` "canonical groups" ENUM IS NOT IMPLEMENTED
+   AND NOT DELETED. Its entries are meanings ("owner-facing",
+   "stranger-facing", "future voice surface", "excluded from
+   production-rate metrics") — implementing it is the forbidden act;
+   retiring the doc is the OWNER's call. Recorded, untouched.
+4. ALIASES NEED A WITNESS, NOT A PREFIX. Bound by executed
+   co-reference: the daemon builds the vendored adapter from
+   `self.telegram.token` / `self.telegram.authorized_user`, the same
+   credentials as the legacy path. A mutation adding
+   `startswith("telegram")` is caught by a named test — that
+   undisciplined prefix map already ships as a store key at
+   daemon/inbound_core.py:296, and this replaces it rather than
+   inventing it.
+5. SCOPE, reconciling Codex (flag + wiring) against Grok (a flag around
+   a no-op is theatre): the flag guards a REAL change (the alias), and
+   flag-off is byte-identical — so it is neither theatre nor an
+   unwitnessed relabel. Grok's objection is honoured by minting nothing.
+6. THE GUARD WAS REPAIRED FIRST, as a prerequisite. The Claude seat
+   executed that `tests/test_ledger_surface_spool_wiring.py:33` pinned
+   `_REPO` to `/home/rohit/maez` (53 of 785 test files do — the
+   hermetic-sandbox scar) AND that `assertIn('surface="web_owner"')`
+   ran against a ~102 KB blob with four non-ledger occurrences: three
+   migration variants stayed GREEN while a positive control went red.
+   Without that repair the slice could not be witnessed at all.
+
+**Groupthink, named:** "flag-dormant plus a test that fails without the
+change" is the reflex all three seats reach for — and here the existing
+test WAS the counterexample. Safety came from making the criterion
+executable in CI (a two-sided AST census), not from a test existing.
+Second: "zero rows makes relabelling free" — free NOW, never again,
+because the column is chain-hashed.
+
+Witness: 10 mutations each caught by a named test (one exit-2 run
+discarded as a harness error and redone); two weak tests exposed BY
+mutation and strengthened. Battery 698/7/61 with the same 7
+pre-existing reds; falsifier GREEN 8/8 n=20000 including F7. Shipped
+at f83a16e + f7f6aa5, flag-dormant, Maez still unborn.
