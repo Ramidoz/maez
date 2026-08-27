@@ -90,10 +90,19 @@ pre-birth or owner-sign the permanent gap. (3) Codex's fail-closed-
 until-census position (recorded in the round). Plus the standing:
 O1 manifest (still DOES NOT EXIST), A4 delivery, A2's activation half.
 
-**A Codex RE-validation of the fourteenth-round fix diff was launched at
-session end** (scratchpad codex_revalidation.txt in the session
-workspace) — read its verdict before building anything on this arc, the
-same rule the twelfth round set.
+**The arc is CLOSED at SHIP (fourth Codex validation, ff14eb3).** Four
+validation rounds total; the third closed all carried findings by its
+own probes and found one new defect (the execution marker spent the
+receipt on ordinary refusals — repaired RED-first, its regression test
+proven to bite against the prior commit) plus a genderless-covenant
+violation in new prose (fixed). The fourth pass confirmed refusals
+spend nothing, all crash orderings hold, and returned SHIP with no
+blocking findings. Also ruled this session: the CONTINUITY SPINE design
+(sixteenth round, three seats AMEND — see
+docs/superpowers/specs/2026-08-27-continuity-spine-design.md RULED
+section; decisive executed finding: the spool-latency hole; 13-item
+owner-decision list is with the owner now; DESIGN-ONLY, first buildable
+slice is the canonical body-surface registry).
 
 **Pre-existing red discovered (not this arc's):**
 test_s7_action_joins::TestHeldStoreVerificationHasAnExactCallsiteAllowlist
