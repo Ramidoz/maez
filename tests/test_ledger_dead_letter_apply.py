@@ -801,3 +801,42 @@ class TerminalRefusalTests(unittest.TestCase):
         self.assertEqual(m["selected"]["companions"], [])
         self.assertEqual(m["census_counts"].get("replay_refused"), 1)
         self.assertIsNone(m["census_counts"].get("already_enqueued"))
+
+    def test_an_ack_against_a_different_kind_is_not_our_replay(self):
+        """The writer's idempotent-redrive branch compares ONLY raw_text
+        (writer.py's IntegrityError handler), so an envelope can ACK
+        against an existing row of a DIFFERENT turn_kind that happens to
+        share the identity and the text. Executed by a council seat
+        (Codex, xhigh, 2026-08-26) and reproduced here: 'a filename,
+        producer directory, SID and ACK receipt prove custody and identity
+        resolution; they do not prove which mutation created the row.'
+
+        So the causation predicate compares the committed row's PAYLOAD to
+        the envelope we published, not just its clock.
+        """
+        shared_sid = "c0ffee" * 5 + "ab"
+        shared_text = "one text, two kinds"
+        lived = 1_700_000_000.0
+
+        # Someone else's submission commits first, under that identity,
+        # with a clock our envelope will also carry.
+        spool.enqueue_reconstructed(
+            self.f.spool_root, submission_id=shared_sid, submitted_at=lived,
+            producer="web", turn_kind="user_message", raw_text=shared_text,
+            kwargs={"surface": "web_owner",
+                    "taint_labels": ["owner_utterance"],
+                    "privacy_access": "public"})
+        self.f.drain()
+        row = self.f.rows(shared_sid)[0]
+        self.assertEqual(row[0], "user_message")
+        self.assertEqual(row[6], lived)
+
+        # Our organ publishes a system_event body under the same identity
+        # and the same text; the door ACKs it to the existing row.
+        envelope = {"submission_id": shared_sid, "submitted_at": lived,
+                    "turn_kind": "system_event", "raw_text": shared_text}
+        is_ours, why = R._row_is_our_replay(self.f.db, envelope)
+        self.assertFalse(
+            is_ours,
+            "an ack against a row of another kind must not read as our replay")
+        self.assertIn("payload", why)
