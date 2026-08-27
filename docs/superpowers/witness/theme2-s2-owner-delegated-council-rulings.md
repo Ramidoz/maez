@@ -1162,3 +1162,42 @@ preimage's canonical claim vs the writer's caller path; consume-once
 vs execute-once). Validation must walk EVERY path a property is
 supposed to cover, and a weak test caught only by a mutation is a
 finding about the test, not the code.
+
+## Fifteenth entry (2026-08-27, rail re-validation round): F1/F6/F7 CLOSED; F2-new/F3/F4/F5/F8 repaired under RED-first tests
+
+The fourteenth round's fix diff went back to Codex. Verdict: F1
+(dry-run env-blind guard), F6 (store posture + no-auto-create), F7
+(two-sided inventory) CLOSED by its own fresh probes. Its remaining
+findings, each REPRODUCED then repaired RED-first (commit ce200c9):
+
+- **F2 NEW-DEFECT (executed symlink probe):** an alias spelling that
+  RESOLVES canonical passed the equality checks, but the execution
+  marker and owner latch derived from the unresolved spelling — landing
+  beside the alias, splitting their identity. run_transaction now
+  resolve-normalizes db/store/manifest ONCE at entry.
+- **F3:** the post-commit marker left one window (commit → crash →
+  delete ledger → re-run inside 600s). The marker is now a durable
+  CLAIM written BEFORE the mutation: every crash ordering leaves a born
+  ledger or a spent marker. Cost accepted by the standing ruling: a
+  crash between claim and commit spends the receipt; the owner re-taps.
+- **F4 (executed TOCTOU probe):** a foreign db inserted between the
+  boundary classification and the latch was migrated and birthed. The
+  NOT_COMMITTED classification now runs UNDER the latch; an unreadable
+  target refuses by name from the lease's own failure.
+- **F5:** the D12 forge loop now covers every shared field incl.
+  action_params_hash, and voice-hash absence is NULL-only (the literal
+  'none' was accepted; the mint writes NULL).
+- **F8:** OverflowError/OSError from extreme timestamps and
+  missing-column IndexError are named refusals (clock_incoherent /
+  receipt_store_unavailable schema-drift guard).
+
+Witness: 98 rail+ceremony tests green; battery 693 passed, same 7
+pre-existing reds; falsifier GREEN 8/8 n=20000; tree unborn. A third
+Codex validation pass was launched on this diff — its verdict gates
+calling the arc done.
+
+**Recurring lesson, now three rounds deep in ONE arc:** every surviving
+defect was an identity or ordering question (which spelling, which
+instant, which side of the latch) — never a missing check, always a
+check anchored to the wrong copy of the fact. Anchor checks to resolved
+identities and to moments nothing else can move.
