@@ -288,6 +288,29 @@ class LedgerWriter:
                 self._conn.execute("PRAGMA synchronous = NORMAL")
             else:
                 self._conn.execute("PRAGMA synchronous = FULL")
+                # journal_size_limit (ninth round Q-B, 3-0, adopted as
+                # INSURANCE): after a pinning reader leaves, the next
+                # autocheckpoint truncates the WAL file back to this
+                # limit by itself — no call site, no thread, no waiting.
+                # It does NOT bound growth while a reader still pins; it
+                # bounds the aftermath. DERIVED as two PHYSICAL WAL
+                # cycles (Codex read the vendored source: frames are
+                # page_size+24 bytes plus a 32-byte file header — bare
+                # 2*page*pages under-sizes two real cycles). Never at or
+                # below one cycle: the healthy plateau must never churn.
+                page = self._conn.execute("PRAGMA page_size").fetchone()[0]
+                pages = self._conn.execute(
+                    "PRAGMA wal_autocheckpoint").fetchone()[0]
+                if page and pages and int(pages) > 0:
+                    limit = 32 + 2 * int(pages) * (int(page) + 24)
+                    got = self._conn.execute(
+                        f"PRAGMA journal_size_limit = {int(limit)}"
+                    ).fetchone()[0]
+                    if int(got) != int(limit):
+                        raise RuntimeError(
+                            f"journal_size_limit readback {got} != "
+                            f"derived {limit} — refusing an unverified "
+                            f"WAL bound")
         except BaseException:
             self._release_owner_latch()
             raise

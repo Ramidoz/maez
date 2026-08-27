@@ -204,3 +204,62 @@ class CheckpointPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JournalSizeLimitTests(unittest.TestCase):
+    """Ninth round Q-B (3-0): adopt as insurance. Reclaim was reproduced
+    independently by two seats before adoption; the limit is DERIVED as
+    two PHYSICAL cycles (32 + 2*pages*(page_size+24)), never hardcoded,
+    never encoded as a speedup."""
+
+    def test_limit_is_set_derived_and_read_back(self):
+        db = _fresh("jsl")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = LedgerWriter(db)
+            try:
+                page = w._conn.execute("PRAGMA page_size").fetchone()[0]
+                pages = w._conn.execute(
+                    "PRAGMA wal_autocheckpoint").fetchone()[0]
+                got = w._conn.execute(
+                    "PRAGMA journal_size_limit").fetchone()[0]
+                self.assertEqual(got, 32 + 2 * pages * (page + 24))
+                self.assertGreater(
+                    got, wal_ceiling_bytes(db, conn=w._conn),
+                    "the limit must sit ABOVE the healthy plateau so "
+                    "normal operation never churns truncate/re-extend")
+            finally:
+                w.close()
+
+    def test_wal_self_reclaims_after_pinning_reader_leaves(self):
+        """The adoption claim, witnessed in-battery: grow under a pin,
+        release, and ordinary commits alone bring the FILE back to the
+        limit — no checkpoint call anywhere."""
+        db = _fresh("reclaim")
+        wal = db + "-wal"
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = LedgerWriter(db)
+            try:
+                limit = w._conn.execute(
+                    "PRAGMA journal_size_limit").fetchone()[0]
+                for i in range(200):
+                    w.write_turn("user_message", f"w{i} " + "x" * 200,
+                                 surface="probe", **_STAMP)
+                ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+                ro.execute("BEGIN")
+                ro.execute("SELECT count(*) FROM turns").fetchone()
+                for i in range(3000):
+                    w.write_turn("user_message", f"p{i} " + "x" * 200,
+                                 surface="probe", **_STAMP)
+                grown = os.path.getsize(wal)
+                ro.execute("COMMIT")
+                ro.close()
+                self.assertGreater(grown, limit * 2, "pin must grow the WAL")
+                for i in range(600):
+                    w.write_turn("user_message", f"a{i} " + "x" * 200,
+                                 surface="probe", **_STAMP)
+                self.assertLessEqual(
+                    os.path.getsize(wal), limit,
+                    "after the pin leaves, ordinary commits must reclaim "
+                    "the file to the derived limit by themselves")
+            finally:
+                w.close()
