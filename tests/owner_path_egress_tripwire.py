@@ -159,9 +159,11 @@ OWNER_PATH_SCOPES: tuple[Scope, ...] = (
     Scope(
         "core/routing/recall_receipt.py",
         None,
-        "Holds WORKING_RECEIPT_TEXT, delivered via send_intermediate at "
-        "daemon/maez_daemon.py:8612 -- inside the region an earlier "
-        "census called empty.",
+        "Holds WORKING_RECEIPT_TEXT. NOTE, corrected by Codex's boundary "
+        "walk: that constant is NOT inventoried -- it is passed, never "
+        "returned, so no shape here sees it; its DELIVERY is watched "
+        "instead at daemon/maez_daemon.py:8612. This scope earns its "
+        "place only for a future RETURNED canned string in this module.",
     ),
     Scope(
         "daemon/maez_daemon.py",
@@ -169,6 +171,54 @@ OWNER_PATH_SCOPES: tuple[Scope, ...] = (
         "The owner reply function that already writes the model_reply row "
         "(:9786). Watched for the send_intermediate receipt mouth (:8612) "
         "and for anything beside it matching the send name shape.",
+    ),
+    Scope(
+        "skills/web_interface.py",
+        "chat",
+        "The owner /chat route. Its S4 branch returns the crisis answer "
+        "at :6807 BEFORE the user turn is submitted to the spool below "
+        "-- structurally the SAME early-egress shape as inbound_core's "
+        "S4 return, which was watched while this one was not.",
+    ),
+    Scope(
+        "skills/surface/telegram_adapter.py",
+        None,
+        "The live inbound Telegram surface: the daemon's own comment at "
+        ":12188 says this vendored adapter owns inbound polling. It "
+        "answers /receipts, proposal and dream commands DIRECTLY, "
+        "before the watched MaezMessageHandler ever runs.",
+    ),
+    Scope(
+        "skills/surface/platform_base.py",
+        "BasePlatformAdapter._send_with_retry",
+        "The transport every Surface V2 reply crosses, including its "
+        "retry and error mouths.",
+    ),
+    Scope(
+        "core/brain/brain_loop.py",
+        "_emit_search_progress",
+        "Intermediate brain-loop speech: canned owner-facing progress "
+        "receipts emitted mid-turn, before any reply is recorded.",
+    ),
+    Scope(
+        "cli/maez_chat.py",
+        None,
+        "The CLI owner chat. Its empty-search branch answers the owner "
+        "and returns before reply persistence.",
+    ),
+    Scope(
+        "skills/telegram_voice.py",
+        "TelegramVoice._send_card_message",
+        "A still-used OUTBOUND legacy mouth. The daemon keeps this "
+        "class alive specifically for its outbound calls, so the "
+        "inbound-only scope below watched the dormant half.",
+    ),
+    Scope(
+        "skills/telegram_voice.py",
+        "TelegramVoice.send_envelope",
+        "The other still-used outbound legacy mouth, watched for the "
+        "same reason: the daemon keeps this class alive for its "
+        "outbound calls after the inbound half went dormant.",
     ),
     Scope(
         "daemon/maez_daemon.py",

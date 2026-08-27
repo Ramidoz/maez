@@ -143,6 +143,19 @@ class CouncilNamedMissesTests(unittest.TestCase):
             load_frozen(),
         )
 
+    def test_the_web_owner_s4_early_return_is_watched(self):
+        """The omission that mattered most (Codex boundary walk, B7).
+
+        skills/web_interface.py returns the S4 crisis answer at :6807
+        BEFORE submitting the owner's turn to the spool -- the same
+        early-egress shape as inbound_core's S4 return, which the first
+        roster watched while missing this one. Two rosters, two
+        different answers: the second time in this arc that a scope list
+        was found incomplete, which is the argument FOR the tripwire
+        framing, not against it.
+        """
+        self.assertIn("skills/web_interface.py::chat::canned_return::", load_frozen())
+
     def test_the_recall_receipt_mouth_is_watched(self):
         # daemon/maez_daemon.py:8612 -- delivers WORKING_RECEIPT_TEXT
         # inside the region a previous census called empty.
@@ -468,6 +481,19 @@ class ScopeHygieneTests(unittest.TestCase):
                 ("skills/approval_card.py", None),
                 ("core/routing/recall_receipt.py", None),
                 ("daemon/maez_daemon.py", "MaezDaemon.handle_message"),
+                ("skills/web_interface.py", "chat"),
+                ("skills/surface/telegram_adapter.py", None),
+                (
+                    "skills/surface/platform_base.py",
+                    "BasePlatformAdapter._send_with_retry",
+                ),
+                ("core/brain/brain_loop.py", "_emit_search_progress"),
+                ("cli/maez_chat.py", None),
+                (
+                    "skills/telegram_voice.py",
+                    "TelegramVoice._send_card_message",
+                ),
+                ("skills/telegram_voice.py", "TelegramVoice.send_envelope"),
                 (
                     "daemon/maez_daemon.py",
                     "MaezDaemon._run_health_server.message",
