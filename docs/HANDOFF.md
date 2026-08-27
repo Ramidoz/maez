@@ -90,6 +90,11 @@ pre-birth or owner-sign the permanent gap. (3) Codex's fail-closed-
 until-census position (recorded in the round). Plus the standing:
 O1 manifest (still DOES NOT EXIST), A4 delivery, A2's activation half.
 
+**A Codex RE-validation of the fourteenth-round fix diff was launched at
+session end** (scratchpad codex_revalidation.txt in the session
+workspace) — read its verdict before building anything on this arc, the
+same rule the twelfth round set.
+
 **Pre-existing red discovered (not this arc's):**
 test_s7_action_joins::TestHeldStoreVerificationHasAnExactCallsiteAllowlist
 fails on clean HEAD — provision_covenant_phase_table_at calls
