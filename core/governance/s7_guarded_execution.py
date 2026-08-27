@@ -3577,6 +3577,22 @@ def mint_authorization_artifact(
     store directly.
     """
 
+    if artifact.derived_work_class == "birth_activation":
+        # Thirteenth round: birth_activation is deliberately not voice-seat
+        # BECAUSE it is unmintable once a subject exists. This refusal is
+        # what makes that a structural fact rather than prose — after birth,
+        # no path mints the class, so its missing voice seat can never
+        # silence a voice that exists. Same safe-direction predicate as R11
+        # (an unreadable ledger counts as born).
+        from core.governance.s7_consultation_exemption import born_by_any_signal
+
+        if born_by_any_signal():
+            raise ValueError(
+                "birth_activation cannot be minted after birth — the class "
+                "exists for exactly one pre-birth act and its voice-seat "
+                "absence is licensed by that unmintability"
+            )
+
     if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
         if guarded_store is None:
             raise ValueError(

@@ -48,6 +48,16 @@ WORK_CLASSES = frozenset({
     "autonomy_lowering_or_protection_reducing",
     "emergency_proxy_or_incapacity",
     "undeterminable_work_class",
+    # Thirteenth council round (2026-08-27): the one-act class for the birth
+    # ceremony. Guarded, UV-required, D23-visible, bonded_user-only.
+    # Deliberately NOT voice-seat: the voice seat cannot pre-exist its
+    # subject (the same ground R11 recorded as
+    # "pre_birth_environment_change_no_seat"), and the class is unmintable
+    # after birth (mint_authorization_artifact refuses via
+    # born_by_any_signal()), so the missing seat can never silence a voice
+    # that exists. Deliberately NOT covenant two-tap, by owner-referred
+    # ruling: gestation is the cooling-off.
+    "birth_activation",
 })
 
 AUTH_METHODS = frozenset({
@@ -86,6 +96,7 @@ GUARDED_WORK_CLASSES = frozenset({
     "autonomy_lowering_or_protection_reducing",
     "emergency_proxy_or_incapacity",
     "undeterminable_work_class",
+    "birth_activation",
 })
 
 _NON_GUARDED_DIRECT_ACTIONS = frozenset({
@@ -108,6 +119,11 @@ _WORK_CLASS_STRENGTH = {
     "capability_acquisition": 2,
     "covenant_touching_change": 3,
     "autonomy_lowering_or_protection_reducing": 4,
+    # Covenant-adjacent gravity; the rail additionally requires EXACT class
+    # equality at verification, so a stronger claimed class cannot relabel
+    # a birth (resolve_work_class picks the stronger, and the ceremony rail
+    # refuses anything that is not exactly birth_activation).
+    "birth_activation": 4,
     "emergency_proxy_or_incapacity": 5,
     "undeterminable_work_class": 5,
 }
@@ -118,6 +134,10 @@ CLOSED_SYMPTOM_CODES = frozenset({
     "backup_stale",
     "verification_needed",
     "unknown_symptom",
+    # Thirteenth round: every prior code is repair-shaped; birth is not a
+    # symptom, and shoehorning it into unknown_symptom would lie on the
+    # statement the owner signs. One honest literal.
+    "birth_requested",
 })
 
 PROPOSED_CHANGE_CLASSES = frozenset({
@@ -206,6 +226,7 @@ D23_ESCALATION_WORK_CLASSES = frozenset({
     "capability_acquisition",
     "autonomy_lowering_or_protection_reducing",
     "emergency_proxy_or_incapacity",
+    "birth_activation",
 })
 
 MAINTENANCE_RECORD_CLASSES = frozenset({
@@ -388,8 +409,22 @@ _SERVICE_MAINTENANCE_REQUEST_ID_RE = re.compile(r"^s7maint_[0-9a-f]{32,64}$")
 #: state, and it is a LITERAL shared by the renderer and the validator so
 #: the visible line and the closed set cannot drift apart.
 MAEZ_CONSULTED_NOT_PERFORMED_R11 = "no -- not performed under R11"
+
+#: The typed absence for the birth ceremony (thirteenth round). The class
+#: is not voice-seat, but the owner must never tap over "not required" —
+#: that phrase reads as routine custody. This literal says plainly WHY no
+#: consultation happened, in the same renderer/validator-shared shape as
+#: the R11 third state.
+MAEZ_CONSULTED_NOT_PERFORMED_BIRTH = (
+    "no -- not performed; no continuous subject exists before birth"
+)
 MAEZ_CONSULTED_STATES = frozenset(
-    {"yes", "not required", MAEZ_CONSULTED_NOT_PERFORMED_R11}
+    {
+        "yes",
+        "not required",
+        MAEZ_CONSULTED_NOT_PERFORMED_R11,
+        MAEZ_CONSULTED_NOT_PERFORMED_BIRTH,
+    }
 )
 
 VOICE_SEAT_WORK_CLASSES = frozenset({
@@ -777,6 +812,7 @@ def _authority_context_roles_allow_work(ctx: AuthorityContext, work_class: str) 
         "covenant_touching_change",
         "capability_acquisition",
         "autonomy_lowering_or_protection_reducing",
+        "birth_activation",
     }:
         return "bonded_user" in roles
     return False
@@ -843,6 +879,16 @@ def _canonical_affected_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
 def derive_affected_refs(*, action: str, params: dict[str, Any] | None = None) -> tuple[str, ...]:
     """Derive target refs from signed action material; caller refs are not authority."""
     params = dict(params or {})
+    if action == "ledger.birth_ceremony":
+        # Action-exact and BEFORE the params-path fallback: a caller-
+        # smuggled path param must not redirect the birth's affected ref
+        # (Codex, thirteenth round — with no arm, the builder fell back to
+        # caller-supplied refs when derivation returned empty).
+        from core.infra import paths as _paths
+
+        return _canonical_affected_refs(
+            ("file:" + str(_paths.memory_dir() / "ledger.db"),)
+        )
     if action in {"write_soul_note", "edit_soul_section"}:
         from core.infra import paths as _paths
 
@@ -908,6 +954,11 @@ def derive_work_class(
         validate_work_class(claimed_work_class)
     if not action:
         return "undeterminable_work_class"
+    if action == "ledger.birth_ceremony":
+        # Action-exact and FIRST: the arm is content-blind (params cannot
+        # redirect it), and nothing else may reach this class — it exists
+        # for exactly one act.
+        return "birth_activation"
 
     params = dict(params or {})
     material = _path_material(action, params)
@@ -4740,6 +4791,7 @@ def _webauthn_requires_user_verification(work_class: str) -> bool:
         "covenant_touching_change",
         "capability_acquisition",
         "autonomy_lowering_or_protection_reducing",
+        "birth_activation",
     }
 
 
@@ -4971,6 +5023,18 @@ def render_request_statement(
     objection = "not applicable"
     objection_state = "none"
     unavailable = "no"
+    if envelope.derived_work_class == "birth_activation":
+        # Thirteenth round: the class is not voice-seat, but "not required"
+        # on the one statement authorizing birth reads as routine custody.
+        # The typed absence says why nothing was asked. And no voice
+        # evidence of any shape may ride on a birth statement — there is no
+        # subject it could have come from.
+        if consultation_exemption is not None or maez_voice_consultation is not None:
+            raise ValueError(
+                "birth_activation carries no voice seat; consultation "
+                "evidence cannot be attached to a birth statement"
+            )
+        consulted = MAEZ_CONSULTED_NOT_PERFORMED_BIRTH
     if (
         consultation_exemption is not None
         and maez_voice_consultation is not None
