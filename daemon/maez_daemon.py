@@ -2828,13 +2828,22 @@ def _ledger_admission_health(daemon) -> dict:
     try:
         from core.ledger.dead_letter_replay import classify as _dl_classify
 
-        _dl_counts = _dl_classify(db)["counts"]
+        _dl_census = _dl_classify(db)
+        _dl_counts = _dl_census["counts"]
+        # Everything except the two RESOLVED classes counts. That
+        # deliberately includes `torn` (an unread line is not a resolved
+        # one) and `unreadable_sidecars` (a box we cannot open is not an
+        # empty box) — the classifier reports both as their own classes
+        # precisely so this sum cannot miss them.
         dead["unresolved_rows"] = sum(
             count for disposition, count in _dl_counts.items()
             if disposition not in ("already_committed", "already_enqueued")
         )
+        dead["unreadable_sidecars"] = _dl_census.get("unreadable_sidecars", [])
     except Exception:
-        dead["unresolved_rows"] = dead.get("rows", 0)
+        # An unreadable census must page, not soothe.
+        dead["unresolved_rows"] = max(1, dead.get("rows", 0))
+        dead["unreadable_sidecars"] = ["<census failed>"]
     spool = spool_status(default_spool_root(db))
     # WAL visibility (council round eight): SQLite's automatic
     # checkpointing IS the policy, so nothing here truncates. The

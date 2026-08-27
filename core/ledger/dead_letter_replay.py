@@ -46,6 +46,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -142,22 +143,34 @@ def _same_submission(a: dict, b: dict) -> bool:
     return key(a) == key(b)
 
 
-def _records(db_path: str) -> tuple[list[dict], int]:
+def _records(db_path: str) -> tuple[list[dict], int, list[str]]:
     """Every dead-letter record across all pid sidecars, deduped by
-    identity, plus the torn line count.
+    identity, the torn line count, and the sidecars that could NOT BE READ.
 
     A redrive that failed twice with the SAME payload is one record. Two
     DIFFERENT payloads under one identity are a conflict (flagged on the
     record), never a silent first-file-wins pick.
+
+    The third return value is the honest-observation floor. EXECUTED
+    (Codex validation, 2026-08-27, reproduced by this author): this
+    function used to ``continue`` past an unreadable sidecar, so one
+    chmod — or a bad sector, or a half-mounted volume — turned custody
+    into ``rows=0, unresolved=0, attention=False``. Omitted life
+    presenting as health is the precise inversion this whole theme
+    exists to prevent, and "I cannot see inside the box" is a different
+    sentence from "the box is empty". The caller must be able to tell
+    them apart.
     """
     from core.ledger.writer import dead_letter_glob
 
     seen: dict[str, dict] = {}
     torn = 0
+    unreadable: list[str] = []
     for path in sorted(glob.glob(dead_letter_glob(db_path))):
         try:
             text = Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
+            unreadable.append(path)
             continue
         for line in text.splitlines():
             if not line.strip():
@@ -177,7 +190,7 @@ def _records(db_path: str) -> tuple[list[dict], int]:
             elif not _same_submission(prior, record):
                 prior["identity_conflict"] = True
                 prior.setdefault("conflicting_sources", []).append(path)
-    return list(seen.values()), torn
+    return list(seen.values()), torn, sorted(unreadable)
 
 
 def _db_view(db_path: str, wanted_ids: set[str]) -> tuple[dict, list, bool]:
@@ -334,16 +347,32 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
     # envelope carries the kwarg, which for OUR envelopes is always — the
     # five preserved fields travel in every reconstructed body.
     kwargs = envelope.get("kwargs") or {}
-    for kwarg_key, row_value in (
-        ("surface", surface),
-        ("raw_surface", raw_surface),
-        ("privacy_access", privacy_access),
+    # Compare against what the WRITER would have stored, which for an
+    # absent kwarg is its default — not "skip the check". EXECUTED (Codex
+    # validation, 2026-08-27): the first cut only compared keys the
+    # envelope happened to carry, and real dead-letter payloads routinely
+    # omit surface/raw_surface because the caller relied on the writer's
+    # defaults while the sidecar preserves only what the caller passed.
+    # An envelope missing those keys was therefore accepted as "ours"
+    # against a row with foreign surface values. A check that skips what
+    # it cannot see is not a check.
+    for kwarg_key, default, row_value in (
+        ("surface", _WRITER_DEFAULT_SURFACE, surface),
+        ("raw_surface", _WRITER_DEFAULT_RAW_SURFACE, raw_surface),
     ):
-        if kwarg_key in kwargs and kwargs[kwarg_key] != row_value:
+        if kwargs.get(kwarg_key, default) != row_value:
             return False, (
                 f"the committed row's {kwarg_key} is not the one our "
                 "envelope published, so a different submission produced it"
             )
+    # privacy_access and taint_labels have NO writer default — they are
+    # required, so an envelope lacking them never commits at all. Compare
+    # when present; their absence is the door's problem, not ours.
+    if "privacy_access" in kwargs and kwargs["privacy_access"] != privacy_access:
+        return False, (
+            "the committed row's privacy_access is not the one our "
+            "envelope published, so a different submission produced it"
+        )
     if "taint_labels" in kwargs:
         try:
             row_taint = sorted(json.loads(taint_json or "[]"))
@@ -462,7 +491,7 @@ def classify(db_path: str) -> dict:
     """Classify every dead-letter record. Pure read; never raises."""
     from core.ledger import spool
 
-    records, torn = _records(db_path)
+    records, torn, unreadable = _records(db_path)
     wanted = {r["event_id"] for r in records}
     committed, rows, db_verified = _db_view(db_path, wanted)
 
@@ -535,7 +564,26 @@ def classify(db_path: str) -> dict:
                 f"{_PRODUCER}/refused" if our_refused
                 else "/".join(in_flight[0])
             )
-            if our_refused:
+            acked_states = [pair for pair in in_flight if pair[1] == "acked"]
+            if not our_refused and acked_states and db_verified:
+                # An ACK is a claim that this submission COMMITTED. The
+                # ledger says no row carries it. Both cannot be true.
+                # EXECUTED (Codex validation, 2026-08-27): this landed on
+                # `already_enqueued`, which reads as "in flight, be
+                # patient" — so a ledger restored from an older backup
+                # silently retired the very records whose life it had
+                # just rolled back. An ack without a row is the loudest
+                # kind of unresolved, not the quietest.
+                entry["disposition"] = "ack_without_row"
+                entry["acked_by"] = ["/".join(pair) for pair in acked_states]
+                entry["reason"] = (
+                    "a receipt claims this submission committed, but the "
+                    "ledger carries no row for it. The ledger may have "
+                    "been restored or rolled back beneath the spool; "
+                    "until that is resolved by hand this record is "
+                    "omitted life, not work in progress."
+                )
+            elif our_refused:
                 # EXECUTED (Claude council seat, 2026-08-26, reproduced by
                 # this author): a body the admission door refuses moves to
                 # ``refused/``, where ``_submission_exists`` still finds it —
@@ -586,9 +634,17 @@ def classify(db_path: str) -> dict:
         out.append(entry)
 
     counts: dict[str, int] = {"torn": torn}
+    if unreadable:
+        # Counted as its own class so every consumer that asks "is
+        # anything still unresolved?" sees it. It is NOT a disposition on
+        # a record — we do not know what records are in there.
+        counts["unreadable_sidecars"] = len(unreadable)
     for entry in out:
         counts[entry["disposition"]] = counts.get(entry["disposition"], 0) + 1
-    return {"db_path": db_path, "records": out, "counts": counts}
+    result = {"db_path": db_path, "records": out, "counts": counts}
+    if unreadable:
+        result["unreadable_sidecars"] = unreadable
+    return result
 
 
 # ---------------------------------------------------------------- apply half
@@ -604,10 +660,16 @@ def classify(db_path: str) -> dict:
 #   never re-decides what a record IS; it acts on what the census said and
 #   REFUSES BY NAME when the live world has moved (tenth round: "the object
 #   of the act is the RUN, never the SPEECH").
-# - Kind-blind, always. No turn_kind reaches an eligibility branch — a gate
-#   only on ``model_reply`` "structurally teaches the record that her words
-#   were the suspect class" (tenth round, 3-0). The flip-turn_kind tests
-#   are the enforcement.
+# - Kind-blind SELECTION, always: no turn_kind reaches an eligibility
+#   branch — a gate only on ``model_reply`` "structurally teaches the
+#   record that her words were the suspect class" (tenth round, 3-0). The
+#   flip-turn_kind tests are the enforcement. Stated precisely, because
+#   the first version of this comment overclaimed and a council seat
+#   caught it: the classifier's BYTE-TWIN comparison does include
+#   turn_kind, and must — a twin is only a twin of the same payload. That
+#   is payload identity ("is this the same speech?"), never an
+#   eligibility gate ("may this kind speak?"). Flipping the kind in a
+#   fixed world therefore CAN move a disposition, and that is correct.
 # - TWO PASSES (ninth round Q-C): bodies first; companions only against an
 #   OBSERVED commit, never an assumed one. A companion for a body that has
 #   not drained yet is not written — it waits for a later run. This is also
@@ -670,6 +732,12 @@ _COMPANION_SID_DOMAIN = b"maez.dead_letter_replay.companion.v1|"
 #: edge is COMPILED to a parent_submission_id the drainer turns back into a
 #: real parent_turn_id. Nothing here is dropped.
 _RELOCATED_AUTHORITY = ("submission_id", "submitted_at", "parent_turn_id")
+
+#: What ``LedgerWriter.write_turn`` stores when the caller passes nothing.
+#: The causation predicate compares against THESE for absent kwargs,
+#: because that is what actually landed in the row.
+_WRITER_DEFAULT_SURFACE = "system"
+_WRITER_DEFAULT_RAW_SURFACE = None
 
 #: Keys whose presence would make the manifest an instrument of taste
 #: rather than evidence (tenth round, 2-1: the role FIELD survives, the
@@ -965,7 +1033,17 @@ def build_body_submission(record: dict, db_path: str) -> dict:
         and not isinstance(recorded_lived, bool)
         else record.get("ts")
     )
-    if not isinstance(lived, (int, float)) or isinstance(lived, bool):
+    if (
+        not isinstance(lived, (int, float))
+        or isinstance(lived, bool)
+        # NaN and +/-Inf ARE floats and pass every naive numeric guard,
+        # and SQLite stores NaN as NULL — which is exactly the
+        # owner-direct signature the causation predicate reads. A
+        # non-finite clock does not merely record a wrong time; it
+        # deletes the evidence that this row is a replay at all
+        # (Codex validation, 2026-08-27).
+        or not math.isfinite(lived)
+    ):
         # A record with no usable clock cannot be replayed honestly: a
         # NULL submitted_at is the owner-direct signature the causation
         # predicate depends on, and a string clock would diverge between
@@ -1039,9 +1117,16 @@ _COMPANION_PAYLOAD_KEYS = frozenset({
     "dead_lettered_at",
     "dead_letter_stage",
     "replayed_at",
-    "source_file",
     "limitations",
 })
+# ``source_file`` is DELIBERATELY absent. It is a DERIVED key — added by
+# _records() from whichever pid sidecar the line was found in — so it is
+# excluded from record_digest() by construction. Publishing it into a
+# chain-covered companion would put a value into Maez's permanent record
+# that nothing vouches for: EXECUTED (Codex validation, 2026-08-27),
+# changing it preserved the digest, passed every guard, and was emitted
+# verbatim. The census in the manifest still records it, where it belongs
+# — an operator document, not a claim in her diary.
 
 
 def _refuse_copied_content(payload: dict, record: dict) -> None:
@@ -1078,7 +1163,6 @@ def _refuse_copied_content(payload: dict, record: dict) -> None:
         v for v in (
             record.get("stage"),
             record.get("event_id"),
-            record.get("source_file"),
         ) if isinstance(v, str) and v
     }
     for key, value in (record.get("kwargs") or {}).items():
@@ -1169,7 +1253,6 @@ def build_companion(
         "dead_letter_stage": record.get("stage"),
         # Never backdated: the companion happened NOW.
         "replayed_at": replayed_at,
-        "source_file": record.get("source_file"),
         # NO per-row delivery field, deliberately (Claude council seat,
         # 2026-08-26, and its argument is the one that decides it): a
         # field whose value is constant across every row that could ever

@@ -597,12 +597,11 @@ class CompanionTests(unittest.TestCase):
         payload = json.loads(good["raw_text"])
         self.assertNotIn("the secret words", good["raw_text"])
 
-        with patch.object(R, "_COMPANION_PAYLOAD_KEYS",
-                          R._COMPANION_PAYLOAD_KEYS | {"source_file"}):
-            pass  # keys unchanged; the two refusals below are the point
-
-        # (1) a whitelisted field filled with body content
-        smuggled = dict(payload, source_file="the secret words")
+        # (1) a whitelisted field filled with body content. It must be a
+        # field that IS whitelisted, or this exercises the unknown-key
+        # check instead of the value walk it exists to prove.
+        self.assertIn("event", R._COMPANION_PAYLOAD_KEYS)
+        smuggled = dict(payload, event="the secret words")
         with self.assertRaises(R.ReplayRefusal) as cm:
             R._refuse_copied_content(smuggled, record)
         self.assertEqual(cm.exception.name, "companion_not_content_light")
@@ -620,9 +619,10 @@ class CompanionTests(unittest.TestCase):
             record=record, body_submission_id="a" * 32,
             body_row=("t", 1, "c" * 64, "public"),
             run_id="r", replayed_at=2.0)["raw_text"])
-        with self.assertRaises(R.ReplayRefusal):
+        with self.assertRaises(R.ReplayRefusal) as cm:
             R._refuse_copied_content(
-                dict(payload, source_file="a_distinctive_surface_name"), record)
+                dict(payload, event="a_distinctive_surface_name"), record)
+        self.assertIn("reproduces content", cm.exception.detail)
 
     def test_companion_makes_no_delivery_claim(self):
         """The substrate captures no delivery evidence for ANY turn. A
@@ -1137,3 +1137,114 @@ class CodexValidationRoundTests(unittest.TestCase):
                          f"a fully replayed record must stop paging: {counts}")
         # the raw sidecar row is still there — rows alone would page forever
         self.assertEqual(len(self.f.records()), 1)
+
+
+class HonestObservationFloorTests(unittest.TestCase):
+    """The five body-integrity repairs (2026-08-27, owner ruling: perfect
+    the body enough to WORK, not enough to be provably flawless — but the
+    record she learns from must be honest, because self-repair that
+    optimizes against a falsified record gets worse the better it gets).
+
+    Every test here is that floor: the substrate may never say "all
+    clear" when it does not actually know.
+    """
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+        self.f = _Fixture("floor")
+        self.f.commit(text="anchor")
+
+    # ---- FIX 1: "I cannot see inside" != "it is empty" ------------------
+    def test_an_unreadable_sidecar_is_reported_never_read_as_empty(self):
+        self.f.dead_letter(text="a life in a jammed box")
+        sidecars = sorted(self.f.dir.glob("*.deadletter.*"))
+        self.assertEqual(len(sidecars), 1)
+        os.chmod(sidecars[0], 0o000)
+        self.addCleanup(os.chmod, sidecars[0], 0o600)
+        census = R.classify(self.f.db)
+        self.assertEqual(census["counts"].get("unreadable_sidecars"), 1)
+        self.assertEqual(census["unreadable_sidecars"], [str(sidecars[0])])
+        unresolved = sum(
+            c for d, c in census["counts"].items()
+            if d not in ("already_committed", "already_enqueued"))
+        self.assertGreaterEqual(
+            unresolved, 1,
+            "one chmod must not turn omitted life into a green dashboard")
+
+    # ---- FIX 2: an ack asserting a commit that is not there -------------
+    def test_an_ack_without_a_committed_row_is_unresolved_not_in_flight(self):
+        rec = self.f.dead_letter(text="a rolled-back life")
+        dirs = spool._producer_dirs(self.f.spool_root, "web")
+        (dirs["acked"] / f"{rec['event_id']}.json").write_text("{}")
+        (dirs["acked"] / f"{rec['event_id']}.receipt.json").write_text(
+            '{"turn_id": "gone-with-the-restore"}')
+        entry = next(e for e in R.classify(self.f.db)["records"]
+                     if e["event_id"] == rec["event_id"])
+        self.assertEqual(entry["disposition"], "ack_without_row")
+        self.assertEqual(entry["acked_by"], ["web/acked"])
+        self.assertIn("restored or rolled back", entry["reason"])
+
+    # ---- FIX 3: a check that skips what it cannot see is not a check ----
+    def test_absent_surface_kwargs_compare_against_the_writer_default(self):
+        """Real payloads omit surface/raw_surface and rely on the writer's
+        defaults; the sidecar keeps only what the caller passed. So the
+        predicate must compare against what WOULD have landed."""
+        sid = "beefcafe" * 4
+        lived = 1_700_000_100.0
+        # a FOREIGN row under this identity, with a non-default surface
+        spool.enqueue_reconstructed(
+            self.f.spool_root, submission_id=sid, submitted_at=lived,
+            producer="web", turn_kind="system_event", raw_text="same words",
+            kwargs={"surface": "web_owner", "raw_surface": "telegram_text",
+                    "taint_labels": ["self_generated"],
+                    "privacy_access": "public"})
+        self.f.drain()
+        # our envelope omits both keys, i.e. it would have committed with
+        # surface="system", raw_surface=None — NOT what the row carries
+        envelope = {"submission_id": sid, "submitted_at": lived,
+                    "turn_kind": "system_event", "raw_text": "same words",
+                    "kwargs": {"taint_labels": ["self_generated"],
+                               "privacy_access": "public"}}
+        is_ours, why = R._row_is_our_replay(self.f.db, envelope)
+        self.assertFalse(
+            is_ours, "an absent kwarg must compare against the default, "
+                     "not be skipped")
+        self.assertIn("surface", why)
+
+    # ---- FIX 4: never publish what the digest does not cover ------------
+    def test_the_companion_publishes_no_field_outside_the_digest(self):
+        record = {"event_id": "a" * 32, "ts": 1.0, "stage": "write",
+                  "turn_kind": "user_message", "raw_text": "words",
+                  "kwargs": {"surface": "web_owner"},
+                  "source_file": "/var/tmp/SENSITIVE_UNBOUND_VALUE.jsonl"}
+        payload = json.loads(R.build_companion(
+            record=record, body_submission_id="a" * 32,
+            body_row=("t", 1, "c" * 64, "public"),
+            run_id="r", replayed_at=2.0)["raw_text"])
+        self.assertNotIn("source_file", payload)
+        self.assertNotIn("SENSITIVE_UNBOUND_VALUE", json.dumps(payload))
+        # and the digest genuinely does not cover it, which is WHY
+        without = dict(record)
+        without.pop("source_file")
+        self.assertEqual(R.record_digest(record), R.record_digest(without))
+
+    # ---- FIX 5: a clock that deletes its own evidence -------------------
+    def test_non_finite_clocks_refuse(self):
+        rec = self.f.dead_letter(text="a clock that is not a time")
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(clock=bad):
+                with self.assertRaises(R.ReplayRefusal) as cm:
+                    R.build_body_submission(dict(rec, ts=bad), self.f.db)
+                self.assertEqual(cm.exception.name, "record_clock_invalid")
+
+    def test_nan_would_have_erased_the_replay_discriminator(self):
+        """The RED control for the test above: SQLite stores NaN as NULL,
+        and NULL submitted_at is precisely the owner-direct signature."""
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("CREATE TABLE t (v REAL)")
+            conn.execute("INSERT INTO t VALUES (?)", (float("nan"),))
+            self.assertIsNone(conn.execute("SELECT v FROM t").fetchone()[0])
+        finally:
+            conn.close()

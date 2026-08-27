@@ -531,6 +531,37 @@ class TestLedgerAdmissionRealState(unittest.TestCase):
             self.assertIn("The ledger is owed attention.", body, html)
 
 
+    def test_an_unreadable_sidecar_pages_the_cockpit(self):
+        """One chmod must not turn omitted life into a green dashboard.
+        A box we cannot open is not an empty box."""
+        import tempfile
+        from pathlib import Path
+
+        from daemon import maez_daemon as md
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            db = Path(td) / "ledger.db"
+            from core.ledger import migrate as _migrate
+            _migrate.run(str(db))
+            sidecar = Path(str(db) + ".deadletter.777.jsonl")
+            sidecar.write_text('{"event_id": "x", "ts": 1.0}\n')
+            import os as _os
+            _os.chmod(sidecar, 0o000)
+            try:
+                with mock.patch.object(md, "LEDGER_DB_PATH", db):
+                    state = _build_state_under_patches(_FakeDaemon())
+            finally:
+                _os.chmod(sidecar, 0o600)
+        adm = state["ledger_admission"]
+        self.assertEqual(adm["dead_letter"]["rows"], 0,
+                         "the row count genuinely cannot see inside")
+        self.assertEqual(len(adm["dead_letter"]["unreadable_sidecars"]), 1)
+        self.assertGreaterEqual(adm["dead_letter"]["unresolved_rows"], 1)
+        self.assertTrue(
+            adm["attention"],
+            "custody we cannot read is omitted life and must page")
+
+
 
 class TestWalExcursionVisibility(unittest.TestCase):
     """Council round eight: ship no periodic checkpoint, ship VISIBILITY.
