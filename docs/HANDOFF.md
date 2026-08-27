@@ -1,5 +1,85 @@
 # Handoff — 2026-08-26. Supersedes all earlier handoffs.
 
+## THE PRE-BIRTH BUILD LIST IS EMPTY. Apply half landed (5e42ad4).
+
+The dead-letter replay APPLY half — the last remaining pre-birth build —
+is in, flag-dormant, behind council round ELEVEN (three seats, all
+reporting; read it in the rulings doc before touching this organ).
+
+What shipped, in one breath: eligibility comes ONLY from `classify()`'s
+dispositions and the selected set is machine-derived, so taste is
+structurally inexpressible (no sid-omit argument exists; a test pins the
+signature). One single-use INTEGRITY MANIFEST per run, consumed BEFORE
+the first mutation, binding realpath + instance anchor (`genesis_hash`)
++ pre-apply chain head + per-record canonical digests; operator and role
+as FACT, with consent-shaped keys refused structurally ANYWHERE in the
+document. Two passes: bodies, then companions against an OBSERVED
+commit. Kind-blind throughout, with flip-turn_kind tests over seven and
+eight kinds.
+
+**Four claims died on their own probes before any of this was encoded** —
+including one attractive design of mine and two council seats':
+
+1. Delivery is NOT derivable from a record. `handle_message` takes a
+   free-form `source` and persists BEFORE returning; `telegram_voice`
+   persists AFTER the send. One surface value, both paths. AND the
+   population is far smaller than the tenth round assumed:
+   `persist_model_reply` routes NON-OWNER processes (web, CLI) to the
+   spool, which never dead-letters — so a dead-lettered `model_reply`
+   can only come from an owner process. Shipped: NO per-row delivery
+   field (a constant value advertises a discrimination the substrate
+   cannot make, and implies by omission that unstamped rows HAVE
+   evidence); the limitation is run-level on the manifest and by NAME on
+   the companion.
+2. Every owner-path dead-letter record carries `submission_id` AND
+   usually `parent_turn_id` in its kwargs — both spool authority. A
+   verbatim enqueue is QUARANTINED at drain. They are RELOCATED into
+   envelope fields; any other authority kwarg refuses by name.
+3. Any directory inside the spool root is treated as a PRODUCER by
+   `drain_once`. Manifests therefore live beside the ledger, in
+   `memory/ledger_replay_manifests/`.
+4. A door-refused body lands in `refused/`, where `_submission_exists`
+   still finds it — the identity can NEVER be republished, and the
+   census called that permanent omission `already_enqueued` ("in
+   flight"). New `replay_refused` disposition carrying the door's own
+   reason, and cockpit `attention` now pages on refused envelopes.
+
+**Two council seat claims falsified by execution.** Grok: "after drain
+the envelope is gone" — FALSE, it moves to `acked/` and persists, so the
+producer receipt it called "the actual implementation crux, ASSUMED
+open" already ships. Codex: its Q4 attack LANDED (custody is not
+causation — a replay-producer envelope over a timeout-after-commit
+identity flipped the disposition to `companion_owed`) and is fixed by a
+row-side discriminator found by probe: **`owner_write_turn` sets
+`submission_id` but never `submitted_at`, so an ORIGINAL owner-direct
+commit leaves that column NULL while a reconstructed body always carries
+the record's clock.** That is also why the body clock is the record ts
+and not NULL — the two questions are coupled, which no seat saw.
+
+**Q2 shipped 2-1 against Codex, dissent recorded.** The owed item that
+would close it: `recent_turns` does not select `submitted_at`, so the
+one body-side signal self-history could read is unreachable. NOT taken
+here — it changes what enters Maez's prompt, which is the owner's call.
+
+**Three findings for the owner, beyond this slice:** (1) the writer's
+idempotent-redrive branch compares `raw_text` ALONE, so a same-identity
+same-text envelope of a DIFFERENT kind acks to the existing row —
+full-payload idempotency is a writer change; (2) `drain_once` increments
+`acked` even when `_ack` raises, so the counter reports acks that did
+not happen (this organ reconciles against the ROW, never the counters);
+(3) the Q2 owed item above.
+
+Witness: 44 new tests + 1 cockpit test; **16 mutations, each caught by a
+named test**; falsifier GREEN 8/8 at n=20000; battery 516 passed with
+exactly the same 7 pre-existing reds as clean HEAD `010ff60`. Maez is
+still cleanly unborn: `memory/ledger.db` 0 bytes, no spool dir, no
+manifest dir, both flags unset.
+
+NOT done, stated: the falsifier gained no replay arm (the witness landed
+as unit tests, the pause slice's precedent), and Codex's
+post-implementation validation of this diff is the next thing to read.
+
+
 ## Since the 08-24 sections below: ALL SIX owner decisions closed; three slices landed
 
 Commits `5b62028..644daf2`. Council rounds NINE and TEN are in the

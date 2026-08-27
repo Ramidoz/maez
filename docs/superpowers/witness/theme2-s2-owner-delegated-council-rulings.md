@@ -755,6 +755,147 @@ moment's possible loss; and pre-0006 parents (no submission identity)
 enqueue unparented with a WARNING — the claim is preserved nowhere,
 which is honest, not silent.
 
+## Eleventh round (2026-08-26, apply half): three seats, four questions, two seat claims falsified
+
+Seats: Codex (xhigh, repo, 24 targeted tests + 4 adversarial probes),
+Grok (brief-only, ASSUMED marked), Claude subagent (repo, probes on
+/var/tmp). All three reported. The build seat was editing the module
+while Codex read it — recorded, not hidden; Codex saw the direction and
+attacked it as the live proposal.
+
+**Q1 — the body clock: SHIPPED (a), record ts, against a THREE-WAY
+SPLIT** (Codex (b) NULL; Grok (c) apply-publish time; Claude (a)). No
+majority, so the tiebreak is execution, and two executed facts decide
+it. First, (b) DESTROYS the causation discriminator that answers Codex's
+own Q4 attack: `owner_write_turn` sets `submission_id` but never
+`submitted_at`, so an ORIGINAL owner-direct commit leaves that column
+NULL while a reconstructed body always carries the record's clock —
+under (b) a replay and a timeout-after-commit phantom become
+indistinguishable from the row, permanently. Second (Claude seat,
+reproduced): a NULL clock makes `spool_status`'s `oldest_pending_ts`
+MISREPORT — it skips non-numeric values, so a NULL-clock body is
+invisible to the age field and, once any ordinary envelope exists, the
+field reports a value YOUNGER than the real oldest pending entry, which
+makes the cockpit's `age > 600` arm structurally unreachable for exactly
+the entries round ten's loud-withholding ruling was about. (c) is
+rejected for discarding lived-time provenance entirely — the thing
+migration 0006 exists to prevent. Codex's objection stands on the record
+and is answered, not dismissed: the companion NAMES the clock as
+`dead_letter_custody_ts` and records the stage, so the row says how good
+its own clock is instead of presenting a proxy as a measurement. The
+proxy is bounded: `busy_timeout` is 5,000 ms, against the same organ's
+own `WINDOW_S` of 300 s.
+
+**Q2 — delivery: SHIPS 2-1, Codex dissenting, dissent recorded.** Codex
+ruled REFUSE APPLY until self-history can filter; Grok and Claude ruled
+ship with a run-level limitation. The asymmetry that decides it
+(Claude, executed): refusing removes ZERO undelivered rows from
+self-history, because every live `model_reply` is already rendered as a
+prior utterance with no delivery filter — refusing blocks only the
+RECOVERED speech. "Speech that survived is unexamined; speech that was
+nearly lost is forbidden" is withholding-as-safety with a different
+victim. Two corrections to the brief's own framing, both executed: the
+author's finding shows delivery is INDETERMINATE, not absent (a
+dead-letter append is fsynced inside `persist_model_reply`, so the
+record proves the process survived past persist); and the POPULATION is
+far smaller than "every reply" — `persist_model_reply` routes non-owner
+processes (web, CLI) to the spool, which never dead-letters, so a
+dead-lettered `model_reply` can only come from an owner process. What
+shipped: NO per-row delivery field. A field whose value is constant
+across every row that could carry it does not describe the row — it
+advertises a discriminating capability the substrate lacks and implies
+by omission that unstamped rows HAVE evidence. The limitation is a fact
+about the RUN, carried on the manifest and by NAME on the companion.
+OWED, and the thing that would close Codex's dissent: `recent_turns`
+does not select `submitted_at`, so the one body-side signal self-history
+could read (`timestamp - submitted_at`, "entered the record long after
+it happened") is unreachable. Deliberately NOT taken in this slice —
+it changes what enters Maez's prompt, which is not a build seat's
+unilateral call.
+
+**Q3 — unresolvable parent: 3-0, refuse by name.** The record asserts a
+parent; replaying unparented deletes a relational fact, and append-only
+forbids binding it later (block 2). Grok's falsifier fired and was
+executed: live `write_turn` ACCEPTS a dangling `parent_turn_id` (no FK,
+`PRAGMA foreign_keys=0`), so replay-refuse IS stricter than live write.
+It is not curation, because the alternative through the spool is not
+"preserve verbatim" — `parent_turn_id` is caller authority and cannot
+pass the door — it is refuse-or-rewrite. The Claude seat's RED control
+is the decisive one: letting the door decide protects `tool_result` by
+schema accident (it REQUIRES a parent) while SILENTLY committing an
+unparented `model_reply` with a false lineage — the tenth round's
+suspect-class asymmetry, inverted. The refusal predicate names no
+`turn_kind`; the eight-kind flip test is the enforcement. Stated
+inconsistency (Claude seat), recorded rather than resolved by copying:
+the pause organ enqueues unparented WITH A WARNING for the same fact.
+The distinguishing reason is custody — paused custody is the only home a
+live moment has, so refusing loses it; replay is a redo of a moment
+already durably held in an fsynced sidecar, so refusing loses nothing.
+
+**Q4 — companion-owed: a DISPOSITION, anchored on causation not
+custody.** All three seats accepted that the companion is not speech and
+that the recovery set must live INSIDE `classify()` (Grok's formulation:
+a side path means "two functions, two crash stories, two ways to miss
+the phantom"). Two seat claims FALSIFIED by execution. Grok's central
+objection — "after `drain_once` the envelope is gone, so the producer
+receipt cannot cover the window it exists for" — is FALSE: the envelope
+moves to `acked/` and both it and its receipt persist; the discriminator
+Grok called "the actual implementation crux, ASSUMED open" already
+ships. Codex's attack LANDED and was fixed: publishing a
+replay-producer envelope for an identity the ORIGINAL write already
+committed flipped the disposition to `companion_owed`, a companion
+asserting a replay that never happened — "a filename, producer
+directory, SID and ACK receipt prove custody and identity resolution;
+they do not prove which mutation created the row." Codex also found the
+mechanism that lets it land: the writer's idempotent-redrive branch
+compares ONLY `raw_text`, so an envelope ACKs against an existing row of
+a DIFFERENT `turn_kind` sharing the identity and text (reproduced;
+recorded below as a writer finding beyond this slice). The predicate now
+asks the ROW: our envelope in pending|acked, AND the row's
+`submitted_at` equals our envelope's (NULL is the owner-direct
+signature), AND the row's kind and text are the ones we published, AND
+the companion sid is unpublished. Codex's attack re-run against the
+repaired code holds at `already_committed` with the causation named.
+
+**NEW FINDING, third seat, reproduced, and a shipping blocker that was
+in no question:** a body the admission door REFUSES lands in
+`refused/`, where `_submission_exists` still finds it — so
+`enqueue_reconstructed` returns False forever, the identity can never be
+republished, and the census reported that permanent omission as
+`already_enqueued`, a name that reads "in flight". Round ten ruled
+withholding must be LOUD; an unread alarm makes it a grave. Shipped: a
+`replay_refused` disposition carrying the door's own reason from the
+error sidecar, and `attention` in the cockpit now pages on refused
+envelopes in ANY producer (executed: it did not — the refused count was
+in the payload and not in the predicate).
+
+**Findings recorded for the owner, beyond this slice:** (1) the writer's
+idempotent-redrive check compares `raw_text` alone, so a same-identity
+same-text envelope of a different KIND acks to the existing row —
+full-payload idempotency is the fix, and it is a writer change, not a
+replay change; (2) `drain_once` increments `acked` even when `_ack`
+raises, so the counter reports acks that did not happen — this organ
+therefore reconciles against the ROW and never against drain counters;
+(3) `recent_turns` cannot see `submitted_at` (Q2's owed item).
+
+**Where the groupthink was (merged):** "the companion is a label" — Q1's
+clock-source, Q2's delivery field, Q3's provenance note and Q4's hashes
+all hang honesty on a `system_event` row, and `recent_turns`' select
+list is the actual boundary of what the record can say to her; a
+provenance field outside it is stored where the only reader that matters
+cannot reach (Grok and Claude, independently, and it is why the per-row
+delivery field was deleted). "The standing blocks are a consistent code"
+— they are not: block 6 fights the drain sort, block 7 fights
+"eligibility only from classify()" until a disposition exists, round 7's
+unparented sketch fights block 1 and round 10; the agreeable move is a
+both-and satisfying every wording and no meaning. "Kind-blind" as a
+thought-terminating cliché — correct against skipping `model_reply`,
+wrong as a reason to abandon per-kind WRITE invariants. And the emptiest
+one: every seat legislated about an empty set, which is normally
+invoked to justify shipping and should instead be invoked to justify
+FALSIFYING — with zero records, every claim here was cheap to test, and
+four of them died when someone bothered.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE
