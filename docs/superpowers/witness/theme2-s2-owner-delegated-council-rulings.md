@@ -896,6 +896,77 @@ invoked to justify shipping and should instead be invoked to justify
 FALSIFYING — with zero records, every claim here was cheap to test, and
 four of them died when someone bothered.
 
+## Twelfth round (2026-08-27, post-implementation Codex validation): DO-NOT-SHIP → repaired under test
+
+A second-lane xhigh read-only review of the finished apply-half diff
+(5e42ad4) returned DO-NOT-SHIP: 3 CRITICAL, 7 MAJOR, 1 MINOR. Every
+finding was REPRODUCED by the build seat before its fix was written;
+all eleven repaired in c0db8a4 behind finding-numbered tests, 29
+mutations each caught by a named test. The design-stage rule held
+again: a design-round council is NOT implementation validation — the
+three CRITICALs existed only in the shipped code.
+
+The three CRITICALs, kept whole because each is a lesson:
+
+1. **The causation predicate existed and the mutation path never called
+   it.** The same-run companion pass checked custody (our envelope in
+   pending|acked) — exactly the shape the eleventh round had just ruled
+   insufficient — so a foreign same-identity commit landing after the
+   census got a replay companion in the SAME run. And the predicate
+   itself compared only clock/kind/text: same-sid rows differing only
+   in privacy_access passed as "ours" (reachable via the writer's
+   raw-text-only idempotency). Building the right check and not
+   wiring it into the path that needed it is a new entry for the
+   nouns-as-proofs list: a predicate is not protection until every
+   mutation calls it.
+2. **The editable manifest WAS the forbidden per-row switch.** apply()
+   trusted the document's selected arrays; deleting one sid from the
+   JSON applied the rest and silently omitted that record — per-
+   utterance taste, expressible with a text editor, in the exact organ
+   built to make it structurally inexpressible. The repair inverts the
+   authority: the selection is ALWAYS re-derived from the live census
+   and the document must match exactly (selection_mismatch refuses the
+   whole run; an edited document and a stale document are
+   indistinguishable and share a cure). Consumption became
+   content-bound (read-once digest verified against the spent bytes)
+   and outcome receipts never overwrite.
+3. **A refused companion was declared "the replay is complete."** The
+   eleventh round fixed refused BODIES being reported as in-flight;
+   the same shape recurred one layer up, for companions, in the very
+   commit that fixed it for bodies. Terminal companion_refused
+   disposition now, with the door's reason.
+
+MAJORs, condensed: binding checks ran BEFORE the lock (guarding a
+moment the lock did not hold) — moved under it, with per-mutation
+FRESH re-classification replacing the run-start snapshot; a
+caller-supplied true lived time in the record's kwargs was being
+DISCARDED in favor of the custody proxy — now preferred; a body whose
+text coincides with record metadata ("write" at stage "write") refused
+its own companion forever — metadata values sanctioned; a FOREIGN
+producer's refusal was labeled replay_refused (terminal) while replay
+remained publishable — only our producer's refusal is terminal;
+"kind-blind" was overclaimed (byte-twin identity includes kind — as
+payload identity, "is this the same speech?", never a gate — pinned by
+a fixed-world test); "owner-process only" was overclaimed (public
+try_write_turn dead-letters in ANY process — the narrowing is a fact
+about the four shipped call sites); and the attention alarm counted
+raw sidecar rows, which nothing truncates, so a COMPLETED replay paged
+forever while both cockpit clients discarded ledger_admission entirely
+— attention now counts unresolved dispositions and the visible cockpit
+renders "The ledger is owed attention."
+
+MINOR: a record with a missing or string clock would replay into the
+owner-direct NULL-submitted_at signature and later read as foreign —
+named refusal record_clock_invalid.
+
+**Meta-lesson, recorded for the next slice:** the eleventh round's own
+groupthink warning ("the companion is a label") did not prevent the
+twelfth round's crop — every CRITICAL was a gap between a stated
+property and the code path that had to enforce it. The property was
+true of the DESIGN and false of one BOUNDARY (mutation path, document
+trust, one disposition branch). Validation must walk boundaries, not
+re-read properties.
+
 ## Consequence for the slice order
 
 The admission-protocol slice absorbs these rulings and becomes ONE

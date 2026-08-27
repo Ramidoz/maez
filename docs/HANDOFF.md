@@ -1,6 +1,31 @@
 # Handoff — 2026-08-26. Supersedes all earlier handoffs.
 
-## THE PRE-BIRTH BUILD LIST IS EMPTY. Apply half landed (5e42ad4).
+## THE PRE-BIRTH BUILD LIST IS EMPTY. Apply half landed (5e42ad4), then survived a DO-NOT-SHIP validation round (c0db8a4).
+
+**2026-08-27: Codex post-implementation validation returned DO-NOT-SHIP
+(3 CRITICAL / 7 MAJOR / 1 MINOR). All eleven findings reproduced by the
+build seat and repaired under test** — read the TWELFTH round in the
+rulings doc. The CRITICALs, in one line each: the causation predicate
+existed but the same-run companion pass never called it (and it compared
+too few fields); the editable manifest WAS the forbidden per-row switch
+(deleting a sid from the JSON silently omitted that record — selection is
+now ALWAYS re-derived from the live census, mismatch refuses the run,
+consumption is content-bound); a refused COMPANION was declared "the
+replay is complete" (the same shape the previous round fixed for bodies,
+recurring one layer up). Also fixed: binding checks moved under the apply
+lock with per-mutation fresh re-classification; a recorded TRUE lived
+time was being discarded; metadata-coincidence content refusals;
+foreign-producer refusals mislabeled terminal; kind-blind and
+owner-process-only claims narrowed to what execution supports; cockpit
+attention now counts UNRESOLVED dispositions (a completed replay stops
+paging) and the visible cockpit finally consumes ledger_admission.
+Witness after fixes: 29 mutations each caught by a named test (the
+mutation harness itself was repaired — it had counted "no tests
+collected" as caught); falsifier GREEN 8/8 n=20000; battery 534 passed,
+same 7 pre-existing reds. A Codex RE-validation of the fix diff was
+launched at session end — read its verdict before building anything on
+this organ.
+
 
 The dead-letter replay APPLY half — the last remaining pre-birth build —
 is in, flag-dormant, behind council round ELEVEN (three seats, all
