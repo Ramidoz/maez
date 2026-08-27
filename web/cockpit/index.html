@@ -742,12 +742,12 @@ function LivingDashboard({ onMode, openSurface }) {
         <Starfield />
         <div style={{ position: 'absolute', top: 16, left: 20, zIndex: 2, display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, fontWeight: 850, letterSpacing: 1.1, textTransform: 'uppercase' }}>Maez</span>
-          <span style={{ fontFamily: A.mono, fontSize: 13, color: d.stalled ? A.red : A.green, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{d.status || 'unknown'}</span>
+          <span style={{ fontFamily: A.mono, fontSize: 13, color: (d.stalled || d.ledgerAttention) ? A.red : A.green, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{d.status || 'unknown'}</span>
         </div>
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', width: '100%' }}>
           <MaezCoreVisual d={d} />
           <div style={{ marginTop: 8, fontFamily: A.sans, fontSize: 23, fontWeight: 800, letterSpacing: -0.7, color: A.text }}>
-            {d.stalled ? 'Daemon needs attention.' : 'Watching the live daemon.'}
+            {d.stalled ? 'Daemon needs attention.' : d.ledgerAttention ? 'The ledger is owed attention.' : 'Watching the live daemon.'}
           </div>
           <div style={{ margin: '8px auto 0', maxWidth: 560, fontFamily: A.sans, fontSize: 14, color: A.textSoft, lineHeight: 1.55 }}>
             {d.currentThought || 'Waiting for the next live thought.'}

@@ -359,10 +359,11 @@ class BindingRefusalTests(unittest.TestCase):
         outcome = next(iter(report["outcomes"].values()))
         self.assertEqual(outcome["refusal"], "record_digest_mismatch")
 
-    def test_disposition_change_refuses_by_name(self):
-        """The census said replayable; if the live classifier disagrees at
-        apply time, that mutation refuses — eligibility comes only from
-        the disposition, and the disposition moved."""
+    def test_world_moved_after_census_refuses_the_whole_run(self):
+        """The census said replayable; the live derivation at apply time
+        disagrees. The WHOLE run refuses — an edited document and a stale
+        document are indistinguishable from here, and both have the same
+        cure (a fresh census). The manifest stays unconsumed."""
         m, path = self.f.manifest()
         sid = m["selected"]["bodies"][0]
         rec = next(r for r in self.f.records() if r["event_id"] == sid)
@@ -373,8 +374,27 @@ class BindingRefusalTests(unittest.TestCase):
             self.f.spool_root, submission_id=sid, submitted_at=rec["ts"],
             producer="dead_letter_replay", turn_kind=rec["turn_kind"],
             raw_text=rec["raw_text"], kwargs=kw)
-        report = R.apply(self.f.db, path)
-        self.assertEqual(report["outcomes"][sid]["refusal"], "disposition_changed")
+        with self.assertRaises(R.ReplayRefusal) as cm:
+            R.apply(self.f.db, path)
+        self.assertEqual(cm.exception.name, "selection_mismatch")
+        self.assertTrue(Path(path).exists(),
+                        "a selection refusal must not spend the manifest")
+
+    def test_per_mutation_guard_still_checks_the_fresh_disposition(self):
+        """Defense in depth behind the selection check: _guard_record
+        re-classifies at MUTATION time, so a drainer racing mid-run (it
+        does not take the apply lock) turns into a named per-record
+        refusal, never a stale-snapshot publication."""
+        m, _ = self.f.manifest()
+        sid = m["selected"]["bodies"][0]
+        rec = next(r for r in self.f.records() if r["event_id"] == sid)
+        digests = {sid: R.record_digest(rec)}
+        # the world moves AFTER the run started: the identity commits
+        self.f.commit(text=rec["raw_text"], submission_id=sid)
+        with self.assertRaises(R.ReplayRefusal) as cm:
+            R._guard_record(self.f.db, sid, digests,
+                            expect_disposition="replayable")
+        self.assertEqual(cm.exception.name, "disposition_changed")
 
 
 class BodyReconstructionTests(unittest.TestCase):
@@ -908,3 +928,212 @@ class PartialRunTests(unittest.TestCase):
         self.assertIn("incomplete", report)
         self.assertEqual(len(report["outcomes"]), 1,
                          "the reached mutation must be recorded")
+
+
+class CodexValidationRoundTests(unittest.TestCase):
+    """Each test here pins a finding from the 2026-08-27 Codex validation
+    round (DO-NOT-SHIP, 3 CRITICAL / 7 MAJOR / 1 MINOR), reproduced by
+    this author before the fix was written. The test names carry the
+    finding numbers."""
+
+    def setUp(self):
+        ledger_owner._reset_for_tests()
+        self.addCleanup(ledger_owner._reset_for_tests)
+        self.f = _Fixture("codexval")
+        self.f.commit(text="anchor")
+
+    # ---- CRITICAL 1: causation at the mutation boundary -----------------
+    def test_c1_same_run_companion_refuses_a_foreign_commit(self):
+        """Our body envelope pending, but the committed row under that
+        identity is a FOREIGN original (timeout-after-commit): the
+        companion pass must ask the row, and refuse."""
+        rec = self.f.dead_letter(text="the twice-told life")
+        # our body publishes but does NOT drain
+        _, path = self.f.manifest()
+        R.apply(self.f.db, path)
+        # ...and the ORIGINAL write lands first, under the same identity
+        self.f.commit(text="the twice-told life",
+                      submission_id=rec["event_id"])
+        out = R._apply_one_companion(
+            self.f.db, self.f.spool_root, rec["event_id"], "run-x",
+            {rec["event_id"]: R.record_digest(
+                next(r for r in self.f.records()
+                     if r["event_id"] == rec["event_id"]))},
+            expect_disposition=None)
+        self.assertEqual(out["refusal"], "companion_refused_body_not_replayed")
+        self.assertIn("NULL submitted_at", out["detail"])
+
+    def test_c1b_causation_checks_the_preserved_fields_too(self):
+        """Same sid, same clock, same kind, same text — but different
+        privacy. The writer's raw-text-only idempotency makes this
+        reachable; the predicate must ask the whole row."""
+        sid = "feedface" * 4
+        lived = 1_700_000_000.0
+        spool.enqueue_reconstructed(
+            self.f.spool_root, submission_id=sid, submitted_at=lived,
+            producer="web", turn_kind="user_message", raw_text="same words",
+            kwargs={"surface": "web_owner",
+                    "taint_labels": ["owner_utterance"],
+                    "privacy_access": "sealed_adjacent"})
+        self.f.drain()
+        envelope = {"submission_id": sid, "submitted_at": lived,
+                    "turn_kind": "user_message", "raw_text": "same words",
+                    "kwargs": {"surface": "web_owner",
+                               "taint_labels": ["owner_utterance"],
+                               "privacy_access": "public"}}
+        is_ours, why = R._row_is_our_replay(self.f.db, envelope)
+        self.assertFalse(is_ours)
+        self.assertIn("privacy_access", why)
+
+    # ---- CRITICAL 2: the editable manifest ------------------------------
+    def test_c2_deleting_one_sid_from_the_file_refuses_the_whole_run(self):
+        """The per-utterance omission switch the tenth round ruled
+        inexpressible must not be expressible with a text editor."""
+        self.f.dead_letter(text="first life")
+        rec2 = self.f.dead_letter(text="second life")
+        m, path = self.f.manifest()
+        m["selected"]["bodies"] = [
+            s for s in m["selected"]["bodies"] if s != rec2["event_id"]]
+        Path(path).write_text(json.dumps(m), encoding="utf-8")
+        with self.assertRaises(R.ReplayRefusal) as cm:
+            R.apply(self.f.db, path)
+        self.assertEqual(cm.exception.name, "selection_mismatch")
+        # NOTHING published — not even the record that was kept.
+        self.assertEqual(
+            spool.spool_status(self.f.spool_root)["pending_total"], 0)
+
+    def test_c2b_consuming_different_bytes_refuses_before_any_mutation(self):
+        """No read-A-consume-B: the bytes consumed must be the bytes this
+        run read and checked."""
+        self.f.dead_letter(text="a life")
+        m, path = self.f.manifest()
+        real_consume = R._consume_manifest
+
+        def swap_then_consume(manifest_path, run_id):
+            # an attacker replaces the file between read and consume
+            Path(manifest_path).write_text(
+                json.dumps(m) + "\n// tampered", encoding="utf-8")
+            return real_consume(manifest_path, run_id)
+
+        with patch.object(R, "_consume_manifest", swap_then_consume):
+            with self.assertRaises(R.ReplayRefusal) as cm:
+                R.apply(self.f.db, path)
+        self.assertEqual(cm.exception.name, "manifest_changed_during_consume")
+        self.assertEqual(
+            spool.spool_status(self.f.spool_root)["pending_total"], 0,
+            "no mutation may precede the digest check")
+
+    def test_c2c_outcome_receipts_never_overwrite(self):
+        """A re-fed manifest copy carries the same run_id; its outcome map
+        must not clobber the original run's evidence."""
+        rec = self.f.dead_letter(text="a life")
+        m, path = self.f.manifest()
+        R.apply(self.f.db, path)
+        R._write_outcome_receipt(self.f.db, {"run_id": m["run_id"],
+                                             "outcomes": {}, "counts": {}})
+        receipts = sorted(p.name for p in
+                          Path(R.manifest_root(self.f.db)).glob("*.outcomes*"))
+        self.assertEqual(len(receipts), 2, receipts)
+
+    # ---- CRITICAL 3: refused companion is not complete ------------------
+    def test_c3_a_refused_companion_pages_as_companion_refused(self):
+        rec = self.f.dead_letter(text="a replayed life")
+        _, path = self.f.manifest()
+        R.apply(self.f.db, path)
+        self.f.drain()
+        csid = R.companion_submission_id(rec["event_id"])
+        _, path2 = self.f.manifest()
+        R.apply(self.f.db, path2)          # publishes the companion
+        # the door refuses it
+        pend = Path(self.f.spool_root) / "dead_letter_replay" / "pending" / f"{csid}.json"
+        refused = Path(self.f.spool_root) / "dead_letter_replay" / "refused"
+        refused.mkdir(parents=True, exist_ok=True)
+        os.replace(pend, refused / f"{csid}.json")
+        (refused / f"{csid}.error.json").write_text(
+            '{"error": "writer refused payload"}')
+        entry = next(e for e in R.classify(self.f.db)["records"]
+                     if e["event_id"] == rec["event_id"])
+        self.assertEqual(entry["disposition"], "companion_refused")
+        self.assertIn("permanently unexplained", entry["reason"])
+        self.assertNotIn("complete", entry["reason"])
+
+    # ---- MAJOR 5 + MINOR 11: the lived clock ----------------------------
+    def test_m5_a_recorded_true_lived_time_survives_reconstruction(self):
+        rec = self.f.dead_letter(text="lived at T0", submitted_at=1000.0)
+        env = R.build_body_submission(rec, self.f.db)
+        self.assertEqual(env["submitted_at"], 1000.0,
+                         "the record's TRUE lived time was discarded")
+
+    def test_m11_a_record_without_a_numeric_clock_refuses(self):
+        rec = self.f.dead_letter(text="clockless")
+        rec = dict(rec, ts="not-a-number")
+        with self.assertRaises(R.ReplayRefusal) as cm:
+            R.build_body_submission(rec, self.f.db)
+        self.assertEqual(cm.exception.name, "record_clock_invalid")
+
+    # ---- MAJOR 6: metadata coincidence is not content -------------------
+    def test_m6_a_body_whose_text_equals_the_stage_still_gets_a_companion(self):
+        record = {"event_id": "a" * 32, "ts": 1.0, "stage": "write",
+                  "turn_kind": "user_message", "raw_text": "write",
+                  "kwargs": {"surface": "web_owner"}}
+        companion = R.build_companion(
+            record=record, body_submission_id="a" * 32,
+            body_row=("t", 1, "c" * 64, "public"), run_id="r", replayed_at=2.0)
+        self.assertEqual(
+            json.loads(companion["raw_text"])["dead_letter_stage"], "write")
+
+    # ---- MAJOR 7: a foreign refusal is not a replay refusal -------------
+    def test_m7_a_foreign_refused_envelope_does_not_block_replay(self):
+        rec = self.f.dead_letter(text="refused elsewhere")
+        dirs = spool._producer_dirs(self.f.spool_root, "web")
+        (dirs["refused"] / f"{rec['event_id']}.json").write_text("{}")
+        (dirs["refused"] / f"{rec['event_id']}.error.json").write_text(
+            '{"error": "foreign refusal"}')
+        entry = next(e for e in R.classify(self.f.db)["records"]
+                     if e["event_id"] == rec["event_id"])
+        self.assertEqual(
+            entry["disposition"], "replayable",
+            "a foreign producer's refusal blocks nothing here")
+        self.assertEqual(entry["foreign_refusals"], ["web/refused"])
+
+    # ---- MAJOR 8: twin identity includes kind, and that is identity -----
+    def test_m8_twin_identity_includes_kind_as_payload_not_gate(self):
+        """Held world: a committed user_message twin. Flipping the record
+        kind changes the disposition BECAUSE a twin is only a twin of the
+        same payload — the kind participates in 'is this the same
+        speech?', never in 'may this kind speak?'. Pinned so the claim
+        'kind-blind' stays precise: selection never branches on kind;
+        identity comparison includes it."""
+        self.f.commit(text="the same words")
+        rec_same = self.f.dead_letter(kind="user_message",
+                                      text="the same words")
+        rec_other = self.f.dead_letter(kind="system_event",
+                                       text="the same words")
+        by_id = {e["event_id"]: e["disposition"]
+                 for e in R.classify(self.f.db)["records"]}
+        self.assertEqual(by_id[rec_same["event_id"]], "possibly_committed",
+                         "same kind + same text within the window is the "
+                         "timeout-after-commit shape")
+        self.assertEqual(by_id[rec_other["event_id"]], "replayable",
+                         "a different kind is a different payload, so no "
+                         "twin exists for it")
+
+    # ---- MAJOR 10: attention clears when the record is resolved ---------
+    def test_m10_attention_logic_counts_unresolved_not_raw_rows(self):
+        rec = self.f.dead_letter(text="restored and resolved")
+        counts = R.classify(self.f.db)["counts"]
+        self.assertEqual(counts.get("replayable"), 1)
+        _, path = self.f.manifest()
+        R.apply(self.f.db, path)
+        self.f.drain()
+        _, path2 = self.f.manifest()
+        R.apply(self.f.db, path2)
+        self.f.drain()
+        counts = R.classify(self.f.db)["counts"]
+        unresolved = sum(
+            c for d, c in counts.items()
+            if d not in ("already_committed", "already_enqueued"))
+        self.assertEqual(unresolved, 0,
+                         f"a fully replayed record must stop paging: {counts}")
+        # the raw sidecar row is still there — rows alone would page forever
+        self.assertEqual(len(self.f.records()), 1)

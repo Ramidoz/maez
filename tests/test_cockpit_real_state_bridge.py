@@ -461,6 +461,76 @@ class TestLedgerAdmissionRealState(unittest.TestCase):
         )
 
 
+    def test_attention_counts_unresolved_not_raw_sidecar_rows(self):
+        """A fully replayed dead letter stays in the sidecar forever
+        (nothing truncates it). Attention must ask the classifier what is
+        STILL omitted or unexplained, not count rows — an alarm that never
+        clears carries no information (Codex validation, 2026-08-27)."""
+        import tempfile
+        from pathlib import Path
+
+        from daemon import maez_daemon as md
+
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+            db = Path(td) / "ledger.db"
+            from core.ledger import migrate as _migrate
+            _migrate.run(str(db))
+            import json as _json
+            import time as _time
+
+            # a dead-letter record whose identity ALREADY committed:
+            # resolved life, but the sidecar row remains. The row is
+            # committed through the real writer (turns is append-only —
+            # an UPDATE is trigger-refused).
+            from core.ledger import owner as _owner
+
+            _owner._reset_for_tests()
+            try:
+                with mock.patch.dict(
+                    __import__("os").environ, {"MAEZ_LEDGER_WRITES": "1"}
+                ):
+                    tid = _owner.owner_write_turn(
+                        str(db), "user_message", "resolved",
+                        submission_id="resolved-id", surface="web_owner",
+                        taint_labels=["owner_utterance"],
+                        privacy_access="public")
+            finally:
+                _owner._reset_for_tests()
+            self.assertIsNotNone(tid, "fixture commit failed")
+            sidecar = Path(str(db) + ".deadletter.999.jsonl")
+            record = {"event_id": "resolved-id", "ts": _time.time(),
+                      "pid": 999, "stage": "write", "category": "failed",
+                      "turn_kind": "user_message", "raw_text": "resolved",
+                      "kwargs": {}, "error": "OSError()"}
+            sidecar.write_text(_json.dumps(record) + "\n")
+            with mock.patch.object(md, "LEDGER_DB_PATH", db):
+                state = _build_state_under_patches(_FakeDaemon())
+        adm = state["ledger_admission"]
+        self.assertEqual(adm["dead_letter"]["rows"], 1,
+                         "the raw row is still in custody")
+        self.assertEqual(adm["dead_letter"]["unresolved_rows"], 0)
+        self.assertFalse(
+            adm["attention"],
+            "a resolved record must stop paging, or the alarm is a "
+            "stuck light carrying no information")
+
+    def test_visible_cockpit_consumes_ledger_admission(self):
+        """Codex validation, 2026-08-27: both cockpit clients discarded
+        ledger_admission, so a refused envelope left the UI green and
+        saying 'Watching the live daemon.' Withholding must be LOUD in the
+        surface a human actually looks at."""
+        from pathlib import Path
+
+        for jsx in ("web/cockpit/sim.jsx", "web/cockpit/v2/sim.jsx"):
+            body = Path(jsx).read_text(encoding="utf-8")
+            self.assertIn("d.ledger_admission", body, jsx)
+            self.assertIn("ledgerAttention", body, jsx)
+        for html in ("web/cockpit/index.html", "web/cockpit/v2/index.html"):
+            body = Path(html).read_text(encoding="utf-8")
+            self.assertIn("d.ledgerAttention", body, html)
+            self.assertIn("The ledger is owed attention.", body, html)
+
+
 
 class TestWalExcursionVisibility(unittest.TestCase):
     """Council round eight: ship no periodic checkpoint, ship VISIBILITY.

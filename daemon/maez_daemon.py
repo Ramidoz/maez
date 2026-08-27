@@ -2815,6 +2815,26 @@ def _ledger_admission_health(daemon) -> dict:
 
     db = str(LEDGER_DB_PATH)
     dead = dead_letter_status(db)
+    # Raw rows are custody, not omission: a fully REPLAYED dead letter
+    # still sits in the sidecar forever (nothing truncates it), so paging
+    # on rows alone left attention=true permanently after a completed
+    # replay — an alarm that never clears carries no information (Codex
+    # validation, 2026-08-27). Ask the classifier which records still
+    # represent omitted or unexplained life: everything except
+    # already_committed / already_enqueued (pending envelopes have their
+    # own arm below), and torn lines count — an unread record is not a
+    # resolved one. Falls back to raw rows if the census fails: an
+    # unreadable census must page, not soothe.
+    try:
+        from core.ledger.dead_letter_replay import classify as _dl_classify
+
+        _dl_counts = _dl_classify(db)["counts"]
+        dead["unresolved_rows"] = sum(
+            count for disposition, count in _dl_counts.items()
+            if disposition not in ("already_committed", "already_enqueued")
+        )
+    except Exception:
+        dead["unresolved_rows"] = dead.get("rows", 0)
     spool = spool_status(default_spool_root(db))
     # WAL visibility (council round eight): SQLite's automatic
     # checkpointing IS the policy, so nothing here truncates. The
@@ -2859,7 +2879,7 @@ def _ledger_admission_health(daemon) -> dict:
     )
     spool["refused_total"] = refused_total
     attention = bool(
-        dead.get("rows")
+        dead.get("unresolved_rows")
         or refused_total
         or (
             not paused

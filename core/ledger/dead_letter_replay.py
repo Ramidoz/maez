@@ -77,6 +77,34 @@ _LOGGER = logging.getLogger("core.ledger.dead_letter_replay")
 _PRODUCER = "dead_letter_replay"
 
 
+def _published_states(spool_root: str, submission_id: str) -> list[tuple[str, str]]:
+    """Every (producer, state) pair under which this identity is published.
+
+    One identity can appear under several producers (each producer dir is
+    its own namespace on disk even though the schema UNIQUE is global), and
+    WHICH producer holds a refusal decides what the refusal means: a
+    refusal under OUR producer is terminal for replay (the no-overwrite
+    seam checks our producer), while a refusal under a FOREIGN producer
+    blocks nothing — executed (Codex validation, 2026-08-27): a foreign
+    refused envelope was labeled replay_refused while our producer could
+    still publish, so the census claimed a replay was attempted and
+    permanently refused when it was neither.
+    """
+    from core.ledger import spool
+
+    root = Path(spool_root)
+    out: list[tuple[str, str]] = []
+    if not root.is_dir():
+        return out
+    for producer_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        state = spool._submission_exists(
+            spool_root, producer_dir.name, submission_id
+        )
+        if state:
+            out.append((producer_dir.name, state))
+    return out
+
+
 def _published_anywhere(spool_root: str, submission_id: str) -> str | None:
     """Is this identity published under ANY producer? The producer label
     is a directory name, not a namespace: the schema UNIQUE is on the
@@ -270,7 +298,8 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
         return False, "the ledger could not be read"
     try:
         row = conn.execute(
-            "SELECT turn_kind, raw_text, submitted_at FROM turns"
+            "SELECT turn_kind, raw_text, submitted_at, surface, raw_surface,"
+            " privacy_access, taint_labels_json FROM turns"
             " WHERE submission_id = ?", (envelope.get("submission_id"),),
         ).fetchone()
     except sqlite3.Error:
@@ -279,7 +308,8 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
         conn.close()
     if row is None:
         return False, "no committed row carries this identity"
-    turn_kind, raw_text, submitted_at = row
+    (turn_kind, raw_text, submitted_at, surface, raw_surface,
+     privacy_access, taint_json) = row
     if submitted_at is None:
         return False, (
             "the committed row has a NULL submitted_at, which is the "
@@ -297,6 +327,33 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
             "published (the writer's idempotent-redrive check compares "
             "raw_text alone, so an ack does not prove the row is ours)"
         )
+    # The preserved provenance fields too (Codex validation, 2026-08-27:
+    # "a row with the same SID/time/kind/text but different privacy,
+    # surface, taint ... returns True", and the writer's raw-text-only
+    # idempotency makes that collision reachable). Compared only where the
+    # envelope carries the kwarg, which for OUR envelopes is always — the
+    # five preserved fields travel in every reconstructed body.
+    kwargs = envelope.get("kwargs") or {}
+    for kwarg_key, row_value in (
+        ("surface", surface),
+        ("raw_surface", raw_surface),
+        ("privacy_access", privacy_access),
+    ):
+        if kwarg_key in kwargs and kwargs[kwarg_key] != row_value:
+            return False, (
+                f"the committed row's {kwarg_key} is not the one our "
+                "envelope published, so a different submission produced it"
+            )
+    if "taint_labels" in kwargs:
+        try:
+            row_taint = sorted(json.loads(taint_json or "[]"))
+        except ValueError:
+            row_taint = None
+        if row_taint != sorted(kwargs["taint_labels"] or []):
+            return False, (
+                "the committed row's taint labels are not the ones our "
+                "envelope published, so a different submission produced it"
+            )
     return True, "the committed row is the body this organ published"
 
 
@@ -331,12 +388,20 @@ def _committed_disposition(spool_root: str, event_id: str,
     two functions, two crash stories, two ways to miss the phantom).
     """
     state, envelope = _our_body_envelope(spool_root, event_id)
-    companion_state = _published_anywhere(
-        spool_root, companion_submission_id(event_id)
+    companion_sid = companion_submission_id(event_id)
+    companion_states = _published_states(spool_root, companion_sid)
+    companion_our_refused = any(
+        p == _PRODUCER and st == "refused" for p, st in companion_states
     )
+    companion_in_flight = [
+        f"{p}/{st}" for p, st in companion_states if st in ("pending", "acked")
+    ]
     out = {
         "replay_body_state": state,
-        "companion_state": companion_state,
+        "companion_state": (
+            f"{_PRODUCER}/refused" if companion_our_refused
+            else (companion_in_flight[0] if companion_in_flight else None)
+        ),
         "disposition": "already_committed",
     }
     if state not in ("pending", "acked"):
@@ -356,7 +421,28 @@ def _committed_disposition(spool_root: str, event_id: str,
         )
         out["causation_check"] = why
         return out
-    if companion_state is not None:
+    if companion_our_refused:
+        # EXECUTED (Codex validation, 2026-08-27, reproduced): the first
+        # cut treated ANY published companion state as "the replay is
+        # complete" — including refused/, where the no-overwrite seam
+        # makes the refusal permanent. A replayed body whose companion
+        # was refused is a committed row that will NEVER get its
+        # provenance note: terminal, unexplained, and it must page, not
+        # report itself finished.
+        out["disposition"] = "companion_refused"
+        out["refusal_reason"] = _refusal_reason(
+            spool_root, f"{_PRODUCER}/refused", companion_sid
+        )
+        out["reason"] = (
+            "this organ replayed the body and the body committed, but the "
+            "provenance companion was REFUSED at the admission door and is "
+            "terminal: the no-overwrite seam will not accept a second "
+            "companion under its deterministic identity. The replay is "
+            "permanently unexplained unless the envelope is resolved by "
+            "hand."
+        )
+        return out
+    if companion_in_flight:
         out["reason"] = (
             "this organ replayed the body and its companion is already "
             "published; the replay is complete"
@@ -406,7 +492,20 @@ def classify(db_path: str) -> dict:
         )
         entry["byte_twin_exists"] = bool(twin_times)
 
-        published = _published_anywhere(spool_root, event_id)
+        states = _published_states(spool_root, event_id)
+        our_refused = any(
+            p == _PRODUCER and st == "refused" for p, st in states
+        )
+        in_flight = [(p, st) for p, st in states if st in ("pending", "acked")]
+        foreign_refused = [
+            f"{p}/refused" for p, st in states
+            if st == "refused" and p != _PRODUCER
+        ]
+        if foreign_refused:
+            # Informational, never a gate: a foreign producer's refusal is
+            # that producer's terminal state, and it blocks nothing here —
+            # the no-overwrite seam checks OUR producer only.
+            entry["foreign_refusals"] = foreign_refused
         if record.get("identity_conflict"):
             entry["disposition"] = "identity_conflict"
             entry["conflicting_sources"] = record.get("conflicting_sources")
@@ -431,9 +530,12 @@ def classify(db_path: str) -> dict:
         elif event_id in committed:
             entry["turn_id"] = committed[event_id]
             entry.update(_committed_disposition(spool_root, event_id, db_path))
-        elif published:
-            entry["spool_state"] = published
-            if published.endswith("/refused"):
+        elif our_refused or in_flight:
+            entry["spool_state"] = (
+                f"{_PRODUCER}/refused" if our_refused
+                else "/".join(in_flight[0])
+            )
+            if our_refused:
                 # EXECUTED (Claude council seat, 2026-08-26, reproduced by
                 # this author): a body the admission door refuses moves to
                 # ``refused/``, where ``_submission_exists`` still finds it —
@@ -443,8 +545,8 @@ def classify(db_path: str) -> dict:
                 # This is terminal and it must say so, with the door's own
                 # reason attached.
                 entry["disposition"] = "replay_refused"
-                entry["refusal_reason"] = _refusal_reason(spool_root, published,
-                                                          event_id)
+                entry["refusal_reason"] = _refusal_reason(
+                    spool_root, f"{_PRODUCER}/refused", event_id)
                 entry["reason"] = (
                     "a published envelope for this identity was REFUSED at "
                     "the admission door and is terminal: the door never "
@@ -607,11 +709,13 @@ _STANDING_LIMITATIONS = (
             "(handle_message(source='unknown')). The same surface value "
             "therefore arises from a delivered and an undelivered path, so "
             "no field in the record discriminates. Population narrowed by "
-            "execution: persist_model_reply routes NON-OWNER processes "
-            "(web, CLI) to the spool, which never dead-letters — so a "
-            "dead-lettered model_reply can only come from an owner "
-            "process. The hazard is real and it is smaller than 'every "
-            "reply ever written'."
+            "execution, precisely: the four shipped surface call sites "
+            "route non-owner processes (web, CLI) through "
+            "persist_model_reply's spool lane, which never dead-letters — "
+            "but the public try_write_turn dead-letters on failure in ANY "
+            "process (Codex validation, 2026-08-27), so the narrowing is a "
+            "fact about the shipped call sites, not a mechanical guarantee "
+            "about the record shape."
         ),
         "what_would_close_it": (
             "Writers capturing delivery/closure evidence at the send site, "
@@ -846,8 +950,33 @@ def build_body_submission(record: dict, db_path: str) -> dict:
         )
 
     kwargs.pop("submission_id", None)
-    kwargs.pop("submitted_at", None)
+    recorded_lived = kwargs.pop("submitted_at", None)
     parent_turn_id = kwargs.pop("parent_turn_id", None)
+
+    # The envelope's lived time, best evidence first (Codex validation,
+    # 2026-08-27: the first cut popped a caller-supplied submitted_at and
+    # DISCARDED it, substituting the custody clock — destroying the one
+    # case where the record carries the TRUE lived time). The custody ts
+    # is the bounded proxy (busy_timeout is 5 s against the organ's own
+    # 300 s window), used only when the record has nothing truer.
+    lived = (
+        recorded_lived
+        if isinstance(recorded_lived, (int, float))
+        and not isinstance(recorded_lived, bool)
+        else record.get("ts")
+    )
+    if not isinstance(lived, (int, float)) or isinstance(lived, bool):
+        # A record with no usable clock cannot be replayed honestly: a
+        # NULL submitted_at is the owner-direct signature the causation
+        # predicate depends on, and a string clock would diverge between
+        # the row (coerced) and the envelope (verbatim) — either way a
+        # genuine replay would later read as foreign. Evidence, loudly.
+        raise ReplayRefusal(
+            "record_clock_invalid",
+            f"the record's clock is {lived!r}, which is not a number; a "
+            "reconstructed body without a numeric lived time would be "
+            "indistinguishable from an original owner-direct commit",
+        )
 
     parent_submission_id = None
     if parent_turn_id is not None:
@@ -875,7 +1004,7 @@ def build_body_submission(record: dict, db_path: str) -> dict:
 
     return {
         "submission_id": record["event_id"],
-        "submitted_at": record.get("ts"),
+        "submitted_at": lived,
         "producer": _PRODUCER,
         "turn_kind": record.get("turn_kind"),
         "raw_text": record.get("raw_text"),
@@ -938,6 +1067,20 @@ def _refuse_copied_content(payload: dict, record: dict) -> None:
     raw_text = record.get("raw_text")
     if isinstance(raw_text, str) and raw_text:
         forbidden.add(raw_text)
+    # Values the companion LEGITIMATELY shares with the record are not
+    # copied content — they are the record's own metadata. Executed (Codex
+    # validation, 2026-08-27): a user message whose exact text is "write"
+    # dead-letters at stage "write", and the first cut then refused its
+    # own companion forever because dead_letter_stage equaled the body
+    # text. A five-byte coincidence with a closed metadata vocabulary is
+    # not a content leak.
+    sanctioned = {
+        v for v in (
+            record.get("stage"),
+            record.get("event_id"),
+            record.get("source_file"),
+        ) if isinstance(v, str) and v
+    }
     for key, value in (record.get("kwargs") or {}).items():
         # The RELOCATED authority values are identity and clocks, not
         # content: submission_id IS the body's name and the companion
@@ -949,6 +1092,7 @@ def _refuse_copied_content(payload: dict, record: dict) -> None:
             continue
         if isinstance(value, str) and value:
             forbidden.add(value)
+    forbidden -= sanctioned
 
     def walk(node, path):
         if isinstance(node, dict):
@@ -1129,7 +1273,11 @@ def build_manifest(db_path: str, *, role: str) -> dict:
             "derivation": (
                 "machine-derived from classify() dispositions alone: "
                 "'replayable' → body pass, 'companion_owed' → companion "
-                "pass. turn_kind is recorded as fact and never consulted. "
+                "pass. turn_kind is never consulted BY SELECTION; the "
+                "census's byte-twin identity does include kind, because a "
+                "twin is only a twin of the same payload — that is payload "
+                "identity, not an eligibility gate (a gate asks 'may this "
+                "kind speak?'; identity asks 'is this the same speech?'). "
                 "There is no per-record switch: refused/unknown_category/"
                 "unverified/identity_conflict stay evidence, and "
                 "possibly_committed waits for the evidence lane — review "
@@ -1247,7 +1395,13 @@ def apply(db_path: str, manifest_path: str) -> dict:
     from core.ledger import spool
 
     started_at = time.time()
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    # Read the document ONCE, as bytes, and remember its digest. Every
+    # later step acts on these bytes; the digest is what proves the file
+    # consumed is the file read (Codex validation, 2026-08-27: reading
+    # document A while consuming replacement B was expressible).
+    manifest_bytes = Path(manifest_path).read_bytes()
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
     _refuse_consent_semantics(manifest)
 
     if manifest.get("manifest_version") != MANIFEST_VERSION:
@@ -1259,39 +1413,6 @@ def apply(db_path: str, manifest_path: str) -> dict:
         )
     run_id = manifest["run_id"]
     target = manifest.get("target_ledger") or {}
-
-    # ---- binding checks. All BEFORE the manifest is consumed, so a
-    # refusal here leaves the document usable against the right ledger.
-    if target.get("realpath") != os.path.realpath(db_path):
-        raise ReplayRefusal(
-            "target_ledger_mismatch",
-            f"manifest targets {target.get('realpath')!r}, not "
-            f"{os.path.realpath(db_path)!r}",
-        )
-    live_anchor = _meta(db_path, "genesis_hash")
-    if live_anchor is None:
-        raise ReplayRefusal(
-            "ledger_instance_unanchored",
-            "the target ledger has no genesis_hash, so this census cannot "
-            "be bound to a ledger INSTANCE; an unanchored apply could "
-            "publish a census taken against a different ledger's life",
-        )
-    if target.get("instance_anchor") != live_anchor:
-        raise ReplayRefusal(
-            "ledger_instance_changed",
-            "the ledger's genesis_hash differs from the manifest's: this is "
-            "a DIFFERENT ledger instance at the same path (restored, "
-            "re-created), and every digest in the census is meaningless "
-            "against it",
-        )
-    live_head = _meta(db_path, "last_chain_hash")
-    if target.get("pre_apply_chain_head") != live_head:
-        raise ReplayRefusal(
-            "stale_chain_head",
-            f"the chain advanced since the census (manifest head "
-            f"{target.get('pre_apply_chain_head')!r}, live head "
-            f"{live_head!r}); the census may no longer describe the ledger",
-        )
 
     spool_root = spool.default_spool_root(db_path)
     lock_root = Path(manifest_root(db_path))
@@ -1316,25 +1437,54 @@ def apply(db_path: str, manifest_path: str) -> dict:
 
     outcomes: dict[str, dict] = {}
     try:
-        # Re-read the world. The manifest says what WAS; these say what IS.
-        live_census = {r["event_id"]: r for r in classify(db_path)["records"]}
-        live_records = {r["event_id"]: r for r in _records(db_path)[0]}
+        # ---- binding checks, all UNDER the lock (Codex validation,
+        # 2026-08-27: the chain head was checked before the lock, so the
+        # check guarded a moment the lock did not hold). All BEFORE the
+        # manifest is consumed, so a refusal leaves the document usable
+        # against the right ledger at a quieter moment.
+        if target.get("realpath") != os.path.realpath(db_path):
+            raise ReplayRefusal(
+                "target_ledger_mismatch",
+                f"manifest targets {target.get('realpath')!r}, not "
+                f"{os.path.realpath(db_path)!r}",
+            )
+        live_anchor = _meta(db_path, "genesis_hash")
+        if live_anchor is None:
+            raise ReplayRefusal(
+                "ledger_instance_unanchored",
+                "the target ledger has no genesis_hash, so this census "
+                "cannot be bound to a ledger INSTANCE; an unanchored apply "
+                "could publish a census taken against a different ledger's "
+                "life",
+            )
+        if target.get("instance_anchor") != live_anchor:
+            raise ReplayRefusal(
+                "ledger_instance_changed",
+                "the ledger's genesis_hash differs from the manifest's: "
+                "this is a DIFFERENT ledger instance at the same path "
+                "(restored, re-created), and every digest in the census is "
+                "meaningless against it",
+            )
+        live_head = _meta(db_path, "last_chain_hash")
+        if target.get("pre_apply_chain_head") != live_head:
+            raise ReplayRefusal(
+                "stale_chain_head",
+                f"the chain advanced since the census (manifest head "
+                f"{target.get('pre_apply_chain_head')!r}, live head "
+                f"{live_head!r}); the census may no longer describe the "
+                "ledger",
+            )
+
         manifest_digests = {
             e["event_id"]: e.get("record_digest")
             for e in manifest.get("census") or []
         }
-
-        consumed_path = _consume_manifest(manifest_path, run_id)
-
         selected = manifest.get("selected") or {}
         body_ids = list(selected.get("bodies") or [])
         companion_ids = list(selected.get("companions") or [])
         # The outcome map is keyed by identity, so a sid appearing twice
         # would silently overwrite its own outcome — one mutation
-        # reported, two attempted. A machine-derived selection cannot
-        # produce that (one record, one disposition), but the manifest is
-        # a FILE and this is the check that keeps "machine-derived" true
-        # of the document actually being applied.
+        # reported, two attempted.
         seen_once = set()
         duplicates = sorted(
             {sid for sid in body_ids + companion_ids
@@ -1347,15 +1497,55 @@ def apply(db_path: str, manifest_path: str) -> dict:
                 "outcome map keyed by identity would report one mutation "
                 "and attempt two",
             )
+        # ---- the selection is NEVER the file's word. Re-derive it from
+        # the LIVE census and require the document to match exactly.
+        # Executed (Codex validation, 2026-08-27): the first cut trusted
+        # the JSON arrays, so deleting one sid from the file applied the
+        # rest and silently omitted that record — the per-utterance taste
+        # power the tenth round ruled inexpressible, expressible with a
+        # text editor. A mismatch refuses the WHOLE run: an edited
+        # document and a stale document are indistinguishable from here,
+        # and both have the same cure — a fresh census.
+        live_now = classify(db_path)["records"]
+        derived_bodies = sorted(
+            e["event_id"] for e in live_now if e["disposition"] == "replayable"
+        )
+        derived_companions = sorted(
+            e["event_id"] for e in live_now
+            if e["disposition"] == "companion_owed"
+        )
+        if (sorted(body_ids) != derived_bodies
+                or sorted(companion_ids) != derived_companions):
+            raise ReplayRefusal(
+                "selection_mismatch",
+                "the manifest's selected set is not the machine-derivation "
+                f"from the live census (document bodies={sorted(body_ids)} "
+                f"companions={sorted(companion_ids)}; derived "
+                f"bodies={derived_bodies} companions={derived_companions}). "
+                "Either the document was edited — taste is not expressible "
+                "here — or the world moved since the census. Both cures are "
+                "the same: build a fresh manifest.",
+            )
+
+        consumed_path = _consume_manifest(manifest_path, run_id)
+        # The file consumed must be the file read (no read-A-consume-B).
+        spent_bytes = Path(consumed_path).read_bytes()
+        if hashlib.sha256(spent_bytes).hexdigest() != manifest_digest:
+            raise ReplayRefusal(
+                "manifest_changed_during_consume",
+                "the bytes consumed are not the bytes this run read and "
+                "checked; refusing to mutate. The document is spent and no "
+                "mutation was performed.",
+            )
+
         for sid in body_ids:
             outcomes[sid] = _apply_one_body(
-                db_path, spool_root, sid, live_census, live_records,
-                manifest_digests,
+                db_path, spool_root, sid, manifest_digests,
             )
         for sid in companion_ids:
             outcomes[sid] = _apply_one_companion(
-                db_path, spool_root, sid, run_id, live_census, live_records,
-                manifest_digests, expect_disposition="companion_owed",
+                db_path, spool_root, sid, run_id, manifest_digests,
+                expect_disposition="companion_owed",
             )
         # Second pass over the bodies just published: a body that ALREADY
         # committed by the time this pass runs (a live drainer racing us)
@@ -1365,8 +1555,8 @@ def apply(db_path: str, manifest_path: str) -> dict:
             if outcomes[sid].get("outcome") != "body_published":
                 continue
             outcomes[sid]["companion"] = _apply_one_companion(
-                db_path, spool_root, sid, run_id, live_census, live_records,
-                manifest_digests, expect_disposition=None,
+                db_path, spool_root, sid, run_id, manifest_digests,
+                expect_disposition=None,
             )
         completed = True
     finally:
@@ -1416,14 +1606,23 @@ def apply(db_path: str, manifest_path: str) -> dict:
     return report
 
 
-def _guard_record(sid, live_census, live_records, manifest_digests,
-                  expect_disposition):
-    """Shared per-mutation guards. Returns the live record, or raises the
-    NAMED refusal that stopped this one mutation.
+def _guard_record(db_path, sid, manifest_digests, expect_disposition):
+    """Shared per-mutation guards, against a FRESH census. Returns the
+    live record, or raises the NAMED refusal that stopped this mutation.
 
-    The manifest is evidence about a moment. These four checks are what
-    keep it from becoming an authorization that outlives its evidence.
+    Fresh per mutation, not a run-start snapshot (Codex validation,
+    2026-08-27: a snapshot reused for every mutation guards the moment the
+    run began, not the moment each mutation happens — a drainer does not
+    take the apply lock, so the world can move mid-run). The residual
+    window between this check and the publication is stated, not hidden:
+    it is bounded by the door's own UNIQUE constraint and digest check,
+    which make the worst case a refused envelope, never a duplicate life.
+
+    The manifest is evidence about a moment. These checks are what keep it
+    from becoming an authorization that outlives its evidence.
     """
+    live_census = {r["event_id"]: r for r in classify(db_path)["records"]}
+    live_records = {r["event_id"]: r for r in _records(db_path)[0]}
     live = live_census.get(sid)
     if live is None:
         raise ReplayRefusal(
@@ -1462,14 +1661,13 @@ def _guard_record(sid, live_census, live_records, manifest_digests,
     return record
 
 
-def _apply_one_body(db_path, spool_root, sid, live_census, live_records,
-                    manifest_digests) -> dict:
+def _apply_one_body(db_path, spool_root, sid, manifest_digests) -> dict:
     """Publish ONE reconstructed body. Named refusal or publication."""
     from core.ledger import spool
 
     try:
         record = _guard_record(
-            sid, live_census, live_records, manifest_digests,
+            db_path, sid, manifest_digests,
             expect_disposition="replayable",
         )
         envelope = build_body_submission(record, db_path)
@@ -1499,9 +1697,8 @@ def _apply_one_body(db_path, spool_root, sid, live_census, live_records,
     }
 
 
-def _apply_one_companion(db_path, spool_root, sid, run_id, live_census,
-                         live_records, manifest_digests,
-                         expect_disposition) -> dict:
+def _apply_one_companion(db_path, spool_root, sid, run_id,
+                         manifest_digests, expect_disposition) -> dict:
     """Publish ONE provenance companion, against an OBSERVED body commit.
 
     Deferral is not failure and is never silent: a body that has not
@@ -1514,7 +1711,7 @@ def _apply_one_companion(db_path, spool_root, sid, run_id, live_census,
 
     try:
         record = _guard_record(
-            sid, live_census, live_records, manifest_digests,
+            db_path, sid, manifest_digests,
             expect_disposition=expect_disposition,
         )
         body_row = _committed_body_row(db_path, sid)
@@ -1527,10 +1724,13 @@ def _apply_one_companion(db_path, spool_root, sid, run_id, live_census,
                     "commit, never an assumed one"
                 ),
             }
-        # The body must be OURS. A body committed by the ORIGINAL owner
-        # write (timeout-after-commit) gets no replay companion — that
-        # would be a false claim that the row was replayed.
-        body_state = spool._submission_exists(spool_root, _PRODUCER, sid)
+        # The body must be OURS — custody AND causation. Executed (Codex
+        # validation, 2026-08-27): the first cut checked only that our
+        # envelope existed in pending|acked, so a foreign same-identity
+        # row committed after the census got a replay companion in the
+        # SAME run — the causation predicate existed and this path never
+        # called it. Custody is not causation; ask the row.
+        body_state, our_envelope = _our_body_envelope(spool_root, sid)
         if body_state not in ("pending", "acked"):
             return {
                 "refusal": "companion_refused_body_not_replayed",
@@ -1539,6 +1739,16 @@ def _apply_one_companion(db_path, spool_root, sid, run_id, live_census,
                     f"the committed row is not a replay (body state "
                     f"{body_state!r}); a companion here would claim a replay "
                     "that never happened"
+                ),
+            }
+        is_ours, why = _row_is_our_replay(db_path, our_envelope)
+        if not is_ours:
+            return {
+                "refusal": "companion_refused_body_not_replayed",
+                "detail": (
+                    f"the committed row is not the body we published: {why}; "
+                    "a companion here would claim a replay that never "
+                    "happened"
                 ),
             }
         envelope = build_companion(
@@ -1581,7 +1791,16 @@ def _write_outcome_receipt(db_path: str, report: dict) -> str:
     """
     root = Path(manifest_root(db_path))
     root.mkdir(parents=True, exist_ok=True)
+    # Never overwrite: a re-fed manifest COPY carries the same run_id, and
+    # the first cut let its (refusing) outcome map clobber the original
+    # run's — evidence of a completed maintenance operation destroyed by a
+    # later refusal (Codex validation, 2026-08-27). Every receipt keeps
+    # its own file.
     name = f"{report['run_id']}.outcomes.json"
+    suffix = 2
+    while (root / name).exists():
+        name = f"{report['run_id']}.outcomes-{suffix}.json"
+        suffix += 1
     payload = (
         json.dumps(report, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
     ).encode("utf-8")

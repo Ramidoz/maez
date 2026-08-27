@@ -37,6 +37,7 @@ const SIM = (() => {
       valence: null,   // { sign, magnitude, telemetry } — the real felt-state reading
       status: 'unknown', // alive | stalled | stopped | safe_standby | unknown
       stalled: false,
+      ledgerAttention: false,
       scratchpad: [],
     },
     chat: {
@@ -271,6 +272,13 @@ const SIM = (() => {
       state.daemon.status = typeof d.status === 'string' ? d.status : 'unknown';
       const _rl = d.reasoning_loop;
       state.daemon.stalled = !!(_rl && _rl.cycle_stalled) || d.status === 'stalled' || d.status === 'stopped';
+      // Ledger admission health rides the same poll: omitted or
+      // unexplained life must reach the VISIBLE cockpit, not only the
+      // API payload (council round ten: withholding must be LOUD; Codex
+      // validation 2026-08-27: both clients discarded ledger_admission,
+      // so a terminally refused envelope left the UI green).
+      const _adm = d.ledger_admission;
+      state.daemon.ledgerAttention = !!(_adm && _adm.attention);
       emit();
     } catch (e) { markOffline('daemon', e); }
   };
