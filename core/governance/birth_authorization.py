@@ -262,8 +262,16 @@ def build_birth_envelope(
 def _parse_ts(value: object, *, field: str) -> datetime:
     # Exact-canonical bytes, the committed-grant proof's discipline
     # (Codex validation F8): a noncanonical encoding of a valid instant
-    # refuses rather than parsing to something plausible.
-    parsed = s7._parse_exact_canonical_row_timestamp(value)
+    # refuses rather than parsing to something plausible. Extreme
+    # timezone-aware values can raise OverflowError/OSError inside the
+    # canonical parse (re-validation, executed probe) — every escape is
+    # the same named refusal.
+    try:
+        parsed = s7._parse_exact_canonical_row_timestamp(value)
+    except (ValueError, OverflowError, OSError) as exc:
+        raise BirthAuthorizationRefusal(
+            "clock_incoherent", f"{field}={value!r}: {exc}"
+        ) from exc
     if parsed is None:
         raise BirthAuthorizationRefusal(
             "clock_incoherent", f"{field}={value!r} is not exact-canonical"
@@ -366,6 +374,26 @@ def held_birth_authorization_proof(
                 "one consumed birth authorization must exist for this run",
             )
         art = row[0]
+        # Schema-drift guard (re-validation F8, executed probe): a
+        # quick-check-clean store whose v2 table lost a column leaked a
+        # bare IndexError from row access. Named refusal instead.
+        _required = {
+            "artifact_id", "request_id", "request_envelope_hash",
+            "rendered_text_hash", "action", "action_params_hash",
+            "precondition_hash", "authority_context_hash",
+            "derived_work_class", "derived_aggregation_group", "nonce",
+            "credential_ref", "auth_method", "grant_source",
+            "user_presence", "user_verification", "created_at",
+            "expires_at", "consumed_at", "consumed_by_request_id",
+            "ceremony_kind", "schema_version",
+        }
+        _missing = _required - set(art.keys())
+        if _missing:
+            raise BirthAuthorizationRefusal(
+                "receipt_store_unavailable",
+                f"v2 table is missing column(s) {sorted(_missing)} — "
+                "schema drift is not a readable receipt",
+            )
 
         if art["action"] != BIRTH_ACTION:
             raise BirthAuthorizationRefusal("wrong_action", art["action"])
@@ -493,7 +521,7 @@ def held_birth_authorization_proof(
             or ch["authority_context_hash"] != art["authority_context_hash"]
             or ch["derived_aggregation_group"]
             != art["derived_aggregation_group"]
-            or ch["maez_voice_consultation_hash"] not in (None, "", "none")
+            or ch["maez_voice_consultation_hash"] is not None
         ):
             raise BirthAuthorizationRefusal(
                 "challenge_join_failed",

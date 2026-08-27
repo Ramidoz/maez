@@ -263,6 +263,24 @@ def classify_commit(db_path: Path | str) -> str:
         conn.close()
 
 
+def _write_execution_marker(marker: Path, doc: dict) -> None:
+    """Atomic, fsynced execution-marker write (file then directory)."""
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    tmp = marker.parent / f".tmp-{marker.name}"
+    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, json.dumps(doc, sort_keys=True).encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, marker)
+    dir_fd = os.open(marker.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def run_transaction(
     *,
     db_path: Path,
@@ -287,10 +305,19 @@ def run_transaction(
     """
     from core.governance import birth_authorization as _birth_auth
 
+    # Re-validation F2 (executed symlink probe): an alias spelling that
+    # RESOLVES to the canonical path passed the equality checks, but the
+    # execution marker and the writer's owner latch derived from the
+    # UNRESOLVED spelling — landing beside the alias and splitting their
+    # identity. Normalize ONCE, here; every consumer below sees the real
+    # path.
+    db_path = Path(db_path).resolve()
+    s7_store_path = Path(s7_store_path).resolve()
+    manifest_path = Path(manifest_path).resolve()
+
     if dry_run and (
-        Path(db_path).resolve() == birth_phase.default_ledger_path().resolve()
-        or str(Path(db_path).resolve())
-        == _birth_auth.canonical_ledger_realpath()
+        db_path == birth_phase.default_ledger_path().resolve()
+        or str(db_path) == _birth_auth.canonical_ledger_realpath()
     ):
         # BOTH resolvers (Codex validation F1, reproduced): with
         # MAEZ_LEDGER_DB_PATH set, default_ledger_path() stops
@@ -399,16 +426,22 @@ def run_transaction(
                 f"{_marker.name} exists — this authorization already "
                 "executed a birth transaction; re-tap for a new attempt",
             )
-        # Codex validation F4: the signed NOT_COMMITTED precondition is
-        # re-classified at the transaction boundary, before any mutation.
-        _classification = classify_commit(db_path)
-        if _classification != "NOT_COMMITTED":
-            raise _birth_auth.BirthAuthorizationRefusal(
-                "preflight_not_unborn",
-                f"the target classifies {_classification} at the "
-                "transaction boundary — only a provably unborn ledger "
-                "enters the birth write",
-            )
+        # Re-validation F3: the marker is a durable CLAIM written BEFORE
+        # the mutation, not a trophy after it. Every crash ordering now
+        # leaves either a born ledger (classification refuses a re-run)
+        # or a spent marker (this check refuses) — including the
+        # commit-then-delete window the post-commit marker left open.
+        # Cost accepted by ruling: a crash between here and the commit
+        # spends the receipt; the owner re-taps.
+        _write_execution_marker(
+            _marker,
+            {
+                "state": "executing",
+                "ceremony_run_id": run_id,
+                "s7_artifact_id": receipt_facts["s7_artifact_id"],
+                "claimed_at": time.time(),
+            },
+        )
         # THE LEASE: the enabled writer, constructed before any mutation.
         # The flag is raised only around construction (the writer reads it
         # at __init__) and restored after — a dry run inside a test
@@ -419,7 +452,17 @@ def run_transaction(
         prior = os.environ.get("MAEZ_LEDGER_WRITES")
         os.environ["MAEZ_LEDGER_WRITES"] = "1"
         try:
-            writer = LedgerWriter(db_path=str(db_path))
+            try:
+                writer = LedgerWriter(db_path=str(db_path))
+            except sqlite3.DatabaseError as exc:
+                # An unreadable target dies in the lease's own pragmas
+                # before the under-latch classification can name it. No
+                # mutation happened; refuse by the same name.
+                raise _birth_auth.BirthAuthorizationRefusal(
+                    "preflight_not_unborn",
+                    f"the target is unreadable as a database "
+                    f"(classifies {classify_commit(db_path)}): {exc}",
+                ) from exc
         finally:
             if prior is None:
                 os.environ.pop("MAEZ_LEDGER_WRITES", None)
@@ -427,6 +470,18 @@ def run_transaction(
                 os.environ["MAEZ_LEDGER_WRITES"] = prior
 
         try:
+            # Re-validation F4 (executed TOCTOU probe): a foreign db
+            # inserted between an early classification and the latch was
+            # migrated and birthed. The NOT_COMMITTED classification now
+            # runs UNDER the latch, where nothing can swap the file.
+            _classification = classify_commit(db_path)
+            if _classification != "NOT_COMMITTED":
+                raise _birth_auth.BirthAuthorizationRefusal(
+                    "preflight_not_unborn",
+                    f"the target classifies {_classification} under the "
+                    "latch — only a provably unborn ledger enters the "
+                    "birth write",
+                )
             # Transaction step 1: init (idempotent), UNDER the latch —
             # migrate.run() is itself an unlatched WAL writer (trap #4).
             migrate.run(str(db_path))
@@ -461,35 +516,20 @@ def run_transaction(
                 taint_labels=["self_generated"],
                 privacy_access="public",
             )
-            # Execution marker (F3), durable + fsynced, written the
-            # moment the birth commit exists. A crash BEFORE this line
-            # leaves a born ledger (the boundary classification refuses a
-            # re-run); a crash AFTER leaves the marker (the marker check
-            # refuses). Both accident paths are closed.
-            _marker.parent.mkdir(parents=True, exist_ok=True)
-            _tmp = _marker.parent / f".tmp-{_marker.name}"
-            _fd = os.open(_tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-            try:
-                os.write(
-                    _fd,
-                    json.dumps(
-                        {
-                            "birth_turn_id": birth_turn_id,
-                            "ceremony_run_id": run_id,
-                            "executed_at": time.time(),
-                        },
-                        sort_keys=True,
-                    ).encode("utf-8"),
-                )
-                os.fsync(_fd)
-            finally:
-                os.close(_fd)
-            os.replace(_tmp, _marker)
-            _dir_fd = os.open(_marker.parent, os.O_RDONLY)
-            try:
-                os.fsync(_dir_fd)
-            finally:
-                os.close(_dir_fd)
+            # The marker was claimed BEFORE the mutation; now that the
+            # commit exists, rewrite it with the outcome (atomic replace
+            # — a crash here leaves the "executing" claim, which refuses
+            # identically).
+            _write_execution_marker(
+                _marker,
+                {
+                    "state": "committed",
+                    "birth_turn_id": birth_turn_id,
+                    "ceremony_run_id": run_id,
+                    "s7_artifact_id": receipt_facts["s7_artifact_id"],
+                    "executed_at": time.time(),
+                },
+            )
         finally:
             writer.close()
 

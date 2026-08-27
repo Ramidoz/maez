@@ -939,6 +939,196 @@ class CodexValidationRoundFixes(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "receipt_already_executed")
         self.assertFalse(db.exists())
 
+    def test_f2b_symlink_alias_cannot_split_marker_and_latch_identity(self):
+        # Re-validation NEW-DEFECT: a canonical-RESOLVING alias passed the
+        # equality check, but the execution marker and owner latch were
+        # derived from the UNRESOLVED spelling — landing beside the alias,
+        # splitting their identity. run_transaction must normalize first.
+        from scripts.birth_ceremony import run_transaction
+
+        real_dir = self.td / "real"
+        alias_dir = self.td / "alias"
+        real_dir.mkdir()
+        alias_dir.mkdir()
+        kwargs, _ = authorized_ceremony_fixture(
+            self.td, db_path=real_dir / "ledger.db"
+        )
+        (alias_dir / "ledger.db").symlink_to(real_dir / "ledger.db")
+        kwargs["db_path"] = alias_dir / "ledger.db"
+        run_transaction(dry_run=True, **kwargs)
+        self.assertTrue(
+            (real_dir / "birth_ceremony_receipts").exists(),
+            "the execution marker must live beside the REAL ledger",
+        )
+        self.assertFalse(
+            (alias_dir / "birth_ceremony_receipts").exists(),
+            "nothing may land beside the alias spelling",
+        )
+        self.assertTrue((real_dir / "ledger.db.ownerlock").exists())
+        self.assertFalse((alias_dir / "ledger.db.ownerlock").exists())
+
+    def test_f3b_crash_before_commit_still_spends_the_receipt(self):
+        # Re-validation: the marker must be a durable claim BEFORE the
+        # mutation, not a trophy after it — a crash after commit but
+        # before a post-commit marker left a re-birthable window once the
+        # ledger was deleted. With the marker written first, EVERY crash
+        # ordering leaves either a born ledger or a spent marker.
+        from unittest import mock
+
+        from core.governance import birth_authorization as ba
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        with mock.patch(
+            "core.ledger.writer.LedgerWriter.write_turn",
+            side_effect=RuntimeError("simulated crash before commit"),
+        ):
+            with self.assertRaises(RuntimeError):
+                run_transaction(dry_run=True, **kwargs)
+        # The ledger never got its birth row; the receipt is spent anyway.
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            run_transaction(dry_run=True, **kwargs)
+        self.assertEqual(ctx.exception.reason, "receipt_already_executed")
+
+    def test_f4b_classification_happens_under_the_latch(self):
+        # Re-validation TOCTOU (executed probe): a foreign db inserted
+        # between classification and writer construction was migrated and
+        # birthed. Classification must run AFTER the latch is held.
+        from unittest import mock
+
+        from scripts.birth_ceremony import run_transaction
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        order: list[str] = []
+        from core.ledger.writer import LedgerWriter
+
+        orig_init = LedgerWriter.__init__
+
+        def recording_init(self_w, *a, **kw):
+            order.append("latch")
+            return orig_init(self_w, *a, **kw)
+
+        import scripts.birth_ceremony as bc
+
+        orig_classify = bc.classify_commit
+
+        def recording_classify(path):
+            order.append("classify")
+            return orig_classify(path)
+
+        with mock.patch.object(
+            LedgerWriter, "__init__", recording_init
+        ), mock.patch.object(bc, "classify_commit", recording_classify):
+            run_transaction(dry_run=True, **kwargs)
+        self.assertIn("latch", order)
+        self.assertIn("classify", order)
+        self.assertLess(
+            order.index("latch"),
+            order.index("classify"),
+            "the unborn classification must happen UNDER the latch — "
+            "before it is a TOCTOU window",
+        )
+
+    def test_f5b_voice_hash_none_literal_refuses(self):
+        # Re-validation (executed probe): the mint stores voice absence
+        # as SQL NULL, but the join accepted the literal string 'none'.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        conn = _sqlite3.connect(kwargs["s7_store_path"])
+        conn.execute(
+            "UPDATE s7_ceremony_challenges SET "
+            "maez_voice_consultation_hash='none' WHERE request_id=?",
+            (kwargs["run_id"],),
+        )
+        conn.commit()
+        conn.close()
+        expected = {
+            "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+            "creation_manifest_sha256": ba.read_manifest_sha256(
+                kwargs["manifest_path"]
+            ),
+            "owner_witness": "rohit",
+            "mode": "dry_run",
+        }
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=kwargs["s7_store_path"],
+                run_id=kwargs["run_id"],
+                expected_params=expected,
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "challenge_join_failed")
+
+    def test_f8b_extreme_timezone_timestamp_refuses_by_name(self):
+        # Re-validation (executed probe): an extreme timezone-aware
+        # timestamp escaped as bare OverflowError instead of the named
+        # refusal.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        conn = _sqlite3.connect(kwargs["s7_store_path"])
+        conn.execute(
+            "UPDATE s7_authorization_artifacts_v2 SET "
+            "consumed_at='0001-01-01T00:00:00+14:00' WHERE request_id=?",
+            (kwargs["run_id"],),
+        )
+        conn.commit()
+        conn.close()
+        expected = {
+            "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+            "creation_manifest_sha256": ba.read_manifest_sha256(
+                kwargs["manifest_path"]
+            ),
+            "owner_witness": "rohit",
+            "mode": "dry_run",
+        }
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=kwargs["s7_store_path"],
+                run_id=kwargs["run_id"],
+                expected_params=expected,
+            ):
+                pass
+        self.assertEqual(ctx.exception.reason, "clock_incoherent")
+
+    def test_f8b_missing_column_refuses_by_name(self):
+        # Re-validation (executed probe): a quick-check-clean store whose
+        # v2 table lost a column leaked bare IndexError from row access.
+        import sqlite3 as _sqlite3
+
+        from core.governance import birth_authorization as ba
+
+        kwargs, _ = authorized_ceremony_fixture(self.td)
+        conn = _sqlite3.connect(kwargs["s7_store_path"])
+        conn.execute(
+            "ALTER TABLE s7_authorization_artifacts_v2 DROP COLUMN action"
+        )
+        conn.commit()
+        conn.close()
+        expected = {
+            "ledger_db_realpath": str(kwargs["db_path"].resolve()),
+            "creation_manifest_sha256": ba.read_manifest_sha256(
+                kwargs["manifest_path"]
+            ),
+            "owner_witness": "rohit",
+            "mode": "dry_run",
+        }
+        with self.assertRaises(ba.BirthAuthorizationRefusal) as ctx:
+            with ba.held_birth_authorization_proof(
+                store_path=kwargs["s7_store_path"],
+                run_id=kwargs["run_id"],
+                expected_params=expected,
+            ):
+                pass
+        self.assertEqual(
+            ctx.exception.reason, "receipt_store_unavailable"
+        )
+
     def test_f4_committed_or_unknown_db_refuses_inside_transaction(self):
         # MAJOR 4 (second half): the NOT_COMMITTED precondition is
         # re-classified at the transaction boundary, before migrate.
@@ -986,6 +1176,7 @@ class CodexValidationRoundFixes(unittest.TestCase):
         for column in (
             "request_envelope_hash",
             "rendered_text_hash",
+            "action_params_hash",
             "precondition_hash",
             "authority_context_hash",
             "derived_aggregation_group",
