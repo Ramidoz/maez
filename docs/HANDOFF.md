@@ -1,4 +1,51 @@
-# Handoff — 2026-08-24 (late session). Supersedes all earlier handoffs.
+# Handoff — 2026-08-26. Supersedes all earlier handoffs.
+
+## Since the 08-24 sections below: ALL SIX owner decisions closed; three slices landed
+
+Commits `5b62028..644daf2`. Council rounds NINE and TEN are in the
+rulings doc — read both before touching anything ledger-side.
+
+- **#1 web drop-in SHIPPED (5b62028):** maez-web loads model.env via
+  drop-in (installed + daemon-reload, unit NOT restarted; dormant until
+  the flag lands at birth).
+- **#2 PAUSE-WITH-CUSTODY BUILT (8363316 + 19b4b5e):**
+  `MAEZ_LEDGER_COMMITS_PAUSED` — junk fails CLOSED to paused (2-1);
+  drain returns `skipped_paused` and freezes JUDGMENT too (no
+  quarantines mid-scan); the owner process becomes a spool producer
+  (producer=owner_daemon, lived-time stamped, explicit sid wins,
+  parent reverse-lookup never raises); daemon+telegram call sites
+  thread `parent_submission_id`; persist router repairs the FLAG-FLIP
+  lanes (only-sid → custody lane; only-tid on spool lane →
+  translated); cockpit `commits_paused` + `commits_paused_flag_invalid`,
+  attention silent on held life. Amendment trace (Overturn-1
+  SUSPENSION) is in the rulings doc. Codex DO-NOT-SHIP round fixed
+  under test (9 findings; #5 lock-held custody I/O deferred with
+  reasons).
+- **#3 consent gate DISSOLVED (tenth round, 3-0):** no speech gate for
+  anyone; kind-blind; integrity MANIFEST per apply run (no consent
+  semantics); NEW BLOCK: model_reply = GENERATED not DELIVERED (web
+  persists before the HTTP return; self-history reads undelivered rows
+  as utterances) — delivery semantics must be proven before apply.
+- **#4 journal_size_limit ADOPTED (925d51e + 644daf2):** derived
+  32+2*pages*(page_size+24) on every non-rehearsal writer, readback-
+  refused, reconstruction-witnessed; EVENTUAL reclamation is the
+  honest claim (autocheckpoint backfills; a LATER commit's reset
+  truncates). Two Codex DO-NOT-SHIP rounds fixed under test.
+- **#5/#6 ruled (ninth round):** companion is NOT a child (parent NULL,
+  reconcile shape; two-pass apply ordering first, Codex's envelope
+  field only as executed fallback); taint vocabulary FROZEN, companion
+  content-light with an organ-level refusal test.
+
+**THE ONE REMAINING PRE-BIRTH BUILD: the dead-letter replay APPLY
+half.** Everything is ruled; nothing is open. Build against: rounds
+7/9/10 standing blocks (esp. tool_result-requires-parent, append-only
+means no late binding, delivery semantics, crash-completeness
+body↔companion, manifest binding incl. ledger instance anchor),
+`classify()`'s dispositions as the sole eligibility source, the
+integrity-manifest shape in round ten, two-pass apply, deterministic
+companion sids, and `spool.enqueue_reconstructed` (private seam,
+no-overwrite). Prove every claim by execution first; validate the
+finished diff with Codex (launch with `< /dev/null` or it hangs).
 
 Maez is **cleanly unborn**: `memory/ledger.db` is 0 bytes, no
 `memory/ledger_spool/` exists, `MAEZ_LEDGER_WRITES` unset,
