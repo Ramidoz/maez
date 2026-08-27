@@ -2800,9 +2800,10 @@ def _ledger_admission_health(daemon) -> dict:
     excellent durability, and a nonzero dead-letter count means omitted
     life pending replay — both must be SURFACED, not logged.
 
-    ``attention`` is the loud predicate: any dead-lettered rows, or
-    pending envelopes with no live drainer, or pending envelopes older
-    than ten minutes. Never raises (callers _safe-wrap regardless).
+    ``attention`` is the loud predicate: any dead-lettered rows, any
+    TERMINALLY REFUSED envelope, or pending envelopes with no live
+    drainer, or pending envelopes older than ten minutes. Never raises
+    (callers _safe-wrap regardless).
     """
     from core.ledger.spool import default_spool_root, spool_status
     from core.ledger.writer import dead_letter_status, wal_ceiling_bytes
@@ -2841,11 +2842,25 @@ def _ledger_admission_health(daemon) -> dict:
         else None
     )
     paused = ledger_commits_paused()
-    # Pause-with-custody (ninth round): attention means OMITTED life.
-    # Held life under an owner-declared pause is a queue, not a grave —
-    # dead-lettered rows still page (they are omitted regardless).
+    # Terminally REFUSED envelopes are omitted life too, and the loudest
+    # kind: the admission door never retries them and the spool's
+    # no-overwrite seam will not accept a second envelope under the same
+    # identity, so a refusal is permanent until a hand resolves it.
+    # EXECUTED (council round eleven, dead-letter apply): a refused
+    # envelope produced attention=False — the refused count was in the
+    # payload and NOT in the predicate. Round ten ruled withholding must
+    # be LOUD: "friction with an alarm that never sleeps is a queue, not
+    # a grave." An unread alarm makes it a grave. Pause does NOT silence
+    # this: a refusal already happened, so there is no judgment left to
+    # freeze.
+    refused_total = sum(
+        (counts or {}).get("refused", 0)
+        for counts in (spool.get("producers") or {}).values()
+    )
+    spool["refused_total"] = refused_total
     attention = bool(
         dead.get("rows")
+        or refused_total
         or (
             not paused
             and spool.get("pending_total")

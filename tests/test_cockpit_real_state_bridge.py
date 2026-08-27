@@ -425,6 +425,42 @@ class TestLedgerAdmissionRealState(unittest.TestCase):
             "silent-omission machine — it must demand attention",
         )
 
+    def test_attention_fires_on_a_terminally_refused_envelope(self):
+        """Round ten ruled withholding must be LOUD: "friction with an
+        alarm that never sleeps is a queue, not a grave." A refused
+        envelope is the loudest kind of omission — the admission door
+        never retries it and the spool's no-overwrite seam will not accept
+        a second envelope under that identity, so it is permanent until a
+        hand resolves it. EXECUTED before this test existed: the refused
+        count was in the payload and NOT in the predicate, so a
+        terminally lost life produced attention=False.
+        """
+        import tempfile
+        from pathlib import Path
+
+        from core.ledger import spool as spool_mod
+        from daemon import maez_daemon as md
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ledger.db"
+            db.touch()
+            root = spool_mod.default_spool_root(str(db))
+            dirs = spool_mod._producer_dirs(root, "dead_letter_replay")
+            # A quarantined envelope, exactly as _quarantine leaves one.
+            (dirs["refused"] / "abc123.json").write_text("{}")
+            (dirs["refused"] / "abc123.error.json").write_text(
+                '{"error": "writer refused payload"}')
+            with mock.patch.object(md, "LEDGER_DB_PATH", db):
+                state = _build_state_under_patches(_FakeDaemon())
+        adm = state["ledger_admission"]
+        self.assertEqual(adm["spool"]["pending_total"], 0)
+        self.assertEqual(adm["spool"]["refused_total"], 1)
+        self.assertTrue(
+            adm["attention"],
+            "a terminally refused envelope is omitted life and must page",
+        )
+
+
 
 class TestWalExcursionVisibility(unittest.TestCase):
     """Council round eight: ship no periodic checkpoint, ship VISIBILITY.
