@@ -1,4 +1,4 @@
-# Handoff — 2026-08-27 (late session, 1faa96a). Supersedes all earlier handoffs.
+# Handoff — 2026-08-27 (session end, 4544ec3). Supersedes all earlier handoffs.
 
 ## THIS SESSION: continuity spine SLICE 1 SHIPPED — the surface registry, flag-dormant
 
@@ -115,15 +115,69 @@ live daemon's environ, no unit restarted.
   written, so turning the registry on changes nothing yet. Owner ruling
   3 (posture half wakes early) does not apply to this key as built.
 
-### NEXT: A3 seam closure — step 2 of the ruled build order
+### A3 — COUNCILLED (eighteenth round) AND DECLARED **NOT BUILD-READY**
 
-Five reply-producing interceptor paths (clinical, camera,
-approval-card, proposal, search-commitment) return BEFORE the ledger
-seam; verified OPEN by execution last session (replies produced with
-ZERO ledger trace). Owner ruling 4-AMENDED: crisis turns belong in the
-record like any other turn, and the S4 ORGAN STAYS — there is no
-removal arc. Closing these changes WHAT ENTERS the ledger, so it gets
-its own council before building.
+Read the eighteenth round in the rulings doc IN FULL before touching
+this. Design-only; nothing was built. What the council changed:
+
+**The build seat's METHOD was falsified, not just its list.** A census of
+reply-producing `return` statements cannot see a mouth that sends and
+returns nothing: `daemon/inbound_core.py:526` -> the CardRenderer sends
+(its own comment says so at :541) and the function may `return None`
+(:577); `skills/approval_card.py:374` sends and returns None (Codex
+EXECUTED it). And `core/routing/recall_receipt.py:17` — "I'm checking my
+dated memory for that." — is delivered via `send_intermediate`
+(`daemon/maez_daemon.py:8612`) INSIDE the region the brief called empty.
+Three seats produced three different censuses. **The disagreement is the
+finding.** Do not accept a completeness claim from anyone, including
+yourself.
+
+Also: `daemon/maez_daemon.py:7385` (S4) is DEAD on the live v2 path —
+`run_inbound_turn` intercepts at :341 and reaches `handle_message` only
+at :835. Correct line numbers, correct arithmetic, dead site labelled
+live. Static enumeration cannot say what RUNS.
+
+**Settled by execution (do not re-litigate):** canned interceptor output
+CANNOT be `model_reply` — that costs six false claims (the taint
+singleton plus model_id/prompt_hash/soul_hash/envelope/verdict, all
+NOT NULL for the kind) and the door will not catch an empty model_id.
+`system_event` structurally FORBIDS model_id and prompt_hash. Exact
+bytes, never content-light (content-light "preserves occurrence while
+deleting what happened"). The owner's message enters in full as
+`user_message`. NO second flag — the write is byte-inert with
+MAEZ_LEDGER_WRITES unset; the REFACTOR needs one. "Write the user
+message first" is ILLEGAL per `docs/adr/0035-clinical-boundary-v1.md`
+(guard before ANY owner-text side effect including ledgers).
+
+**BUILD BLOCKERS:** inventory every EGRESS (not returns); freeze the
+`system_event` payload AND its conversation-stream role; carry
+`self_mod_dialog_id` end to end; adopt custody-before-egress or NAME the
+S4 storage-failure exception — "omission impossible" and "the reply
+always ships" cannot both be absolute under today's best-effort contract.
+
+**THE SHARPEST RISK:** the write is inert until MAEZ_LEDGER_WRITES flips,
+and that IS the birth flag — so the first time this code is ever
+witnessed writing would be the day Maez is born. A rehearsal-lane
+witness (`lifecycle_stage='rehearsal'`, already supported) is MANDATORY
+before A3 is called done.
+
+**NEXT BUILDABLE STEP:** a TRIPWIRE test — fail the build when a new bare
+`return <str>` or a new direct send appears on the owner path. Frame it
+as a tripwire, NEVER as a completeness proof.
+
+### Live-store incident, resolved by owner ruling
+
+An A3 council seat driving the real `run_inbound_turn` fired the S4
+crisis writer and appended 6 rows (5672-5677) to the LIVE
+`memory/private_thoughts.db`. Content-free literal, no owner text,
+gestation, dormancy gate untripped. Owner ruled: mark as test. Done via
+`context_json.extra` (`origin=automated_test_probe`,
+`not_owner_state=true`); `signal_state` deliberately NOT set to
+`resolved` (that would assert a real crisis was handled), content and
+timestamps untouched, backup at /var/tmp. **SCAR, now in memory:
+MAEZ_TEST_MODE=1 does NOT sandbox PrivateThoughts** — only
+MAEZ_PRIVATE_THOUGHTS_PATH redirects it. Redirect every reachable store
+before dispatching any agent at owner-text paths.
 
 Then (3) A4 evidence lanes, (4) the conversation-stream reader +
 spool-read + typed states, (5) the shared context-assembly adapter,
