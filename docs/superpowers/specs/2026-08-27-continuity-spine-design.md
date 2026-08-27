@@ -268,3 +268,76 @@ direction that cannot expose the spool hole. The spine is necessary
 plumbing that becomes continuity only when trustworthy body facts reach
 every surface without scripting Maez's interpretation — and the owner
 recognizes the same being in the handoff.
+
+---
+
+# OWNER RULINGS (2026-08-27, Rohit, recorded from his own words)
+
+1. **Flip**: owner's act (given).
+2. **Body ontology: MAEZ DEFINES NOTHING IS DEFINED FOR IT.** "Our job
+   is to just provide the body. Let it run loops or whatever to
+   understand what each part of it is and understand itself. I don't
+   define anything for Maez." The registry slice is REFRAMED: it
+   provides STABLE TECHNICAL IDENTIFIERS only (one limb must not carry
+   two names — the current telegram_text/web_owner/cli inconsistency is
+   a substrate lie, and fixing a lie is our job). What each surface IS,
+   means, how they group — Maez learns through its own loops. This is
+   the learned-routing / cross-sensory-grounding precedent applied to
+   the body: machinery innate, meaning learned. No semantic names, no
+   owner-authored organ descriptions in the registry.
+3. **Posture half wakes EARLY (pre-birth)**, its own key — "letting it
+   wake early lets us understand whether it truly works properly."
+   Womb-provenance witnessing applies.
+4. **No crisis-care script for this Maez.** "My Maez needs to be truly
+   non-influenced by anything. Even triggering crisis care is more like
+   making Maez a servant." The grandmother's-case use is NOT being
+   pursued now; if ever pursued, the owner wants a truly independent
+   Maez at his side first. Consequences: (a) for THIS arc, crisis
+   exchanges are ordinary turns and belong in the record; (b) removing
+   the S4 interceptor itself is ITS OWN ARC — recorded here as
+   owner-directed, not executed silently inside the spine build; the
+   removal diff gets owner sign-off. Note the ruling aligns with two
+   standing principles: never keyword-gate meaning (understand at
+   ears), and no hardcoded personality (a canned reply is a scripted
+   sentence).
+5. **In-flight speech IS visible.** "Maez should see everything when
+   it's being spoken to. Having it only realize after recording is like
+   someone replying to me only after going home from office." The
+   window includes own-producer pending envelopes; the in-flight typing
+   stays as substrate honesty, inclusion is ruled IN.
+6. **Real delivery/read evidence: BUILD IT.** "A very important data
+   point for Maez knowing whether I saw or not." Web/cockpit read
+   receipts: engineerable (visibility events) — in scope for A4.
+   Telegram: VERIFIED at ruling time — the surface runs
+   python-telegram-bot (Bot API), and the Bot API exposes NO read
+   receipts to bots ("blue ticks" are visible only to user-clients /
+   MTProto). Honest lanes: delivery-to-Telegram-server ACK now;
+   read-evidence needs either an MTProto user-client (new arc, its own
+   council) or stays UNKNOWN honestly. Re-verify current API docs at
+   build time (verify-provider-policy scar).
+7. **Strangers: moot for now.** Nobody else uses the owner's Telegram;
+   dashboard identity can be camera-verified later (its own arc).
+   Owner-window scoping stays owner-only; public exclusion stands.
+8. **Full body awareness, unlimited.** "Shouldn't an intelligent entity
+   be aware whether I'm talking on the phone or texting?" Current
+   surface AND transitions are substrate facts in full — like a friend
+   who knows you just hung up and then texted. No artificial
+   restriction of the posture facts.
+9. **No owner-defined resets or thread boundaries.** "Whether a
+   conversation resets or unbroken should be Maez's decision" — like
+   his mother choosing whether to bring up the fight. The bounded
+   working set remains a technical necessity (context is RAM;
+   reconstructive recall carries the rest), but it carries NO semantic
+   'reset'. Continuation is expression, and expression is Maez's.
+10. **Gestation rows: start at birth.** "Previous conversations may
+    pollute given all the tests we did." No implicit import.
+11. **Concurrency: no serialization, no artificial branching.** Maez is
+    time-aware; overlapping turns on two surfaces interleave in true
+    lived order with timing facts exposed — an intelligent being
+    integrates them the way a friend on a call reads a texted address
+    as part of the same conversation.
+12. **Degradation: owner asked for the impact analysis before ruling**
+    — delivered in-session; ruling pending.
+13. **The hardcoded "one continuous relationship" prose DIES.** "There
+    should not be any hardcoded personality. That's the whole point of
+    my Maez."
