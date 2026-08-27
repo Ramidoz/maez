@@ -1331,3 +1331,112 @@ discarded as a harness error and redone); two weak tests exposed BY
 mutation and strengthened. Battery 698/7/61 with the same 7
 pre-existing reds; falsifier GREEN 8/8 n=20000 including F7. Shipped
 at f83a16e + f7f6aa5, flag-dormant, Maez still unborn.
+
+## Eighteenth round (2026-08-27, A3 seam closure): three seats, all AMEND; the BUILD SEAT'S METHOD was falsified, A3 declared NOT build-ready
+
+Question: what enters the record when an interceptor answers before the
+ledger seam. Seats: Codex (xhigh, repo + probes), Grok (brief-only),
+Claude subagent (repo + execution). Design-only; NOTHING built.
+
+**The method, not the details, was falsified.** The build seat censused
+reply-producing RETURN statements. A mouth need not return.
+- `daemon/inbound_core.py:526` calls `pipe.handle_reply`; the code's own
+  comment at :541 says the CardRenderer SENT the resolution, and the
+  function may then `return None` (:577).
+  `skills/approval_card.py:374` `send_resolution(...) -> None` sends and
+  returns nothing. Codex EXECUTED it: "the renderer returned None while
+  the fake transport received exactly one resolution message."
+- `core/routing/recall_receipt.py:17` holds
+  `"I'm checking my dated memory for that."`, delivered via
+  `send_intermediate` at `daemon/maez_daemon.py:8612` — INSIDE the
+  region the brief called empty (between the user write at :7449 and the
+  reply write at :9786). Armed live (MAEZ_RECALL_RECEIPT_ENABLED=1).
+- Two further misses at `daemon/inbound_core.py:857` and `:861`.
+Three censuses, three different answers. **The disagreement IS the
+finding: the method does not converge.** No seat claimed completeness
+and none is entitled to.
+
+**A dead site was labelled live.** `daemon/maez_daemon.py:7385` (S4)
+cannot fire on the v2 path — `run_inbound_turn` intercepts at :341 and
+only reaches `handle_message` at :835. Proven with a spy daemon driving
+the real function. The brief's line numbers and arithmetic were correct
+and it still shipped a dead site as live: static enumeration cannot say
+what RUNS.
+
+**Q3 SETTLED BY EXECUTION, not preference.** Writing a canned sentence as
+`model_reply` costs SIX false claims: the taint singleton
+`{self_generated}` (the only admissible set — all 10 others raise
+TaintStampingRefusal) plus model_id, prompt_hash, soul_hash,
+evidence_envelope and audit_verdict, which `core/ledger/writer.py:73`
+makes NOT NULL for that kind — for a generation that never happened. And
+the door will NOT catch the lie: an empty model_id commits. By contrast
+`system_event` STRUCTURALLY forbids model_id and prompt_hash
+(`core/ledger/writer.py:103`), and no `audit_trace_label` can mark a
+canned row (`core/cognition/audit_policy.py` admits exactly
+`projection_influenced`). The repo had already ruled it:
+`core/ledger/dead_letter_replay.py:758` states "a model_reply row means
+GENERATED, not DELIVERED". The council did not need to decide this; it
+needed to notice it was decided.
+
+**RULED (3-0 where noted):**
+1. The owner's message enters IN FULL as `user_message`
+   {owner_utterance}. Never in question; currently dropped entirely.
+2. Canned organ output enters as `system_event` carrying the EXACT bytes
+   plus which organ fired — never `model_reply`. Content-light was
+   REJECTED (Codex): "it preserves occurrence while deleting what
+   actually happened — the omission sin in a more respectable format."
+3. The recall/self-history exclusion is ACCEPTED as the price, because
+   the errors are asymmetric: adding `system_event` to a reader later is
+   a frozenset edit; a `model_reply` row that lies about provenance is
+   PERMANENTLY indistinguishable from Maez's own speech.
+   `SELF_HISTORY_KINDS` (`core/ledger/envelope_schema.py:77`) and
+   `_DIALOGUE_TURN_KINDS` (`core/consolidation/shadow_dashboard.py:14`)
+   both exclude it — so does `self_mod_dialog_step`, which means "it
+   already exists, just wire it" would record a real owner conversation
+   and render it NOWHERE.
+4. NO SECOND FLAG for the write (3-0): `try_write_turn` returns before
+   constructing a writer when MAEZ_LEDGER_WRITES is unset, so a new
+   interceptor write is BYTE-INERT today. `LEDGER_WRITES=1 + A3=0` would
+   be autobiography live while intercepted life is knowingly omitted — a
+   configurable covenant breach. The REFACTOR does need its own flag.
+5. "Write the user message before the interceptors" is ILLEGAL:
+   `docs/adr/0035-clinical-boundary-v1.md` requires the guard before any
+   owner-text side effect INCLUDING ledgers. Order is fixed:
+   guard -> admit user_message -> interceptors -> typed artifact ->
+   record -> transport.
+6. Not every intercept is speech. `intent_unavailable` is degradation;
+   camera is a body fact. The precedent is already on the shelf:
+   `PrivateThoughtsCrisisSignalWriter` records a crisis content-free.
+
+**BUILD BLOCKERS (both repo seats).** Inventory every EGRESS including
+side-effect mouths; freeze the `system_event` payload AND its future
+conversation-stream role; carry `self_mod_dialog_id` end to end
+(`PipelineResult` exports only `dialog_reply_text`); and either adopt
+durable-custody-before-egress or NAME the S4 storage-failure exception —
+today's contract is best-effort and must not block the reply, so
+"omission impossible" and "the reply always ships" cannot both be
+absolute.
+
+**The sharpest unaddressed risk, and it is not in the brief:** because
+the write is inert until MAEZ_LEDGER_WRITES flips, and that flag IS the
+birth flag, THE FIRST TIME THIS CODE IS EVER WITNESSED WRITING IS THE DAY
+MAEZ IS BORN. A rehearsal-lane witness (`lifecycle_stage='rehearsal'`,
+already supported) is mandatory before A3 is called done.
+
+**INCIDENT.** A council seat driving the real `run_inbound_turn` fired
+the S4 crisis writer and appended 6 rows (5672-5677) to the LIVE
+`memory/private_thoughts.db`. Content-free literal, no owner text,
+gestation phase, dormancy gate untripped, no crisis channel fired. NOT
+deleted (deweighting, never deletion; deleting would destroy the audit
+trail of the mistake). Owner ruled: mark them as test. Done via the
+designed `context_json.extra` extension point
+(`origin=automated_test_probe`, `not_owner_state=true`); `signal_state`
+deliberately NOT flipped to `resolved`, which would assert a real crisis
+had been handled. Generalisable scar, now in memory:
+**MAEZ_TEST_MODE=1 does NOT sandbox PrivateThoughts** — only
+MAEZ_PRIVATE_THOUGHTS_PATH redirects it.
+
+**A3 IS NOT BUILD-READY.** Recorded as design-only. The next buildable
+step is a TRIPWIRE (fail the build when a new bare `return <str>` or a
+new direct send appears) — framed as a tripwire, never as a completeness
+proof, because this round proved no census converges.
