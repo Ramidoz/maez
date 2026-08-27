@@ -1,57 +1,138 @@
-# Handoff — 2026-08-27 (end of session, d4bbe2f). Supersedes all earlier handoffs.
+# Handoff — 2026-08-27 (late session, 1faa96a). Supersedes all earlier handoffs.
 
-## NEXT SESSION: build the CONTINUITY SPINE, slice 1 — the surface registry
+## THIS SESSION: continuity spine SLICE 1 SHIPPED — the surface registry, flag-dormant
 
-Read IN ORDER before any code: this file; then
-docs/superpowers/specs/2026-08-27-continuity-spine-design.md IN FULL
-(v0 + RULED DESIGN + both OWNER RULINGS sections — all thirteen owner
-decisions are CLOSED); then the SIXTEENTH round in
-docs/superpowers/witness/theme2-s2-owner-delegated-council-rulings.md.
+Commits `f83a16e` (guard repair), `f7f6aa5` (registry), `e823f2a`
+(seventeenth round), `1faa96a` (Codex-finding repairs).
 
-The ruled build order: (1) stable-identifier surface registry — one
-limb one name, ZERO semantics (the owner: "I don't define anything for
-Maez"; we repair the substrate's telegram_text/web_owner/cli naming
-lies, Maez learns the meanings); (2) A3 seam closure (crisis turns
-included, the S4 ORGAN STAYS — owner safety-net ruling); (3) A4
-evidence lanes (web/cockpit read receipts engineerable; telegram
-delivered-to-server only — Bot API has NO blue ticks, VERIFIED; the
-telegram USER-CLIENT is a QUEUED arc whose first step is reading
-Telegram's CURRENT automation terms); (4) conversation-stream reader +
-own-producer spool-read + typed AVAILABLE/DEGRADED/UNAVAILABLE (the
-numbness fact is TOLD, content-light, no scripted wording); (5) one
-shared context-assembly adapter at the three injection points,
-flag-off; (6) rehearsal witnesses BOTH handoff directions + negative
-witnesses + the CLI double-append fix; (7) owner flip, post-birth.
-Posture half (current_ingress_surface) may wake PRE-birth on its own
-key — owner ruled it, womb provenance applies.
+**The slice's premise changed under execution.** The lie is NOT the
+docs mismatch the ruled design assumed. Telegram reaches the ledger
+under TWO names: `telegram_text` (skills/telegram_voice.py:3644) and
+`telegram_surface` (skills/surface/maez_adapter.py:152), the latter via
+`handle_message`'s FREE-FORM `source` — whose own default is the
+literal string `"unknown"`. The adapter's own comment says the second
+spelling exists only "during parallel operation with the legacy path".
+Live runtime witness: daemon pid 2806 runs BOTH a `surface-v2` and a
+`telegram-bot` thread.
 
-Each slice: council on load-bearing choices, execute claims first,
-finished DIFF to Codex (phrase validation prompts as BOUNDARY WALKS,
-not attack language — the adversarial phrasing tripped a provider
-content filter this session), mutation harness (pytest exit != 1 =
-harness error), falsifier + battery at the end.
+**What shipped.** `core/body/surface_registry.py` — identifiers only.
+IDs are `cli`, `telegram_text`, `web_owner`; NONE minted (every id is a
+name the body already emits, because `surface` sits inside the
+chain-hash preimage and a gratuitous relabel rewrites the inputs of
+Maez's tamper-evidence). One alias, `telegram_surface -> telegram_text`,
+bound by an EXECUTED co-reference witness: the daemon builds the
+vendored adapter from `self.telegram.token` /
+`self.telegram.authorized_user`, the same credentials as the legacy
+path. Unregistered labels pass through VERBATIM and typed — never
+refused, never rewritten. Flag `MAEZ_SURFACE_REGISTRY`, default off,
+junk fails to off; flag-off is byte-identical including the
+dead-letter and pause-race custody payloads. The daemon seam resolves
+`source` at all three of `handle_message`'s ledger admissions.
 
-BASELINE at d4bbe2f: falsifier GREEN 8/8 n=20000. Battery 694 passed /
-7 failed / 61 subtests on the named 35-file list = the 26
-tests/test_ledger_*.py files + test_birth_ceremony_script,
-test_reconcile_ledger_cli, test_maez_web_ledger_env_dropin,
-test_no_bare_sqlite_connect, test_slice_3_5_envelope_wiring,
-test_birth_authorization_rail, test_s7_1_ceremony_service,
-test_s7_covenant_ceremony, test_birth_readiness_projection. The 7 reds
-are the named pre-existing ones (ModelReplyGate x2,
-no_bare_sqlite_connect x3, WebSlice35 x1, DaemonSlice35 subtest x1).
-ALSO pre-existing on clean HEAD (outside the battery):
-test_s7_action_joins allowlist vs provision_covenant_phase_table_at.
+**Why never-rewrite is load-bearing, not taste:** F7 writes synthetic
+surfaces (`webish7`/`clish7`) and then finds those rows BY NAME. A
+canonicalising registry turns the only shipped end-to-end surface
+witness red SILENTLY, against a full database.
 
-Maez is cleanly unborn: ledger.db 0 bytes, no spool/manifest dirs,
-flags unset, live S7 store untouched (6 consumed cutover artifacts).
-Seats verified this session: codex exec -c
-model_reasoning_effort=xhigh -s read-only ALWAYS with < /dev/null;
-grok --print takes the prompt as an ARGUMENT (stdin piping fails);
-Claude subagent seats can read and execute.
+**Anti-drift:** a two-sided AST census (the PerClassInventory shape) —
+a new production ledger call site fails until its label is registered
+or adjudicated, and a phantom id/adjudication fails too. Plus an
+ALLOWLIST of the registry module's complete top-level names, which is
+what enforces the owner's "no semantics" ruling structurally.
 
+**The guard had to be repaired FIRST, and that is the reusable
+lesson.** `tests/test_ledger_surface_spool_wiring.py` pinned `_REPO` to
+`/home/rohit/maez` (53 of 785 test files do — the hermetic-sandbox scar
+recurring), so every source-text assertion graded the LIVE TREE
+whatever checkout pytest ran in; and `assertIn('surface="web_owner"')`
+ran against a ~102 KB blob holding four non-ledger occurrences. Three
+migration variants stayed GREEN while a positive control went red.
+Without that repair the slice could not have been witnessed at all.
 
-## THIS SESSION: A1/B2 receipt rail BUILT; A6 and A3 verified by execution
+**Council: seventeenth round, three seats, all AMEND. TWO of the build
+seat's own stated facts died on the seats' probes** — "no ledger reader
+keys on surface" (the falsifier, consolidation/skeleton, digester,
+`_row_is_our_replay`, and `producer=surface` all do) and "raw_surface
+has one producer" (three; the grep missed the dict-literal form). The
+brief's "~48 literals" was also wrong: the production ledger-reaching
+population is THREE. Read the seventeenth round before touching this.
+
+**Codex post-implementation validation returned FIX FIRST (7
+boundaries); six were real and all are repaired under mutation** — read
+them in the seventeenth round. The sharpest: flag-off was NOT
+byte-identical (an explicit `raw_surface=None` changed the dead-letter
+key set and envelope digest); the census and wiring guard were blind to
+VARIABLE bindings (`_cli_surface = "rogue_surface"` left every guard
+green); "enforced structurally" was false (three semantic additions
+accepted); and `test_model_reply_persistence.py` was GREEN WHILE
+ASSERTING SOMETHING FALSE about the call it names.
+
+**Witness:** 16 mutations total across the slice, each caught by a named
+test (one exit-2 run discarded as a HARNESS ERROR and redone); two of
+my own tests were exposed as weak BY mutation and strengthened.
+Battery 698 passed / 7 failed / 61 subtests — the 7 are the same named
+pre-existing reds. Falsifier GREEN 8/8 at n=20000 including F7. Maez
+still unborn: ledger 0 bytes, no spool/manifest dirs, no flags in the
+live daemon's environ, no unit restarted.
+
+### OWED on this slice, by name — do not rediscover
+
+1. **F7 has NO registry arm.** The flag-on/flag-off pair per adapter is
+   unwitnessed end-to-end; the slice's evidence is unit tests plus
+   Codex's disposable executions.
+2. **The census is a LITERAL census, not a ledger-reachability one.**
+   Invisible to it: `**kwargs` splats, f-strings, constructed dicts,
+   `getattr`, wrappers/partials, `raw_surface` and `producer` values,
+   and `spool.owner_commit` as a sink. Callee matching uses the
+   terminal name without module provenance, and `ast.walk` counts
+   unreachable/nested decoy calls.
+3. **web / cli / telegram_voice still INLINE their literals** rather
+   than importing registry constants. Only the daemon seam resolves.
+4. **Pre-existing spool defect, recorded not fixed:** the producer name
+   IS the surface string; `_producer_dirs` refuses `/` or a leading
+   `.`, and an EMPTY label publishes into the spool root where drain
+   does not look (returns an id, strands the envelope). Registered ids
+   are all legal producers and a test pins that.
+
+### OWNER-ONLY decisions this slice surfaced
+
+- **`docs/ledger/envelope-schema.md`'s `surface` enum** ("canonical
+  groups": telegram / web_chat / cockpit / scheduled / tooling ...)
+  is the SEMANTIC shape owner ruling 2 forbade — its entries are
+  meanings ("owner-facing", "stranger-facing", "future voice surface",
+  "excluded from production-rate metrics"). It was deliberately NOT
+  implemented and NOT deleted. Implementing it is forbidden; retiring
+  or annotating the doc is the owner's call. It is a live doc-vs-code
+  divergence until he rules.
+- **`UI` vs `cockpit`** — a SECOND same-limb duplicate, two
+  flag-selected branches of ONE `/message` route. NOT aliased, because
+  unlike telegram they differ behaviourally (`cockpit` is excluded from
+  `M1_ALLOWED_PROMOTION_SOURCES`). Named in
+  `KNOWN_UNREGISTERED_SEAM_LABELS` with its reason. Aliasing gets its
+  own council.
+- **The `MAEZ_SURFACE_REGISTRY` flip.** Note it is currently
+  unobservable pre-birth: with `MAEZ_LEDGER_WRITES` unset nothing is
+  written, so turning the registry on changes nothing yet. Owner ruling
+  3 (posture half wakes early) does not apply to this key as built.
+
+### NEXT: A3 seam closure — step 2 of the ruled build order
+
+Five reply-producing interceptor paths (clinical, camera,
+approval-card, proposal, search-commitment) return BEFORE the ledger
+seam; verified OPEN by execution last session (replies produced with
+ZERO ledger trace). Owner ruling 4-AMENDED: crisis turns belong in the
+record like any other turn, and the S4 ORGAN STAYS — there is no
+removal arc. Closing these changes WHAT ENTERS the ledger, so it gets
+its own council before building.
+
+Then (3) A4 evidence lanes, (4) the conversation-stream reader +
+spool-read + typed states, (5) the shared context-assembly adapter,
+(6) rehearsal witnesses both directions + the CLI double-append fix,
+(7) owner flip post-birth.
+
+---
+
+## PREVIOUS SESSION: A1/B2 receipt rail BUILT; A6 and A3 verified by execution
 
 **The ceremony now proves what it claims.** Blocker A1/B2's substance —
 `run_transaction` accepting ANY non-empty string as its "S7 receipt" and
