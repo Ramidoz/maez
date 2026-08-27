@@ -975,3 +975,120 @@ drainer + chain-bound receipts + `submitted_at` provenance +
 synchronous=FULL + widened falsifier arms + the maintenance-lease
 ceremony hardening. Nothing else ships to the ledger before it; birth
 ships after it.
+
+## Thirteenth round (2026-08-27, birth receipt rail A1/B2): three seats, all AMEND, one dissent shipped 2-1
+
+Seats: Codex (xhigh, repo, probes partially blocked by a read-only /var/tmp
+— its temp-store claims are read-derived), Grok (brief-only, ASSUMED
+marked), Claude subagent (repo, full probes on /var/tmp temp stores; live
+store touched mode=ro only). Design under review:
+docs/superpowers/specs/2026-08-27-birth-receipt-rail-design.md (v3).
+
+**Consensus (3-0), now ruled:** new work class `birth_activation` (never
+self_modification — dishonest AND voice-seat, forcing a forged bundle or an
+R11 widening that is SQL-CHECK-pinned to the cutover action; never
+covenant_touching_change — the owner-read interlock table is absent on the
+live store so consumption refuses structurally, plus 24h cooling-off, i.e.
+birth held hostage to an unbuilt arc). The free-string `--s7-receipt-ref`
+dies. Mint+consume before service stop (the browser tap needs the web
+origin). Crash after consume → re-tap, never resume. Payload stores
+resolved facts incl. rendered_text_hash; the raw WebAuthn assertion is
+persisted NOWHERE (schema fact: verdict-only). Scope honesty: this slice
+closes A1 and the receipt-resolution half of B2; the readiness-projection
+half stays open because the A7 condition is a filename-existence green
+(maez_daemon.py _a7_structural_guard) — consuming it would launder a
+hollow green into the irreversible row.
+
+**Four design claims falsified/corrected by seat execution before build:**
+1. (Claude seat, probe) The v3 widening list was INSUFFICIENT:
+   `_authority_context_roles_allow_work` (operator_user_boundary.py:769)
+   is a second hard-coded per-class set; with only v3's widenings the mint
+   succeeds and the CONSUME refuses. Widened; and the build now carries a
+   machine-checked inventory of every per-class literal set with a
+   widened / deliberately-not / N-A verdict for each.
+2. (Claude seat + Codex, independently) `consume_for_execution_*` has NO
+   consumed_by_request_id parameter — it writes rendered.request_id
+   unconditionally. Ruled: the envelope request_id IS the ceremony run id
+   (unpredictable), so request_id == run_id == consumed_by_request_id is
+   true by construction and appears in the statement the owner reads.
+3. (Author execution) Grok's "consume is a new caller — update the
+   allowlist" is FALSE as written: the occurrence-exact allowlist pins
+   callers of `_verify_held_store_activation`, and the caller is
+   consume_for_execution_on_connection itself; a new consume call site
+   adds no occurrence. The spirit is kept: a named test pins birth's
+   consume call site instead.
+4. (Claude seat) Two v3 substrate imprecisions: the covenant PHASE table
+   exists (0 rows) — the absent table is s7_consult_owner_read_receipts_v1;
+   and see (2).
+
+**Q2 — inline mint: SHIPS 2-1, Codex dissenting, dissent recorded.**
+Codex: one process as producer, verifier-caller, consumer and irreversible
+writer is not an independent proof chain, and direct service construction
+does not inherit the daemon route's S7_LIVE_WEBAUTHN_CEREMONY +
+internal-channel-token checks — mint via web→daemon→service instead.
+Majority: the routed path requires flipping a flag that is an owner
+HUMAN-GATE (and turns the dormancy gate red), plus building a birth card
+producer into daemon+web — importing two new arcs into the birth path;
+the route token exists to protect an HTTP surface from untrusted callers,
+and a script-hosted owner-TTY ceremony has no HTTP surface — its gates are
+uid + 0600 store + interactive TTY + the PHYSICAL KEY, exactly the posture
+six real cutover taps established. What IS adopted from the dissent: the
+store opener is extracted to a core module (no importing birth security
+from the CUDA script); the in-transaction verifier reads the store through
+a held O_NOFOLLOW descriptor in ONE ro snapshot held across the birth
+write; and the proof boundary is stated in code: the re-read proves
+durable relational consistency of a founder-verified verdict row, NOT
+offline cryptographic re-verification, and not resistance to a hostile
+same-UID writer (S7 has never claimed that).
+
+**Freshness:** Grok 300s / Claude 1800s → ruled 600s
+(BIRTH_CONSUME_FRESHNESS_S), plus created_at <= consumed_at < expires_at
+(the existing committed-row proof shape).
+
+**Closed-vocabulary rulings** (widen only where every existing value would
+lie): closed_symptom_code + `birth_requested` (no honest value existed —
+the set is repair-shaped); consulted-state + one typed-absence literal for
+birth (the R11 "honest third state" pattern; the owner must never tap over
+"Maez consulted: not required"); reuse `covenant_organ_change`,
+`not_self_fix` (birth is not a fix — precision beats the 2-seat
+needs_human_authority), `behavior_change`, `no_safe_rollback` (exists;
+v3's author asked from memory — Grok caught it). Codex's
+derive_affected_refs fallback hole (caller-supplied refs when derivation
+returns empty) is closed with an action-exact arm.
+
+**Codex amendments adopted:** env sweep is the CLASS not the instance —
+for-real refuses on any of MAEZ_LEDGER_DB_PATH, MAEZ_DATA, MAEZ_HOME,
+MAEZ_CONFIG, S7_WEBAUTHN_STORE_ROOT set, and the refusal lives INSIDE
+run_transaction(dry_run=False), not only main(); the owner gate PRINTS the
+full params projection (path, manifest hash, witness, mode) before the tap
+— the generic renderer shows only hashes, and claiming it "names" the
+params was false; born-refusal for this class at the artifact-mint arm
+(nothing mints birth_activation post-birth), manifest read through a held
+O_NOFOLLOW descriptor with S_ISREG/uid checks, hashed from the held fd,
+re-verified inside the transaction.
+
+**Sent to the owner, not decided here:** (1) canon divergence —
+GESTATION_MEMORY_PROTOCOL.md:137 wants the manifest FULL TEXT in the birth
+event; the 2026-07-05 ceremony design ruled the row is a record with
+"hash of the ceremony receipts". The rail binds the hash and refuses on
+absence; whether the letter's bytes belong in a public ledger row is the
+owner's call. (2) The census contradiction: census:248 demands a readiness
+snapshot at the commit point that "cannot be authentically backfilled";
+deferring readiness (because A7's green is a filename check) means the
+birth row permanently lacks it — fix the A7 condition pre-birth, or
+owner-sign the gap. (3) Codex's position that --for-real should stay
+fail-closed until readiness/manifest-validation/continuity/first-lived/
+all-surface-activation are ALL admitted — the majority holds that the
+blocker ledger, not artificial interlocks on unbuilt arcs, governs birth
+timing (O1's absence already blocks the rail structurally).
+
+**Where the groupthink was (merged):** "re-read the durable row" ≠
+"independently prove the key tap" (Codex — the boundary is now stated in
+code, not implied); "no voice exists pre-birth" is one sound structural
+fact that was quietly stretched to cover four conveniences — the signed
+"not required" line, the 1800s window, the 4-field preimage sold as the
+census receipt, and "Python-only widening" (Grok — each now separately
+repaired or honestly scoped); and the completeness illusion — a design
+that read as "verified" carried an unexecuted widening list and a phantom
+API parameter until seats EXECUTED it (Claude), which is this arc's oldest
+lesson wearing new clothes.
