@@ -20,6 +20,7 @@ birth as pre-birth life (birth-gated activation).
 from __future__ import annotations
 
 import json
+import ast
 import os
 import re
 import sqlite3
@@ -30,7 +31,12 @@ from unittest.mock import patch
 
 os.environ["MAEZ_TEST_MODE"] = "1"
 _TEST_DIR = tempfile.mkdtemp(prefix="maez_test_surface_spool_")
-_REPO = Path("/home/rohit/maez")
+#: Derived from THIS FILE, never hardcoded. A pinned absolute path made
+#: every source-text assertion below read the live tree no matter which
+#: checkout pytest was running in — so a worktree, a CI clone or a
+#: mutation copy was graded against /home/rohit/maez and stayed green.
+#: (Executed by the sixteenth-round Claude seat, 2026-08-27.)
+_REPO = Path(__file__).resolve().parents[1]
 
 from core.ledger import migrate, spool  # noqa: E402
 from core.ledger import model_reply_persistence as mrp  # noqa: E402
@@ -78,6 +84,73 @@ def _method_body(src: str, name: str) -> str:
     match = re.search(r"\n    def ", src[start + 20:])
     end = start + 20 + match.start() if match else len(src)
     return src[start:end]
+
+
+#: The admission APIs a conversation surface may reach the ledger through.
+_LEDGER_WRITE_APIS = frozenset(
+    {
+        "write_turn",
+        "try_write_turn",
+        "owner_write_turn",
+        "submit_user_message",
+        "persist_model_reply",
+    }
+)
+
+
+def _ledger_call_surfaces(rel: str, func_name: str) -> list[tuple[str, str]]:
+    """(callee, surface-expression) for every ledger write inside a function.
+
+    AST, not substring. `_method_body` returns a ~100 KB blob for the
+    Flask `chat` route (it terminates at the next ``\\n    def ``), inside
+    which four NON-ledger call sites also spell ``surface="web_owner"`` —
+    so ``assertIn`` on that literal stayed green through both real ledger
+    call sites being relabelled, while a positive control in the same
+    file went red. Import aliases are resolved, because the production
+    call sites import these APIs under leading-underscore names
+    (``try_write_turn as _try_write_turn``, ``submit_user_message as
+    _sum``) and a callee-name match alone would miss every one of them.
+    """
+    tree = ast.parse(_read(rel))
+
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in _LEDGER_WRITE_APIS:
+                    aliases[a.asname or a.name] = a.name
+
+    target = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == func_name:
+                target = node
+                break
+    if target is None:
+        raise AssertionError(f"{func_name} not found in {rel}")
+
+    out = []
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+        canonical = aliases.get(name, name if name in _LEDGER_WRITE_APIS else None)
+        if canonical is None:
+            continue
+        surface = None
+        for kw in node.keywords:
+            if kw.arg != "surface":
+                continue
+            # A literal yields its VALUE; anything else (a variable, an
+            # f-string) yields its source, so a non-literal surface is
+            # visible as such instead of silently reading like a name.
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                surface = kw.value.value
+            else:
+                surface = ast.unparse(kw.value)
+        out.append((canonical, surface))
+    return out
 
 
 _REPLY_ARGS = dict(
@@ -287,7 +360,26 @@ class WebWiringTests(unittest.TestCase):
             "admission spool, never a direct writer",
         )
         self.assertIn("submit_user_message(", body)
-        self.assertIn('surface="web_owner"', body)
+
+    def test_web_ledger_call_sites_name_one_surface_and_only_one(self):
+        """One limb, one name — asserted at the CALL SITES, not by substring.
+
+        The predecessor of this test was ``assertIn('surface="web_owner"',
+        body)`` over a ~100 KB blob holding four non-ledger occurrences of
+        that same literal; it survived both real ledger call sites being
+        relabelled. This reads the actual admission calls.
+        """
+        calls = _ledger_call_surfaces("skills/web_interface.py", "chat")
+        by_api = {api: surf for api, surf in calls}
+        self.assertIn("submit_user_message", by_api)
+        self.assertIn("persist_model_reply", by_api)
+        surfaces = {surf for _api, surf in calls}
+        self.assertEqual(
+            surfaces, {"web_owner"},
+            "every ledger write from the web owner bridge must name the "
+            "same surface; two spellings on one limb is the substrate lie "
+            "this slice exists to close",
+        )
 
     def test_web_reply_links_by_parent_submission_id(self):
         body = _method_body(_read("skills/web_interface.py"), "chat")
@@ -310,6 +402,28 @@ class CliWiringTests(unittest.TestCase):
         body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")
         self.assertNotIn("try_write_turn", body)
         self.assertIn("submit_user_message(", body)
+
+    def test_cli_ledger_call_sites_name_one_surface_and_only_one(self):
+        calls = _ledger_call_surfaces("cli/maez_chat.py", "_handle_chat")
+        by_api = {api for api, _surf in calls}
+        self.assertIn("submit_user_message", by_api)
+        self.assertIn("persist_model_reply", by_api)
+        self.assertEqual(
+            {surf for _api, surf in calls}, {"_cli_surface", "cli"},
+            "the CLI's two ledger writes must resolve to one name; "
+            "_cli_surface is that name's single binding",
+        )
+
+    def test_telegram_ledger_call_sites_name_one_surface_and_only_one(self):
+        calls = _ledger_call_surfaces("skills/telegram_voice.py", "_process_message")
+        by_api = {api for api, _surf in calls}
+        self.assertIn("try_write_turn", by_api)
+        self.assertIn("persist_model_reply", by_api)
+        self.assertEqual(
+            {surf for _api, surf in calls}, {"_telegram_surface", "telegram_text"},
+            "the legacy telegram path's ledger writes must resolve to one "
+            "name; _telegram_surface is that name's single binding",
+        )
 
     def test_cli_reply_links_by_parent_submission_id(self):
         body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")

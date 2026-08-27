@@ -313,5 +313,36 @@ class CodexValidationTests(unittest.TestCase):
         self.assertNotIn("enqueue_reconstructed", spool.__all__)
 
 
+class WriterDefaultMirrorTests(unittest.TestCase):
+    """The replay organ hand-copies the writer's surface defaults.
+
+    ``_row_is_our_replay`` decides "did OUR envelope produce this row"
+    by comparing the row's ``surface``/``raw_surface`` against the
+    envelope's — and for kwargs the envelope OMITS it compares against
+    these mirrored constants, "because that is what actually landed in
+    the row". Nothing pinned the mirror to the original, so changing
+    the writer's default would silently turn the causation predicate
+    into "a different submission produced it" for every defaulted row.
+    Found by the sixteenth-round Claude seat, 2026-08-27.
+    """
+
+    def test_mirrored_writer_surface_defaults_match_the_writer(self):
+        import inspect
+
+        from core.ledger import dead_letter_replay as dlr
+        from core.ledger import writer as ledger_writer
+
+        params = inspect.signature(ledger_writer.LedgerWriter.write_turn).parameters
+        self.assertEqual(
+            dlr._WRITER_DEFAULT_SURFACE, params["surface"].default,
+            "dead_letter_replay mirrors LedgerWriter.write_turn's surface "
+            "default; drift silently breaks the causation predicate",
+        )
+        self.assertEqual(
+            dlr._WRITER_DEFAULT_RAW_SURFACE, params["raw_surface"].default,
+            "same mirror, raw_surface half",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
