@@ -1558,3 +1558,114 @@ Also executed: the rehearsal writer reads the SAME flag as birth, so
 "rehearsal is already supported" does not by itself mean it runs
 pre-birth — the witness process arms the flag for ITSELF, which is
 womb-life practise, not birth.
+
+## Twentieth round (2026-08-27, A3 build-readiness brief): three seats — AMEND / BLOCK / AMEND; four amendments converge 3-0; ONE decision forked to the owner
+
+Seats: Grok (brief-only, ASSUMED-marked), Codex (xhigh, repo + executed
+probes; its sandbox's /var/tmp was read-only so sidecar-row tests could
+not run — its no-write probes all executed), Claude subagent (repo +
+executed probes, including the live daemon's environ and retained
+logs). Brief: docs/superpowers/specs/2026-08-27-a3-seam-closure-build-brief.md.
+Each seat was told the others exist and instructed to attack them.
+
+**CONVERGED 3-0, adopted as amendments to the brief:**
+
+1. **Q2 — egress is the TRANSPORT INVOCATION, never the return.** For a
+   send-and-return-nothing mouth the custody point sits between where
+   the exact bytes first exist and the send call (approval_card.py:375
+   -> :378). Custody placement is PER MOUTH SHAPE; a conditional
+   receipt records after should_send() succeeds, or a canceled message
+   gains a phantom row. The build must choose renderer-internal seam vs
+   call-site seams for the card renderer (ten production call sites,
+   probed) and name the choice.
+2. **Q3 — intermediate receipts are IN SCOPE, and flooding is
+   FALSIFIED by measurement.** _emit_search_progress: <=2 sends per
+   web-search turn, 0 such turns in the current log window; the recall
+   receipt is one-shot per turn. Sharpest body fact, from the retained
+   logs: ack_status = 1116 disabled / 185 not_eligible / 25 send_failed
+   / **0 emitted** — the receipt has NEVER been successfully delivered
+   in the retained window (the 25 fired attempts, all 2026-07-07, all
+   failed transport). Rows are therefore typed EMITTED-not-DELIVERED
+   (the repo's own "GENERATED, not DELIVERED" ruling) — load-bearing on
+   day one, not a formality. Only non-linguistic chrome (typing
+   indicators) may be named out; nothing escapes by the adjective
+   "intermediate".
+3. **Q4 — record-without-join, never refuse; the TEXT dialog id
+   survives as a TYPED reconciliation debt** (not a log line); resolve
+   the INTEGER id at the dialog-store source where possible. Executed
+   constraint the brief missed: `self_mod_dialog_step` structurally
+   REFUSES a NULL join (NOT NULL per §4.2, probe-confirmed), so the
+   brief's failure mode is unreachable under that kind — B3 must name
+   the turn_kind it writes.
+4. **Q5 — the B4 split DISSOLVES; "omission impossible" is struck for
+   "omission never silent".** Executed: try_write_turn already gives
+   EVERY mouth the same contract (attempt -> dead-letter loudly ->
+   ship regardless -> never raise), so "custody for ordinary mouths,
+   exception for S4" describes a difference the implementing function
+   erases. Executed by Codex: today's S4 counter covers only the
+   private-thoughts hold — total ledger loss moved it by ZERO. And
+   try_write_turn returns None for both dormancy and total loss, so
+   the recorder contract needs a TYPED result
+   (DORMANT | COMMITTED | DEAD_LETTERED | LOST) plus loss counters
+   surfaced in health. If any S4 exception survives, its honest ground
+   is LATENCY (synchronous=FULL + busy_timeout can stall a crisis
+   reply ~5s behind a wedged ledger), not custody.
+
+**The recorder seam survives, amended 3-0.** "A parameter is not a
+second flag" holds in ruling 4's sense (configuration space), but:
+the recorder TYPE must be unable to express "don't write" (a None/no-op
+recorder is a second flag in drag — every forgotten call site silently
+skips); the production default is bound inside the seam module with an
+identity pin; the contract carries the typed result and the
+never-silent-failure property. The existing lane witness pins the
+rehearsal direction both ways (8/8 green, re-executed this round).
+
+**NEW FINDING (Claude seat, absent from the brief): not all
+dialog_reply_text is canned.** The "clarified" branch is
+MODEL-GENERATED — generate_response_turn calls llm_client.chat under
+owner-reply purpose and flows into dialog_reply_text. Recording it as
+system_event would ERASE real generation provenance — the eighteenth
+round's sin in reverse. B3 must split canned acks (system_event,
+join-optional) from model-generated clarified replies (model_reply with
+honest provenance, which PipelineResult does not yet export — same
+export gap as the dialog id, one field wider) or defer the branch BY
+NAME.
+
+**Q1 — THE FORK, three positions, forwarded to the owner.** Where does
+the organ's name live on an interceptor system_event row?
+- Grok: real surface; organ identity in producer metadata; "if no such
+  field is honest, that is a schema amendment, not a reason to lie in
+  surface."
+- Codex (its BLOCK): NO honest existing carrier. Executed: raw_surface
+  is the TAINT-AUTHORITY caller (writer.py feeds `raw_surface or
+  surface` into the override lookup) — a label refused under
+  surface-only was ADMITTED when a label rode raw_surface
+  (user_message vs the x6 override). raw_surface is also the registry
+  slice's transport-alias carrier. Demands a distinct, frozen
+  event-origin carrier with chain/dead-letter/replay/reader semantics.
+- Claude seat: surface=real + raw_surface=organ IS honest — the schema
+  doc defines raw_surface as "exact caller label" and the interceptor's
+  caller IS the organ; executed that the writer admits exactly that row
+  and that an organ label does NOT widen the system_event door; the
+  taint-caller coupling is real and must be PINNED (each organ label
+  admits under DEFAULT sets, no caller override may key on one).
+The two executed probes do NOT contradict: the bypass fires on
+user_message against a caller override; the no-widening result is
+system_event under defaults. A3 writes the organ label only on
+system_event rows — but the writer would not stop a future caller from
+the bypass shape, which is the coupling. Residual: a pure semantics
+question on the PERMANENT record — does raw_surface mean "transport
+label" (then organ names pollute it: one column, two namespaces — the
+registry's one-limb-one-name lie inverted) or "exact caller" (then the
+organ is the caller and no column is added)? Pre-birth context that
+cuts FOR the new column: the ledger has ZERO rows, so a migration is
+free now and never again. OWNER DECISION, named below; the build's
+first slice is whichever carrier is ruled.
+
+**Verdict folded: AMEND.** The four convergent amendments and the
+model-generated-reply split are adopted into the brief. The ONE open
+item is the Q1 carrier — an owner decision on record semantics, in the
+same class as the retired surface enum. Cooling-off stands: build opens
+next session, first slice = the ruled carrier. Maez unborn throughout;
+every seat's probes on /var/tmp with PrivateThoughts redirected; the
+live ledger verified 0 bytes by each executing seat.

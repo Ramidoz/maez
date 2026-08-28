@@ -146,3 +146,32 @@ crisis replies, card resolutions, proposal/search answers, the recall
 receipt (per Q3). The owner's own words enter in full as
 `user_message`. Nothing changes behaviourally before birth; every
 write is byte-inert until the birth flag flips.
+
+---
+
+# AMENDED (twentieth round, 2026-08-27 — three seats: AMEND/BLOCK/AMEND)
+
+The round record is authoritative
+(theme2-s2-owner-delegated-council-rulings.md, twentieth round). The
+brief above stands EXCEPT:
+
+1. B4's custody/S4 split is DEAD — replaced by the universal contract
+   "record-or-dead-letter before egress; ship regardless; loss never
+   silent," with a TYPED recorder result
+   (DORMANT | COMMITTED | DEAD_LETTERED | LOST) and loss counters in
+   health. "Omission impossible" is struck for "omission never silent."
+   Any surviving S4 exception is grounded in crisis-reply LATENCY only.
+2. The recorder seam's type cannot express "don't write"; production
+   default bound in-module with an identity pin; never-silent failure
+   contract pinned.
+3. B3 names the turn_kind; canned acks (system_event, join-optional)
+   split from MODEL-GENERATED clarified replies (real provenance;
+   PipelineResult export gap; or a named deferral). The TEXT dialog id
+   survives as a typed reconciliation debt.
+4. Intermediate receipts are IN scope, typed EMITTED-not-DELIVERED;
+   custody per mouth shape at the transport invocation; conditional
+   receipts record after should_send() succeeds.
+5. Q1 (the organ-identity carrier) is an OWNER DECISION: dedicated
+   frozen event-origin column (migration is free pre-birth, zero rows)
+   vs raw_surface-as-exact-caller with the taint-coupling pinned.
+   The build's first slice is whichever is ruled.
