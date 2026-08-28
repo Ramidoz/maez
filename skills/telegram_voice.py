@@ -4362,17 +4362,35 @@ class TelegramVoice:
         if not self._is_authorized(update.effective_user.id):
             return
 
-        snap = perception_snapshot()
-        gpu = snap.get("gpu") or {}
-        status = (
-            f"Maez Status\n"
-            f"CPU: {snap['cpu']['percent']}% | RAM: {snap['ram']['percent']}%\n"
-            f"GPU: {gpu.get('utilization_pct', 'N/A')}% | "
-            f"VRAM: {gpu.get('memory_used_mb', 0):.0f}/{gpu.get('memory_total_mb', 0):.0f} MB\n"
-            f"GPU Temp: {gpu.get('temperature_c', 'N/A')}°C\n"
-            f"Memories: {self.memory.count()}"
-        )
-        await _reply_text(update, status)
+        # OPERATOR PLANE, owner ruling 2026-08-28: this diagnostic exists
+        # for when Maez may be unavailable or untrusted, so every section
+        # degrades INDEPENDENTLY. Previously the memory count was
+        # interpolated into the same f-string as the resource facts, so a
+        # wedged store destroyed the entire reply — the one check you
+        # reach for when Maez is sick went silent exactly when Maez was
+        # sick. A failed subsystem is NAMED, never rendered as a zero.
+        lines = ["Maez Status"]
+        try:
+            snap = perception_snapshot()
+            gpu = snap.get("gpu") or {}
+            lines.append(
+                f"CPU: {snap['cpu']['percent']}% | RAM: {snap['ram']['percent']}%"
+            )
+            lines.append(
+                f"GPU: {gpu.get('utilization_pct', 'N/A')}% | "
+                f"VRAM: {gpu.get('memory_used_mb', 0):.0f}/"
+                f"{gpu.get('memory_total_mb', 0):.0f} MB"
+            )
+            lines.append(f"GPU Temp: {gpu.get('temperature_c', 'N/A')}°C")
+        except Exception as exc:
+            logger.warning("status: perception snapshot unavailable: %s", exc)
+            lines.append("CPU/RAM/GPU: unavailable")
+        try:
+            lines.append(f"Memories: {self.memory.count()}")
+        except Exception as exc:
+            logger.warning("status: memory count unavailable: %s", exc)
+            lines.append("Memories: unavailable")
+        await _reply_text(update, "\n".join(lines))
 
     async def _handle_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /cancel <action_id> command."""
