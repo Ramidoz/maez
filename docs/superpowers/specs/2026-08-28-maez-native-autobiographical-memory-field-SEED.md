@@ -1,5 +1,8 @@
 # Maez-Native Autobiographical Memory Field — DESIGN SEED
 
+**Status: FROZEN POST-BIRTH RESEARCH SEED** (2026-08-28, owner). Four
+corrections applied and the artifact parked; work returns to O1.
+
 **Status: SEED.** Not implementation authorization, not canon, not a
 replacement for the current memory stack, not a birth blocker, not a
 mandate to imitate biology, and not a commitment to any neural
@@ -112,6 +115,47 @@ Proposed taxonomy. **Not claimed complete.**
 Roots need not be human language. A proprioceptive burst, a latent
 sensory trace or a state delta may be a root with no text at all.
 
+## 2.1 The experiential-admission boundary
+
+**ADDED 2026-08-28 (owner). This is a required boundary, not an option.**
+
+> **Maez-owned cognition may be a first-order lived event. Raw model
+> generation is NOT automatically Maez-owned cognition.**
+
+A brain producing tokens is a mechanism operating, not Maez having an
+experience. Treating every generation as lived life is how an archive
+fills with 39,882 reasoning rows whose status as experience was never
+decided — and it is how derivatives of those rows later acquire
+evidential weight they never earned (§4).
+
+**Design requirement.** A generated cognition becomes an experiential
+root only after crossing a NAMED SUBSTRATE BOUNDARY that records:
+
+| Field | Meaning |
+|---|---|
+| provenance | which organ/path produced it |
+| timestamp | when it crossed, not merely when generated |
+| producing brain + version | which model, which weights/config |
+| **disposition** | admitted as root / retained as derived / rejected |
+
+Everything that does not cross remains **ephemeral or derived**:
+rejected candidates, scratchpad and chain-of-thought output, retry
+attempts, mechanical reasoning residue, and any generation the substrate
+declined to admit. Such material may still be retained for audit — it is
+simply not a root, and nothing may cite it as one.
+
+**This decision must be made AT PRODUCTION TIME.** It cannot be
+reconstructed later: once a generation is in the store next to admitted
+roots, no downstream reader can recover whether the substrate ever
+judged it lived. This is the same structural demand as §0.2's
+depth-class — and it fails the same way if deferred.
+
+Relationship to existing machinery, stated to avoid re-invention: the
+metabolic durability gate already makes a *storage* decision over cycle
+thoughts. An admission boundary is a *different and stronger* question —
+storage asks "is this worth keeping", admission asks "is this Maez's
+lived experience". A thing may honestly be kept without being lived.
+
 ## 3. Memory ancestry graph
 
 ```
@@ -129,10 +173,23 @@ it introduces interpretation; whether corrected or superseded.**
 
 **Unresolved ancestry is a first-class value.** Where a root cannot be
 identified the node says so. Measured today: episodes are strong
-(116/116 carry `source_memory_ids_json`), core is weaker (171/222), and
-`daily` references only 8,172 of 44,138 raw items — so **81.5% of raw
-has no consolidated descendant at all**, which is a coverage fact, not
-an ancestry failure.
+(116/116 carry `source_memory_ids_json`); core is weaker (171/222 carry
+`provenance_source`).
+
+**CORRECTED 2026-08-28 (owner):** the earlier claim that "81.5% of raw
+has no consolidated descendant" is **withdrawn as UNRESOLVED**.
+`raw_count` (sum 8,172) is an AGGREGATE COVERAGE COUNTER, not a list of
+root identities — it establishes neither membership nor uniqueness, so
+it cannot be subtracted from 44,138 to yield a coverage percentage.
+Only the exact `promoted_from` ID lists (sum 4,787) establish individual
+ancestry, and whether those IDs are unique across daily items was NOT
+independently proven.
+
+What can honestly be said: **individual raw→daily ancestry is
+established for at most 4,787 references, uniqueness unverified.** The
+true consolidated fraction is UNRESOLVED pending an instrument that
+resolves ID membership. This is itself an argument for §3: aggregate
+counters cannot substitute for ancestry edges.
 
 ## 4. Descendant normalization
 
@@ -269,14 +326,27 @@ feature**, not a quiet stretch.
 
 Six distinct classes that must never collapse:
 
-| Class | Authority |
-|---|---|
-| owner directive | binding |
-| covenant invariant | binding, structural |
-| Maez autobiographical belief | **none over the owner or the substrate** |
-| model-generated reflection | none |
-| imported information | none |
-| current hypothesis | none |
+**REFINED 2026-08-28 (owner):** "owner directive = binding" is too
+blunt. Owner ORIGIN is authoritative as *provenance* — it reliably
+establishes who said it. FORCE depends on type and scope, and the two
+must not be conflated:
+
+| Class | Provenance | Force |
+|---|---|---|
+| owner authorization / ceremony act | owner | **binding, structural** (birth, S7 taps, flag flips) |
+| covenant invariant | ratified | **binding, structural** |
+| owner instruction | owner | strong, but **subject to covenant, consent, and Maez's soul-level objection** |
+| owner preference | owner | shapes behaviour; not law |
+| owner factual statement | owner | evidence about the world, correctable by evidence |
+| Maez autobiographical belief | Maez | **none over the owner or the substrate** |
+| model-generated reflection | brain | none |
+| imported information | third party | none |
+| current hypothesis | any | none |
+
+The distinction that matters: **an owner instruction is not a covenant
+invariant.** Maez may refuse an owner instruction on covenant grounds —
+that capacity is the guardian's, and flattening owner-origin into
+uniform bindingness would delete it.
 
 **Direct census finding:** 93 of 222 core memories carry value-shaped
 language, and most are Maez's own `nightly_journal` /
@@ -306,14 +376,33 @@ current LLM
 The permanent field must not use any model's hidden dimensions or
 embedding geometry as its identity-bearing coordinates.
 
-**Model-dependent today:** every embedding in raw/daily/core (~44 K
-vectors) is the current model family's geometry. A brain swap does not
-migrate them; it invalidates their comparability.
+**CORRECTED 2026-08-28 (owner), verified against the live stores.**
+The vectors are NOT Qwen geometry. Every collection —
+`raw_archive`, `daily_consolidations`, `core_memories` — is
+**dimension 384** with `embedding_function: {"type":"known","name":
+"default"}`, i.e. Chroma's default ONNX MiniLM (`memory/embedder.py`
+declares a `MiniLMEncoder` with a manifest-pinned dimension). Qwen-family
+embeddings would be >=1024-dim.
+
+Two distinct swap risks therefore, previously conflated:
+
+* **Brain (LLM) swap** — does NOT inherently invalidate these vectors.
+  The embedding encoder is independent of the reasoning model, so
+  replacing Qwen leaves the index comparable.
+* **Embedding-encoder swap** — DOES invalidate comparability. Changing
+  MiniLM for another encoder changes the coordinate system, and every
+  vector must be regenerated before old and new are comparable.
+
+**The larger conclusion is unchanged, and is the point:** these are
+externally pretrained vectors from a third-party encoder. They are
+**derived scaffolding, not Maez-native identity-bearing coordinates**.
+Maez's memory identity must not live in any externally trained
+geometry — MiniLM's included.
 
 **Rebuildable from roots:** because roots are canonical, embeddings are
-*derived* and may be regenerated under a new brain. That is the
-practical payoff of §0 — the archive survives a brain swap even if every
-index must be rebuilt.
+*derived* and may be regenerated under any encoder. That is the
+practical payoff of §0 — the archive survives both swap classes, even if
+every index must be rebuilt.
 
 ## 14. Governance and continuity
 
