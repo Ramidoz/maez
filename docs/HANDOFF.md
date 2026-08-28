@@ -107,18 +107,33 @@ ingestion question, deferred by name).
 
 ### OWED / NOT DONE, by name — do not rediscover
 
-1. **A3 IS NOT DONE.** Closed: the two S4 mouths. Still open on the
+1. **A3 IS NOT DONE.** Closed so far: the two S4 crisis mouths
+   (7efa998) and the PROPOSAL interceptor (0a26392). Still open on the
    roster: card resolutions (renderer-internal vs call-site seam must
-   be CHOSEN and named — twentieth round Q2), proposal and
-   search-commitment returns, intent_unavailable (a degradation, not
-   speech — eighteenth round item 6), the recall receipt + \
-   _emit_search_progress intermediate receipts (record-before-invoke
-   must NOT claim EMITTED — walk correction; the honest pre-send claim
-   is eligibility/intent), the dialog branch split (canned acks vs
-   MODEL-GENERATED clarified replies -> persist_model_reply),
-   telegram legacy outbound mouths, the CLI empty-search branch, the
-   cockpit /message route. Each: RED-first, tripwire re-run with the
-   moved/unmoved reasoning in the commit message.
+   be CHOSEN and named — twentieth round Q2), intent_unavailable (a
+   degradation, not speech — eighteenth round item 6), the recall
+   receipt + _emit_search_progress intermediate receipts
+   (record-before-invoke must NOT claim EMITTED — walk correction; the
+   honest pre-send claim is eligibility/intent), the dialog branch
+   split (canned acks vs MODEL-GENERATED clarified replies ->
+   persist_model_reply), telegram legacy outbound mouths, the CLI
+   empty-search branch, the cockpit /message route. Each: RED-first,
+   tripwire re-run with the moved/unmoved reasoning in the commit
+   message.
+   **SEARCH-COMMITMENT IS BLOCKED, NOT MERELY OPEN — a PROVENANCE
+   EXPORT GAP** (executed 2026-08-28): `_try_search_commitment_intent`
+   returns two materially different kinds of text through ONE `str`
+   return — canned sentences (honestly `{self_generated}`) and
+   `_format_search_commitment_results`, which embeds LIVE WEB CONTENT
+   (titles, snippets, URLs; honestly `{self_generated, tool_output,
+   internet_derived}` — a set the writer ALREADY permits for
+   system_event). `run_inbound_turn` sees only the string, so BOTH
+   fixed labels lie in one branch. The fix is an EXPORT (the producer
+   declares its own provenance), not a chosen label — the same
+   export-gap shape as the dialog id and the model-generated reply.
+   Two tests in tests/test_ledger_a3_interceptor_closures.py pin the
+   reason; one goes red the moment the seam gains honest tool/web
+   provenance, which is the signal to close this mouth.
 2. **Era-coherence hardening, deferred:** ledger_is_initialized does
    not demand v2/0007 coherence; a hand-built pre-0007 artifact
    passes it (fails loudly only at first write). Triage category B.
