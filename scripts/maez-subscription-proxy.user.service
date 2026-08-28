@@ -1,0 +1,40 @@
+[Unit]
+Description=Maez subscription proxy — localhost OpenAI-compatible endpoint → Claude/OpenRouter adapters
+Documentation=file:///home/rohit/maez/core/subscription_proxy/README.md
+After=network-online.target
+Wants=network-online.target
+
+# CONVERTED to a --user unit 2026-08-28 (owner ruling, D1 seam 1).
+# scripts/maez-subscription-proxy.service is a SYSTEM unit
+# (User=/Group=/multi-user.target) requiring root, which does not match
+# Maez's runtime posture — every other Maez unit is --user. A user unit
+# already runs as the owner, so User=/Group= are dropped rather than
+# reproduced. Hardening is PRESERVED deliberately, not relaxed for
+# convenience; any writable path below is added only on proven runtime
+# evidence that the Claude CLI requires it.
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rohit/maez
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_SUBSCRIPTION_PROXY_PORT=11438
+ExecStart=/home/rohit/maez/.venv/bin/python3 -m core.subscription_proxy
+Restart=always
+RestartSec=5
+
+# Localhost-only binding is enforced in code (uvicorn host=127.0.0.1).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/rohit/maez/memory /home/rohit/maez/logs
+ProtectHome=read-only
+PrivateTmp=true
+LockPersonality=true
+
+LimitNOFILE=4096
+TasksMax=128
+
+StandardOutput=append:/home/rohit/maez/logs/subscription_proxy.log
+StandardError=append:/home/rohit/maez/logs/subscription_proxy.log
+
+[Install]
+WantedBy=default.target
