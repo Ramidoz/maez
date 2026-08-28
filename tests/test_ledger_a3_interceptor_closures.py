@@ -166,7 +166,16 @@ class ProposalClosureTests(unittest.TestCase):
         self.assertEqual(organ_row["turn_kind"], "system_event")
         self.assertEqual(
             organ_row["raw_text"], _PROPOSAL_REPLY,
-            "the organ row carries the EXACT bytes the owner received",
+            # CORRECTED (twenty-third round, executed): the honest claim
+            # is the bytes the INTERCEPTOR PRODUCED, not the bytes the
+            # owner received. platform_base extracts markdown images and
+            # MEDIA tokens before transport, so recorded and delivered
+            # text diverge for those shapes — and both divergent shapes
+            # are web-snippet-shaped, i.e. the mouth still to be closed.
+            # Which bytes provenance binds to is a named question for the
+            # custody-placement slice.
+            "the organ row carries the EXACT bytes the interceptor "
+            "produced",
         )
         self.assertEqual(organ_row["event_origin"], _PROPOSAL_ORIGIN)
         self.assertEqual(

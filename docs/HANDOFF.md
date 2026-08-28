@@ -107,6 +107,26 @@ ingestion question, deferred by name).
 
 ### OWED / NOT DONE, by name — do not rediscover
 
+0. **NEXT SLICE IS CUSTODY PLACEMENT — a PHANTOM-ROW WINDOW EXISTS IN
+   LANDED A3 CODE** (twenty-third round, 35eb90c). `platform_base.py`
+   can discard a reply AFTER the handler returns — stale-response
+   suppression when the owner sends a second message while the first
+   is in flight (`response = None`), plus an empty-drop — so the S4
+   and proposal closures can record speech the owner never received.
+   The ruled "conditional receipts record after should_send()
+   succeeds" CANNOT be honoured at the closures' current placement:
+   the real `should_send` is two frames up in another module, and
+   that module is not in the tripwire's watched constructs. HARM IS
+   BOUNDED TODAY (a row is not a delivery claim — GENERATED-not-
+   DELIVERED; and `system_event` is excluded from SELF_HISTORY_KINDS,
+   so Maez does not read these rows back as its own speech), which is
+   why it was NOT hot-patched into a barely-watched module. It goes
+   sharp when the conversation-stream reader lands. Also executed:
+   recorded bytes are NOT delivered bytes for web-snippet shapes
+   (markdown images and MEDIA tokens are extracted before transport),
+   so the assertion in this session's closure test was corrected to
+   claim the INTERCEPTOR-PRODUCED bytes. Which bytes provenance binds
+   to, and what delivery state a row claims, is the slice's question.
 1. **A3 IS NOT DONE.** Closed so far: the two S4 crisis mouths
    (7efa998) and the PROPOSAL interceptor (0a26392). Still open on the
    roster: card resolutions (renderer-internal vs call-site seam must
@@ -134,6 +154,36 @@ ingestion question, deferred by name).
    Two tests in tests/test_ledger_a3_interceptor_closures.py pin the
    reason; one goes red the moment the seam gains honest tool/web
    provenance, which is the signal to close this mouth.
+   **The twenty-third round RULED the export design 3-0** (35eb90c):
+   a typed producer result (NOT a `str` subclass — dead by execution,
+   it evaporates at the first of five transformations before
+   transport; NOT producer-side recording — phantom rows; NOT a
+   per-turn register), the SHIPPING call site records, and the seam
+   maps a CLOSED NAMED SHAPE to a bound taint set so no taint list
+   ever crosses a closure. Fail-closed = refuse ledger admission with
+   NO guessed taint in the sidecar (replay preserves kwargs and would
+   launder it), reply ships, and refusal must be a BUILD failure not a
+   runtime path (required parameter, no default). Model speech stays
+   OUT — its own slice, five exports plus a different recorder, and
+   the twentieth round's "one field wider" is FALSIFIED, as is
+   "clarified is model-generated" (the DEFER ack and the LLM-failure
+   fallback are both canned).
+   **OWNER FORK, undecided:** the search reply quotes the owner's own
+   query, so the maximally honest set
+   `{owner_utterance, self_generated, tool_output, internet_derived}`
+   is REFUSED by the frozen taint map today. Either echoed owner text
+   is not a distinct provenance, or the map gains a sixth
+   `system_event` set. Same class and same owner as the `event_origin`
+   carrier ruling.
+   **Three side findings for their own follow-ups:**
+   `audit_surface_reply` is injected into `run_inbound_turn` and NEVER
+   CALLED (AST-verified, 0 occurrences) while its docstring claims
+   adapter parity; the search producer skips the `self_claim_audit`
+   the proposal producer runs; and the brief's call-site census was
+   wrong in BOTH directions (it missed two legacy Telegram search
+   mouths that do ship web results, and its "five sites, three
+   contracts" described the proposal producer, which needs no
+   export).
 2. **Era-coherence hardening, deferred:** ledger_is_initialized does
    not demand v2/0007 coherence; a hand-built pre-0007 artifact
    passes it (fails loudly only at first write). Triage category B.
