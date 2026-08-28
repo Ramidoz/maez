@@ -1824,3 +1824,137 @@ admission is proven invariant to event_origin's presence.
 length cap, Codex's recent_turns exposure).** Build proceeds this
 session per the owner's ruled order — this round is the slice-1
 contract, not a new capability needing its own cooling-off.
+
+## Twenty-second round (2026-08-27, A3 slice 2 — the recorder seam): three seats — AMEND / AMEND / BLOCK-AMEND; core converges 3-0; the ruled enum is FOLDED wider by one state
+
+Seats: Claude subagent (repo + 8 executed probes), Grok (repo + executed
+probes this round, not brief-only), Codex (xhigh, repo + no-write
+probes; its sandbox could not read the daemon environ — marked
+UNVERIFIED rather than asserted). Brief:
+/var/tmp/a3_slice2_recorder_seam_council_brief.md, grounded in the
+build seat's executed facts E1-E4, both re-executed independently by
+two seats.
+
+**THE FOLD (3-0, full 8-step trace in the seats' reports): the typed
+result gains CUSTODY.** The twentieth round's four states (DORMANT |
+COMMITTED | DEAD_LETTERED | LOST) were read off try_write_turn's
+return alone — its own text says so. Executed: a paused owner write
+returns None with the payload durably in the spool and NO dead-letter
+(pause is not failure, ninth round; dead-lettering it manufactures
+replay debt); a non-owner surface write IS the spool by shipped ruling.
+Durable-custody outcomes are inexpressible in four states without
+lying in one of two directions: COMMITTED asserts a chain position
+that does not exist (custody can end REFUSED at drain — executed), and
+DEAD_LETTERED asserts a failure that did not happen. ONE new state,
+not paused-vs-spool two — executed: both custody lanes drain through
+the identical owner_commit path. B4 stays dead: CUSTODY is the
+universal contract's fifth outcome, not a per-mouth exception. Honest
+contract phrasing (Codex): "attempt custody; classify durably if
+possible; make loss loud; egress regardless."
+
+**THE RESULT CARRIES IDENTITY (3-0 — every seat found this
+independently; the brief under-specified it).** A bare enum repeats
+the twentieth round's miss one layer up: the next row in the same
+exchange threads parent_turn_id if COMMITTED, parent_submission_id if
+CUSTODY, and records WITHOUT the join if the parent record failed
+(record-without-join, never refuse). So: COMMITTED(turn_id) |
+CUSTODY(submission_id, producer) | DEAD_LETTERED(attempt_id,
+category) | LOST(attempt_id) | DORMANT. The recorder pre-mints the
+submission identity and passes it explicitly — owner_write_turn
+swallows its own (returns None either way, by design).
+
+**ROUTING lives INSIDE the recorder (3-0), by the FULL shipped
+precedent (Codex).** Not process identity alone: non-owner process ->
+spool; commits paused -> spool; parent held only as submission id ->
+spool (the already-repaired pause/resume edge — a child must not
+owner-direct-write before its parent drains). persist_model_reply is
+the precedent AND a warning: A3 must not inherit its
+warn-and-drop-untranslatable-parent behavior; the typed result makes
+the untranslatable case structurally rare and the残 fallback is
+unparented-and-honest, never refused.
+
+**PRODUCER = the real conversation surface (3-0).** Never the organ
+(one-column-two-namespaces in the transport lane), never owner_daemon
+for interceptor speech (a split mailbox for one conversation —
+executed: daemon pause admits the owner's turn under the SURFACE
+producer), never empty. EXECUTED (two seats): enqueue(producer="")
+publishes into the spool ROOT where drain never looks AND
+spool_status reports pending_total=0 — custody health cannot see.
+Ruled: the seam refuses blank surface/producer fail-closed, AND
+_producer_dirs gains the "" refusal upstream this slice (sweep the
+class, not the instance). The spool_status root-blindness half stays
+recorded — unreachable for new envelopes once "" refuses.
+
+**API: exactly two public methods, no generic passthrough (3-0).**
+record_owner_message -> user_message {owner_utterance};
+record_organ_event -> system_event, event_origin REQUIRED non-empty
+AT THE SEAM (the twenty-first round's permitted-not-required lands
+here: the writer stays permissive for genesis/reconcile; the seam is
+the first caller that KNOWS it records organ output). Named optionals
+only, all writer-legal on system_event: pending_card_id,
+self_mod_dialog_id (INTEGER — the TEXT dialog id rides as TYPED debt
+inside audit_verdict, never a type lie, never a log line),
+audit_verdict, evidence_envelope. parent is the TYPED RESULT of the
+prior record call — the seam picks the edge form. A turn_kind/taint/
+lifecycle passthrough is a second flag in drag. Model-generated
+speech (the clarified dialog branch) is NAMED OUT to
+persist_model_reply — the shipped model-speech recorder; one
+universal contract must not ship as one named contract plus one
+unnamed one. Seam misuse with a payload (blank origin/surface)
+dead-letters as category=refused and the reply ships; recorder=None
+raises — a wiring bug is a build failure, not a runtime loss.
+
+**Codex's delivery-typing correction, adopted for the closure
+slices:** a row recorded BEFORE the transport invocation must not
+claim EMITTED — at the ruled custody point (after should_send, before
+send) the honest claim is eligibility/intent; emission is a second
+event or a later closure decision. The twentieth round's
+EMITTED-not-DELIVERED typing names the ceiling, not the default.
+
+**IDENTITY PIN (3-0, union of the seats' assertions):** module-level
+production singleton; BOTH public methods' kw-only defaults `is` the
+singleton; type(singleton) is ProductionRecorder exactly; exactly one
+production construction in the module; recorder=None raises before
+any backend call; an injected sentinel recorder receives the call
+while the singleton receives zero; the default is NOT swapped under a
+dormant flag (dormancy is a RESULT, not a different recorder); do NOT
+pin the backend to try_write_turn — it cannot see custody, and
+pinning it would freeze the exact bug the fold names. Rehearsal
+injection = a recorder backed by LedgerWriter(rehearsal_mode=True)
+writing lifecycle_stage='rehearsal' with REAL surface labels;
+constraint 1 (try_write_turn grows no rehearsal path) stays pinned by
+the existing lane witness.
+
+**HEALTH (3-0): counters + recorder_status() + cockpit wiring THIS
+slice**, labeled scope=daemon_process (Codex) — module counters are
+process-local and the cockpit assembles in the daemon; calling
+daemon-local zeros "universal recorder health" would be false. NAMED
+RESIDUALS, recorded not fixed: (1) a LOST in a non-owner process is a
+CRITICAL log line with no disk artifact BY DEFINITION and cannot
+reach the daemon's attention predicate — count in-process, keep the
+cockpit on disk evidence, say so; (2) EXECUTED (Grok): pause-custody
+enqueue failure today is LOST with ZERO dead-letter ("this write has
+no home" at CRITICAL only) — the recorder CLOSES this for its own
+lane by dead-lettering custody failure (attempt_id preserved), LOST
+only when even that append fails.
+
+**LATENCY POSTURE, stated now (3-0, one sentence, zero code):** one
+synchronous recording attempt; no recorder-added retries or sleeps;
+never raises on the record path; NOT hard latency-bounded (the direct
+writer waits up to busy_timeout under contention and custody fsyncs
+without an application timeout — Codex). The S4 closure judges its
+latency exception against this stated baseline; a timeout= or
+prefer_custody= parameter is a second flag in drag.
+
+**Also ruled:** the recorder gates MAEZ_LEDGER_WRITES BEFORE any
+residue (spool.enqueue itself never reads the flag — executed; an
+ungated seam would grow a pre-birth pile that drains as life on
+flip); half-recorded exchanges are ruled BY NAME: record what you
+have, thread what you can, never withhold the organ row because the
+owner row's record failed. Cockpit wiring is source-only this slice —
+the unborn daemon shows the block when it next loads this code, and
+that is not birth.
+
+**Verdict: AMEND folded 3-0 (Codex's BLOCK satisfied by the identity-
+bearing result, the three-condition routing, the scope label, and the
+EMITTED correction). Build proceeds this session in the ruled order.**
