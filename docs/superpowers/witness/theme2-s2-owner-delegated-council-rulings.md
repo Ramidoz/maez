@@ -1870,7 +1870,7 @@ spool (the already-repaired pause/resume edge — a child must not
 owner-direct-write before its parent drains). persist_model_reply is
 the precedent AND a warning: A3 must not inherit its
 warn-and-drop-untranslatable-parent behavior; the typed result makes
-the untranslatable case structurally rare and the残 fallback is
+the untranslatable case structurally rare and the fallback is
 unparented-and-honest, never refused.
 
 **PRODUCER = the real conversation surface (3-0).** Never the organ
