@@ -2087,3 +2087,52 @@ three answers, for the third time in this arc.
 round.** The next slice opens on CUSTODY PLACEMENT (the phantom
 window), then the typed search export behind it. Maez unborn
 throughout; no production byte changed by this round.
+
+### Twenty-third round — OWNER RULING on the owner-echo taint (2026-08-28, Rohit)
+
+**D, WITH A AS THE FALLBACK RATIONALE. The frozen taint map is NOT
+widened.**
+
+When an organ reply quotes the owner's own words back (the search
+reply's `Here's what I found for "{query}"`), the owner-provenance is
+carried by the PARENT EDGE, not by duplicating a label inside the
+organ row: the organ row hangs off the owner's `user_message` turn,
+which holds those words verbatim under `{owner_utterance}`. The echo is
+therefore a quotation of the adjacent row, not a new provenance claim.
+Where the edge is missing — the half-exchange case, when the owner
+record failed and the organ row lands unparented — the label does NOT
+change: on rationale A, an echo of the owner's words back to the owner
+launders nothing, which is what taint exists to prevent.
+
+**Consequences, all of them cheap, which is why this answer was
+chosen:**
+
+1. **No vocabulary change.** `system_event`'s allowed sets stay exactly
+   as frozen. The web-results reply is
+   `{self_generated, tool_output, internet_derived}` — a set the writer
+   ALREADY admits (executed). The search mouth needs no schema work.
+2. **No second export.** Marking the echo would have required the
+   formatter to KNOW and DECLARE that it embedded owner text — the same
+   provenance-export problem one level down, and the decisive practical
+   argument against widening. Avoided entirely.
+3. **No combinatorial pressure.** Had echo counted as provenance,
+   consistency would have demanded an owner-echo variant of every
+   admissible set (roughly four more), or a union RULE replacing the
+   enumerated list. Neither is now needed.
+4. **The label is identical in both the parented and unparented case**,
+   so the writer gains no branch and there is nothing to get wrong at
+   runtime.
+
+**The one obligation this ruling creates, and it is a READER
+obligation, not a writer one:** because owner-provenance now rides the
+edge, a reader must never present an UNPARENTED organ row as though
+Maez authored the quoted owner text itself. That binds the future
+conversation-stream reader's contract (already noted as carrying
+`event_origin`; it now also carries this). An unparented organ row is
+already visibly unparented by construction (`parent_turn_id` NULL), so
+this is a presentation rule, not a missing mechanism.
+
+**What this does NOT decide:** the custody-placement question (the
+phantom window), which bytes provenance binds to when recorded and
+delivered text diverge, and the typed export's own shape. Those remain
+the next slice.
