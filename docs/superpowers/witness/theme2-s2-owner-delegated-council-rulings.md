@@ -1690,3 +1690,137 @@ Then the recorder seam (typed result, cannot-skip, in-module default),
 then per-path closures against the tripwire roster. Cooling-off stands:
 the build opens next session. All five questions of this round are now
 closed; A3 is DESIGN-COMPLETE against the eighteenth round's blockers.
+
+## Twenty-first round (2026-08-27, A3 slice 1 — the event_origin writer contract): three seats — AMEND / BLOCK-AMEND / AMEND; core converges 3-0; three questions the brief missed
+
+Seats: Grok (brief-only, ASSUMED-marked, record-semantics axis), Codex
+(xhigh, repo + executed probes incl. an in-memory UPDATE against the
+append-only trigger), Claude subagent (repo + 15 executed probes on
+/var/tmp, live ledger verified 0 bytes before and after). Brief:
+/var/tmp/a3_slice1_event_origin_council_brief.md, grounded in eight
+build-seat executed facts (F1-F8), the sharpest being F2: `ALTER TABLE
+turns ADD COLUMN event_origin TEXT` with nothing else breaks EVERY
+chain verifier (genesis + new rows both mismatch, because
+span_reader/citation_lock/birth_phase/ceremony/replay all recompute
+from SELECT * read-back and canonical bytes include every non-stripped
+key). There is no do-nothing option; the choice is forced.
+
+**CONVERGED 3-0, adopted:**
+
+1. **Q1 — the preimage takes it (option A).** `event_origin` enters
+   canonical bytes: the key is ALWAYS present (None default) in
+   GENESIS_ROW, the writer row dict and _TURN_COLUMNS, in lockstep;
+   it never joins `_CHAIN_HASH_EXCLUDE` (a negative test pins that).
+   The genesis hash changes — free at zero rows, never again. The
+   executed kill shot on option B (Claude seat): drop the append-only
+   trigger (the adversary the chain exists for), `UPDATE turns SET
+   event_origin='forged_organ'`, verify_chain → ZERO violations.
+   Attribution forgery on the who-spoke column would be
+   chain-invisible. Codex's counter-probe (the trigger refuses an
+   ordinary UPDATE, 0002 is table-scoped over future columns) is true
+   and does not save B: triggers are enforcement, the chain is
+   evidence, and evidence must survive a dropped trigger. Also killed:
+   the "provenance ⇒ preimage" SLOGAN (chain.py:77-79 — submitted_at
+   is provenance, excluded, and load-bearing for replay causation);
+   A wins on this column's specifics — attribution IS the row's
+   honesty claim — not on a principle that would auto-apply to the
+   next plumbing column.
+2. **Q2 — one frozen implication: event_origin non-None ⇒
+   turn_kind='system_event'.** The reverse is NOT frozen: genesis,
+   reconcile and other generic system rows keep None legally
+   (permitted ≠ required — Grok's catch; fail-closed "organ paths
+   must attribute" belongs to the recorder seam, the first caller
+   that knows it is recording organ output). Every other kind refuses
+   loudly in the §4.2 _FORBIDDEN_FIELDS shape, naming kind + field.
+   Honest wording (Codex): the loud refusal is the ENABLED direct
+   writer's; try_write_turn stays never-raising by contract (dormant
+   → None; enabled failure → dead-letter category "refused"). The
+   model-generated clarified reply stays model_reply with
+   event_origin=None — its generation provenance is
+   model_id/prompt_hash; stamping the organ on model speech would be
+   one-column-two-meanings reborn. Intermediate receipts are
+   system_event WITH an origin. user_message refusal forecloses
+   nothing: the owner is not an organ.
+3. **Q3 — verbatim free-form: non-empty, non-whitespace str, stored
+   untouched.** No enum (the mouth-whitelist scar: a curated roster
+   saw 0 of 5 real mouths; an enum is B1's failed census installed as
+   a write-gate that would REFUSE true attribution and dead-letter
+   real speech). No SQL DEFAULT (a default fabricates a speaker).
+   NULL is the ONLY spelling of "no organ"; "" refuses (under A,
+   empty-string and NULL hash differently — a second forgeable
+   spelling). No length cap this slice (2-1, Grok dissent recorded:
+   payload-dump worry; majority: the column is neither indexed nor a
+   path, mirror the uncapped submission_id precedent, add a bound
+   when a real consumer supplies one). Codex's standing correction:
+   a free-form value is a caller ASSERTION, not attestation — the
+   recorder seam binds production constants (slice 2).
+4. **Q4 — replay causation learns the column.** Executed gap (Claude
+   seat P6): a committed row with event_origin='s4_crisis' and an
+   envelope with no event_origin anywhere → _row_is_our_replay
+   returned TRUE. Fix: SELECT gains the column; the compare tuple
+   gains ("event_origin", _WRITER_DEFAULT_EVENT_ORIGIN=None) in the
+   compare-against-writer-default shape (F6: a check that skips what
+   it cannot see is not a check). Everything else rides kwargs
+   verbatim (dead-letter record, spool digest, reconstruction,
+   paused custody — all executed).
+5. **Q5 — span_reader exposes it BY CONTRACT (test pins the
+   read-back, not the SELECT * accident); recent_turns is NOT
+   widened.** Codex dissented (add it to the fixed SELECT now; its
+   executed fact: envelope_builder filters kinds AND projects four
+   fields, so the prompt would not change). The majority keeps the
+   eleventh-round line — that SELECT is prompt-adjacent owner
+   territory, exactly why the owed submitted_at was never taken —
+   and Codex's own fact makes the deferral zero-cost. Deferred BY
+   NAME beside the submitted_at owed item. The future
+   conversation-stream reader's contract notes the column.
+
+**THREE QUESTIONS THE BRIEF MISSED, all adopted:**
+
+- **The none-spelling contract (Grok).** Key always present in
+  canonical bytes; missing kwarg ≡ None ≡ SQL NULL, one digest; ""
+  is a ValueError, never stored; no SQL DEFAULT. Pinned as tests so
+  the A-decision cannot rot into three encodings of "nobody".
+- **The spool door (Claude seat, executed).** event_origin ∉
+  _AUTHORITY_KWARGS, so a spool producer CAN mint organ identity in
+  an envelope and drain commits it. Ruled 2-1: it STAYS expressible.
+  The naive fix (authority-refuse at the door) was executed into a
+  wall by its own proposer — build_body_submission refuses stranded
+  authority kwargs, so every organ dead-letter would become
+  permanently unreplayable. And the build seat adds the decisive
+  path fact the proposal missed: the web /chat S4 closure (the
+  nineteenth round's sharpest miss) runs in a NON-OWNER process
+  whose custody IS the spool — spool-inexpressible attribution would
+  strand the organ name on exactly the mouth A3 exists to close.
+  The residual — a producer can assert a false organ — is the same
+  trust class as the free-form surface/raw_surface assertions the
+  door already passes (honest-producer evidence; the recorder seam
+  binds production constants). Named residual, pinned by a test that
+  DOCUMENTS the pass-through rather than pretending a boundary.
+- **The schema era (Codex's BLOCK, satisfied).** The ratified schema
+  doc (envelope-schema.md status line) and GENESIS_ROW's own comment
+  ("Do not edit without bumping schema_version") make the preimage
+  edit a schema_version event. Migrations 0003-0006 added columns
+  WITHOUT bumps — all four were chain-EXCLUDED; this is the first
+  canonical-bytes change since ratification. schema_version bumps
+  1 → 2 in lockstep: GENESIS_ROW (the int field AND the embedded
+  genesis raw_text JSON), the writer row, the meta seed, init.py's
+  status string, and the tests that pin "1". Verified: no reader
+  branches on the value. The doc gains an amendment section
+  RECORDING the owner's 2026-08-27 ruling — recording, not
+  authoring.
+
+**Also adopted:** migration 0007 carries a typed populated-turns
+refusal mirroring the 0005 S1 guard — the owner's "free now and never
+again" encoded as a refusal, so the four retained x6 rehearsal
+sidecars (201 rows each at 0004, verified) and any future populated
+pre-0007 db surface-and-ask instead of silently breaking their
+chains. And the twentieth round's carried regression ships: the
+CALLER_ALLOWED_TAINT_LABEL_SETS inventory is frozen at exactly its
+one key (("user_message","x6_rehearsal")) so a future override
+keying on an organ label must go through a human, and taint
+admission is proven invariant to event_origin's presence.
+
+**Verdict: AMEND, folded 3-0 on the core; dissents recorded (Grok's
+length cap, Codex's recent_turns exposure).** Build proceeds this
+session per the owner's ruled order — this round is the slice-1
+contract, not a new capability needing its own cooling-off.
