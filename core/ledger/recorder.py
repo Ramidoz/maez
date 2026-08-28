@@ -91,6 +91,7 @@ __all__ = [
     "ProducedReply",
     "record_owner_message",
     "record_organ_event",
+    "record_approval_decision",
     "recorder_status",
 ]
 
@@ -690,6 +691,64 @@ def record_organ_event(
         raw_text,
         surface=surface,
         provenance=provenance,
+        kwargs=kwargs,
+        parent=parent,
+    )
+
+
+def record_approval_decision(
+    *,
+    surface: str,
+    raw_text: str,
+    audit_verdict: dict,
+    pending_card_id: int,
+    raw_surface: str | None = None,
+    parent: RecordResult | None = None,
+    recorder=PRODUCTION,
+) -> RecordResult:
+    """Record an approval/denial resolution as ``approval_decision``.
+
+    THE THIRD PUBLIC METHOD — an owner-ruled amendment (2026-08-28) to
+    the twenty-second round's "exactly two public methods". That ruling
+    remains correct IN PURPOSE: it exists to prevent semantic
+    passthrough, and this is not one. Implementation evidence forced the
+    amendment — ``approval_decision`` is a first-class ledger kind that
+    **structurally FORBIDS ``event_origin``** while
+    ``record_organ_event`` REQUIRES it, so neither existing method could
+    represent it honestly. Recording it as ``system_event`` would flatten
+    approval/rejection AUTHORITY into organ speech.
+
+    Narrowly scoped by construction: ``turn_kind`` is the literal
+    ``"approval_decision"``, there is no caller-supplied kind, no
+    ``event_origin``, and no ``**kwargs`` escape hatch. The schema's
+    real required fields are mandatory parameters with no defaults, so
+    a forgotten one is a BUILD failure.
+
+    NAMED RESIDUAL, recorded rather than papered over: this kind admits
+    exactly one taint set, ``{owner_utterance}``. The bytes are
+    substrate-RENDERED (``format_resolution_text``) even though the
+    DECISION they record is the owner's act. The schema leaves no
+    alternative, so the label is the schema's claim about whose act this
+    is, not a claim that Maez transcribed owner speech. A future reader
+    must not present these bytes as words the owner typed.
+    """
+    _require_recorder(recorder)
+    if not isinstance(pending_card_id, int) or isinstance(pending_card_id, bool):
+        raise TypeError(
+            "record_approval_decision: pending_card_id must be an int — "
+            "the card receipt is the parent action's identity"
+        )
+    kwargs: dict = {
+        "audit_verdict": audit_verdict,
+        "pending_card_id": pending_card_id,
+    }
+    if raw_surface is not None:
+        kwargs["raw_surface"] = raw_surface
+    return recorder._record(
+        "approval_decision",
+        raw_text,
+        surface=surface,
+        taint_labels=["owner_utterance"],
         kwargs=kwargs,
         parent=parent,
     )

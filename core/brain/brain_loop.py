@@ -86,6 +86,28 @@ class BrainLoopResult:
     combined_mode: bool = False
 
 
+def _record_intermediate_receipt(origin: str, text: str) -> None:
+    """Record substrate progress speech as intent, never as delivery.
+
+    Shared by every intermediate-receipt mouth so the eligibility/intent
+    semantics are stated ONCE rather than re-derived per call site.
+    Never raises: a receipt is not worth costing the owner their reply.
+    """
+    try:
+        from core.ledger.recorder import OrganProvenance, record_organ_event
+
+        record_organ_event(
+            surface="telegram_text",
+            event_origin=f"intermediate_receipt:{origin}",
+            provenance=OrganProvenance.CANNED,
+            raw_text=text,
+        )
+    except Exception:
+        logging.getLogger("maez").debug(
+            "intermediate receipt record failed", exc_info=True
+        )
+
+
 def _emit_search_progress(send_intermediate, external_sources, *, stage: str, count):
     """Emit true substrate progress for real fresh-evidence fanout stages."""
     if send_intermediate is None:
@@ -95,13 +117,25 @@ def _emit_search_progress(send_intermediate, external_sources, *, stage: str, co
     }
     if not source_values.intersection({"WEB_SEARCH", "FETCH_URL"}):
         return
+    text: str | None = None
+    if stage == "start" and "FETCH_URL" in source_values:
+        text = "reading the page..."
+    elif stage == "start":
+        text = "searching the web..."
+    elif "WEB_SEARCH" in source_values and stage == "results" and count is not None:
+        text = f"reading {count} results..."
+    if text is None:
+        return
+    # A3 closure for an INTERMEDIATE RECEIPT. Recorded at the single
+    # point where the exact bytes exist, before the transport
+    # invocation — so the honest claim is ELIGIBILITY/INTENT, never
+    # EMITTED (twenty-second round; the recorder's typed result carries
+    # no EMITTED state, so the claim is unrepresentable by construction).
+    # The send is best-effort and may fail after this row exists; that
+    # is the ruled cost of recording before egress.
+    _record_intermediate_receipt("search_progress", text)
     try:
-        if stage == "start" and "FETCH_URL" in source_values:
-            send_intermediate("reading the page...")
-        elif stage == "start":
-            send_intermediate("searching the web...")
-        elif "WEB_SEARCH" in source_values and stage == "results" and count is not None:
-            send_intermediate(f"reading {count} results...")
+        send_intermediate(text)
     except Exception:
         logging.getLogger("maez").debug("search progress emit failed", exc_info=True)
 

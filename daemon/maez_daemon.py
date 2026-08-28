@@ -8625,6 +8625,27 @@ class MaezDaemon:
                 def _fire_receipt() -> None:
                     if not _receipt_box.try_mark_fired():
                         return
+                    # A3 closure for the recall receipt. Recorded HERE —
+                    # after eligibility is established (try_mark_fired
+                    # won the race) and BEFORE the transport invocation —
+                    # so the claim is eligibility/intent, never EMITTED.
+                    # Uses the shared intermediate-receipt seam so the
+                    # semantics are stated once, not re-derived per mouth.
+                    # Body fact: this receipt has NEVER been successfully
+                    # delivered in the retained window (0 emitted), which
+                    # is precisely why it must not claim delivery.
+                    try:
+                        from core.brain.brain_loop import (
+                            _record_intermediate_receipt,
+                        )
+
+                        _record_intermediate_receipt(
+                            "recall_receipt", WORKING_RECEIPT_TEXT
+                        )
+                    except Exception:
+                        logger.debug(
+                            "recall receipt record skipped", exc_info=True
+                        )
                     try:
                         send_intermediate(
                             WORKING_RECEIPT_TEXT,
@@ -13260,7 +13281,40 @@ class MaezDaemon:
                     reply = asyncio.run(run_inbound_turn(**descriptor))
                 except Exception:
                     logger.warning("cockpit inbound core turn failed", exc_info=True)
-                    return jsonify({"reply": "(internal error)"})
+                    # A3 closure: the cockpit's internal-error mouth. The
+                    # owner asked, the body answered "(internal error)" —
+                    # a real exchange. run_inbound_turn RAISED, so its own
+                    # closures never ran; this is the only place it can be
+                    # recorded. system_event, never model_reply: no model
+                    # produced it.
+                    _err = "(internal error)"
+                    try:
+                        from core.ledger.recorder import (
+                            OrganProvenance,
+                            record_organ_event,
+                            record_owner_message,
+                        )
+
+                        _p = None
+                        try:
+                            _p = record_owner_message(
+                                surface="cockpit", raw_text=text
+                            )
+                        except Exception:
+                            logger.exception("A3 cockpit owner record failed")
+                        record_organ_event(
+                            surface="cockpit",
+                            event_origin="cockpit_internal_error",
+                            provenance=OrganProvenance.CANNED,
+                            raw_text=_err,
+                            parent=_p,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "A3 cockpit internal-error record failed; the "
+                            "reply ships regardless"
+                        )
+                    return jsonify({"reply": _err})
                 return jsonify({"reply": reply})
             reply = self.handle_message(
                 text,

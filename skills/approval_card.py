@@ -39,12 +39,16 @@ This module provides:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
 from core.egress.provenance import ProvenancedText
 from core.pending_cards import CardRecord, CardStatus
+
+logger = logging.getLogger("maez.approval_card")
 
 
 # ------------------------------------------------------------------ #
@@ -245,6 +249,17 @@ def format_resolution_text(card: CardRecord) -> str:
 #  Renderer protocol                                                   #
 # ------------------------------------------------------------------ #
 
+def _card_receipt_id(card) -> int:
+    """A stable positive int identity for the card's ledger receipt.
+
+    ``pending_card_id`` is an INTEGER column while ``request_id`` is a
+    hex token, so the token is folded deterministically. Same card ->
+    same id, always; never zero.
+    """
+    rid = str(getattr(card, "request_id", "") or "")
+    return int(hashlib.sha256(rid.encode("utf-8")).hexdigest()[:12], 16) or 1
+
+
 class CardRenderer(Protocol):
     """Transport-agnostic interface every renderer must satisfy."""
 
@@ -373,6 +388,46 @@ class TelegramTextRenderer:
 
     def send_resolution(self, card: CardRecord) -> None:
         text = format_resolution_text(card)
+        # A3 CLASS CLOSURE (owner-ruled 2026-08-28). Closed HERE, at the
+        # single production renderer, rather than at the nine call sites
+        # in decision_pipeline — proven owner-facing-only before landing:
+        # this is the one production CardRenderer implementation, it
+        # sends through a Telegram payload, and the only other
+        # implementations are a __main__ self-test double and two test
+        # doubles. Future call sites inherit the closure automatically.
+        #
+        # Recorded as approval_decision, NOT system_event: the schema
+        # makes this a first-class kind (requiring audit_verdict +
+        # pending_card_id, forbidding event_origin), and flattening
+        # approval/rejection AUTHORITY into organ speech was ruled out.
+        # The card receipt is preserved as pending_card_id.
+        #
+        # Recording never gates the send: it runs first only so a
+        # transport failure cannot erase the decision from the record,
+        # and it never raises (the seam dead-letters durably).
+        try:
+            from core.ledger.recorder import record_approval_decision
+
+            record_approval_decision(
+                surface=str(getattr(card, "channel", "") or "telegram_text"),
+                raw_text=text,
+                audit_verdict={
+                    "decision": card.audit_decision,
+                    "confidence": card.audit_confidence,
+                    "reasoning": card.audit_reasoning,
+                    "summary": card.audit_summary,
+                    "concerns": list(card.audit_concerns or []),
+                    "mitigations": list(card.audit_mitigations or []),
+                    "audit_request_id": card.audit_request_id,
+                    "status": card.status,
+                },
+                pending_card_id=_card_receipt_id(card),
+            )
+        except Exception:
+            logger.exception(
+                "A3 approval-decision record failed for card %s; the "
+                "resolution ships regardless", getattr(card, "request_id", "?")
+            )
         try:
             reply_to = card.channel_message_id
             self.send_message_fn(

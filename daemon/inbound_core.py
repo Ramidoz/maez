@@ -875,6 +875,43 @@ async def run_inbound_turn(
                 turn.update(output="intent_unavailable")
             except Exception:
                 pass
+            # A3 closure. OWNER RULED 2026-08-28: this IS lived
+            # owner-facing speech. The owner spoke, Maez's body answered
+            # that a capability is unavailable — that exchange happened
+            # and belongs in the biography. Being canned, or being a
+            # degradation, does not make it non-lived. Classified
+            # honestly as a SUBSTRATE event (system_event), never
+            # model_reply: no model produced it.
+            _a3_owner_turn = None
+            try:
+                from core.ledger.recorder import record_owner_message
+
+                _a3_owner_turn = record_owner_message(
+                    surface=owner_surface_label, raw_text=text
+                )
+            except Exception:
+                logger.exception(
+                    "A3 owner record failed on the intent_unavailable "
+                    "path; the reply ships regardless"
+                )
+            try:
+                from core.ledger.recorder import (
+                    OrganProvenance,
+                    record_organ_event,
+                )
+
+                record_organ_event(
+                    surface=owner_surface_label,
+                    event_origin="intent_unavailable",
+                    provenance=OrganProvenance.CANNED,
+                    raw_text="intent_unavailable",
+                    parent=_a3_owner_turn,
+                )
+            except Exception:
+                logger.exception(
+                    "A3 organ record failed on the intent_unavailable "
+                    "path; the reply ships regardless"
+                )
             return "intent_unavailable"
 
         if (

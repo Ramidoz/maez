@@ -879,6 +879,36 @@ class ChatSession:
                         source=_web_source,
                         surface="cli",
                     )
+                    # A3 closure: the CLI empty-search mouth. The owner
+                    # asked, Maez answered honestly that it found nothing
+                    # — a real exchange that returned before any ledger
+                    # seam. system_event, never model_reply: the honest
+                    # empty reply is substrate-built, no model produced
+                    # it. CLI is a NON-OWNER process, so the seam routes
+                    # this through spool custody by its own rules.
+                    try:
+                        from core.ledger.recorder import (
+                            OrganProvenance,
+                            record_organ_event,
+                            record_owner_message,
+                        )
+
+                        _p = None
+                        try:
+                            _p = record_owner_message(
+                                surface="cli", raw_text=user_text
+                            )
+                        except Exception:
+                            pass
+                        record_organ_event(
+                            surface="cli",
+                            event_origin="cli_honest_empty_search",
+                            provenance=OrganProvenance.CANNED,
+                            raw_text=_hr.reply,
+                            parent=_p,
+                        )
+                    except Exception:
+                        pass
                     console.print(_role_header("assistant", "honest_empty"))
                     console.print(Markdown(_hr.reply))
                     self.turns.append(Turn("assistant", _hr.reply, meta="honest_empty"))
