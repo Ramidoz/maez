@@ -382,3 +382,123 @@ Still a requirement, not an implementation task.
 - Retirement decisions for 6 legacy-unwired + 8 never-populated stores
   — owner's call, deliberately not taken.
 - Four empty orphans are still in the backup manifest.
+
+---
+
+# Cleanup classification — EVIDENCE AND RECOMMENDED DISPOSITION
+
+**Nothing deleted, nothing retired. Owner decides.** None of these is a
+birth blocker; the ledger is unaffected by all of them.
+
+## A. Backup-restored orphans — the only group with a live consequence
+
+The manifest ALREADY skips three with documented reasons:
+`memory/dream_state.db` ("0 bytes, no schema, no writer on the live
+path — vestigial"), `memory/maez_memory.db` and `memory/memory.db`
+("0 bytes, superseded by the Chroma stores under memory/db/").
+
+**FOUR are still actively backed up as `sqlite_db` entries**, so a
+restore recreates them — and backup can turn a 0-byte file into a valid
+4 KB empty SQLite that LOOKS initialised afterwards:
+
+| Entry | Store | Evidence |
+|---|---|---|
+| entries[37] | `memory/evolution.db` | 0 tables, superseded by `evolution_track.db` |
+| entries[57] | `memory/maez.db` | 0 tables, no application constructor |
+| entries[68] | `memory/raw.db` | 0 bytes; live raw memory is `memory/db/raw/chroma.sqlite3` (44,137 embeddings) |
+| entries[89] | `memory/user_profiles.db` | 0 tables; roles live in `config/user_profiles.yaml` + `memory/users.db` |
+
+**Recommended disposition: move these four to `intentionally_skipped`
+with reasons, exactly as the other three already are.** Cheapest item on
+the list, keeps restore honest, and touches no organ. The manifest
+already has the vocabulary for it.
+
+## B. Superseded — retire the wiring, keep the file
+
+`memory.db`, `maez_memory.db`, `dream_state.db`, `raw.db`,
+`evolution.db`, `user_profiles.db`, `maez.db` (all 0 rows / 0 tables),
+plus `evolution_track.db` (2,101 rows, authority replaced by
+Decision 40, generation hard-disabled, all candidates terminal).
+
+**Recommended: leave the files, retire nothing yet.** They cost nothing
+and carry provenance. `evolution_track` is the only one with a live
+caller, and after the `bf0e5f5` fix it reaches its early return by query
+rather than by exception.
+
+## C. Legacy-unwired — flags OFF, zero runtime
+
+`self_dev.db` (46 concerns, all terminal), `workshop.db`,
+`self_mod_dialogs.db`, `fast_conversation_log.db`,
+`subscription_proxy.db` (no unit, no process), `entity_index.db`
+(reader gated behind `MAEZ_ENTITY_EXPANSION`, absent from the live
+process).
+
+**Recommended: document as dormant, decide after birth.** Each is a
+feature that may be re-armed. Retiring them now converts a reversible
+dormancy into an irreversible deletion for no gain.
+
+## D. Never-populated but wired — 0 rows, no staleness risk
+
+`temperament`, `unseal_receipts`, `capability_acquisition_queue`,
+`capability_gap_cooldown`, `capability_integration_plans`,
+`autonomy_preferences`, `maintenance_proposals`, `sandbox_witnesses`.
+
+**Recommended: no action.** Zero rows cannot be served stale. Whether
+their organs ever fire is a post-birth observation, not a pre-birth fix.
+
+`ledger.db` is empty BY DESIGN and birth-gated — not in this class.
+
+---
+
+# REQUIREMENT (NOT AN IMPLEMENTATION) — lived_graph state closure
+
+Owner-ruled 2026-08-28. **"Not confirmed recently" is not the same as
+"ended."** Three truths must stay conceptually separate:
+
+| Truth | Meaning |
+|---|---|
+| `held at T` | the relation was asserted at T |
+| `last supported at T` | the most recent evidence for it is from T |
+| `known to have ended at T` | the relation actually stopped |
+
+**Only the third may ever set `valid_to`.** Setting `valid_to` because
+supporting evidence is old would FABRICATE AN ENDING — an invented fact
+in exactly the record that exists to prevent invented facts.
+
+Scope, deliberately narrow: state-like relations only
+(`cares_about`, `open_loop_about` — 10 edges today). Event-like
+relations (`corrected`, 9 edges) need nothing; an event stays true.
+
+Reuse the proven in-tree pattern from `interaction_preferences`
+(`active`/`retracted`/`superseded`, a renderer that filters on status,
+a schema CHECK) rather than inventing a mechanism. Preserve history —
+never delete a superseded state.
+
+**Open design note, not yet answered:** `last supported at T` may be
+DERIVABLE from provenance already present (`source_episode_ids_json`,
+`source_memory_ids_json`) without mutating the relation at all. That
+should be checked before any schema change.
+
+NOT scheduled. NOT designed. Recorded as a requirement.
+
+---
+
+# TEST-ISOLATION HAZARD — consequence_memory.DB_PATH
+
+`core/learning/consequence_memory.py` evaluates
+`DB_PATH = _default_db_path()` **at module import**. The
+`MAEZ_CONSEQUENCE_MEMORY_DB` override therefore only applies if it is
+set BEFORE the module is first imported.
+
+Consequences for any future witness:
+- a second test silently inherits the first test's path — and if that
+  was a `TemporaryDirectory`, it is already deleted;
+- worse, if anything imports the module before the override is set,
+  `DB_PATH` resolves to **the live `memory/consequence_memory.db`**, and
+  a scar or consequence write lands in the owner's real record.
+
+**Mitigation, used by `tests/test_scar_organic_witness.py`:** patch the
+attribute directly (`mock.patch.object(_cm, "DB_PATH", ...)`), and keep
+the witness a single test so no cross-test caching can occur. Live row
+counts were verified unchanged after every run (scar 4, episodes 116,
+consequences 974).
