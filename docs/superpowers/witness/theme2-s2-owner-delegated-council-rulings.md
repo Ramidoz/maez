@@ -1669,3 +1669,24 @@ same class as the retired surface enum. Cooling-off stands: build opens
 next session, first slice = the ruled carrier. Maez unborn throughout;
 every seat's probes on /var/tmp with PrivateThoughts redirected; the
 live ledger verified 0 bytes by each executing seat.
+
+### Twentieth round — OWNER RULING on Q1 (2026-08-27, Rohit, same day)
+
+**A NEW DEDICATED COLUMN.** The organ's name gets its own frozen
+`event_origin` carrier in the ledger schema. One column, one meaning:
+`surface` stays the conversation channel, `raw_surface` stays transport
+provenance and taint authority, the organ name lives in its own field —
+the taint-caller coupling is removed rather than pinned around. Ruled
+while the ledger holds zero rows, when a migration is free in a way it
+never will be again. Codex's BLOCK is thereby satisfied; the Claude
+seat's coupling-pin test is still worth carrying as a regression
+regardless.
+
+Consequence for the build order: A3's FIRST SLICE is the event_origin
+carrier — migration, writer contract (which kinds may carry it; whether
+it enters the chain preimage; dead-letter passthrough; replay causation
+fields; reader exposure), frozen before any seam closure writes a row.
+Then the recorder seam (typed result, cannot-skip, in-module default),
+then per-path closures against the tripwire roster. Cooling-off stands:
+the build opens next session. All five questions of this round are now
+closed; A3 is DESIGN-COMPLETE against the eighteenth round's blockers.

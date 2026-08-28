@@ -119,11 +119,23 @@ Every probe on /var/tmp; PrivateThoughts redirected for every execution.
    this is the first thing to check.
 2. **The tripwire is not in `battery.sh`.** It runs under CI discovery
    and by name, not in the named battery.
-3. **A3 itself is untouched.** All four eighteenth-round build blockers
-   stand: the egress inventory, freezing the `system_event` payload AND
-   its conversation-stream role, carrying `self_mod_dialog_id` end to
-   end, and custody-before-egress vs naming the S4 storage-failure
-   exception.
+3. **A3 is now DESIGN-COMPLETE but NOT BUILT — read the TWENTIETH
+   round before building.** Same session, after this handoff section
+   was first written: the build-readiness brief
+   (docs/superpowers/specs/2026-08-27-a3-seam-closure-build-brief.md,
+   AMENDED section) resolved all four blockers through a three-seat
+   round (AMEND/BLOCK/AMEND; four amendments converged 3-0), and the
+   owner ruled Q1: a NEW dedicated `event_origin` column. Build order
+   for next session: (1) the event_origin carrier — migration, writer
+   contract, chain/dead-letter/replay/reader semantics; (2) the
+   recorder seam (typed result DORMANT|COMMITTED|DEAD_LETTERED|LOST,
+   cannot-skip type, in-module default identity pin); (3) per-path
+   closures against the tripwire roster, RED-first each. Also adopted:
+   "omission never silent" replaces "omission impossible"; intermediate
+   receipts are IN scope typed EMITTED-not-DELIVERED; the clarified
+   dialog branch is MODEL-GENERATED and must not be recorded as
+   system_event. Body fact recorded, not fixed: the recall receipt has
+   NEVER been successfully delivered (0 emitted in retained logs).
 4. **The rehearsal witness OF A3's write cannot exist until A3 does** —
    and CONSTRAINT 1 says A3's design must change to make it possible.
 5. **Still invisible to the tripwire, by name:** `**kwargs` splats,

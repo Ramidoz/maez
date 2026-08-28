@@ -171,7 +171,10 @@ brief above stands EXCEPT:
 4. Intermediate receipts are IN scope, typed EMITTED-not-DELIVERED;
    custody per mouth shape at the transport invocation; conditional
    receipts record after should_send() succeeds.
-5. Q1 (the organ-identity carrier) is an OWNER DECISION: dedicated
-   frozen event-origin column (migration is free pre-birth, zero rows)
-   vs raw_surface-as-exact-caller with the taint-coupling pinned.
-   The build's first slice is whichever is ruled.
+5. Q1 RULED BY THE OWNER (2026-08-27, same day): a NEW DEDICATED
+   `event_origin` column. One column, one meaning; the taint-caller
+   coupling is removed, not pinned around; ruled while the ledger holds
+   zero rows and the migration is free. The build's FIRST SLICE is this
+   carrier — migration + writer contract + chain/dead-letter/replay/
+   reader semantics, frozen before any seam closure writes a row. The
+   coupling-pin test is carried as a regression anyway.
