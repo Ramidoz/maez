@@ -338,6 +338,32 @@ async def run_inbound_turn(
             mark = getattr(daemon, "_mark_m1_s4_policy", None)
             if callable(mark):
                 mark(_s4_result.promotion_policy)
+        # A3 seam closure (twenty-second round): the crisis exchange is an
+        # ORDINARY pair of turns in the record. The guard has already run
+        # (ADR 0035 order holds); before this, the whole exchange recorded
+        # nothing — this branch returns before handle_message's
+        # user_message admission. Byte-inert while MAEZ_LEDGER_WRITES is
+        # unset; the reply ships regardless of what recording does.
+        try:
+            from core.ledger.recorder import (
+                record_organ_event,
+                record_owner_message,
+            )
+
+            _a3_owner_turn = record_owner_message(
+                surface=owner_surface_label, raw_text=text
+            )
+            record_organ_event(
+                surface=owner_surface_label,
+                event_origin="s4_clinical_boundary",
+                raw_text=_s4_result.answer_text,
+                parent=_a3_owner_turn,
+            )
+        except Exception:
+            logger.exception(
+                "A3 record failed on the S4 path; the crisis reply ships "
+                "regardless"
+            )
         return _s4_result.answer_text
 
     # Pre-processing — same signals the daemon's own

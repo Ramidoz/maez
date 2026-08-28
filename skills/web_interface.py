@@ -6804,6 +6804,37 @@ def chat():
             crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(),
         )
         if _s4_result.matched:
+            # A3 seam closure (twenty-second round): this early return was
+            # the nineteenth round's sharpest miss — the crisis answer left
+            # BEFORE submit_user_message below, so the whole exchange
+            # recorded nothing. Non-owner process: the recorder takes spool
+            # CUSTODY under the web_owner producer; the ordinary path's
+            # submit_user_message never runs on this branch, so nothing
+            # doubles. Byte-inert while MAEZ_LEDGER_WRITES is unset; the
+            # reply ships regardless of what recording does. NOTE the
+            # endpoint itself is currently PARKED (410) by
+            # _LEGACY_PARKED_API_ENDPOINTS — this closure is for the day
+            # the reversible parking is reversed.
+            try:
+                from core.ledger.recorder import (
+                    record_organ_event,
+                    record_owner_message,
+                )
+
+                _a3_owner_turn = record_owner_message(
+                    surface="web_owner", raw_text=message
+                )
+                record_organ_event(
+                    surface="web_owner",
+                    event_origin="s4_clinical_boundary",
+                    raw_text=_s4_result.answer_text,
+                    parent=_a3_owner_turn,
+                )
+            except Exception:
+                logger.exception(
+                    "A3 record failed on the web S4 path; the crisis reply "
+                    "ships regardless"
+                )
             return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
     logger.info("Web chat from %s: %s", display, message[:80])
