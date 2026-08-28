@@ -5,7 +5,7 @@
 Locks in the schema-doc contract from docs/ledger/envelope-schema.md
 (§4.1 meta seeding, §6.1 chain construction):
 
-  - migrate.run() seeds meta with schema_version='1' and a 64-char-hex
+  - migrate.run() seeds meta with schema_version='2' and a 64-char-hex
     genesis_hash row.
   - The genesis row in `turns` has prev_chain_hash IS NULL and its
     chain_hash equals meta.genesis_hash.
@@ -80,10 +80,13 @@ class GenesisMetaTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def test_schema_version_is_one(self):
+    def test_schema_version_is_two(self):
+        # v2 era since A3 slice 1 (2026-08-27): event_origin entered the
+        # chain-hash canonical bytes — the first preimage change since
+        # ratification, which the schema doc rules a version event.
         row = self.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         self.assertIsNotNone(row, "meta.schema_version was not seeded")
-        self.assertEqual(row[0], "1")
+        self.assertEqual(row[0], "2")
 
     def test_genesis_hash_is_64_char_hex(self):
         row = self.conn.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()

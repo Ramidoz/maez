@@ -16,7 +16,7 @@ What ``run()`` does, in order:
    in lexicographic order, applying any not yet recorded in
    ``schema_migrations`` via ``executescript`` and recording the
    filename stem + applied_at timestamp.
-6. Seeds ``meta`` with ``('schema_version', '1')`` if not present.
+6. Seeds ``meta`` with ``('schema_version', '2')`` if not present.
 7. Inserts the canonical genesis row into ``turns`` if not present,
    computes its ``chain_hash`` per docs/ledger/envelope-schema.md §6.1,
    and records ``('genesis_hash', <chain_hash>)`` in ``meta``.
@@ -43,11 +43,19 @@ class LedgerMigrationRefusal(RuntimeError):
 # Canonical genesis row content. These EXACT values feed the §6.1
 # canonical recipe; changing any field changes the genesis hash and
 # breaks the chain. Do not edit without bumping schema_version.
+#
+# schema_version 2 (2026-08-27, A3 slice 1, twenty-first round): the
+# owner-ruled `event_origin` carrier is the first CANONICAL-PREIMAGE
+# change since ratification (0003-0006 all added chain-EXCLUDED
+# columns). Per this comment's own rule and the schema doc's status
+# line, the preimage edit rides a schema_version bump. The key is
+# always present in canonical bytes — "no organ claimed" is itself a
+# claim the chain covers. Bumped while the ledger held zero rows.
 GENESIS_ROW: dict = {
     "turn_id": "genesis",
     "tenant_id": "owner",
     "timestamp": 0.0,
-    "schema_version": 1,
+    "schema_version": 2,
     "turn_kind": "system_event",
     "surface": "system",
     "raw_surface": None,
@@ -57,7 +65,7 @@ GENESIS_ROW: dict = {
     "lora_hash": None,
     "soul_hash": None,
     "prompt_hash": None,
-    "raw_text": '{"event":"genesis","schema_version":1}',
+    "raw_text": '{"event":"genesis","schema_version":2}',
     "rewritten_text": None,
     "was_rewritten": 0,
     "signals_present": "[]",
@@ -74,6 +82,7 @@ GENESIS_ROW: dict = {
     "pending_card_id": None,
     "taint_labels_json": "[]",
     "privacy_access": "public",
+    "event_origin": None,
     "chain_position": 0,
 }
 
@@ -121,6 +130,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> None:
     already = _applied_migrations(conn)
     if "0005_add_taint_privacy_chain_position" not in already:
         _refuse_s1_migration_if_turns_populated(conn)
+    if "0007_add_event_origin" not in already:
+        _refuse_event_origin_migration_if_turns_populated(conn)
     for path in sql_files:
         name = path.stem
         if name in already:
@@ -148,13 +159,42 @@ def _refuse_s1_migration_if_turns_populated(conn: sqlite3.Connection) -> None:
         )
 
 
+def _refuse_event_origin_migration_if_turns_populated(
+    conn: sqlite3.Connection,
+) -> None:
+    """The owner's "free now and never again", encoded as a refusal.
+
+    0007 puts `event_origin` INSIDE the chain-hash canonical bytes, so
+    applying it to a populated turns table would silently invalidate
+    every existing row's hash (executed: SELECT * read-back gains the
+    key; every verifier recomputes from read-back). A populated db —
+    the four retained x6 rehearsal sidecars are the live example —
+    must surface-and-ask, never break quietly. Same shape as the 0005
+    S1 refusal above.
+    """
+    table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='turns'"
+    ).fetchone()
+    if table is None:
+        return
+    count = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+    if count:
+        raise LedgerMigrationRefusal(
+            "refusing event_origin ledger migration (0007): turns "
+            f"already contains {count} row(s) hashed without the "
+            "event_origin key; migrating would silently invalidate "
+            "their chain. Populated pre-0007 ledgers stay on their own "
+            "era — this migration was free only at zero rows"
+        )
+
+
 def _seed_meta_schema_version(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT 1 FROM meta WHERE key='schema_version'"
     ).fetchone()
     if row is None:
         conn.execute(
-            "INSERT INTO meta(key, value) VALUES ('schema_version', '1')"
+            "INSERT INTO meta(key, value) VALUES ('schema_version', '2')"
         )
 
 

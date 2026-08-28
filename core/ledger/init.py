@@ -37,6 +37,20 @@ def _head_prefix(db_path: str) -> str:
         conn.close()
 
 
+def _meta_schema_version(db_path: str) -> str:
+    # Read the REAL seeded value rather than restating a constant the
+    # status line could drift from (it had: hardcoded "1" survived the
+    # v2 era bump in a draft of this change).
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        return row[0] if row and row[0] else "?"
+    finally:
+        conn.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     path = args[0] if args else _DEFAULT_PATH
@@ -46,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         f"ledger initialized: {path} | meta=ok turns=ok genesis=ok "
-        f"schema_version=1 head={_head_prefix(path)}"
+        f"schema_version={_meta_schema_version(path)} head={_head_prefix(path)}"
     )
     return 0
 

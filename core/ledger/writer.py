@@ -100,16 +100,23 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "system_event": ("raw_text",),
 }
 
+# event_origin (A3 slice 1, owner-ruled 2026-08-27, twenty-first
+# round): the ONE frozen implication is `event_origin non-None =>
+# turn_kind == 'system_event'` — organ attribution on any other kind is
+# a category error (the owner is not an organ; model speech carries its
+# own generation provenance in model_id/prompt_hash). The REVERSE is
+# deliberately not frozen: generic system rows (genesis, reconcile)
+# keep None legally. Widening this is a contract edit, never a default.
 _FORBIDDEN_FIELDS: dict[str, tuple[str, ...]] = {
-    "user_message": ("model_id", "prompt_hash", "audit_verdict"),
-    "model_reply": (),
-    "tool_call": ("model_id",),
-    "tool_result": ("model_id", "evidence_envelope"),
-    "daemon_cycle": (),
-    "approval_decision": ("model_id",),
-    "self_mod_dialog_step": (),
-    "peer_message_in": (),
-    "peer_message_out": (),
+    "user_message": ("model_id", "prompt_hash", "audit_verdict", "event_origin"),
+    "model_reply": ("event_origin",),
+    "tool_call": ("model_id", "event_origin"),
+    "tool_result": ("model_id", "evidence_envelope", "event_origin"),
+    "daemon_cycle": ("event_origin",),
+    "approval_decision": ("model_id", "event_origin"),
+    "self_mod_dialog_step": ("event_origin",),
+    "peer_message_in": ("event_origin",),
+    "peer_message_out": ("event_origin",),
     "system_event": ("model_id", "prompt_hash"),
 }
 
@@ -146,6 +153,7 @@ _TURN_COLUMNS: tuple[str, ...] = (
     "pending_card_id",
     "taint_labels_json",
     "privacy_access",
+    "event_origin",
 )
 
 
@@ -376,6 +384,7 @@ class LedgerWriter:
         meta_marker_keys: list[str] | tuple[str, ...] | None = None,
         submission_id: str | None = None,
         submitted_at: float | None = None,
+        event_origin: str | None = None,
         taint_labels: list[str] | tuple[str, ...] | set[str],
         privacy_access: str,
     ) -> str | None:
@@ -388,6 +397,15 @@ class LedgerWriter:
             not isinstance(submission_id, str) or not submission_id.strip()
         ):
             raise ValueError("submission_id must be a non-empty string")
+        # Organ identity (A3 slice 1): verbatim free-form value — no
+        # enum (a curated organ roster goes stale silently, the
+        # mouth-whitelist scar), no rewrite. None is the ONLY spelling
+        # of "no organ claimed"; an empty string would be a second,
+        # forgeable encoding inside the chain preimage.
+        if event_origin is not None and (
+            not isinstance(event_origin, str) or not event_origin.strip()
+        ):
+            raise ValueError("event_origin must be a non-empty string")
         # One-time markers: each named meta key is set to the new turn_id
         # INSIDE the write transaction, and refused (rolling back the turn
         # row) if already set. This is what makes "the marker turn and the
@@ -472,6 +490,7 @@ class LedgerWriter:
             "will_i": will_i,
             "pending_card_id": pending_card_id,
             "self_mod_dialog_id": self_mod_dialog_id,
+            "event_origin": event_origin,
         }
 
         required = _REQUIRED_FIELDS.get(turn_kind)
@@ -516,7 +535,7 @@ class LedgerWriter:
             "turn_id": turn_id,
             "tenant_id": tenant_id,
             "timestamp": ts,
-            "schema_version": 1,
+            "schema_version": 2,
             "turn_kind": turn_kind,
             "surface": surface,
             "raw_surface": raw_surface,
@@ -543,6 +562,12 @@ class LedgerWriter:
             "pending_card_id": pending_card_id,
             "taint_labels_json": stamp.taint_labels_json,
             "privacy_access": stamp.privacy_access,
+            # ALWAYS present, None included: event_origin is INSIDE the
+            # chain preimage (twenty-first round Q1), so "no organ
+            # claimed" is itself a chain-covered claim. Absent-key and
+            # null hash differently; every canonical row constructor
+            # carries the key.
+            "event_origin": event_origin,
         }
 
         with self._lock:

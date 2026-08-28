@@ -312,7 +312,7 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
     try:
         row = conn.execute(
             "SELECT turn_kind, raw_text, submitted_at, surface, raw_surface,"
-            " privacy_access, taint_labels_json FROM turns"
+            " privacy_access, taint_labels_json, event_origin FROM turns"
             " WHERE submission_id = ?", (envelope.get("submission_id"),),
         ).fetchone()
     except sqlite3.Error:
@@ -322,7 +322,7 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
     if row is None:
         return False, "no committed row carries this identity"
     (turn_kind, raw_text, submitted_at, surface, raw_surface,
-     privacy_access, taint_json) = row
+     privacy_access, taint_json, event_origin) = row
     if submitted_at is None:
         return False, (
             "the committed row has a NULL submitted_at, which is the "
@@ -345,7 +345,9 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
     # surface, taint ... returns True", and the writer's raw-text-only
     # idempotency makes that collision reachable). Compared only where the
     # envelope carries the kwarg, which for OUR envelopes is always — the
-    # five preserved fields travel in every reconstructed body.
+    # five preserved fields travel in every reconstructed body
+    # (event_origin joins them verbatim wherever the original caller
+    # asserted an organ; absent means the writer stored its default).
     kwargs = envelope.get("kwargs") or {}
     # Compare against what the WRITER would have stored, which for an
     # absent kwarg is its default — not "skip the check". EXECUTED (Codex
@@ -359,6 +361,12 @@ def _row_is_our_replay(db_path: str, envelope: dict) -> tuple[bool, str]:
     for kwarg_key, default, row_value in (
         ("surface", _WRITER_DEFAULT_SURFACE, surface),
         ("raw_surface", _WRITER_DEFAULT_RAW_SURFACE, raw_surface),
+        # A3 slice 1 (twenty-first round Q4, executed gap): a row
+        # carrying an organ name was claimed by an envelope that never
+        # asserted one. Organ attribution is compared like the other
+        # preserved provenance fields — against the writer default when
+        # the envelope kwarg is absent.
+        ("event_origin", _WRITER_DEFAULT_EVENT_ORIGIN, event_origin),
     ):
         if kwargs.get(kwarg_key, default) != row_value:
             return False, (
@@ -738,6 +746,7 @@ _RELOCATED_AUTHORITY = ("submission_id", "submitted_at", "parent_turn_id")
 #: because that is what actually landed in the row.
 _WRITER_DEFAULT_SURFACE = "system"
 _WRITER_DEFAULT_RAW_SURFACE = None
+_WRITER_DEFAULT_EVENT_ORIGIN = None
 
 #: Keys whose presence would make the manifest an instrument of taste
 #: rather than evidence (tenth round, 2-1: the role FIELD survives, the

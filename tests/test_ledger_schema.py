@@ -139,10 +139,13 @@ class MetaTableTests(unittest.TestCase):
         self.assertEqual(set(info.keys()), {"key", "value"})
 
     def test_seeded_schema_version(self):
+        # "2" since A3 slice 1 (2026-08-27): the event_origin carrier is
+        # the first canonical-preimage change since ratification, and the
+        # schema doc's own rule makes a preimage edit a version event.
         with _connect() as conn:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         self.assertIsNotNone(row, "meta missing schema_version row")
-        self.assertEqual(row["value"], "1")
+        self.assertEqual(row["value"], "2")
 
     def test_seeded_genesis_hash_present(self):
         import string
@@ -217,6 +220,13 @@ class TurnsTableTests(unittest.TestCase):
         # integrity.
         ("submission_id", "TEXT", False, None),
         ("submitted_at", "REAL", False, None),
+        # A3 slice 1 (migration 0007, owner-ruled 2026-08-27): the
+        # dedicated organ-identity carrier. Nullable, NO SQL default (a
+        # default would fabricate attribution no caller made). UNLIKE
+        # the excluded columns above it ENTERS chain-hash canonical
+        # bytes — attribution is the row's honesty claim (twenty-first
+        # round Q1; tests/test_ledger_event_origin.py).
+        ("event_origin", "TEXT", False, None),
     ]
 
     def test_columns(self):

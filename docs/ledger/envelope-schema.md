@@ -608,3 +608,52 @@ This schema is ready for Slice 2 implementation when:
 ---
 
 *This is paper. §12 is now checked off for Slice 2 design. Code still lands test-first: Slice 2 must implement the writer, reconciliation job, and schema tests before any production daemon writes to `ledger.db`.*
+
+---
+
+## 13. Amendment — `event_origin` and the v2 canonical era (2026-08-27)
+
+**Recorded, not authored here: the OWNER RULED this column** (2026-08-27,
+twentieth council round Q1 fork — see
+`docs/superpowers/witness/theme2-s2-owner-delegated-council-rulings.md`).
+This section records the ruling and its schema consequences; the
+contract details were frozen by the twenty-first round.
+
+**The column.** `turns.event_origin TEXT NULL`, no SQL default
+(migration `0007_add_event_origin.sql`). One column, one meaning: which
+ORGAN produced this row's bytes, for interceptor speech that answers
+the owner before the model runs. `surface` stays the conversation
+channel; `raw_surface` stays transport provenance and taint authority —
+the taint-caller coupling is removed rather than pinned around.
+
+**Writer contract** (enforced in `core/ledger/writer.py`, pinned by
+`tests/test_ledger_event_origin.py`):
+
+- Non-None `event_origin` ⇒ `turn_kind = 'system_event'`; every other
+  kind refuses it in the §4.2 forbidden-field shape. The REVERSE is not
+  frozen: generic system rows (genesis, reconcile) legally carry NULL.
+- Verbatim free-form non-empty string. No enum, no rewrite, no default:
+  a curated organ roster goes stale silently, and a default fabricates
+  attribution no caller made. NULL is the ONLY spelling of "no organ";
+  `''` refuses. The value is a caller ASSERTION — the recorder seam
+  binds production constants; the writer verifies shape, not truth.
+
+**The v2 canonical era.** Unlike every column added since ratification
+(0003–0006, all excluded from chain-hash canonical bytes),
+`event_origin` ENTERS the §6.1 preimage: the key is always present
+(`null` included) in canonical row bytes, so "no organ claimed" is
+itself a chain-covered claim and post-hoc attribution edits break
+verification even for an adversary who drops the append-only triggers.
+Per this doc's status line and `GENESIS_ROW`'s own rule, that preimage
+edit bumps `schema_version` 1 → 2 (genesis row, embedded genesis JSON,
+writer rows, `meta.schema_version`). Ruled and landed while the ledger
+held ZERO rows — migration 0007 refuses to apply to a populated
+`turns` table, so pre-v2 artifacts (the retained rehearsal sidecars)
+keep their own era instead of silently losing their chains.
+
+**Readers.** `span_reader` exposes the column by contract. The
+prompt-feeding `recent_turns_by_kind` is deliberately NOT widened —
+prompt-content exposure is the owner's decision, deferred by name
+(same class as the owed `submitted_at` selection). A future
+conversation-stream reader's contract must carry `event_origin` on
+`system_event` rows.

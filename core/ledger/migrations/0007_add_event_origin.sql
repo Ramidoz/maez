@@ -1,0 +1,33 @@
+-- A3 slice 1 (2026-08-27, owner-ruled same day; twenty-first round).
+--
+-- Adds the dedicated organ-identity carrier to the turns table:
+--
+--   event_origin — which ORGAN produced this row's bytes, for
+--     interceptor speech that answers the owner before the model runs
+--     (S4 crisis replies, card resolutions, proposal/search answers,
+--     the recall receipt). One column, one meaning: `surface` stays
+--     the conversation channel, `raw_surface` stays transport
+--     provenance and taint authority, the organ name lives HERE — the
+--     taint-caller coupling is removed rather than pinned around.
+--
+-- Contract (enforced by core/ledger/writer.py, pinned by
+-- tests/test_ledger_event_origin.py):
+--   * non-None  =>  turn_kind = 'system_event'; every other kind
+--     refuses it loudly. The REVERSE is not frozen: generic system
+--     rows (genesis, reconcile) keep NULL legally.
+--   * verbatim free-form non-empty string; no enum, no rewrite. NULL
+--     is the ONLY spelling of "no organ claimed"; '' is refused.
+--   * NO SQL DEFAULT: a default would fabricate attribution no caller
+--     made.
+--
+-- UNLIKE 0006's columns, event_origin ENTERS the chain-hash canonical
+-- bytes (the key is always present in every canonical row constructor;
+-- it is deliberately NOT in core/ledger/chain.py's strip set). It is
+-- the first canonical-preimage change since ratification, so it rides
+-- the schema_version 1 -> 2 era bump. Ruled while the ledger holds
+-- ZERO rows — this migration is free now and never again, which is
+-- why core/ledger/migrate.py refuses to apply it to a populated turns
+-- table (the retained rehearsal sidecars keep their old-era chains by
+-- never migrating, not by a compatibility carve-out).
+
+ALTER TABLE turns ADD COLUMN event_origin TEXT;
