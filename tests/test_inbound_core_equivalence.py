@@ -264,7 +264,15 @@ class InboundCoreEquivalenceTests(unittest.TestCase):
 
         async def _fake_search(*, text, chat_id):
             trace.append(("try_search_commitment_intent", text, chat_id))
-            return search_reply
+            # The producer's contract is a TYPED result carrying its
+            # provenance shape (twenty-third round), not a bare str —
+            # both flag paths unwrap `.text`, so a str double would
+            # test a contract the producer no longer has.
+            if search_reply is None:
+                return None
+            from core.ledger.recorder import OrganProvenance, ProducedReply
+
+            return ProducedReply(search_reply, OrganProvenance.CANNED)
 
         # The descriptor wires self._try_* — patch the bound methods so BOTH
         # flag paths (flag-off calls them as self.method; flag-on calls them as

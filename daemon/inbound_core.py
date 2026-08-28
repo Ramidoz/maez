@@ -256,7 +256,7 @@ async def run_inbound_turn(
     # Injected dependencies (adapter methods / module helpers become callables):
     chat_history_provider: Callable[[int], Any],
     try_proposal_intent: Callable[..., Awaitable[Optional[str]]],
-    try_search_commitment_intent: Callable[..., Awaitable[Optional[str]]],
+    try_search_commitment_intent: Callable[..., Awaitable[Any]],
     search_commitment_controller: Callable[[], Any],
     audit_surface_reply: Callable[..., str],
     clean_exchange: Callable[[str], str],
@@ -360,11 +360,15 @@ async def run_inbound_turn(
                 "ships regardless"
             )
         try:
-            from core.ledger.recorder import record_organ_event
+            from core.ledger.recorder import (
+                OrganProvenance,
+                record_organ_event,
+            )
 
             record_organ_event(
                 surface=owner_surface_label,
                 event_origin="s4_clinical_boundary",
+                provenance=OrganProvenance.CANNED,
                 raw_text=_s4_result.answer_text,
                 parent=_a3_owner_turn,
             )
@@ -640,11 +644,15 @@ async def run_inbound_turn(
                 "ships regardless"
             )
         try:
-            from core.ledger.recorder import record_organ_event
+            from core.ledger.recorder import (
+                OrganProvenance,
+                record_organ_event,
+            )
 
             record_organ_event(
                 surface=owner_surface_label,
                 event_origin="proposal_interceptor",
+                provenance=OrganProvenance.CANNED,
                 raw_text=proposal_reply,
                 parent=_a3_owner_turn,
             )
@@ -655,12 +663,66 @@ async def run_inbound_turn(
             )
         return proposal_reply
 
-    search_commitment_reply = await try_search_commitment_intent(
+    search_commitment_result = await try_search_commitment_intent(
         text=text,
         chat_id=chat_id,
     )
-    if search_commitment_reply:
-        return search_commitment_reply
+    if search_commitment_result is not None:
+        # A3 seam closure: the search-commitment mouth. It was BLOCKED,
+        # not merely open — the producer returned two materially
+        # different provenances (canned sentences, and a formatter that
+        # embeds LIVE WEB CONTENT) through one `str`, so both fixed
+        # labels lied in one branch. It now EXPORTS its shape and the
+        # seam binds the taint set (twenty-third round, 3-0).
+        #
+        # The owner's echoed query inside "Here's what I found for ..."
+        # is NOT a provenance component: owner-provenance rides the
+        # PARENT EDGE (owner ruling, 2026-08-28), so the frozen taint
+        # map is not widened and the web set is one the writer already
+        # admits. raw_text is the bytes the interceptor PRODUCED
+        # (twenty-fourth round, 3-0). SEPARATE try blocks per the
+        # half-exchange rule; byte-inert while the flag is unset; the
+        # reply ships regardless.
+        _a3_owner_turn = None
+        try:
+            from core.ledger.recorder import record_owner_message
+
+            _a3_owner_turn = record_owner_message(
+                surface=owner_surface_label, raw_text=text
+            )
+        except Exception:
+            logger.exception(
+                "A3 owner record failed on the search-commitment path; "
+                "the reply ships regardless"
+            )
+        try:
+            from core.ledger.recorder import record_organ_event
+
+            record_organ_event(
+                surface=owner_surface_label,
+                event_origin="search_commitment",
+                provenance=search_commitment_result.provenance,
+                raw_text=search_commitment_result.text,
+                parent=_a3_owner_turn,
+            )
+        except Exception:
+            logger.exception(
+                "A3 organ record failed on the search-commitment path; "
+                "the reply ships regardless"
+            )
+        # A stale producer returning a bare str would raise here and
+        # cost the owner the reply (Codex walk M5). The export is the
+        # contract; a violation is logged and the text still ships.
+        _shipped = getattr(search_commitment_result, "text", None)
+        if _shipped is None:
+            logger.error(
+                "search-commitment producer returned %s, not a "
+                "ProducedReply — the typed export contract is broken; "
+                "shipping the value unrecorded",
+                type(search_commitment_result).__name__,
+            )
+            return search_commitment_result
+        return _shipped
 
     # Self-mod dialog bridge + recall progress receipt closures are built by
     # the adapter (they capture its loop / _surface_v2_adapter / chat_id) and

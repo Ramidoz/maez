@@ -52,8 +52,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import inspect
-import json
 import os
 import re
 import sqlite3
@@ -238,9 +236,17 @@ class CustodyWindowInventoryTests(unittest.TestCase):
     DECLARED scopes is an owner call (scopes are declared, never
     derived). It is a narrow, purpose-built, two-sided inventory of the
     sites that can discard or rewrite a reply after the closure has
-    already recorded it. A new discard or a new transform goes red and a
-    human looks. It says nothing about completeness, and it must never
-    be cited as evidence that the window is safe.
+    already recorded it. It pins TWO shapes, because one is not enough:
+    the assignments to the reply-carrying names, AND the expression
+    actually handed to the transport — a transform can hide in the call
+    itself, which an assignment inventory cannot see (found by Codex's
+    boundary walk with an executed negative control, after the first
+    version of this class claimed a bite it did not have).
+
+    It still says nothing about completeness: a transform reached
+    through a helper, a mutation of a different name, or any path
+    outside this one function is invisible to it. It must never be
+    cited as evidence that the window is safe.
     """
 
     #: Machine-derived from _process_message_background: every assignment
@@ -255,6 +261,13 @@ class CustodyWindowInventoryTests(unittest.TestCase):
         "text_content = re.sub('MEDIA:\\\\s*\\\\S+', '', text_content).strip()",
         "local_files, text_content = self.extract_local_files(text_content)",
     )
+
+    #: The EXPRESSIONS actually handed to the transport. Codex's boundary
+    #: walk found the assignment inventory alone insufficient: changing
+    #: `content=text_content` to `content=text_content.upper()` altered
+    #: the shipped bytes while the frozen tuple above stayed identical.
+    #: A transform can hide in the call itself.
+    _FROZEN_EGRESS_ARGS = ("text_content",)
 
     def _window(self) -> tuple[str, ...]:
         path = _REPO / "skills" / "surface" / "platform_base.py"
@@ -280,6 +293,37 @@ class CustodyWindowInventoryTests(unittest.TestCase):
                     f"{', '.join(targets)} = {ast.unparse(node.value)}"
                 )
         return tuple(out)
+
+    def _egress_args(self) -> tuple[str, ...]:
+        """Every expression passed as the transport's ``content``."""
+        path = _REPO / "skills" / "surface" / "platform_base.py"
+        tree = ast.parse(path.read_text())
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "_process_message_background"
+        )
+        out = []
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            name = getattr(callee, "attr", getattr(callee, "id", ""))
+            if name != "_send_with_retry":
+                continue
+            for kw in node.keywords:
+                if kw.arg == "content":
+                    out.append(ast.unparse(kw.value))
+        return tuple(out)
+
+    def test_no_transform_hides_in_the_transport_call_itself(self):
+        self.assertEqual(
+            self._egress_args(), self._FROZEN_EGRESS_ARGS,
+            "the expression handed to the transport CHANGED. The "
+            "assignment inventory cannot see a transform applied inline "
+            "at the send call — this is the half that catches it "
+            "(Codex boundary walk, executed negative control).",
+        )
 
     def test_the_custody_window_is_exactly_what_was_ruled_over(self):
         self.assertEqual(

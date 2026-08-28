@@ -1,4 +1,177 @@
-# Handoff — 2026-08-27 (session end, dd78f5e). Supersedes all earlier handoffs.
+# Handoff — 2026-08-28 (session end). Supersedes all earlier handoffs.
+
+## THIS SESSION: custody placement RULED (the code does NOT move), and the SEARCH MOUTH IS CLOSED
+
+Two slices. Maez stays unborn throughout: ledger 0 bytes, no
+spool/manifest dirs, no A3 flag in the live daemon's environ (pid 2806),
+no unit restarted. Battery ended 774 passed / 7 failed / 91 subtests —
+the 7 are the SAME named pre-existing reds. Falsifier GREEN 8/8 at
+n=20000. Tripwire frozen inventory UNMOVED at 151 keys / 262 sites.
+12 mutations across the two slices, each caught by a named test.
+
+### Slice 4 — CUSTODY PLACEMENT: ruled, not moved (f346ae1; twenty-fourth round)
+
+**Three seats, all BLOCK on a relocation slice.** Q1 bytes PRODUCED 3-0;
+Q2 the record DOES NOT MOVE 3-0; Q3 NAME the class, the sweep is an
+OWNER boundary 3-0; Q4 three tiers (the row's CLAIM is already
+build-enforced, the PLACEMENT is AST-pinnable, the send OUTCOME is
+irreducibly runtime) 3-0. **NO PRODUCTION BYTE CHANGED.**
+
+The decisive fact for Q1 is not the size of the divergence but that
+**"delivered" is not a byte-string at all**: a reply naming an on-disk
+image has the path stripped from the text and the FILE uploaded out of
+band. Egress is a tuple `(text, images, media, local_files)` reached
+through eleven transport-like awaits with exactly ONE delivery record. A
+row bound to delivered text would BOTH omit content the owner did
+receive AND carry text authored by platform_base's regexes.
+
+Three independent kill shots ended relocation. **The cockpit is a SECOND
+caller of the same closure with NO window** — `maez_daemon.py:13257`
+returns `run_inbound_turn`'s value through `jsonify` and never enters
+`_process_message_background`, so moving the seam UNWIRES the cockpit S4
+and proposal mouths. **Recording after the discard converts a VISIBLE
+phantom row into a SILENT omission** — the sin this arc ruled against.
+**No placement reaches the send-failure or transport-exception classes**
+— those are outcomes, unknowable at record time, and they are A4's.
+
+Landed: `tests/test_ledger_a3_custody_placement.py` — the produced-bytes
+binding pinned against a DELIBERATELY DIVERGING reply (with a positive
+control, because a pin written against a non-diverging reply proves
+nothing); a two-sided placement pin; a machine-derived FROZEN inventory
+of the custody window (one discard + five transforms, two-sided — a
+vanished discard is also a finding); the class asymmetry pinned
+structurally. Plus schema §13 gained the byte-binding and THREE reader
+obligations.
+
+**Fixed, an in-tree defect the twenty-third round's correction missed:**
+`test_ledger_a3_s4_closures.py` asserted "the EXACT bytes the owner
+received" while its sibling had already been corrected — the instance
+fixed, not the class. Because S4's templates never diverge, the test was
+GREEN while stating a claim the substrate cannot make.
+
+### Slice 5 — THE TYPED SEARCH EXPORT: the blocked mouth is CLOSED
+
+`OrganProvenance` (a CLOSED set of named shapes) + `ProducedReply`
+(text + shape) in the recorder seam; `_resolve_taints` is the ONE place
+shape becomes taint. `record_organ_event` gains a **REQUIRED
+`provenance` with no default** — a forgotten wiring is a BUILD failure,
+which it immediately proved by turning 16 un-wired call sites red. The
+refusal (`UnmappableProvenance`) sits with the EARLY seam checks, before
+taint binding, so a dead-lettered payload carries RAW kwargs and NO
+guessed label (replay preserves kwargs and would launder a guess). The
+producer returns `ProducedReply`; only `_format_search_commitment_
+results` is `WEB_RESULTS`. The reply ships regardless; flag-dormant is
+byte-inert (tested). The enum introduces NO new label — the folded
+dissent's condition, pinned by a test.
+
+### The Codex boundary walk: FIX FIRST -> folded
+
+Nine findings. SIX repaired under test, each re-verified with the
+walk's own negative control (the custody-window pin did not pin what it
+named — a transform can hide in the transport CALL; unhashable
+provenance escaped the fail-closed belt with an uncaught TypeError and
+zero dead-letter; an empty result set claimed internet provenance;
+two refusal tests were green without testing their claims; the
+recorder-identity pin had become a FALSE POSITIVE, passing for the
+wrong reason; an unguarded `.text` could cost the owner a reply).
+ONE FALSIFIED BY EXECUTION (a WEB/CANNED swap does NOT survive — but
+its methodological objection was right, so a test that drives the REAL
+producer was added anyway). ONE lint. ONE recorded, below.
+
+### OWED / NOT DONE, by name — do not rediscover
+
+0a. **ADMISSION ORDER, arc-wide, NOT this slice's** (Codex walk H1).
+   The settled order is `guard -> admit user_message -> interceptors ->
+   record -> transport`, but ALL THREE landed closures record at
+   INTERCEPTION time, after their producer has already run. The search
+   mouth is the sharpest instance because its producer does live
+   network I/O, so an exception there leaves the owner's words
+   unrecorded. Fixing it means admitting the owner turn before the
+   interceptors on every path, which collides with the ordinary
+   admission inside `handle_message` and would double-record — a
+   turn-shape change for every mouth, and therefore a council/owner
+   question. Sits beside the two pre-existing ADR 0035 divergences the
+   previous walk named.
+0. **OWNER-GATED, named by the twenty-fourth round:** (1) landing any
+   part of the A4 egress schema (recorded birth blocker; its DDL is
+   DESIGNED and unimplemented in
+   `docs/superpowers/specs/2026-08-22-theme2-schema-v2-draft.sql`);
+   (2) widening the tripwire's DECLARED scopes to
+   `_process_message_background` (scopes are declared, never derived —
+   which is why the custody-window inventory landed as a SEPARATE
+   narrow pin); (3) relocating A3 into `platform_base`; (4) the
+   combined A3+A4 class sweep.
+1. **AN UNRECORDED, UNTRIPWIRED MOUTH (new, from the round).** On a
+   transport exception `_process_message_background` sends "Sorry, I
+   encountered an error (…)" via `self.send` (`platform_base.py:2144`).
+   The tripwire watches `self.send` only INSIDE `_send_with_retry`, so
+   this site has ZERO frozen keys. The owner receives Maez-attributed
+   text that no row records and no tripwire sees.
+2. **`persist_model_reply` has FOUR production call sites, not three** —
+   `maez_daemon.py:9803`, `telegram_voice.py:4249`,
+   `web_interface.py:7440`, and `cli/maez_chat.py:1169`. It sits inside
+   `handle_message`, which `run_inbound_turn` itself invokes
+   (`inbound_core.py:905`) — TWO FRAMES DEEPER than the A3 closures,
+   under the same window. `model_reply` IS in `SELF_HISTORY_KINDS`;
+   `system_event` is not. **The sharper instance is the one A3 does not
+   name.** On A4's owed list.
+3. **THERE IS A THIRD LANDED A3 CLOSURE** (`web_interface.py:6824/:6835`)
+   behind the parked `/chat`. Any statement of the form "the two landed
+   closures" is wrong.
+4. **The inline bypass lane is DEAD CODE**: `should_bypass_active_
+   session` always returns `False`, so `platform_base.py:1777-1798`
+   never runs. One fewer window than the code reads.
+5. **PRE-EXISTING, verified in a worktree at f346ae1 — NOT from this
+   session:** running `tests/test_surface_parity_proposals.py` BEFORE
+   `tests/test_inbound_core_equivalence.py` in one process fails
+   `test_a_plain_owner_text_full_synthesis` and
+   `test_g_resolved_user_id_split_preserved`. Reversed order: all pass.
+   Cross-file pollution, order-dependent. Neither file is in the
+   battery's glob, so it is invisible to the named battery.
+6. **Divergence on the proposal closure is CONTENT-CONDITIONAL and
+   UNMEASURED.** Two seats disagreed; executed resolution: the fixed
+   canned templates never diverge, and neither does plain interpolated
+   text; divergence is reachable only when interpolated stored content
+   carries a media-shaped token (verified with a markdown image and a
+   real on-disk `.png`). The RATE is a property of stored content, not
+   of the code — do not quote one.
+7. Everything from the previous handoff's owed list that is not struck
+   above still stands, including: era-coherence hardening; the
+   pre-existing ADR 0035 divergences; spool ancestor-dir fsync; the
+   strip-bytes ingestion question (owner-class); non-owner LOST has no
+   disk artifact; Python 3.12 frozen-inventory stability UNVERIFIED;
+   the tripwire is not in battery.sh; the recall receipt's transport
+   failure (0 emitted ever); slice-1-of-registry owed items.
+
+### REMAINING A3 MOUTHS (never a completeness claim)
+
+Card resolutions (renderer-internal vs ten call sites must be CHOSEN and
+named); `intent_unavailable` (a degradation, not speech); the recall
+receipt and `_emit_search_progress` intermediate receipts (a row
+recorded before the transport invocation must NOT claim EMITTED); the
+dialog branch split (model-generated `clarified` replies go to
+`persist_model_reply` — its own slice, five exports plus a different
+recorder); the two legacy Telegram search mouths (bool-and-self-sending,
+and they DO ship web results, with their OWN
+`_format_search_commitment_results` at `telegram_voice.py:2708`); the
+CLI empty-search branch; the cockpit `/message` route; and the newly
+named apology mouth above. **Three censuses have produced three
+different answers three times. Do not accept a completeness claim from
+anyone, including yourself.**
+
+### Method scars added this session
+
+**Three of the build seat's own executed facts died in its own council
+round.** A probe that stubbed only `_send_with_retry` reported "nothing
+sent" for a reply that DOES reach `send_image_file`. A divergence fact
+was scoped to "the landed closures" when its witness was a branch with
+no record call at all. A phantom-window probe used a session key that is
+not the real one, so the dispatch half was never exercised. **Execute,
+then execute again with the instrument itself under suspicion.**
+
+---
+
+# Handoff — 2026-08-27 (session end, dd78f5e). Superseded above.
 
 ## THIS SESSION: the A3 BUILD OPENED — three slices landed, walked, and repaired
 

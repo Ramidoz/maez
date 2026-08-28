@@ -87,12 +87,83 @@ __all__ = [
     "ProductionRecorder",
     "RehearsalRecorder",
     "PRODUCTION",
+    "OrganProvenance",
+    "ProducedReply",
     "record_owner_message",
     "record_organ_event",
     "recorder_status",
 ]
 
 _LOGGER = logging.getLogger("core.ledger.recorder")
+
+
+class OrganProvenance(enum.Enum):
+    """A CLOSED set of named shapes for what an organ row's bytes ARE.
+
+    Twenty-third round, folded 3-0 over a recorded dissent: the producer
+    declares a NAMED SHAPE and the seam binds the taint set, so no taint
+    list ever crosses a closure. The dissent — that a fourth vocabulary
+    beside TAINT_LABEL_ORDER / KNOWN_ORIGINS / PROVENANCE_VALUES is the
+    one-column-two-namespaces sin — was ANSWERED, not overruled, by the
+    constraint pinned here: **this enum introduces no LABEL.** Every
+    shape maps onto labels that already exist, and a test asserts it.
+
+    Why a shape and not a taint list: a caller-supplied set restores
+    exactly the free choice the twenty-second round called "a second
+    flag in drag". Why not a ``str`` subclass carrying provenance: DEAD
+    BY EXECUTION — it survives object-identical to the closure and then
+    evaporates at the first of five string transformations in
+    platform_base before transport. Provenance on a type that any
+    ``.strip()`` silently downgrades is a trapdoor.
+    """
+
+    #: Text the organ wrote itself, with nothing foreign embedded.
+    CANNED = "canned"
+    #: Text embedding LIVE WEB CONTENT — result titles, snippets, URLs.
+    #: The owner's echoed query is NOT a provenance component: owner
+    #: provenance rides the PARENT EDGE (owner ruling, 2026-08-28), so
+    #: the frozen taint map is not widened and this set is one the
+    #: writer already admits for system_event.
+    WEB_RESULTS = "web_results"
+
+
+#: The ONE auditable place shape becomes taint. Never a label this
+#: vocabulary did not already have.
+_PROVENANCE_TAINTS: dict[OrganProvenance, tuple[str, ...]] = {
+    OrganProvenance.CANNED: ("self_generated",),
+    OrganProvenance.WEB_RESULTS: (
+        "self_generated",
+        "tool_output",
+        "internet_derived",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ProducedReply:
+    """What a producer returns: the exact bytes AND their shape.
+
+    The producer is the only thing that knows which branch spoke, so it
+    is the only thing that can declare provenance honestly. Both fields
+    are required; empty text is refused at construction, because a
+    producer that returns an empty reply should return ``None`` (no
+    intent) rather than a reply nobody can record.
+    """
+
+    text: str
+    provenance: OrganProvenance
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise ValueError(
+                "ProducedReply.text must be a non-empty string — a "
+                "producer with nothing to say returns None"
+            )
+        if not isinstance(self.provenance, OrganProvenance):
+            raise TypeError(
+                "ProducedReply.provenance must be an OrganProvenance "
+                f"member, got {self.provenance!r}"
+            )
 
 
 class RecordState(enum.Enum):
@@ -181,6 +252,46 @@ def _blank(value) -> bool:
     return not isinstance(value, str) or not value.strip()
 
 
+class UnmappableProvenance(ValueError):
+    """Raised when neither a ruled fixed taint set nor a mappable
+    producer-declared shape was supplied. Never a taint label —
+    unknown provenance is an epistemic failure state."""
+
+
+def _resolve_taints(
+    taint_labels: list[str] | None,
+    provenance: "OrganProvenance | None",
+) -> list[str]:
+    """Shape -> taint, in the ONE place the mapping lives.
+
+    Called BEFORE any taint is bound into write kwargs, so a refusal
+    dead-letters a payload carrying RAW kwargs and NO guessed labels —
+    replay preserves kwargs verbatim, and a guess in a sidecar could be
+    laundered into the chain later.
+    """
+    if (taint_labels is None) == (provenance is None):
+        raise UnmappableProvenance(
+            "recorder: exactly one of taint_labels (a ruled fixed set) "
+            "or provenance (a producer-declared shape) must be supplied"
+        )
+    if provenance is None:
+        return list(taint_labels or [])
+    # Type FIRST: ``x in dict`` raises TypeError on an unhashable, which
+    # would escape the fail-closed belt entirely (Codex walk M4).
+    if not isinstance(provenance, OrganProvenance):
+        raise UnmappableProvenance(
+            "recorder: provenance must be an OrganProvenance member, "
+            f"got {type(provenance).__name__} — refusing admission "
+            "rather than guessing a taint set"
+        )
+    if provenance not in _PROVENANCE_TAINTS:
+        raise UnmappableProvenance(
+            f"recorder: unmappable organ provenance {provenance!r} — "
+            "refusing admission rather than guessing a taint set"
+        )
+    return list(_PROVENANCE_TAINTS[provenance])
+
+
 class ProductionRecorder:
     """The classified production record path.
 
@@ -215,8 +326,9 @@ class ProductionRecorder:
         raw_text: str | None,
         *,
         surface: str,
-        taint_labels: list[str],
         kwargs: dict,
+        taint_labels: list[str] | None = None,
+        provenance: "OrganProvenance | None" = None,
         parent: RecordResult | None = None,
     ) -> RecordResult:
         from core.ledger.writes_flag import (
@@ -248,6 +360,18 @@ class ProductionRecorder:
                     "on an organ event (the seam is fail-closed; the "
                     "writer stays permitted-not-required)"
                 ),
+            ))
+
+        # PROVENANCE REFUSAL — deliberately HERE, beside the other
+        # early checks and BEFORE taint binding, so the dead-lettered
+        # payload carries RAW kwargs. Unreachable on a green path:
+        # ``provenance`` is a required parameter with no default, so a
+        # forgotten wiring is a BUILD failure. This is the belt.
+        try:
+            taint_labels = _resolve_taints(taint_labels, provenance)
+        except UnmappableProvenance as exc:
+            return self._count(self._dead_letter(
+                db_path, turn_kind, raw_text, kwargs, attempt_id, exc,
             ))
 
         from core.ledger import owner as _owner
@@ -443,10 +567,15 @@ class RehearsalRecorder:
         raw_text: str | None,
         *,
         surface: str,
-        taint_labels: list[str],
         kwargs: dict,
+        taint_labels: list[str] | None = None,
+        provenance: "OrganProvenance | None" = None,
         parent: RecordResult | None = None,
     ) -> RecordResult:
+        # Loud by design (see the class docstring): the rehearsal lane
+        # RAISES rather than dead-lettering, so a witness can never
+        # mistake an unmappable provenance for a green rehearsal.
+        taint_labels = _resolve_taints(taint_labels, provenance)
         write_kwargs = dict(kwargs)
         write_kwargs["surface"] = surface
         write_kwargs["taint_labels"] = list(taint_labels)
@@ -514,6 +643,7 @@ def record_organ_event(
     surface: str,
     event_origin: str,
     raw_text: str,
+    provenance: OrganProvenance,
     raw_surface: str | None = None,
     parent: RecordResult | None = None,
     pending_card_id: int | None = None,
@@ -532,6 +662,16 @@ def record_organ_event(
     type-lying ``self_mod_dialog_id``. Rows recorded BEFORE a transport
     invocation must not claim EMITTED — at the pre-send custody point
     the honest claim is eligibility/intent (twenty-second round).
+
+    ``provenance`` is REQUIRED with NO DEFAULT (twenty-third round):
+    only the producer knows which branch spoke, and a default would let
+    a forgotten wiring silently stamp a lie. A missing argument is a
+    BUILD failure, not a runtime path. The seam binds shape -> taint
+    here so no taint list ever crosses a closure.
+
+    ``raw_text`` is the bytes the organ PRODUCED (twenty-fourth round,
+    3-0) — never "what the owner received". The surface transforms the
+    reply after this call returns, and egress is not even a byte-string.
     """
     _require_recorder(recorder)
     kwargs: dict = {"event_origin": event_origin}
@@ -549,7 +689,7 @@ def record_organ_event(
         "system_event",
         raw_text,
         surface=surface,
-        taint_labels=["self_generated"],
+        provenance=provenance,
         kwargs=kwargs,
         parent=parent,
     )

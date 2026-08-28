@@ -42,6 +42,7 @@ from core.cognition.parity_flag import (
     surface_parity_enabled,
 )
 from core.infra.env_flags import strict_env_flag
+from core.ledger.recorder import OrganProvenance, ProducedReply
 from daemon.inbound_core import inbound_core_v2_enabled, run_inbound_turn
 from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
@@ -561,7 +562,17 @@ class MaezMessageHandler:
         *,
         text: str,
         chat_id: str,
-    ) -> Optional[str]:
+    ) -> "Optional[ProducedReply]":
+        """Return the reply AND its provenance shape, or None.
+
+        Twenty-third round, ruled 3-0: this producer returns two
+        materially different kinds of text — canned sentences, and
+        ``_format_search_commitment_results``, which embeds LIVE WEB
+        CONTENT. A bare ``str`` return made both honest labels
+        impossible at the call site, because only the producer knows
+        which branch spoke. It therefore EXPORTS the shape; the seam
+        binds the taint set.
+        """
         if not _search_commitment_enabled():
             return None
         ctrl = self._search_commitment_controller()
@@ -576,18 +587,20 @@ class MaezMessageHandler:
             health = backend.health()
             if health == "healthy":
                 return None
-            return (
+            return ProducedReply(
                 "My web sense is degraded right now, so I can't check the live web "
                 "for this. I can answer from what I already hold if you ask again, "
-                "or we can retry the web later."
+                "or we can retry the web later.",
+                OrganProvenance.CANNED,
             )
 
         receipt = ctrl.get_search_offer(channel, chat_id)
         query = getattr(receipt, "offered_query", "") if receipt is not None else ""
         if receipt is not None and is_clear_yes(text) and backend.health() != "healthy":
-            return (
+            return ProducedReply(
                 "My web search is unavailable right now, so I can't follow through "
-                "on that search honestly. I'm not going to make up an answer."
+                "on that search honestly. I'm not going to make up an answer.",
+                OrganProvenance.CANNED,
             )
 
         results = ctrl.resolve_search_affirmation(
@@ -598,7 +611,17 @@ class MaezMessageHandler:
             turns_since=1,
         )
         if results is not None:
-            return self._format_search_commitment_results(query, results)
+            # The ONLY branch that CAN embed live web content — and it
+            # only does when there are results. A lawful empty result
+            # set yields the formatter's own unconditional header and
+            # nothing else, so claiming internet provenance for it
+            # would be the same class of lie in the other direction
+            # (Codex walk M8).
+            return ProducedReply(
+                self._format_search_commitment_results(query, results),
+                OrganProvenance.WEB_RESULTS if results
+                else OrganProvenance.CANNED,
+            )
 
         if not is_search_offer_worthy(text):
             return None
@@ -606,11 +629,15 @@ class MaezMessageHandler:
         health = backend.health()
         query = (text or "").strip()
         if ctrl.store_search_offer(channel, chat_id, query, health=health):
-            return f"I can search for this through my local web sense: {query}. Want me to?"
+            return ProducedReply(
+                f"I can search for this through my local web sense: {query}. Want me to?",
+                OrganProvenance.CANNED,
+            )
         if health in {"degraded", "down"}:
-            return (
+            return ProducedReply(
                 "My web search is degraded right now, so I shouldn't promise a search. "
-                "I can answer from what I already know, or we can try again later."
+                "I can answer from what I already know, or we can try again later.",
+                OrganProvenance.CANNED,
             )
         return None
 
@@ -1034,12 +1061,14 @@ class MaezMessageHandler:
         if proposal_reply:
             return proposal_reply
 
-        search_commitment_reply = await self._try_search_commitment_intent(
+        search_commitment_result = await self._try_search_commitment_intent(
             text=text,
             chat_id=chat_id,
         )
-        if search_commitment_reply:
-            return search_commitment_reply
+        if search_commitment_result is not None:
+            # The legacy inline path (flag-off) has no A3 closure of its
+            # own; it ships the text and stays on the open-mouth roster.
+            return search_commitment_result.text
 
         # Self-mod dialog bridge — brain_loop needs a callable that
         # surfaces the Lane-3 dialog opening as a Telegram message

@@ -56,6 +56,7 @@ from unittest.mock import patch
 from core.infra.sqlite_runtime import has_wal_reset_fix
 from core.ledger import migrate, owner, recorder, spool
 from core.ledger.recorder import (
+    OrganProvenance,
     PRODUCTION,
     ProductionRecorder,
     RecordResult,
@@ -169,6 +170,10 @@ class ResultTypeTests(unittest.TestCase):
                     surface=_SURFACE,
                     event_origin=_ORGAN,
                     raw_text=_ORGAN_BYTES,
+                    # Without this the call raises "missing required
+                    # provenance" BEFORE _require_recorder ever runs, and
+                    # the test passes for the wrong reason (Codex walk M7).
+                    provenance=OrganProvenance.CANNED,
                 ),
             ),
         ):
@@ -193,6 +198,7 @@ class DormancyTests(unittest.TestCase):
                 r2 = record_organ_event(
                     surface=_SURFACE,
                     event_origin=_ORGAN,
+                    provenance=OrganProvenance.CANNED,
                     raw_text=_ORGAN_BYTES,
                     parent=r1,
                 )
@@ -218,6 +224,7 @@ class OwnerLaneTests(unittest.TestCase):
             r2 = record_organ_event(
                 surface=_SURFACE,
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
                 parent=r1,
             )
@@ -254,6 +261,7 @@ class OwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface=_SURFACE,
                 event_origin="   ",
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
             )
             self.assertEqual(result.state, RecordState.DEAD_LETTERED)
@@ -268,6 +276,66 @@ class OwnerLaneTests(unittest.TestCase):
         self.assertEqual(record["category"], "refused")
 
     @_needs_enabled_writer
+    def test_an_unmappable_shape_dead_letters_with_NO_taint_in_the_sidecar(self):
+        """The provenance refusal, driven through the REAL recorder.
+
+        Ruled: the refusal must sit with the EARLY seam checks so the
+        dead-lettered payload carries RAW kwargs. Replay preserves an
+        envelope's kwargs verbatim, so a guessed taint label in a
+        sidecar could be laundered into the chain later. Asserting the
+        ABSENCE is the whole point — an earlier version of this test
+        only exercised the exclusivity branch and never looked at a
+        sidecar at all (Codex boundary walk, M6).
+        """
+        import enum as _enum
+
+        class _NotAShape(_enum.Enum):
+            BOGUS = "bogus"
+
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp, _Env(tmp) as env:
+            owner.claim_ownership(str(env.db))
+            result = PRODUCTION._record(
+                "system_event",
+                _ORGAN_BYTES,
+                surface=_SURFACE,
+                provenance=_NotAShape.BOGUS,
+                kwargs={"event_origin": _ORGAN},
+            )
+            self.assertEqual(result.state, RecordState.DEAD_LETTERED)
+            self.assertEqual(_rows(env.db), [])
+            sidecars = list(Path(tmp).glob("ledger.db.deadletter.*.jsonl"))
+            self.assertTrue(sidecars, "the provenance refusal was silent")
+            record = json.loads(
+                sidecars[0].read_text(encoding="utf-8").splitlines()[0]
+            )
+        blob = json.dumps(record)
+        self.assertNotIn(
+            "taint_labels", blob,
+            "the dead-letter sidecar carries a taint label for a payload "
+            "whose provenance the seam REFUSED to determine — replay "
+            "preserves kwargs, so this guess could be laundered into "
+            "the chain later",
+        )
+        for label in ("self_generated", "tool_output", "internet_derived"):
+            self.assertNotIn(label, blob, f"{label} guessed into the sidecar")
+
+    @_needs_enabled_writer
+    def test_an_unhashable_provenance_fails_closed_rather_than_raising(self):
+        """``x in dict`` raises TypeError on an unhashable — which would
+        escape the fail-closed belt entirely (Codex walk M4)."""
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp, _Env(tmp) as env:
+            owner.claim_ownership(str(env.db))
+            result = PRODUCTION._record(
+                "system_event",
+                _ORGAN_BYTES,
+                surface=_SURFACE,
+                provenance=["not", "hashable"],
+                kwargs={"event_origin": _ORGAN},
+            )
+            self.assertEqual(result.state, RecordState.DEAD_LETTERED)
+            self.assertEqual(_rows(env.db), [])
+
+    @_needs_enabled_writer
     def test_a_paused_owner_takes_custody_under_the_surface_producer(self):
         with TemporaryDirectory(dir=_PROBE_ROOT) as tmp, _Env(tmp) as env:
             owner.claim_ownership(str(env.db))
@@ -275,6 +343,7 @@ class OwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface=_SURFACE,
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
             )
             envelopes = _pending_envelopes(env.db)
@@ -306,6 +375,7 @@ class OwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface=_SURFACE,
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
                 parent=custody_parent,
             )
@@ -331,6 +401,7 @@ class OwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface=_SURFACE,
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
                 parent=dead_parent,
             )
@@ -357,6 +428,7 @@ class NonOwnerLaneTests(unittest.TestCase):
                 result = record_organ_event(
                     surface="web_owner",
                     event_origin=_ORGAN,
+                    provenance=OrganProvenance.CANNED,
                     raw_text=_ORGAN_BYTES,
                 )
                 envelopes = _pending_envelopes(env.db)
@@ -385,6 +457,7 @@ class NonOwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface="web_owner",
                 event_origin="",
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
             )
             self.assertEqual(result.state, RecordState.DEAD_LETTERED)
@@ -418,6 +491,7 @@ class NonOwnerLaneTests(unittest.TestCase):
                         result = record_organ_event(
                             surface="web_owner",
                             event_origin=_ORGAN,
+                            provenance=OrganProvenance.CANNED,
                             raw_text=_ORGAN_BYTES,
                         )
             finally:
@@ -437,6 +511,7 @@ class NonOwnerLaneTests(unittest.TestCase):
             result = record_organ_event(
                 surface="web_owner",
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
             )
             sidecars = list(Path(tmp).glob("ledger.db.deadletter.*.jsonl"))
@@ -474,6 +549,7 @@ class BrakeRaceTests(unittest.TestCase):
                 result = record_organ_event(
                     surface="web_owner",
                     event_origin=_ORGAN,
+                    provenance=OrganProvenance.CANNED,
                     raw_text=_ORGAN_BYTES,
                 )
             self.assertEqual(result.state, RecordState.DORMANT)
@@ -502,6 +578,7 @@ class DeadLetterEdgeTests(unittest.TestCase):
             result = record_organ_event(
                 surface="web_owner",
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
                 parent=parent,
             )
@@ -556,6 +633,7 @@ class SpoolProducerSweepTests(unittest.TestCase):
             result = record_organ_event(
                 surface="",
                 event_origin=_ORGAN,
+                provenance=OrganProvenance.CANNED,
                 raw_text=_ORGAN_BYTES,
             )
             self.assertEqual(result.state, RecordState.DEAD_LETTERED)
@@ -600,6 +678,7 @@ class IdentityPinTests(unittest.TestCase):
         result = record_organ_event(
             surface=_SURFACE,
             event_origin=_ORGAN,
+            provenance=OrganProvenance.CANNED,
             raw_text=_ORGAN_BYTES,
             recorder=_Sentinel(),
         )
@@ -642,6 +721,7 @@ class RehearsalInjectionTests(unittest.TestCase):
                     r2 = record_organ_event(
                         surface=_SURFACE,
                         event_origin=_ORGAN,
+                        provenance=OrganProvenance.CANNED,
                         raw_text=_ORGAN_BYTES,
                         parent=r1,
                         recorder=lane,

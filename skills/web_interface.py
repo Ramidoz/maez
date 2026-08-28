@@ -6830,11 +6830,15 @@ def chat():
                     "reply ships regardless"
                 )
             try:
-                from core.ledger.recorder import record_organ_event
+                from core.ledger.recorder import (
+                    OrganProvenance,
+                    record_organ_event,
+                )
 
                 record_organ_event(
                     surface="web_owner",
                     event_origin="s4_clinical_boundary",
+                    provenance=OrganProvenance.CANNED,
                     raw_text=_s4_result.answer_text,
                     parent=_a3_owner_turn,
                 )

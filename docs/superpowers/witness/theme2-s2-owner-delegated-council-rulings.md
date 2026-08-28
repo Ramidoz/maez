@@ -2342,3 +2342,72 @@ contract was not changed without the owner.
 a correction and four pins.** The typed search export proceeds at the
 CURRENT placement, binding to produced bytes — all three seats said so
 explicitly.
+
+### Twenty-fourth round — CODEX BOUNDARY WALK of the finished diff: FIX FIRST, folded
+
+Nine findings. **Six confirmed by my own execution and repaired**; one
+**FALSIFIED BY EXECUTION**; one recorded as an arc-wide finding that is
+NOT this slice's to fix; one lint.
+
+**REPAIRED (each re-verified with the walk's own negative control):**
+- *The frozen custody-window pin did not pin what it named.* Executed
+  control: changing the transport argument to
+  `content=text_content.upper()` altered shipped bytes while the frozen
+  tuple stayed identical — a transform can hide in the CALL, which an
+  assignment inventory cannot see. The class now pins TWO shapes, and
+  the control goes red.
+- *Unhashable provenance escaped the fail-closed belt.* `x in dict`
+  raises `TypeError` before any refusal; executed, `provenance=[]`
+  produced an uncaught raise and ZERO dead-letter. Type-check now
+  precedes membership; all three unhashables fail closed.
+- *A lawful EMPTY result set claimed internet provenance.* The backend
+  may return `[]`, and the formatter then emits only its own
+  unconditional header — no titles, no snippets, no URLs. Labelling
+  that `WEB_RESULTS` is the same class of lie in the other direction.
+  Empty results now map to `CANNED`.
+- *Two refusal tests were green without testing their named claims.*
+  One hit the exclusivity branch instead of the unknown-shape branch
+  and never invoked a recorder or looked at a sidecar; it now drives
+  the REAL recorder and asserts the ABSENCE of any taint label in the
+  dead-letter record. The other read ONE file while claiming "ever";
+  it now covers every closure-bearing module and is two-sided against
+  its own list going stale.
+- *The recorder-identity pin became a FALSE POSITIVE.* A `recorder=None`
+  case omitted provenance, so Python raised "missing required
+  provenance" before `_require_recorder` ever ran — the test passed for
+  the wrong reason. Fixed and proven: neutering `_require_recorder` now
+  turns it red.
+- *An unguarded `.text`.* A stale bare-string producer would raise at
+  the call site and cost the owner the reply; it now logs the broken
+  contract and ships the value unrecorded.
+
+**FALSIFIED BY EXECUTION — recorded, because the seat was wrong and the
+method note is still worth keeping.** The walk claimed the
+producer-provenance tests "stay green if WEB/CANNED labels are
+reversed". Executed: a FULL swap goes RED. The specific claim is false.
+The underlying methodological objection was nonetheless right — every
+row test injected an ALREADY-LABELLED `ProducedReply`, so nothing
+exercised the producer's own labelling. A test that drives the REAL
+producer across three branches was added anyway, and the swap now fails
+two tests instead of one.
+
+**NOT THIS SLICE'S TO FIX — named, arc-wide.** The walk is correct that
+the settled order is `guard -> admit user_message -> interceptors ->
+record -> transport`, and that the search interceptor RUNS (including a
+live backend search) before the owner turn is recorded — so a producer
+exception leaves the owner's words unrecorded. But this is the shape of
+ALL THREE landed closures, ruled by the twenty-second round and landed
+in 7efa998 / 0a26392: every one of them records at interception time.
+The search mouth is merely the SHARPEST instance because its producer
+does network I/O. Fixing it means admitting the owner turn before the
+interceptors for every path, which interacts with the ordinary
+admission inside `handle_message` and would double-record. That is a
+turn-shape change for every mouth — a council/owner question, not a
+boundary-walk repair. Recorded beside the two pre-existing ADR 0035
+divergences the previous walk named (turn-seq advance and web salience
+running before their S4 guards).
+
+**Verification limits the walk stated honestly:** it could not execute
+the unit tests (its sandbox has no writable temp), and the diff it read
+was one test behind the worktree. Both noted; every finding above was
+re-executed locally before being accepted or rejected.

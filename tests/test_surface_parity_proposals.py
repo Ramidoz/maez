@@ -59,7 +59,7 @@ class SurfaceProposalTests(unittest.TestCase):
     def test_proposal_interceptor_is_after_cards_before_search_commitment(self):
         cards = _SRC.index("get_open_for_channel")
         proposal = _SRC.index("proposal_reply = await self._try_surface_parity_proposal_intent")
-        search = _SRC.index("search_commitment_reply = await self._try_search_commitment_intent")
+        search = _SRC.index("search_commitment_result = await self._try_search_commitment_intent")
         self.assertLess(cards, proposal)
         self.assertLess(proposal, search)
 
