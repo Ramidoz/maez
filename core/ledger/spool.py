@@ -104,6 +104,13 @@ def _dir_fsync(path: Path) -> None:
 
 
 def _producer_dirs(spool_root: str, producer: str) -> dict[str, Path]:
+    # Blank refusal (twenty-second round, executed): Path(root) / "" IS
+    # root, so an empty producer published envelopes into the spool ROOT
+    # — where drain never looks and spool_status reported
+    # pending_total=0. Custody that health cannot see is a
+    # silent-omission machine wearing a custody costume.
+    if not producer or not producer.strip():
+        raise ValueError(f"invalid producer name {producer!r}")
     if "/" in producer or producer.startswith("."):
         raise ValueError(f"invalid producer name {producer!r}")
     base = Path(spool_root) / producer

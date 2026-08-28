@@ -2888,9 +2888,25 @@ def _ledger_admission_health(daemon) -> dict:
         for counts in (spool.get("producers") or {}).values()
     )
     spool["refused_total"] = refused_total
+    # Recorder seam health (A3 slice 2, twenty-second round): counts by
+    # typed result state, PROCESS-LOCAL by definition — this block sees
+    # only the daemon's own seam calls, and says so via `scope`. A LOST
+    # in a non-owner process is a CRITICAL log line with no disk
+    # artifact and cannot reach this predicate; that residual is NAMED
+    # in the round, not papered over here. DEAD_LETTERED counts are
+    # additionally visible through the dead-letter sidecar arm above,
+    # which DOES cross processes.
+    from core.ledger.recorder import recorder_status
+    recorder = dict(recorder_status())
+    recorder["scope"] = "daemon_process"
+    recorder_loss = bool(
+        (recorder.get("counts") or {}).get("dead_lettered")
+        or (recorder.get("counts") or {}).get("lost")
+    )
     attention = bool(
         dead.get("unresolved_rows")
         or refused_total
+        or recorder_loss
         or (
             not paused
             and spool.get("pending_total")
@@ -2900,6 +2916,7 @@ def _ledger_admission_health(daemon) -> dict:
     return {
         "dead_letter": dead,
         "spool": spool,
+        "recorder": recorder,
         "wal_bytes": wal_bytes,
         "wal_ceiling_bytes": ceiling,
         "wal_excursion": wal_excursion,
