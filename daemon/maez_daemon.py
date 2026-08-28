@@ -11535,7 +11535,10 @@ class MaezDaemon:
 
                     check_and_revert(self.memory, telegram_callback=send_dev)
                 except Exception as e:
-                    logger.debug("Evolution check failed: %s", e)
+                    # WARNING, not DEBUG: this swallowed a dead organ for
+                    # 171 consecutive cycles. An organ that fails every
+                    # cycle must be visible without grepping DEBUG.
+                    logger.warning("Evolution check failed: %s", e)
 
             # Disk cleanup check — every 2 hours, if disk > 75%
             self._mark_cycle_stage("disk_check")

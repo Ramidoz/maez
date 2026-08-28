@@ -356,7 +356,11 @@ class EvolutionTracker:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or f'{MAEZ_ROOT}/memory/evolution_track.db'
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        # self.db_path, NOT the raw parameter: db_path is None whenever a
+        # caller relies on the default (the daemon's check_and_revert
+        # always does), and os.path.dirname(None) raises. This raised on
+        # 171 consecutive cycles, swallowed at DEBUG.
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with self._conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS deployments (

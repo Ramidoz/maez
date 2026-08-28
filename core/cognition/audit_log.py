@@ -673,8 +673,10 @@ class AuditLog:
 
         This is the reader the daemon calls on startup to see what
         the owner did while Maez was offline. Pass `since_ts` = the
-        previous shutdown timestamp to get only the window of events
-        between restarts. Pass `session_id` to scope to a single
+        previous shutdown timestamp, or the perception high-water mark,
+        to get only the window of events after it. The bound is
+        EXCLUSIVE — an event at exactly `since_ts` has already been
+        perceived and is not returned again. Pass `session_id` to scope to a single
         developer-mode session.
 
         Ascending order (oldest first) is intentional: the daemon
@@ -685,7 +687,16 @@ class AuditLog:
         where = ["action IN (?, ?, ?)"]
         args: list[Any] = [DIRECT_EDIT_SESSION_START, DIRECT_EDIT, DIRECT_EDIT_SESSION_END]
         if since_ts is not None:
-            where.append("ts >= ?")
+            # STRICTLY greater. ``since_ts`` is a high-water mark: it
+            # names the newest instant ALREADY perceived, so an event at
+            # exactly that instant is spent. With ``>=`` the newest
+            # event matched its own watermark on every subsequent cycle
+            # — in production one 2026-06-29 edit re-entered the
+            # evidence packet of 171 of 171 reasoning cycles, factually
+            # true and two months stale (tests/test_builder_event_replay.py).
+            # Safe against same-ts loss: ``ts`` is REAL with microsecond
+            # resolution and no two rows in the live store share one.
+            where.append("ts > ?")
             args.append(since_ts)
         if session_id is not None:
             where.append("session_id = ?")

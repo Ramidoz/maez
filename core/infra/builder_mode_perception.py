@@ -339,7 +339,8 @@ def format_recent_builder_events(
 
     Parameters:
         audit_log: an AuditLog instance pointing at memory/audit_log.db
-        since_ts: unix timestamp; only events at or after this ts
+        since_ts: unix timestamp high-water mark; only events STRICTLY
+            after this ts
             are considered for the since-window. Events from an open
             session older than since_ts may still be included via
             the open-session supplement.
