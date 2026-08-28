@@ -618,6 +618,41 @@ async def run_inbound_turn(
         user_id=_resolved_user_id,
     )
     if proposal_reply:
+        # A3 seam closure: the proposal interceptor answers and returns
+        # before the ledger seam, so this exchange recorded nothing.
+        # Provenance checked before encoding (twentieth round: not all
+        # interceptor text is canned) — every proposal producer was read
+        # and none calls a model; the rendered content is Maez's own
+        # stored proposals, so {self_generated} is honest and a
+        # model_reply row would be six false claims. SEPARATE try blocks
+        # per the half-exchange rule; byte-inert while the flag is unset;
+        # the reply ships regardless.
+        _a3_owner_turn = None
+        try:
+            from core.ledger.recorder import record_owner_message
+
+            _a3_owner_turn = record_owner_message(
+                surface=owner_surface_label, raw_text=text
+            )
+        except Exception:
+            logger.exception(
+                "A3 owner record failed on the proposal path; the reply "
+                "ships regardless"
+            )
+        try:
+            from core.ledger.recorder import record_organ_event
+
+            record_organ_event(
+                surface=owner_surface_label,
+                event_origin="proposal_interceptor",
+                raw_text=proposal_reply,
+                parent=_a3_owner_turn,
+            )
+        except Exception:
+            logger.exception(
+                "A3 organ record failed on the proposal path; the reply "
+                "ships regardless"
+            )
         return proposal_reply
 
     search_commitment_reply = await try_search_commitment_intent(
