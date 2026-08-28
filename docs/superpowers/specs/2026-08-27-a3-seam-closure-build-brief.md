@@ -178,3 +178,11 @@ brief above stands EXCEPT:
    carrier — migration + writer contract + chain/dead-letter/replay/
    reader semantics, frozen before any seam closure writes a row. The
    coupling-pin test is carried as a regression anyway.
+6. AMENDED IN BUILD (2026-08-27, Codex boundary walk B6): "the
+   tripwire's frozen inventory moves with every closure" (witness plan
+   above) assumed closures REMOVE or reshape mouths. A closure that
+   only ADDS record calls legitimately leaves the inventory unmoved —
+   `record_*` names match no send shape and add no canned returns. The
+   per-closure obligation is therefore: re-run the tripwire and state
+   in the commit message WHETHER the inventory moved and WHY, with
+   regeneration only when it did.

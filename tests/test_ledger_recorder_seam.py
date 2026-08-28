@@ -130,7 +130,26 @@ class _Env:
 
 
 class ResultTypeTests(unittest.TestCase):
-    """The typed result: five states, no sixth, no skip."""
+    """The typed result: five states, no sixth, no skip — and it cannot
+    state contradictions (Codex boundary walk B3)."""
+
+    def test_the_result_cannot_state_contradictions(self):
+        cases = (
+            dict(state=RecordState.COMMITTED),  # committed without a turn
+            dict(state=RecordState.COMMITTED, turn_id="t",
+                 submission_id="s"),  # two identities
+            dict(state=RecordState.CUSTODY),  # custody without a sid
+            dict(state=RecordState.CUSTODY, submission_id="s",
+                 producer="web_owner", turn_id="t"),  # custody + turn
+            dict(state=RecordState.DEAD_LETTERED),  # no attempt identity
+            dict(state=RecordState.LOST),  # no attempt identity
+            dict(state=RecordState.DORMANT, turn_id="t"),  # dormant + id
+            dict(state="committed", turn_id="t"),  # raw string state
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises((ValueError, TypeError)):
+                    RecordResult(**kwargs)
 
     def test_the_states_are_exactly_five(self):
         self.assertEqual(
@@ -431,6 +450,75 @@ class NonOwnerLaneTests(unittest.TestCase):
         self.assertEqual(record["kwargs"].get("event_origin"), _ORGAN)
 
 
+class BrakeRaceTests(unittest.TestCase):
+    """Codex boundary walk B2: writes-off wins. A flag that flips off
+    between the seam's gate and the custody enqueue must yield DORMANT
+    with zero residue, not a CUSTODY envelope."""
+
+    @_needs_enabled_writer
+    def test_a_mid_call_brake_flip_yields_dormant_not_custody(self):
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp, _Env(tmp) as env:
+            os.environ.pop("MAEZ_LEDGER_OWNER_PID", None)
+
+            # The flip lands DURING routing (after the seam's gate, before
+            # custody) — the exact window the walk's probe exercised. A
+            # flip inside the enqueue syscall itself stays a named race no
+            # pre-call check can win.
+            def _flip_then_false():
+                os.environ.pop("MAEZ_LEDGER_WRITES", None)
+                return False
+
+            with patch.object(
+                owner, "this_process_is_owner", _flip_then_false
+            ):
+                result = record_organ_event(
+                    surface="web_owner",
+                    event_origin=_ORGAN,
+                    raw_text=_ORGAN_BYTES,
+                )
+            self.assertEqual(result.state, RecordState.DORMANT)
+            self.assertEqual(
+                _pending_envelopes(env.db), [],
+                "the brake lost the race: custody residue exists with "
+                "the flag off",
+            )
+
+
+class DeadLetterEdgeTests(unittest.TestCase):
+    """Codex boundary walk B3: a failed custody enqueue must not drop
+    the parent edge — the dead-letter record carries it top-level
+    (never inside kwargs, which must stay writer-legal for replay)."""
+
+    @_needs_enabled_writer
+    def test_failed_custody_preserves_the_parent_submission_edge(self):
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp, _Env(tmp) as env:
+            os.environ.pop("MAEZ_LEDGER_OWNER_PID", None)
+            Path(spool.default_spool_root(str(env.db))).write_text("x")
+            parent = RecordResult(
+                state=RecordState.CUSTODY,
+                submission_id="sid-parent",
+                producer="web_owner",
+            )
+            result = record_organ_event(
+                surface="web_owner",
+                event_origin=_ORGAN,
+                raw_text=_ORGAN_BYTES,
+                parent=parent,
+            )
+            sidecars = list(Path(tmp).glob("ledger.db.deadletter.*.jsonl"))
+            self.assertTrue(sidecars)
+            record = json.loads(
+                sidecars[0].read_text(encoding="utf-8").splitlines()[0]
+            )
+        self.assertEqual(result.state, RecordState.DEAD_LETTERED)
+        self.assertEqual(record.get("parent_submission_id"), "sid-parent")
+        self.assertNotIn(
+            "parent_submission_id", record["kwargs"],
+            "the edge leaked into replay kwargs, which the writer would "
+            "refuse at drain",
+        )
+
+
 class SpoolProducerSweepTests(unittest.TestCase):
     """The empty-producer class, swept upstream (twenty-second round):
     enqueue(producer='') published into the spool ROOT where drain
@@ -502,7 +590,7 @@ class IdentityPinTests(unittest.TestCase):
         calls = []
 
         class _Sentinel:
-            def record(self, turn_kind, raw_text, **kwargs):
+            def _record(self, turn_kind, raw_text, **kwargs):
                 calls.append((turn_kind, raw_text))
                 return RecordResult(
                     state=RecordState.COMMITTED, turn_id="sentinel-turn"

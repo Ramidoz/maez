@@ -290,6 +290,33 @@ class WebChatS4ClosureTests(unittest.TestCase):
             )
 
 
+class HalfExchangeTests(unittest.TestCase):
+    """Codex boundary walk B4: a failing owner record must never
+    withhold the organ record (ruled by name, twenty-second round)."""
+
+    @_needs_enabled_writer
+    def test_an_owner_record_crash_does_not_skip_the_organ_record(self):
+        from core.ledger import recorder as recorder_mod
+
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp:
+            with mock.patch.object(
+                recorder_mod,
+                "record_owner_message",
+                side_effect=RuntimeError("seam bug"),
+            ):
+                harness = InboundCoreS4ClosureTests()
+                answer, db = harness._run_crisis_turn(tmp, writes_on=True)
+            rows = _rows(db)
+        self.assertTrue(answer, "the crisis reply must ship")
+        organ_rows = [r for r in rows if r["turn_kind"] == "system_event"]
+        self.assertEqual(
+            len(organ_rows), 1,
+            "the organ record was withheld because the owner record "
+            "crashed — record what you have, thread what you can",
+        )
+        self.assertIsNone(organ_rows[0]["parent_turn_id"])
+
+
 class RehearsalWitnessOfTheRealSeamTests(unittest.TestCase):
     """THE MANDATED WITNESS (eighteenth round; nineteenth round
     constraints 1+2): the REAL production path — closure code, seam,
@@ -318,41 +345,36 @@ class RehearsalWitnessOfTheRealSeamTests(unittest.TestCase):
             sidecar = root / "x6_a3_s4_witness" / "ledger.db"
             sidecar.parent.mkdir(parents=True)
             migrate.run(str(sidecar))
-            # The production ledger path points at a scratch db that
-            # must stay untouched — the witness proves the rehearsal
-            # lane, not a stealth production write.
-            production_db = Path(tmp) / "production.db"
-            migrate.run(str(production_db))
-            production_bytes = production_db.read_bytes()
 
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "MAEZ_LEDGER_DB_PATH": str(production_db),
-                    "MAEZ_LEDGER_WRITES": "1",
-                    "MAEZ_PRIVATE_THOUGHTS_PATH": str(Path(tmp) / "pt.db"),
-                    "MAEZ_DATA": str(Path(tmp) / "data"),
-                },
-            ):
+            # The rehearsal writer reads the flag AT CONSTRUCTION —
+            # womb-life practise arms it for the lane's own birth here;
+            # the harness re-arms it for the closure run itself.
+            with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
                 lane = recorder_mod.RehearsalRecorder(
                     str(sidecar), rehearsal_root=root
                 )
-                seam_fns = (
-                    recorder_mod.record_owner_message,
-                    recorder_mod.record_organ_event,
-                )
-                saved = [fn.__kwdefaults__["recorder"] for fn in seam_fns]
+            seam_fns = (
+                recorder_mod.record_owner_message,
+                recorder_mod.record_organ_event,
+            )
+            # The swap lives INSIDE the try so a failure mid-swap cannot
+            # leak an injected default past this test (Codex walk B5).
+            saved = [fn.__kwdefaults__["recorder"] for fn in seam_fns]
+            try:
                 for fn in seam_fns:
                     fn.__kwdefaults__["recorder"] = lane
-                try:
-                    harness = InboundCoreS4ClosureTests()
-                    answer, _ = harness._run_crisis_turn(
-                        tmp, writes_on=True
-                    )
-                finally:
-                    for fn, orig in zip(seam_fns, saved):
-                        fn.__kwdefaults__["recorder"] = orig
-                    lane.close()
+                harness = InboundCoreS4ClosureTests()
+                # The harness itself creates and env-names tmp/ledger.db
+                # as the production-path target — THAT is the db the
+                # no-stealth-write assertion must watch (the walk's B5:
+                # the first cut watched an unused file).
+                answer, production_db = harness._run_crisis_turn(
+                    tmp, writes_on=True
+                )
+            finally:
+                for fn, orig in zip(seam_fns, saved, strict=True):
+                    fn.__kwdefaults__["recorder"] = orig
+                lane.close()
 
             self.assertTrue(answer, "the crisis reply must ship")
             con = sqlite3.connect(f"file:{sidecar}?mode=ro", uri=True)
@@ -368,8 +390,15 @@ class RehearsalWitnessOfTheRealSeamTests(unittest.TestCase):
             finally:
                 con.close()
             self.assertEqual(
-                production_db.read_bytes(), production_bytes,
-                "the witness leaked a byte into the production-path db",
+                _rows(production_db), [],
+                "the witness leaked rows into the env-named "
+                "production-path db — the rehearsal injection did not "
+                "hold",
+            )
+            self.assertEqual(
+                _pending(production_db), [],
+                "the witness leaked spool custody beside the env-named "
+                "production-path db",
             )
         self.assertEqual(
             [r["turn_kind"] for r in rows],

@@ -31,9 +31,12 @@ custody. The seam returns :class:`RecordResult` instead:
   DEAD_LETTERED(attempt_id,    the write failed or was refused; the
                 category)      FULL payload is in the dead-letter
                                sidecar under ``attempt_id``.
-  LOST(attempt_id)             even the dead-letter append failed;
-                               named at CRITICAL. The one outcome with
-                               no disk artifact, BY DEFINITION — a
+  LOST(attempt_id)             even the dead-letter append failed to
+                               COMPLETE durably; named at CRITICAL.
+                               Partial bytes may exist (an append can
+                               land and its directory fsync still
+                               fail — Codex walk B3); nothing durably
+                               DISCOVERABLE is guaranteed, so a
                                non-owner process's LOST cannot reach
                                the daemon cockpit and that residual is
                                named in the round, not papered over.
@@ -102,7 +105,14 @@ class RecordState(enum.Enum):
 
 @dataclass(frozen=True)
 class RecordResult:
-    """The identity-bearing outcome of one recording attempt."""
+    """The identity-bearing outcome of one recording attempt.
+
+    Structurally unable to state contradictions (Codex boundary walk,
+    2026-08-27): each state requires exactly the identity it earns and
+    refuses the identities it did not — a COMMITTED without a turn, a
+    CUSTODY claiming a turn, a LOST with no attempt identity are all
+    construction errors, because parent routing TRUSTS these fields.
+    """
 
     state: RecordState
     turn_id: str | None = None
@@ -110,6 +120,50 @@ class RecordResult:
     producer: str | None = None
     attempt_id: str | None = None
     category: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, RecordState):
+            raise TypeError(
+                f"state must be a RecordState, got {self.state!r}"
+            )
+        required, allowed = _RESULT_SHAPE[self.state]
+        fields = {
+            "turn_id": self.turn_id,
+            "submission_id": self.submission_id,
+            "producer": self.producer,
+            "attempt_id": self.attempt_id,
+            "category": self.category,
+        }
+        for name in required:
+            if fields[name] is None:
+                raise ValueError(
+                    f"{self.state.name} requires {name} — a result "
+                    "claiming an outcome without its identity is a lie "
+                    "parent routing would trust"
+                )
+        for name, value in fields.items():
+            if value is not None and name not in allowed:
+                raise ValueError(
+                    f"{self.state.name} must not carry {name} — a "
+                    "contradictory identity is a lie parent routing "
+                    "would trust"
+                )
+
+
+#: Per-state identity contract: (required, allowed).
+_RESULT_SHAPE: dict[RecordState, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    RecordState.DORMANT: ((), ()),
+    RecordState.COMMITTED: (("turn_id",), ("turn_id",)),
+    RecordState.CUSTODY: (
+        ("submission_id", "producer"),
+        ("submission_id", "producer"),
+    ),
+    RecordState.DEAD_LETTERED: (
+        ("attempt_id", "category"),
+        ("attempt_id", "category"),
+    ),
+    RecordState.LOST: (("attempt_id",), ("attempt_id",)),
+}
 
 
 def _canonical_db_path() -> str:
@@ -155,7 +209,7 @@ class ProductionRecorder:
 
     # ----------------------------------------------------------- record
 
-    def record(
+    def _record(
         self,
         turn_kind: str,
         raw_text: str | None,
@@ -259,6 +313,15 @@ class ProductionRecorder:
                     "identity; recording unparented (record-without-join)",
                     parent_turn_id,
                 )
+        # Writes-off WINS (Codex walk B2): re-check the brake at the last
+        # instant before residue. A flip DURING the enqueue syscall itself
+        # remains a named race — one check per side of the call is the
+        # honest boundary; the seam adds no locks over a process-global
+        # env flag.
+        from core.ledger.writes_flag import ledger_writes_enabled
+
+        if not ledger_writes_enabled():
+            return RecordResult(state=RecordState.DORMANT)
         try:
             sid = _spool.enqueue(
                 _spool.default_spool_root(db_path),
@@ -270,7 +333,8 @@ class ProductionRecorder:
             )
         except Exception as e:  # noqa: BLE001 — classified, never silent
             return self._dead_letter(
-                db_path, turn_kind, raw_text, write_kwargs, attempt_id, e
+                db_path, turn_kind, raw_text, write_kwargs, attempt_id, e,
+                parent_submission_id=parent_submission_id,
             )
         return RecordResult(
             state=RecordState.CUSTODY,
@@ -321,6 +385,8 @@ class ProductionRecorder:
         kwargs: dict,
         attempt_id: str,
         error: BaseException,
+        *,
+        parent_submission_id: str | None = None,
     ) -> RecordResult:
         from core.ledger.writer import _REFUSAL_ERRORS, _dead_letter
 
@@ -329,6 +395,7 @@ class ProductionRecorder:
             path = _dead_letter(
                 db_path, turn_kind, raw_text, kwargs, error,
                 "recorder", attempt_id,
+                parent_submission_id=parent_submission_id,
             )
             _LOGGER.error(
                 "recorder %s (kind=%r): %s — payload dead-lettered to %s",
@@ -370,7 +437,7 @@ class RehearsalRecorder:
             db_path, rehearsal_mode=True, rehearsal_root=rehearsal_root
         )
 
-    def record(
+    def _record(
         self,
         turn_kind: str,
         raw_text: str | None,
@@ -432,7 +499,7 @@ def record_owner_message(
     kwargs: dict = {}
     if raw_surface is not None:
         kwargs["raw_surface"] = raw_surface
-    return recorder.record(
+    return recorder._record(
         "user_message",
         raw_text,
         surface=surface,
@@ -478,7 +545,7 @@ def record_organ_event(
         kwargs["audit_verdict"] = audit_verdict
     if evidence_envelope is not None:
         kwargs["evidence_envelope"] = evidence_envelope
-    return recorder.record(
+    return recorder._record(
         "system_event",
         raw_text,
         surface=surface,

@@ -946,6 +946,8 @@ def _dead_letter(
     error: BaseException,
     stage: str,
     attempt_id: str | None = None,
+    *,
+    parent_submission_id: str | None = None,
 ) -> str:
     """Append the full failed payload to the dead-letter sidecar, fsynced.
 
@@ -986,6 +988,11 @@ def _dead_letter(
         "kwargs": _json_safe(kwargs),
         "error": repr(error),
     }
+    # A failed CUSTODY enqueue must not drop its parent edge (Codex walk
+    # B3). Top-level, never inside kwargs: replay reconstruction feeds
+    # kwargs to the writer, which would refuse the unknown key at drain.
+    if parent_submission_id is not None:
+        record["parent_submission_id"] = parent_submission_id
     line = (
         json.dumps(
             record, sort_keys=True, separators=(",", ":"), ensure_ascii=True

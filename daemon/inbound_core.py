@@ -344,15 +344,24 @@ async def run_inbound_turn(
         # nothing — this branch returns before handle_message's
         # user_message admission. Byte-inert while MAEZ_LEDGER_WRITES is
         # unset; the reply ships regardless of what recording does.
+        # SEPARATE try blocks (twenty-second round, half-exchange rule):
+        # a crashing owner record must never withhold the organ record —
+        # record what you have, thread what you can.
+        _a3_owner_turn = None
         try:
-            from core.ledger.recorder import (
-                record_organ_event,
-                record_owner_message,
-            )
+            from core.ledger.recorder import record_owner_message
 
             _a3_owner_turn = record_owner_message(
                 surface=owner_surface_label, raw_text=text
             )
+        except Exception:
+            logger.exception(
+                "A3 owner record failed on the S4 path; the crisis reply "
+                "ships regardless"
+            )
+        try:
+            from core.ledger.recorder import record_organ_event
+
             record_organ_event(
                 surface=owner_surface_label,
                 event_origin="s4_clinical_boundary",
@@ -361,8 +370,8 @@ async def run_inbound_turn(
             )
         except Exception:
             logger.exception(
-                "A3 record failed on the S4 path; the crisis reply ships "
-                "regardless"
+                "A3 organ record failed on the S4 path; the crisis reply "
+                "ships regardless"
             )
         return _s4_result.answer_text
 

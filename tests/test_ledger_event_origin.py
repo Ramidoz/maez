@@ -58,7 +58,7 @@ from unittest.mock import patch
 from core.infra.sqlite_runtime import has_wal_reset_fix
 from core.ledger import chain, migrate, spool
 from core.ledger.taint_stamping import CALLER_ALLOWED_TAINT_LABEL_SETS
-from core.ledger.writer import LedgerWriter, dead_letter_glob, try_write_turn
+from core.ledger.writer import LedgerWriter, try_write_turn
 
 _needs_enabled_writer = unittest.skipUnless(
     has_wal_reset_fix(),
@@ -118,8 +118,7 @@ class MigrationEventOriginTests(unittest.TestCase):
             finally:
                 con.close()
         self.assertIn("event_origin", info)
-        name, col_type, notnull, dflt = (
-            info["event_origin"][1],
+        col_type, notnull, dflt = (
             info["event_origin"][2],
             info["event_origin"][3],
             info["event_origin"][4],

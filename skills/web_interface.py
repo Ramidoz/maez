@@ -6815,15 +6815,23 @@ def chat():
             # endpoint itself is currently PARKED (410) by
             # _LEGACY_PARKED_API_ENDPOINTS — this closure is for the day
             # the reversible parking is reversed.
+            # SEPARATE try blocks (half-exchange rule): a crashing owner
+            # record must never withhold the organ record.
+            _a3_owner_turn = None
             try:
-                from core.ledger.recorder import (
-                    record_organ_event,
-                    record_owner_message,
-                )
+                from core.ledger.recorder import record_owner_message
 
                 _a3_owner_turn = record_owner_message(
                     surface="web_owner", raw_text=message
                 )
+            except Exception:
+                logger.exception(
+                    "A3 owner record failed on the web S4 path; the crisis "
+                    "reply ships regardless"
+                )
+            try:
+                from core.ledger.recorder import record_organ_event
+
                 record_organ_event(
                     surface="web_owner",
                     event_origin="s4_clinical_boundary",
@@ -6832,8 +6840,8 @@ def chat():
                 )
             except Exception:
                 logger.exception(
-                    "A3 record failed on the web S4 path; the crisis reply "
-                    "ships regardless"
+                    "A3 organ record failed on the web S4 path; the crisis "
+                    "reply ships regardless"
                 )
             return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
