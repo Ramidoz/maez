@@ -290,5 +290,115 @@ class WebChatS4ClosureTests(unittest.TestCase):
             )
 
 
+class RehearsalWitnessOfTheRealSeamTests(unittest.TestCase):
+    """THE MANDATED WITNESS (eighteenth round; nineteenth round
+    constraints 1+2): the REAL production path — closure code, seam,
+    writer — rehearsed end-to-end BEFORE birth.
+
+    Both row shapes, REAL surface labels (x6_rehearsal structurally
+    forbids owner_utterance so the rows carry the live v2 label),
+    sidecar db under the rehearsal root, flag armed IN-PROCESS only
+    (womb-life practise, not birth), production ledger never opened.
+
+    Injection mechanics, stated: the closures call the seam's public
+    functions with the identity-pinned production DEFAULT, and Python
+    binds defaults at def time — so the witness swaps
+    ``__kwdefaults__`` in-process and restores it, which is exactly
+    the injection surface the twenty-second round pinned (an explicit
+    recorder object; try_write_turn itself still refuses rehearsal —
+    constraint 1 stays pinned by tests/test_a3_rehearsal_lane_witness).
+    """
+
+    @_needs_enabled_writer
+    def test_the_live_s4_closure_rehearses_both_shapes_end_to_end(self):
+        from core.ledger import recorder as recorder_mod
+
+        with TemporaryDirectory(dir=_PROBE_ROOT) as tmp:
+            root = Path(tmp) / "logs" / "rehearsal"
+            sidecar = root / "x6_a3_s4_witness" / "ledger.db"
+            sidecar.parent.mkdir(parents=True)
+            migrate.run(str(sidecar))
+            # The production ledger path points at a scratch db that
+            # must stay untouched — the witness proves the rehearsal
+            # lane, not a stealth production write.
+            production_db = Path(tmp) / "production.db"
+            migrate.run(str(production_db))
+            production_bytes = production_db.read_bytes()
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_LEDGER_DB_PATH": str(production_db),
+                    "MAEZ_LEDGER_WRITES": "1",
+                    "MAEZ_PRIVATE_THOUGHTS_PATH": str(Path(tmp) / "pt.db"),
+                    "MAEZ_DATA": str(Path(tmp) / "data"),
+                },
+            ):
+                lane = recorder_mod.RehearsalRecorder(
+                    str(sidecar), rehearsal_root=root
+                )
+                seam_fns = (
+                    recorder_mod.record_owner_message,
+                    recorder_mod.record_organ_event,
+                )
+                saved = [fn.__kwdefaults__["recorder"] for fn in seam_fns]
+                for fn in seam_fns:
+                    fn.__kwdefaults__["recorder"] = lane
+                try:
+                    harness = InboundCoreS4ClosureTests()
+                    answer, _ = harness._run_crisis_turn(
+                        tmp, writes_on=True
+                    )
+                finally:
+                    for fn, orig in zip(seam_fns, saved):
+                        fn.__kwdefaults__["recorder"] = orig
+                    lane.close()
+
+            self.assertTrue(answer, "the crisis reply must ship")
+            con = sqlite3.connect(f"file:{sidecar}?mode=ro", uri=True)
+            try:
+                con.row_factory = sqlite3.Row
+                rows = [
+                    dict(r)
+                    for r in con.execute(
+                        "SELECT * FROM turns WHERE lifecycle_stage="
+                        "'rehearsal' ORDER BY chain_position"
+                    )
+                ]
+            finally:
+                con.close()
+            self.assertEqual(
+                production_db.read_bytes(), production_bytes,
+                "the witness leaked a byte into the production-path db",
+            )
+        self.assertEqual(
+            [r["turn_kind"] for r in rows],
+            ["user_message", "system_event"],
+            "both ruled shapes rehearse through the REAL closure",
+        )
+        owner_row, organ_row = rows
+        self.assertEqual(owner_row["raw_text"], _CRISIS_TEXT)
+        self.assertEqual(
+            owner_row["surface"], "telegram_surface",
+            "rehearsal rows carry the REAL surface label "
+            "(constraint 2: x6_rehearsal forbids owner_utterance)",
+        )
+        self.assertEqual(organ_row["raw_text"], answer)
+        self.assertEqual(organ_row["event_origin"], _S4_ORIGIN)
+        self.assertEqual(organ_row["parent_turn_id"], owner_row["turn_id"])
+
+    def test_the_default_recorder_is_restored_after_the_witness(self):
+        from core.ledger import recorder as recorder_mod
+
+        self.assertIs(
+            recorder_mod.record_owner_message.__kwdefaults__["recorder"],
+            recorder_mod.PRODUCTION,
+        )
+        self.assertIs(
+            recorder_mod.record_organ_event.__kwdefaults__["recorder"],
+            recorder_mod.PRODUCTION,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
