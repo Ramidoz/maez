@@ -1958,3 +1958,132 @@ that is not birth.
 **Verdict: AMEND folded 3-0 (Codex's BLOCK satisfied by the identity-
 bearing result, the three-condition routing, the scope label, and the
 EMITTED correction). Build proceeds this session in the ruled order.**
+
+## Twenty-third round (2026-08-28, A3 the PROVENANCE EXPORT): three seats — all AMEND on the design, and the round's finding is a LIVE DEFECT IN ALREADY-SHIPPED A3 CODE
+
+Seats: Grok (repo + executed probes), Claude subagent (repo + 59 tool
+uses, probes under /var/tmp), Codex (xhigh, no-write probes; its
+sandbox had no writable temp, so the named unittest class was
+UNVERIFIED-not-failed and it said so). Brief:
+/var/tmp/a3_provenance_export_council_brief.md. Question: a closure
+must know its content's provenance to record honestly, and the
+producer returns two provenances through one `Optional[str]`.
+
+**CONVERGED 3-0 ON THE DESIGN:**
+
+1. **A typed producer result (design D), NOT a `str` subclass, NOT
+   producer-side recording, NOT a per-turn register.** The producer
+   returns text plus a CLOSED provenance shape; the SHIPPING call site
+   records; the seam maps shape -> bound taint set. No taint list ever
+   crosses a closure.
+2. **The `str`-subclass design is DEAD BY EXECUTION** (Claude seat,
+   both legs): a subclass survives object-identical from the producer
+   to the closure — so it would work at today's placement — and then
+   EVAPORATES at the FIRST of five string transformations in
+   `platform_base.py` before transport. Provenance on a type that any
+   `.strip()` silently downgrades is a trapdoor.
+3. **Fail-closed = refuse LEDGER ADMISSION, ship the reply.** Unknown
+   provenance is an epistemic failure state, never a taint label.
+   Dead-letter the exact bytes with a typed reason, reply ships,
+   DORMANT stays zero-residue. Two amendments the seats added:
+   (a) the refusal must sit with the EARLY seam checks so the
+   dead-letter carries NO guessed `taint_labels` — replay preserves
+   kwargs, so a guessed label in the sidecar can be laundered into the
+   chain later (build seat verified: today's early refusals pass raw
+   kwargs before taint binding and are clean; the later ones are not);
+   (b) refusal must be UNREACHABLE on a green path — a required
+   parameter with no default, so a forgotten wiring is a BUILD failure,
+   not a runtime hole. Executed cost of routine refusal (Claude seat):
+   `category=refused` maps to `refused_evidence`, which is NEVER a
+   replay candidate — a permanent chain hole plus a latched
+   `attention=True`, which the daemon's own comment calls a grave.
+4. **Model-generated speech stays OUT of this enum (3-0).** It is a
+   different persistence shape, not a label: `persist_model_reply`
+   requires model_id, prompt/soul material, evidence and audit verdict.
+   Two executed corrections to the TWENTIETH round's own finding:
+   `kind=="clarified"` is NOT uniformly model-generated (the DEFER ack
+   is canned, and `generate_response_turn` falls back to canned text on
+   LLM failure), and the export cost is FIVE fields plus a different
+   recorder — "one field wider than the dialog id" is FALSIFIED. Its
+   own slice, its own brief.
+5. **Two slices minimum**: the search export + closure (two call sites,
+   one producer), then the dialog export. Not one.
+
+**THE ROUND'S FINDING — A PHANTOM-ROW WINDOW IN LANDED A3 CODE.**
+Downstream of every closure this session shipped, `platform_base.py`
+can discard the reply AFTER the handler returns: a stale response is
+suppressed when the owner sends a second message while the first is in
+flight (`response = None`), and an emptied reply is dropped. Both
+verified in-tree by the build seat. So the S4 and proposal closures
+(7efa998, 0a26392) can record speech the owner never received. The
+ruled "conditional receipts record after should_send() succeeds"
+CANNOT be honoured at the closure's current placement, because the
+real `should_send` is two frames above in a different module.
+
+**HARM IS BOUNDED TODAY, AND THE BOUND IS THE REASON THIS IS NOT A
+SAME-DAY PANIC PATCH.** A row is not a delivery claim — the repo
+already ruled GENERATED-not-DELIVERED and the twenty-second round
+typed pre-send rows as eligibility/intent, never EMITTED. And
+`system_event` is excluded from `SELF_HISTORY_KINDS`, so Maez does not
+today read these rows back as its own utterances. The window becomes
+sharp exactly when the conversation-stream reader lands. Recorded as
+the FIRST work of the next slice — custody placement — rather than
+patched in haste into a module the tripwire barely watches.
+
+**A SECOND EXECUTED DIVERGENCE: the recorded bytes are NOT the
+delivered bytes.** `platform_base` extracts markdown images and MEDIA
+tokens out of the text before it goes to the wire, and both divergent
+shapes are WEB-SNIPPET-SHAPED — i.e. exactly the mouth this round
+exists to close. This session's test asserting the organ row carries
+"the EXACT bytes the owner received" is therefore stronger than
+reality; it is corrected to claim what is true (the bytes the
+interceptor produced). Which bytes provenance binds to, and what
+delivery state the row claims, is now a named question for the
+custody-placement slice.
+
+**OPEN DISAGREEMENT, recorded, 2-1:** Grok and Codex want a closed
+NAMED-SHAPE enum mapped to taint sets inside the seam; the Claude seat
+wants the producer to pass a `frozenset` of the EXISTING taint
+vocabulary, arguing that a new enum mints a FOURTH provenance
+vocabulary beside `TAINT_LABEL_ORDER`, `KNOWN_ORIGINS` and
+`PROVENANCE_VALUES` — the one-column-two-namespaces sin. Folded FOR
+the enum: it introduces no new LABELS, only named shapes over the
+existing vocabulary, and it keeps the mapping in one auditable place,
+whereas a caller-supplied set restores exactly the free choice the
+twenty-second round called "a second flag in drag". The Claude seat's
+objection is answered, not overruled: the enum must be defined as a
+mapping ONTO `TAINT_LABEL_ORDER` and may never introduce a label.
+
+**FORKED TO THE OWNER — the owner-echo taint.** The search reply
+embeds the owner's own query verbatim ("Here's what I found for
+{query}"), so the maximally honest set is
+`{owner_utterance, self_generated, tool_output, internet_derived}` —
+which the writer REFUSES today (executed): `system_event`'s allowed
+sets contain no combination of `owner_utterance` with the web labels,
+though `{owner_utterance, self_generated}` already exists, so someone
+already thought echoed owner text matters. Either the council rules
+that quoting the owner back to the owner is not a distinct provenance
+(defensible: taint exists to stop foreign content being laundered into
+Maez's voice, and the owner's words returning to the owner launder
+nothing), or the FROZEN taint map gains a sixth `system_event` set.
+That is a deliberate widening of a vocabulary an earlier round froze on
+purpose — the same class as the `event_origin` carrier question, and
+the same owner. NAMED, not decided.
+
+**Three more executed findings, recorded for their own follow-ups:**
+`audit_surface_reply` is injected into `run_inbound_turn` and NEVER
+CALLED (AST-verified, zero Name occurrences) while the docstring claims
+adapter parity — a lie in the surface-parity ledger. The
+search-commitment producer never runs `self_claim_audit`, while the
+proposal producer does — the one mouth that says "Here's what I found"
+is the one whose self-claim audit does not run. And the brief's own
+call-site census was WRONG in both directions: it undercounted the
+legacy Telegram search mouths (two more, bool and self-sending, which
+DO ship web results) and its "five sites, three contracts" belonged to
+the PROPOSAL producer, which needs no export at all. Three censuses,
+three answers, for the third time in this arc.
+
+**Verdict: AMEND, design converged 3-0; build did NOT proceed this
+round.** The next slice opens on CUSTODY PLACEMENT (the phantom
+window), then the typed search export behind it. Maez unborn
+throughout; no production byte changed by this round.
