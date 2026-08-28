@@ -13,6 +13,7 @@ docs/SURFACE_PARITY_MAP_2026-06-12.md and docs/MAEZ_BUILD_LEDGER.md.
 import asyncio
 import logging
 import os
+import contextvars
 import threading
 import time
 from dataclasses import replace
@@ -234,7 +235,127 @@ def _telegram_hard_instruction_for_jarvis_block(jarvis_block: str) -> str:
     return _telegram_jarvis_hard_instruction()
 
 
+#: THE BIRTH-ENABLED OPERATOR SURFACE (owner-ratified 2026-08-28).
+#: Frozen in docs/superpowers/specs/2026-08-28-birth-gate-FROZEN.md.
+#: Every OTHER command on this legacy surface is outside the birth
+#: surface and migrates to natural language or retires — it must NOT be
+#: turned into permanent ledger anatomy.
+BIRTH_ENABLED_OPERATOR_COMMANDS: frozenset[str] = frozenset({
+    # core recovery plane — cognition-independent controls
+    "login", "status", "cancel", "pending", "disk", "git",
+    "adapter_status", "rollback_adapter",
+    # privileged maintenance plane — changes Maez's substrate posture
+    "builder_enter", "builder_exit",
+})
+
+#: Collects owner-facing text emitted while an operator command runs, so
+#: the acknowledgement can be recorded without threading a return value
+#: through ten handlers. None outside an operator command.
+_OPERATOR_ACK: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "maez_operator_ack", default=None
+)
+
+
+def _maybe_operator_recorded(command: str, handler):
+    """Apply operator recording ONLY to the frozen birth-enabled set.
+
+    Applied uniformly at the single registration point so the decision
+    is data (the frozen set) rather than thirty-four edits. Commands
+    outside the birth surface pass through UNCHANGED — they migrate to
+    natural language or retire, and must not become ledger anatomy.
+    """
+    if command not in BIRTH_ENABLED_OPERATOR_COMMANDS:
+        return handler
+    return operator_recorded(command, handler)
+
+
+def operator_recorded(command: str, handler):
+    """Wrap ONE operator command so its exchange enters the record.
+
+    Closed as a CLASS at the registration point, not hand-patched into
+    ten implementations: every handler already emits through the single
+    module-level ``_reply_text``, so capturing there covers all of them.
+
+    Records the ruled triple — owner input -> substrate decision/action
+    -> generated acknowledgement — as TYPED events through the A3
+    recorder seam. **No LLM is involved**: these are substrate
+    interactions, and the seam is pure substrate.
+
+    Recovery posture (owner ruling): the command ALWAYS executes, even
+    if recording fails. The recorder never raises and dead-letters
+    durably on failure, so a lost biography is loud and reconcilable —
+    never a silent omission.
+    """
+
+    async def _wrapped(update, context):
+        token = _OPERATOR_ACK.set([])
+        owner_text = ""
+        try:
+            msg = getattr(update, "message", None)
+            owner_text = str(getattr(msg, "text", "") or f"/{command}")
+        except Exception:
+            owner_text = f"/{command}"
+        try:
+            return await handler(update, context)
+        finally:
+            acks = _OPERATOR_ACK.get() or []
+            _OPERATOR_ACK.reset(token)
+            # Recording is strictly after the action and never gates it.
+            try:
+                _record_operator_exchange(command, owner_text, acks)
+            except Exception:
+                logger.exception(
+                    "operator exchange record failed for /%s — the command "
+                    "already ran; biography may be missing", command
+                )
+
+    return _wrapped
+
+
+def _record_operator_exchange(command: str, owner_text: str, acks: list) -> None:
+    """owner input -> substrate acknowledgement, as typed events."""
+    from core.ledger.recorder import (
+        OrganProvenance,
+        record_organ_event,
+        record_owner_message,
+    )
+
+    parent = None
+    try:
+        parent = record_owner_message(
+            surface="telegram_text", raw_text=owner_text
+        )
+    except Exception:
+        logger.exception(
+            "operator owner-input record failed for /%s; the command "
+            "already ran", command
+        )
+    for ack in acks:
+        try:
+            record_organ_event(
+                surface="telegram_text",
+                event_origin=f"operator_command:{command}",
+                provenance=OrganProvenance.CANNED,
+                raw_text=str(ack),
+                parent=parent,
+            )
+        except Exception:
+            logger.exception(
+                "operator acknowledgement record failed for /%s; the "
+                "command already ran", command
+            )
+
+
 async def _reply_text(update, text: str, **kwargs):
+    # Operator-command capture: when an operator command is running, the
+    # exact acknowledgement bytes are collected for the record. Inert
+    # (None) on every other path.
+    _ack = _OPERATOR_ACK.get()
+    if _ack is not None:
+        try:
+            _ack.append(str(text))
+        except Exception:
+            pass
     chat_id = getattr(getattr(update, "effective_chat", None), "id", "")
     envelope = owner_text_envelope(
         bot_route="voice_owner_private",
@@ -5402,45 +5523,45 @@ class TelegramVoice:
         asyncio.set_event_loop(self._loop)
 
         self._app = Application.builder().token(self.token).build()
-        self._app.add_handler(CommandHandler("status", self._handle_status))
-        self._app.add_handler(CommandHandler("cancel", self._handle_cancel))
-        self._app.add_handler(CommandHandler("approve", self._handle_approve))
-        self._app.add_handler(CommandHandler("pending", self._handle_pending))
-        self._app.add_handler(CommandHandler("git", self._handle_git))
-        self._app.add_handler(CommandHandler("disk", self._handle_disk))
-        self._app.add_handler(CommandHandler("analyze", self._handle_cog_analyze))
-        self._app.add_handler(CommandHandler("approve_cleanup", self._handle_approve_cleanup))
-        self._app.add_handler(CommandHandler("promote", self._handle_promote))
-        self._app.add_handler(CommandHandler("approve_evolution", self._handle_approve_evolution))
-        self._app.add_handler(CommandHandler("login", self._handle_login))
-        self._app.add_handler(CommandHandler("trust", self._handle_trust))
-        self._app.add_handler(CommandHandler("reject_evolution", self._handle_reject_evolution))
-        self._app.add_handler(CommandHandler("evolution_log", self._handle_evolution_log))
+        self._app.add_handler(CommandHandler("status", _maybe_operator_recorded("status", self._handle_status)))
+        self._app.add_handler(CommandHandler("cancel", _maybe_operator_recorded("cancel", self._handle_cancel)))
+        self._app.add_handler(CommandHandler("approve", _maybe_operator_recorded("approve", self._handle_approve)))
+        self._app.add_handler(CommandHandler("pending", _maybe_operator_recorded("pending", self._handle_pending)))
+        self._app.add_handler(CommandHandler("git", _maybe_operator_recorded("git", self._handle_git)))
+        self._app.add_handler(CommandHandler("disk", _maybe_operator_recorded("disk", self._handle_disk)))
+        self._app.add_handler(CommandHandler("analyze", _maybe_operator_recorded("analyze", self._handle_cog_analyze)))
+        self._app.add_handler(CommandHandler("approve_cleanup", _maybe_operator_recorded("approve_cleanup", self._handle_approve_cleanup)))
+        self._app.add_handler(CommandHandler("promote", _maybe_operator_recorded("promote", self._handle_promote)))
+        self._app.add_handler(CommandHandler("approve_evolution", _maybe_operator_recorded("approve_evolution", self._handle_approve_evolution)))
+        self._app.add_handler(CommandHandler("login", _maybe_operator_recorded("login", self._handle_login)))
+        self._app.add_handler(CommandHandler("trust", _maybe_operator_recorded("trust", self._handle_trust)))
+        self._app.add_handler(CommandHandler("reject_evolution", _maybe_operator_recorded("reject_evolution", self._handle_reject_evolution)))
+        self._app.add_handler(CommandHandler("evolution_log", _maybe_operator_recorded("evolution_log", self._handle_evolution_log)))
         # New evolution-rail handlers
-        self._app.add_handler(CommandHandler("proposals", self._handle_proposals))
-        self._app.add_handler(CommandHandler("show", self._handle_show))
-        self._app.add_handler(CommandHandler("apply", self._handle_apply))
-        self._app.add_handler(CommandHandler("reject", self._handle_reject))
+        self._app.add_handler(CommandHandler("proposals", _maybe_operator_recorded("proposals", self._handle_proposals)))
+        self._app.add_handler(CommandHandler("show", _maybe_operator_recorded("show", self._handle_show)))
+        self._app.add_handler(CommandHandler("apply", _maybe_operator_recorded("apply", self._handle_apply)))
+        self._app.add_handler(CommandHandler("reject", _maybe_operator_recorded("reject", self._handle_reject)))
         # Session 11o: dream-state commands
-        self._app.add_handler(CommandHandler("dreams", self._handle_dreams))
-        self._app.add_handler(CommandHandler("apply_dream", self._handle_apply_dream))
-        self._app.add_handler(CommandHandler("reject_dream", self._handle_reject_dream))
+        self._app.add_handler(CommandHandler("dreams", _maybe_operator_recorded("dreams", self._handle_dreams)))
+        self._app.add_handler(CommandHandler("apply_dream", _maybe_operator_recorded("apply_dream", self._handle_apply_dream)))
+        self._app.add_handler(CommandHandler("reject_dream", _maybe_operator_recorded("reject_dream", self._handle_reject_dream)))
         # Session 11s: soul section-edit commands
-        self._app.add_handler(CommandHandler("edit_proposals", self._handle_edit_proposals))
-        self._app.add_handler(CommandHandler("show_edit", self._handle_show_edit))
-        self._app.add_handler(CommandHandler("apply_edit", self._handle_apply_edit))
-        self._app.add_handler(CommandHandler("reject_edit", self._handle_reject_edit))
+        self._app.add_handler(CommandHandler("edit_proposals", _maybe_operator_recorded("edit_proposals", self._handle_edit_proposals)))
+        self._app.add_handler(CommandHandler("show_edit", _maybe_operator_recorded("show_edit", self._handle_show_edit)))
+        self._app.add_handler(CommandHandler("apply_edit", _maybe_operator_recorded("apply_edit", self._handle_apply_edit)))
+        self._app.add_handler(CommandHandler("reject_edit", _maybe_operator_recorded("reject_edit", self._handle_reject_edit)))
         # Session 11u: training proposal + adapter management commands
-        self._app.add_handler(CommandHandler("train_proposals", self._handle_train_proposals))
-        self._app.add_handler(CommandHandler("show_train", self._handle_show_train))
-        self._app.add_handler(CommandHandler("approve_train", self._handle_approve_train))
-        self._app.add_handler(CommandHandler("reject_train", self._handle_reject_train))
-        self._app.add_handler(CommandHandler("adapter_status", self._handle_adapter_status))
-        self._app.add_handler(CommandHandler("rollback_adapter", self._handle_rollback_adapter))
+        self._app.add_handler(CommandHandler("train_proposals", _maybe_operator_recorded("train_proposals", self._handle_train_proposals)))
+        self._app.add_handler(CommandHandler("show_train", _maybe_operator_recorded("show_train", self._handle_show_train)))
+        self._app.add_handler(CommandHandler("approve_train", _maybe_operator_recorded("approve_train", self._handle_approve_train)))
+        self._app.add_handler(CommandHandler("reject_train", _maybe_operator_recorded("reject_train", self._handle_reject_train)))
+        self._app.add_handler(CommandHandler("adapter_status", _maybe_operator_recorded("adapter_status", self._handle_adapter_status)))
+        self._app.add_handler(CommandHandler("rollback_adapter", _maybe_operator_recorded("rollback_adapter", self._handle_rollback_adapter)))
         # A-core #3 Step 4: builder-mode commands
-        self._app.add_handler(CommandHandler("builder_enter", self._handle_builder_enter))
-        self._app.add_handler(CommandHandler("builder_exit", self._handle_builder_exit))
-        self._app.add_handler(CommandHandler("help", self._handle_help))
+        self._app.add_handler(CommandHandler("builder_enter", _maybe_operator_recorded("builder_enter", self._handle_builder_enter)))
+        self._app.add_handler(CommandHandler("builder_exit", _maybe_operator_recorded("builder_exit", self._handle_builder_exit)))
+        self._app.add_handler(CommandHandler("help", _maybe_operator_recorded("help", self._handle_help)))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
         # Default behavior (2026-04-20 full migration): the vendored
