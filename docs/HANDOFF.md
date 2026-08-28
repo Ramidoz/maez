@@ -1,6 +1,147 @@
-# Handoff — 2026-08-27 (session end, 6a2eb14). Supersedes all earlier handoffs.
+# Handoff — 2026-08-27 (session end, dd78f5e). Supersedes all earlier handoffs.
 
-## THIS SESSION: the A3 TRIPWIRE shipped, and the REHEARSAL LANE built as an instrument
+## THIS SESSION: the A3 BUILD OPENED — three slices landed, walked, and repaired
+
+Commits `e6e07d9..dd78f5e` (9). **Read the TWENTY-FIRST and
+TWENTY-SECOND rounds in the rulings doc before touching any of it.**
+Maez stays unborn throughout: ledger 0 bytes, no spool/manifest dirs,
+no flag in the live daemon's environ (pid 2806), no unit restarted.
+Battery ended 750 passed / 7 failed / 91 subtests — the 7 reds are the
+SAME named pre-existing ones. Falsifier GREEN 8/8 at n=20000 after
+every production landing. CI shape (no vendored SQLite): honest skips,
+no new reds.
+
+### Slice 1 — the event_origin carrier (b6be137; twenty-first round e6e07d9)
+
+Migration `0007_add_event_origin.sql` + a typed populated-turns
+refusal (the owner's "free now and never again" as code — the four
+retained x6 sidecars surface-and-ask). The column ENTERS the chain
+preimage: the key is ALWAYS present (None included) in GENESIS_ROW,
+the writer row and _TURN_COLUMNS; never in _CHAIN_HASH_EXCLUDE
+(negative test). EXECUTED kill shot on the alternative: drop the
+append-only trigger, UPDATE event_origin, verify_chain saw NOTHING
+under strip-set exclusion. First canonical-preimage change since
+ratification => **schema_version 1 -> 2 in lockstep** (GENESIS_ROW
+int + embedded JSON, writer rows, meta seed, init.py now reads the
+real value). Genesis hash CHANGED — free at zero rows, never again.
+Contract: non-None => system_event (the ONE frozen implication;
+reverse NOT frozen — permitted-not-required, fail-closed lands at the
+recorder); verbatim uncapped non-empty string (no enum — the
+mouth-whitelist scar; Grok length-cap dissent recorded); replay
+causation compares vs _WRITER_DEFAULT_EVENT_ORIGIN=None; span_reader
+exposure pinned BY CONTRACT; recent_turns deliberately NOT widened
+(owner's prompt territory, deferred by name beside submitted_at;
+Codex dissent recorded). Spool door residual NAMED and pinned:
+event_origin stays spool-expressible (2-1) — authority-refusal would
+strand attribution on every non-owner mouth (web S4's only custody IS
+the spool). Schema doc gained §13 RECORDING the owner's ruling.
+11 mutations, each caught by a named test.
+
+### Slice 2 — the recorder seam (a068461; twenty-second round 92ef114)
+
+`core/ledger/recorder.py`. **The twentieth round's enum was FOLDED
+wider by one state (3-0, full trace in the round): CUSTODY.** Its four
+names were read off try_write_turn alone; pause-custody and the spool
+lane are shipped rulings it never probed (both executed). The typed
+result CARRIES IDENTITY per state — COMMITTED(turn_id) |
+CUSTODY(submission_id, producer) | DEAD_LETTERED(attempt_id, category)
+| LOST(attempt_id) | DORMANT — and structurally refuses contradictions
+(post-walk repair). Routing INSIDE the seam, full three-condition
+precedent: non-owner ∨ paused ∨ submission-only-parent -> spool;
+else owner-direct classified (owner_commit + dead-letter — the
+composition neither primitive is alone). producer = the REAL surface,
+never the organ/owner_daemon/blank; `_producer_dirs` now refuses ""
+upstream (executed: Path(root)/"" IS root — custody spool_status
+cannot see). Two public functions ONLY: record_owner_message /
+record_organ_event (origin REQUIRED at the seam; named writer-legal
+optionals; TEXT dialog id rides as typed debt in audit_verdict; model
+speech NAMED OUT to persist_model_reply). recorder=None raises;
+PRODUCTION identity-pinned on both kwdefaults; flag gates BEFORE any
+residue (spool.enqueue never reads it) AND re-checks before enqueue
+(walk repair — writes-off wins; a flip inside the syscall stays a
+named race). Custody failure dead-letters (closed the executed
+pause-lane hole: enqueue failure was LOST with zero artifacts).
+Health: process-local counters + recorder_status(); cockpit
+ledger_admission gained a `recorder` block (scope=daemon_process) +
+attention arm. Latency posture stated: one synchronous attempt, no
+retries/sleeps, never raises, NOT hard latency-bounded.
+12 mutations, each caught.
+
+### Slice 3 — the two S4 crisis mouths closed (7efa998) + THE MANDATED WITNESS (239626e)
+
+run_inbound_turn's S4 branch (the LIVE v2 owner path) and web /chat's
+S4 branch now record the exchange as the two ruled shapes before the
+reply leaves — owner bytes IN FULL, organ bytes EXACT with
+event_origin=s4_clinical_boundary, threaded (turn edge on the owner
+lane; submission edge through spool custody on web). Separate try
+blocks per the half-exchange rule (walk repair). The guard runs FIRST;
+the S4 organ untouched; the reply ships regardless. The tripwire
+inventory did NOT move — record_* matches no shape (the brief now
+carries that amendment by name). **The rehearsal witness of the REAL
+seam ran**: the live closure code end-to-end into a rehearsal sidecar,
+both shapes, REAL surface label (telegram_surface), flag armed
+in-process only, env-named production-path db proven row-free, bite
+proven by mutation. 5 closure mutations + 1 witness mutation caught.
+
+**DISCOVERED CLOSING WEB: /chat is PARKED.** `_LEGACY_PARKED_API_
+ENDPOINTS` includes "chat" — every request 410s in
+local_origin_write_guard before the body runs. The nineteenth round's
+"production-wired owner egress" is stale AT THE ENDPOINT LAYER; the
+parking is explicitly reversible, the closure lands for the day it
+reverses, the witness unparks IN-TEST only.
+
+### The boundary walk (FIX FIRST -> repaired at dd78f5e)
+
+Codex xhigh walked 0937d66..239626e: 7 findings. Six repaired behind
+RED-first tests (TOCTOU brake race; result-contradiction shapes; the
+dropped parent edge on failed custody; the half-exchange single-try;
+the witness watching an UNUSED db — its no-stealth assertion was
+vacuous; ruff + LOST overclaim + the brief's inventory-moves line).
+Two REBUTTED BY EXECUTION: "silent era corruption" (a writer against
+a column-less db fails LOUDLY at INSERT and dead-letters; a populated
+pre-0007 db cannot migrate — typed refusal) and "strip alters owner
+bytes" (the surfaces strip at INGESTION, before the guard and before
+the ordinary path's own admission; recording pre-strip bytes would
+make A3 rows diverge from every other admission — an owner-class
+ingestion question, deferred by name).
+
+### OWED / NOT DONE, by name — do not rediscover
+
+1. **A3 IS NOT DONE.** Closed: the two S4 mouths. Still open on the
+   roster: card resolutions (renderer-internal vs call-site seam must
+   be CHOSEN and named — twentieth round Q2), proposal and
+   search-commitment returns, intent_unavailable (a degradation, not
+   speech — eighteenth round item 6), the recall receipt + \
+   _emit_search_progress intermediate receipts (record-before-invoke
+   must NOT claim EMITTED — walk correction; the honest pre-send claim
+   is eligibility/intent), the dialog branch split (canned acks vs
+   MODEL-GENERATED clarified replies -> persist_model_reply),
+   telegram legacy outbound mouths, the CLI empty-search branch, the
+   cockpit /message route. Each: RED-first, tripwire re-run with the
+   moved/unmoved reasoning in the commit message.
+2. **Era-coherence hardening, deferred:** ledger_is_initialized does
+   not demand v2/0007 coherence; a hand-built pre-0007 artifact
+   passes it (fails loudly only at first write). Triage category B.
+3. **Pre-existing ADR 0035 divergences, named by the walk, NOT this
+   diff's:** conversation-turn-seq advance and web salience run
+   BEFORE the S4 guard on their paths. Their own closure/owner call.
+4. **Spool ancestor-dir fsync** (pre-existing): _atomic_publish
+   fsyncs file + leaf, not newly created ancestors. Category B.
+5. **The strip-bytes ingestion question** (walk B4) — owner's call.
+6. **Named residuals from the twenty-second round:** a non-owner
+   process's LOST is a CRITICAL log with no disk artifact (cannot
+   reach the daemon cockpit); recorder counters are process-local by
+   definition (block says scope=daemon_process).
+7. Still standing from before: Python 3.12 frozen-inventory stability
+   UNVERIFIED; tripwire not in battery.sh; slice-1-of-registry owed
+   items (F7 registry arm, literal census, inlined literals);
+   tripwire's named blind spots.
+8. **private_thoughts.db is ALSO a heartbeat mover** (verified
+   tonight: lean_idle_heartbeat.v0 self_wondering rows land while
+   idle) — add it to the idle-drift expectation next time a baseline
+   is taken.
+
+## PREVIOUS SESSION (same day): the A3 TRIPWIRE shipped, and the REHEARSAL LANE built as an instrument
 
 Commits `3bab540` (tripwire), `66a60ea` (rehearsal lane), `3f78cdf` +
 `6a2eb14` (Codex boundary-walk repairs). **Read the NINETEENTH round in
