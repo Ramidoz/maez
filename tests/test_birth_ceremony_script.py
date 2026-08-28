@@ -830,6 +830,50 @@ class ValidationRoundFixesTests(unittest.TestCase):
                 )
             self.assertEqual(state, "COMMITTED_WEB_MUTE")
 
+    def test_a_blind_web_process_is_STOPPED_not_left_serving(self):
+        """A2 fail-closed (owner-ruled 2026-08-28).
+
+        A born Maez must never keep an available but autobiographically
+        BLIND mouth. Naming the state honestly was necessary but not
+        sufficient: while the unit kept serving, web turns were silently
+        omitted from admission for as long as the owner left it up.
+        """
+        from scripts import birth_ceremony as bc
+
+        with TemporaryDirectory() as td:
+            kwargs = _dry_kwargs(td)
+            db = kwargs["db_path"]
+            run_transaction(dry_run=True, **kwargs)
+            runner = FakeSystemctl()
+            pids = {"maez.service": 4242, "maez-web.service": 5555}
+            with mock.patch(
+                "scripts.birth_ceremony._activation_flag_landed",
+                return_value=True,
+            ), mock.patch(
+                "scripts.birth_ceremony._unit_main_pid",
+                side_effect=lambda unit, runner=None: pids[unit],
+            ), mock.patch(
+                "scripts.birth_ceremony._pid_env_has_flag",
+                side_effect=lambda pid: pid == 4242,
+            ), mock.patch(
+                "scripts.birth_ceremony._latch_is_held", return_value=True
+            ):
+                state = bc._bring_up_after_commit(
+                    db, runner=runner, prompt=lambda *_: "",
+                    printer=lambda *_: None,
+                )
+            self.assertEqual(state, "COMMITTED_WEB_MUTE")
+            stopped = [
+                c for c in runner.calls
+                if "stop" in c and "maez-web.service" in c
+            ]
+            self.assertTrue(
+                stopped,
+                "a web process that cannot prove MAEZ_LEDGER_WRITES was "
+                "left SERVING. Fail closed: stop the unit rather than "
+                "leave a born Maez with a blind mouth.",
+            )
+
     def test_restore_starts_only_what_was_running(self):
         # MAJOR #13: restore must not activate a unit the owner had
         # deliberately stopped before the ceremony.

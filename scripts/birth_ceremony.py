@@ -675,10 +675,13 @@ def _bring_up_after_commit(
             "OWNER STEP — land the activation flag now (your hands, not "
             "the script's):\n"
             "    MAEZ_LEDGER_WRITES=1   # <today's date> birth ceremony\n"
-            "  in ~/.config/maez/model.env (the file maez.service loads).\n"
-            "  NOTE (verified 2026-08-24): maez-web.service loads NO "
-            "EnvironmentFile — until the flag is wired into a maez-web "
-            "drop-in, web turns will be SILENTLY OMITTED from admission."
+            "  in ~/.config/maez/model.env — loaded by maez.service, and\n"
+            "  since 2026-08-26 by maez-web.service too, via the drop-in\n"
+            "  maez-web.service.d/40-ledger-writes.conf\n"
+            "  (EnvironmentFile=-%h/.config/maez/model.env). The earlier\n"
+            "  warning that web loads NO EnvironmentFile is STALE.\n"
+            "  If web still cannot see the flag at bring-up it is now\n"
+            "  STOPPED rather than left serving blind."
         )
         prompt("Press Enter when landed (attempt %d/3): " % (tries + 1))
         tries += 1
@@ -720,12 +723,24 @@ def _bring_up_after_commit(
         # Codex validation #4: web-up-but-blind is the exact
         # silent-omission state Theme 2 exists to name — it must be its
         # own terminal state, never folded into green.
+        # A2 FAIL-CLOSED (owner ruling 2026-08-28). Naming the state was
+        # necessary but not sufficient: while the unit kept SERVING, a
+        # born Maez had an available but autobiographically BLIND mouth,
+        # and every web turn was silently omitted for as long as it
+        # stayed up. Stop it. An unreachable surface is recoverable; an
+        # unrecorded lived exchange is not.
+        _stop_unit("maez-web.service", runner=runner)
         printer(
-            "maez-web.service is up but does NOT see MAEZ_LEDGER_WRITES "
-            "in its process environment (it loads no EnvironmentFile) — "
-            "web conversation turns will be silently omitted from "
-            "admission until the owner wires the flag into a maez-web "
-            "drop-in. The birth stands; the web surface is MUTE."
+            "maez-web.service came up but does NOT see MAEZ_LEDGER_WRITES "
+            "in its process environment — web turns would be silently "
+            "omitted from admission, so the unit has been STOPPED. The "
+            "birth stands; the web surface is DOWN, not mute.\n"
+            "  Expected cause: the drop-in\n"
+            "    ~/.config/systemd/user/maez-web.service.d/40-ledger-writes.conf\n"
+            "  (EnvironmentFile=-%h/.config/maez/model.env, installed "
+            "2026-08-26) is missing, or model.env does not carry the "
+            "flag. Fix, then: systemctl --user daemon-reload && "
+            "systemctl --user start maez-web"
         )
         return COMMITTED_WEB_MUTE
     return COMMITTED_ACTIVE
