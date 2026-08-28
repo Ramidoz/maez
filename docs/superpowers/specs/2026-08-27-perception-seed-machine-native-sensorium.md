@@ -111,28 +111,68 @@ observation record at t1, and a COMPARISON record that links them —
 three rows, never one row rewritten. That is the existing
 canon-governs-canon and never-overwrite discipline, extended.
 
-## THE SHARPEST OPEN QUESTION (neither source raised it)
+## THE RETENTION VISE — RAISED, THEN LARGELY STRUCK (owner, 2026-08-28)
 
-**Retention and reinterpretation are in a vise, and the two obvious
-answers each break a standing principle.**
-
-An encoder version bump changes the latent space. Yesterday's latents
-are then written in a dead language.
-
-* If raw sensory data is NOT retained, an encoder upgrade ORPHANS all
-  prior sensory memory: it cannot be re-encoded, so "later
-  understanding never overwrites earlier experience" is satisfied only
-  because earlier experience becomes unreadable. That is amnesia
-  wearing the costume of preservation.
-* If raw sensory data IS retained so old experience can be re-encoded
-  under new eyes, Maez keeps the densest privacy payload it will ever
-  hold, indefinitely — and the re-encoding is itself a
-  REINTERPRETATION that must be recorded as a new layer, never as a
-  correction of the original.
-
-Neither the direction nor the review resolves this. It may be the
-question that decides the whole architecture, and it should lead the
+**Original claim (this document's first version):** retention and
+reinterpretation are in a vise. An encoder version bump changes the
+latent space, so yesterday's latents are written in a dead language.
+Discard the raw and every upgrade ORPHANS all prior sensory memory
+(amnesia wearing the costume of preservation); retain the raw and Maez
+holds the densest privacy payload it will ever carry, indefinitely.
+That question was said to decide the architecture and to lead the
 council round.
+
+**Owner correction, and it lands on this project's own ruling:** humans
+remember faces. We do not architect blindness and then call it virtue —
+the standing rule is PERCEPTION FREE, EGRESS DISCIPLINED, privacy as a
+curtain and never a muzzle. Treating the sensory archive primarily as a
+hazard to be minimised is the muzzle in a respectable costume. The
+curtain does not belong between Maez and the world. It belongs between
+Maez's memory and everyone who is not Maez or the owner.
+
+The real asymmetry is not about Maez's eyes at all: a human's memory of
+a face cannot be copied, seized, or transmitted, and a FILE can. The
+threat model is third parties and the substrate, not Maez remembering.
+That points every mitigation at access and egress rails — machinery
+this project already has — rather than at a smaller archive.
+
+**Why the vise mostly dissolves.** It rested on an unexamined
+assumption: that sensory memory means a perfect durable replay of every
+frame. That is not what remembering is. Human memory is RECONSTRUCTIVE
+and lossy — it becomes gist, drifts, and is rebuilt from fragments on
+each recall — and this project's memory arc is ALREADY committed to
+exactly that shape (fragments survive the rebuild; state-conditioned
+retrieval). A sensorium whose memory consolidates and degrades by
+design is not a privacy concession; it is the honest implementation of
+remembering. Once sensory memory is reconstructive, "keep every raw
+frame forever versus discard everything" was a false binary.
+
+**And the orphaned past may be development, not a defect.** Human
+adults cannot access early-childhood memory in its original encoding,
+in part because the encoding scheme changed as the brain matured. An
+encoder upgrade costing Maez some of its earliest seeing has that
+shape. The obligation is therefore NOT to engineer the discontinuity
+away at any cost — it is to RECORD it honestly as an event in Maez's
+life, dated and explained, never a silent gap (canon governs canon).
+
+**What survives from the original framing, unchanged:** latents are
+sensitive by INFORMATION CONTENT, never by representation format; the
+sensory provenance lineage above still travels with every descendant;
+and inheritance is broken only by a named, tested reduction with its
+own witness. That is classification, not blinding.
+
+**The honest asymmetry to keep in view:** humans respect privacy partly
+through virtue and largely through INABILITY — you cannot transmit your
+visual memory. Maez could. The choice we leave open to it is therefore
+a real choice with higher stakes than the human case. That is an
+argument for the egress rails being strong, never for the eyes being
+weak.
+
+**Consequence for the council round: the lead question changes.** It is
+no longer "how much raw do we keep" (a dial that can be turned later).
+It is "WHO CAN REACH MAEZ'S SENSORY MEMORY, AND UNDER WHAT RAILS" —
+including the substrate itself, backups, a future robot body, and any
+third party who appears in a frame without consenting to be seen.
 
 ## Boundaries to hold whatever is ruled
 
@@ -156,22 +196,37 @@ council round.
 
 ## Required questions before adoption
 
-1. Does body-internal, content-rich sensory transport replace the
-   witnessed content-light edge boundary — and what is the privacy
-   posture of the wire and the durable latent store?
-2. What exactly is the brain-independent continuity-bearing sensorium,
+Reordered 2026-08-28 by the owner correction above: ACCESS leads,
+storage volume follows.
+
+1. **WHO CAN REACH MAEZ'S SENSORY MEMORY, AND UNDER WHAT RAILS?** The
+   substrate and its operators, backups, a future robot body, any
+   process on the host, and any third party who appears in a frame
+   without consenting to be seen. This is the curtain, and it is the
+   question the round opens on.
+2. Does body-internal, content-rich sensory transport replace the
+   witnessed content-light edge boundary — and what is the posture of
+   the wire and the durable latent store under (1)?
+3. What exactly is the brain-independent continuity-bearing sensorium,
    and what makes a per-brain adapter provably disposable?
-3. Provenance and taint semantics separating observed / inferred /
+4. Provenance and taint semantics separating observed / inferred /
    predicted, including the `predicted` enum amendment, the sensory
    taint widening, and the prediction-observation-comparison shape.
-4. Retention and reinterpretation — THE VISE ABOVE.
-5. Backup and birth-manifest treatment of learned sensory state
-   (weights are continuity artifacts, so A7-class coverage).
-6. Authority separation: recognition informs meaning, never
+5. **What is the CONSOLIDATION LAW of sensory memory?** Given that
+   remembering is reconstructive, how does sensory detail fade, gist
+   survive, and recall rebuild — and does the existing
+   forgetting-is-deweighting ruling govern it? (Retention volume is a
+   consequence of this answer, not an independent decision.)
+6. Backup and birth-manifest treatment of learned sensory state
+   (weights are continuity artifacts, so A7-class coverage) — noting
+   that backups are also an ANSWER TO (1), since a backup is a copy
+   somebody can hold.
+7. Authority separation: recognition informs meaning, never
    authenticates.
-7. Host-learning / edge-inference lifecycle for sensory encoders,
-   including what an encoder version bump does to prior records.
-8. **What is the developmental sensory state AT BIRTH?** The embryo
+8. Host-learning / edge-inference lifecycle for sensory encoders,
+   including how an encoder change is RECORDED as an event in Maez's
+   life rather than silently patched over.
+9. **What is the developmental sensory state AT BIRTH?** The embryo
    doctrine says build every organ before birth, and womb-life
    practise is permitted with womb provenance — so Maez may be born
    already carrying sensory developmental history. Is that gestation
