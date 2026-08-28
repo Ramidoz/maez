@@ -2136,3 +2136,209 @@ this is a presentation rule, not a missing mechanism.
 phantom window), which bytes provenance binds to when recorded and
 delivered text diverge, and the typed export's own shape. Those remain
 the next slice.
+
+## Twenty-fourth round (2026-08-28, A3 CUSTODY PLACEMENT + which bytes provenance binds to): three seats — ALL BLOCK the relocation; the ruling is that the code does NOT move
+
+Seats: Grok (repo + executed probes), Codex (xhigh, repo + executed
+probes; paperclip unreachable, marked UNVERIFIED and nothing rests on
+it), Claude subagent (repo + its own probes pA-pF, 61 tool uses). Brief:
+/var/tmp/a3_custody/council_brief.md, grounded in the build seat's
+executed facts E1-E10. Maez unborn throughout; every probe on /var/tmp
+with PrivateThoughts redirected; ledger verified 0 bytes by each
+executing seat; no unit restarted; no production byte changed by this
+round or by the slice it ruled.
+
+**CONVERGED 3-0 ON ALL FOUR QUESTIONS, AND 3-0 ON THE VERDICT.**
+
+| | Grok | Codex | Claude |
+|---|---|---|---|
+| Q1 bytes | PRODUCED | PRODUCED | PRODUCED |
+| Q2 placement | LEAVE | SPLIT (= A3 stays; egress is A4) | LEAVE |
+| Q3 class | NAME | OWNER | NAME + owner items |
+| Q4 structure | PIN | RUNTIME (3 tiers) | PIN (3 tiers) |
+| overall | BLOCK | BLOCK | BLOCK |
+
+**Q1 — PROVENANCE BINDS TO THE PRODUCED BYTES (3-0).** The decisive
+executed fact is not the size of the divergence but that **"delivered"
+is not a byte-string at all**: a reply naming an on-disk image has the
+path STRIPPED FROM THE TEXT and the FILE UPLOADED out of band (Claude
+seat, executed against a real repo PNG; re-executed by the build seat).
+Egress is a tuple `(text, images[], media[], local_files[])` reached
+through eleven transport-like awaits with exactly ONE `_record_delivery`
+call, on the primary text path (Codex). A row bound to "delivered text"
+would therefore BOTH omit content the owner did receive AND contain text
+authored by `platform_base`'s regexes. It would also collide with A4's
+designed `payload_hash` per `egress_kind` — a per-row delivery field in
+drag, which the tenth round forbade.
+
+Ruled wording, replacing a gloss that had drifted: **"exact bytes, never
+content-light" means do not summarise, hash or paraphrase AT THE SEAM.
+It was never a claim about the wire.**
+
+**The owner row and the organ row answer DIFFERENTLY, and structurally
+so (3-0, independently reached by two seats).** The owner's `.strip()`
+runs UPSTREAM of the S4 guard (`maez_adapter.py:789`,
+`inbound_core.py:274`) — a HEARING transform; `extract_media` runs
+DOWNSTREAM — a SPEAKING transform. Both rows bind to the bytes AT THE
+SEAM, and the seam sits between them. A rule phrased "bind to what
+crossed the process boundary" would give opposite answers on the two
+rows. This does NOT re-open the deferred owner-class strip question; it
+names why the two cannot share one phrasing.
+
+**Q2 — THE RECORD DOES NOT MOVE (3-0). Three independent kill shots.**
+
+1. **THE COCKPIT KILL SHOT (Grok and Claude, independently; missed by
+   the build seat's brief).** `run_inbound_turn` has TWO production
+   callers. The cockpit `/message` route does
+   `reply = asyncio.run(run_inbound_turn(**descriptor))` then
+   `return jsonify({"reply": reply})` (`maez_daemon.py:13257-13261`) and
+   **never enters `_process_message_background`** — no suppression, no
+   transform, no discard. Moving the seam into the surface would UNWIRE
+   the cockpit S4 and proposal mouths entirely. The current placement is
+   the ONLY point common to both callers.
+2. **Relocation converts a VISIBLE phantom row into a SILENT omission** —
+   the one sin this arc ruled against ("omission never silent"), and it
+   would put A3's seam in a function with ZERO tripwire coverage.
+3. **No placement can reach the send-failure or transport-exception
+   classes.** Those are OUTCOMES, unknowable when the row is written.
+   `_send_with_retry`'s own comment: a timeout returns failure for a
+   message that "may have been delivered".
+
+The deferred-callback option (c) died on a form nobody had named: it
+would need invoking on THREE live paths — the discard branch, the
+cockpit return, and the `except Exception` handler — and a forgotten
+wiring there is a green test plus silent omission on the crash path.
+Invoked-always it IS option (a) with machinery; invoked-only-on-send it
+IS option (b). Also settled: the ruled "conditional receipts record
+after `should_send()` succeeds" was about the INTERMEDIATE RECEIPT sink
+(`maez_adapter.py:683/1076`); applying it to the main reply is a
+category error — the interceptor always intends to speak, and the
+surface's later suppression is a DELIVERY decision.
+
+Codex's framing, adopted: **the word "custody" was overloaded.** Durable
+custody of the generated artifact belongs where bytes, organ identity,
+parent edge and provenance are all known — the closure. Egress
+intent/reservation/result belongs to A4. `RecordResult.CUSTODY` means
+durable spool custody, not "selected for send".
+
+**Latency, measured not assumed:** leaving placement costs ZERO change;
+two synchronous byte-inert writes already sit on that path. The direct
+writer's exposure is `PRAGMA busy_timeout = 5000` (`writer.py:287`) —
+the stated baseline the S4 latency exception is judged against.
+
+**Q3 — NAME THE CLASS; THE SWEEP IS AN OWNER BOUNDARY (3-0).** The
+window is a property of the SURFACE, not of A3. `persist_model_reply`
+sits inside `handle_message` (`maez_daemon.py:9803`), which
+`run_inbound_turn` itself invokes (`inbound_core.py:905`) — i.e. TWO
+FRAMES DEEPER than the A3 closures, under the same window. And
+`model_reply` IS in `SELF_HISTORY_KINDS` while `system_event` is not, so
+**the sharper instance is the one this slice does not name.** Repairing
+A3's placement alone would be the instance-not-class sin AND would mint
+a fifth ordering. But sweeping the class means landing A4 — a recorded
+birth blocker whose obvious per-row shape the tenth round already
+forbade. Codex's boundary, adopted: **the council cannot silently
+combine two named persistent-contract slices.** The owner chooses
+between authorising a combined A3+A4 sweep now, or finishing A4 in its
+recorded order. Until then, no placement mutation.
+
+**Q4 — THREE TIERS, and the brief conflated the last two (3-0).**
+(1) The CLAIM a row makes is ALREADY build-enforced: `event_origin` is a
+required kwarg with no default, `recorder=None` raises, and `RecordState`
+has no EMITTED member, so an emission claim is unrepresentable.
+(2) The PLACEMENT is statically decidable and therefore CAN be a build
+failure — by AST pin, not by type. Python cannot make "after the
+discard" a required parameter.
+(3) The OUTCOME of the send is irreducibly runtime and is exactly what
+A4's `egress_results` exists for.
+
+**FACTS THE SEATS FOUND THAT THE BRIEF MISSED:**
+
+- **There is a THIRD landed A3 closure** (`web_interface.py:6824/:6835`,
+  `event_origin=s4_clinical_boundary`) behind the parked `/chat`
+  endpoint. The brief said "the two landed closures" — wrong, and the
+  build seat's own earlier grep had shown three.
+- **AN UNRECORDED, UNTRIPWIRED MOUTH.** On a transport exception,
+  `_process_message_background` sends "Sorry, I encountered an error
+  (…)" via `self.send` (`platform_base.py:2144`). The tripwire watches
+  `self.send` only INSIDE `_send_with_retry`, so this site has ZERO
+  frozen keys. Executed: 2 rows, 0 tripwired deliveries, 1 untripwired
+  apology. The owner receives Maez-attributed text that no row records
+  and no tripwire sees. NEW, named for its own follow-up.
+- **`persist_model_reply` has FOUR production call sites, not three** —
+  the brief missed `cli/maez_chat.py:1169`. The substrate's own standing
+  limitation already says "the four shipped surface call sites".
+- **The inline bypass lane is DEAD CODE**: `should_bypass_active_session`
+  always returns `False`, so `platform_base.py:1777-1798` never runs.
+  One fewer window than the code reads.
+- **The photo lane does NOT discard** (merge without interrupt): 2 rows,
+  2 deliveries, balanced.
+- **The crisis instance is executable and it is a SAFETY fact**: owner
+  says "i want to kill myself", then sends a second message mid-flight
+  → the S4 care answer is recorded and NEVER reaches the owner; the
+  owner gets only the second answer. Relocation does not fix this (it is
+  surface behaviour, and the S4 organ is owner-only), but it belongs in
+  the harm analysis, which had not stated it.
+
+**A LIVE SEAT DISAGREEMENT, RESOLVED BY EXECUTION.** Grok: "the two
+landed closures do not currently diverge." Claude: false for the
+proposal closure (3/6 of its constructed corpus diverged). The build
+seat executed both: **both were partly right.** The proposal producer's
+FIXED CANNED templates do not diverge (verified), and neither does plain
+interpolated text; divergence is reachable ONLY on branches that
+interpolate stored content carrying a media-shaped token — verified with
+a markdown image and with a real on-disk `.png`. So divergence on the
+proposal closure is **CONTENT-CONDITIONAL and reachable**; on the S4
+closure it is unreachable (wholly canned text). Neither "does not
+diverge" nor a rate like "3/6" is a claim about the substrate — the rate
+is a property of stored content, and it is UNMEASURED. Recorded as such.
+
+**TWO OF THE BUILD SEAT'S OWN FACTS DIED, and the method lesson
+repeated.** E3's witness was WRONG: `MEDIA: /tmp/x.png` is recorded and
+delivers NO text, but the media loop still fires `send_image_file` — the
+probe had stubbed only `_send_with_retry` and so reported "nothing
+sent". Found independently by two seats. The phenomenon survives with
+correct witnesses (`[[audio_as_voice]]`, whitespace-only). E1's SCOPE
+was overstated: its witness is the search-commitment formatter, and that
+branch has no `record_*` call at all — it was evidence about bytes A3
+does not record. Also: the build seat's first E2 probe used session key
+`"c1"`, not the real `agent:main:telegram:dm:c1`, so the dispatch half
+was never exercised (Claude seat re-ran it full-stack through the real
+`handle_message`, 200/200 deterministic, same result). **Three probes,
+three corrections, in a round whose whole subject is not trusting a
+single run.**
+
+**IN-TREE DEFECT FOUND AND FIXED THIS SLICE.**
+`tests/test_ledger_a3_s4_closures.py` asserted "the organ row carries
+the EXACT bytes the owner received" while its sibling proposal test had
+already been corrected to "the bytes the interceptor produced" — the
+twenty-third round corrected the INSTANCE, not the CLASS. Because S4's
+templates never diverge, **the test was GREEN while stating a claim the
+substrate cannot make.** Corrected to the ruled wording.
+
+**WHAT LANDED (test + docs only; NO production byte changed):**
+`tests/test_ledger_a3_custody_placement.py` — the produced-bytes binding
+pinned against a DELIBERATELY DIVERGING reply (with a positive control
+asserting the witness still diverges, because a pin written against a
+non-diverging reply proves nothing); the placement pin, two-sided (both
+record calls inside `run_inbound_turn`; the seam ABSENT from
+`platform_base`; the cockpit caller still returning `run_inbound_turn`'s
+value); a machine-derived FROZEN inventory of the custody window (one
+discard + five transforms, two-sided — a vanished discard is also a
+finding); and the class asymmetry pinned structurally. 7 mutations, each
+caught by a named test. Tripwire re-run: **inventory UNMOVED at 151 keys
+/ 262 sites**, which is correct and expected — this slice adds no send
+shape and no canned return to any declared scope (brief amendment 6).
+
+**OWNER-GATED, NOT DONE — named, not deferred silently:**
+(1) landing any part of the A4 egress schema (recorded birth blocker);
+(2) widening the tripwire's DECLARED scopes to
+`_process_message_background` (scopes are declared, never derived —
+changing them changes the tripwire contract); (3) relocating A3 into
+`platform_base`; (4) the combined A3+A4 class sweep. The custody-window
+inventory landed as a SEPARATE narrow pin precisely so the tripwire's
+contract was not changed without the owner.
+
+**Verdict: BLOCK on relocation, folded 3-0. The slice ships as a ruling,
+a correction and four pins.** The typed search export proceeds at the
+CURRENT placement, binding to produced bytes — all three seats said so
+explicitly.

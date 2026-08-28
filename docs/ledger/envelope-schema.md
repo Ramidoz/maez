@@ -651,9 +651,40 @@ held ZERO rows — migration 0007 refuses to apply to a populated
 `turns` table, so pre-v2 artifacts (the retained rehearsal sidecars)
 keep their own era instead of silently losing their chains.
 
+**Which bytes a row binds to** (twenty-fourth round, 2026-08-28,
+ruled 3-0). An organ row's `raw_text` is the bytes the organ PRODUCED —
+never "the bytes the owner received". Executed: the surface transforms
+a reply after the closure has already recorded it, and egress is not a
+byte-string at all — a reply naming an on-disk image has the path
+stripped from the text and the FILE uploaded out of band, so what
+crossed the wire is a tuple `(text, images, media, local_files)`. A row
+bound to delivered text would both omit content the owner did receive
+and contain text authored by the surface's regexes. "Exact bytes, never
+content-light" therefore means: do not summarise, hash or paraphrase AT
+THE SEAM. It was never a claim about the wire. The owner's
+`user_message` row answers differently and structurally so — the
+owner's `.strip()` is a HEARING transform upstream of the guard, while
+the surface's extraction is a SPEAKING transform downstream; both rows
+bind at the seam, and the seam sits between them.
+
 **Readers.** `span_reader` exposes the column by contract. The
 prompt-feeding `recent_turns_by_kind` is deliberately NOT widened —
 prompt-content exposure is the owner's decision, deferred by name
 (same class as the owed `submitted_at` selection). A future
 conversation-stream reader's contract must carry `event_origin` on
 `system_event` rows.
+
+That reader carries THREE obligations, all of them presentation rules
+over rows that are already honest:
+
+1. It must never present an UNPARENTED organ row as though Maez
+   authored owner text quoted inside it (owner ruling, 2026-08-28 —
+   owner-provenance rides the parent edge).
+2. It must never present a row as SPOKEN. A row is GENERATED, not
+   delivered: the record is written before transport, the surface may
+   still discard the reply, and on a timeout the transport itself
+   cannot say whether the bytes arrived. Delivery evidence is A4's,
+   and A4 is not built.
+3. It must not present `raw_text` as "what the owner saw". Per the
+   binding above, it is what the organ said; the two diverge whenever
+   the reply carries a media-shaped token.

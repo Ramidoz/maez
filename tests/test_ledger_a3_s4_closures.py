@@ -172,7 +172,19 @@ class InboundCoreS4ClosureTests(unittest.TestCase):
         self.assertEqual(organ_row["turn_kind"], "system_event")
         self.assertEqual(
             organ_row["raw_text"], answer,
-            "the organ row carries the EXACT bytes the owner received",
+            # RULED 3-0 (twenty-fourth round): provenance binds to the
+            # bytes the interceptor PRODUCED, never to "what the owner
+            # received". Executed: platform_base transforms the reply
+            # after this closure has already recorded it, and egress is
+            # not even a byte-string — a reply naming an on-disk image
+            # has the path stripped from the text and the FILE uploaded.
+            # The S4 templates happen not to diverge today (3/3 survive
+            # the chain byte-identical), which is precisely why the old
+            # wording here stayed GREEN while stating a claim the
+            # substrate cannot make. Pinned against a deliberately
+            # DIVERGING reply in tests/test_ledger_a3_custody_placement.py.
+            "the organ row carries the EXACT bytes the S4 organ "
+            "produced",
         )
         self.assertEqual(organ_row["event_origin"], _S4_ORIGIN)
         self.assertEqual(
