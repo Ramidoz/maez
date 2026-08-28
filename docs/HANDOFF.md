@@ -168,13 +168,21 @@ ingestion question, deferred by name).
    the twentieth round's "one field wider" is FALSIFIED, as is
    "clarified is model-generated" (the DEFER ack and the LLM-failure
    fallback are both canned).
-   **OWNER FORK, undecided:** the search reply quotes the owner's own
-   query, so the maximally honest set
-   `{owner_utterance, self_generated, tool_output, internet_derived}`
-   is REFUSED by the frozen taint map today. Either echoed owner text
-   is not a distinct provenance, or the map gains a sixth
-   `system_event` set. Same class and same owner as the `event_origin`
-   carrier ruling.
+   **OWNER RULED, 2026-08-28 (cb0e13e): D with A as fallback — the
+   frozen taint map is NOT widened.** Owner-provenance for an echoed
+   query rides the PARENT EDGE (the organ row hangs off the owner's
+   user_message turn, which holds those bytes under
+   `{owner_utterance}`); the echo is a quotation of the adjacent row,
+   not a new claim. Unparented rows keep the SAME label — an echo of
+   the owner's words back to the owner launders nothing. So the
+   web-results reply is `{self_generated, tool_output,
+   internet_derived}`, which the writer ALREADY admits: **the search
+   mouth needs no schema work at all.** It also avoids a second export
+   (marking the echo would need the formatter to declare it embedded
+   owner text) and the combinatorial pressure of owner-echo variants
+   for every set. ONE obligation created, on READERS: the future
+   conversation-stream reader must never present an unparented organ
+   row as though Maez authored the quoted owner text itself.
    **Three side findings for their own follow-ups:**
    `audit_surface_reply` is injected into `run_inbound_turn` and NEVER
    CALLED (AST-verified, 0 occurrences) while its docstring claims
