@@ -266,3 +266,119 @@ Requirements earned, not invented:
 
 Pattern count so far for per-relation staleness: **1 of 8 organs**
 (`lived_graph`). Too few to generalise; continue the queue.
+
+---
+
+# Pass 3 — the remaining stale-with-readers (13) and empty-but-wired (16)
+
+## LIVE · empty queue / rare-by-design · freshness IRRELEVANT
+
+- **followup.db** — `followup_delivery` runs every cycle (142/72 window
+  hits). 12 rows, all `delivered`. Empty queue.
+- **veto_ledger.db** — `MAEZ_VETO_LEDGER=1` live. `_veto_ledger_get`
+  constructs on demand WHEN A VETO OCCURS; 0 window mentions in 72
+  cycles. Event-driven, rare by design.
+- **scar_tissue.db** — `MAEZ_SCAR_TISSUE=1` live. 0 window mentions;
+  scars are rare BY DESIGN. Caveat recorded: all 4 rows are
+  `exhibit:*` backfills from one July 3 timestamp, so **organic
+  operation is still unproven** — rare-by-design is the structural
+  reading, not a witnessed one.
+- **wants.db** — `MAEZ_WANT_PURSUIT_ENABLED=1` live, but the consumed
+  surface is `is_hard_want(text)`, a PURE TEXT PREDICATE, not a read of
+  stored state. Flag-live does not imply store-read.
+
+## LEGACY-UNWIRED · freshness N/A
+
+Every feature flag OFF on the live process and zero runtime activity:
+**self_dev.db** (46 concerns, all terminal), **workshop.db**,
+**self_mod_dialogs.db**, **fast_conversation_log.db**,
+**subscription_proxy.db** (no systemd unit, no process — its 239 calls
+are historical), **entity_index.db** (confirmed in Pass 2).
+
+## LIVE · freshness handled CORRECTLY BY CONSTRUCTION ★
+
+- **interaction_preferences.db** — `MAEZ_INTERACTION_PREFERENCES=1`
+  live. Both rows are `retracted`, and
+  `render_interaction_preferences` filters `status == "active"` before
+  rendering, so it emits the empty string. Downstream cognition sees
+  NOTHING stale.
+
+  **This is the reference implementation of the mechanism `lived_graph`
+  is missing.** Explicit lifecycle states
+  (`active`/`retracted`/`superseded`), a renderer that filters on them,
+  and a CHECK constraint in the schema. The pattern already exists
+  in-tree and works; it does not need inventing.
+
+## Low-risk remainder
+
+- **users.db** — web account records; auth data, age-independent.
+- **novelty_harbor.db** (1 harbored), **gestation_claims.db** (3) —
+  small, event-driven, no present-tense reader found.
+
+## The 16 EMPTY-but-wired stores
+
+Zero rows means nothing can be served stale, so freshness is N/A for
+all of them. The live distinction is only LIVE-empty vs LEGACY:
+
+- **ledger.db** — empty BY DESIGN, birth-gated. Not a defect.
+- **memory.db** — SUPERSEDED orphan (zero code refs; the backup
+  manifest says so explicitly).
+- **raw / evolution / maez / user_profiles / dream_state /
+  maez_memory** — superseded or legacy-unwired orphans. NOTE: four
+  remain in the backup manifest, so restore can recreate them and make
+  an empty decoy look initialised.
+- The rest (`temperament`, `unseal_receipts`,
+  `capability_acquisition_queue`, `capability_gap_cooldown`,
+  `capability_integration_plans`, `autonomy_preferences`,
+  `maintenance_proposals`, `sandbox_witnesses`) — wired but never
+  populated. No staleness risk; retirement is an open owner question.
+
+---
+
+# RECURRING PATTERNS — 21 organs classified
+
+| # | Pattern | Count | Category A? |
+|---|---|---|---|
+| 1 | Legacy-unwired, flags off, no runtime | 6 | no |
+| 2 | LIVE with an empty queue (looks dead, is not) | 4 | no |
+| 3 | Rare-by-design, event-driven | 3 | no |
+| 4 | Superseded by a newer organ | 3 | no |
+| 5 | **Present-tense reader over unbounded-age data** | **2** | **YES** |
+| 6 | **LIVE reader, missing writer** | **1** | not yet |
+| 7 | Correct-by-construction lifecycle ★ | 1 | no |
+| 8 | Ephemeral-by-design | 1 | no |
+
+**Pattern 5 is the only proven Category-A class**, and both instances
+are in ONE store (`audit_log`): `recent_direct_edits` (fixed) and
+`recent(limit=50)` (latent — no production caller). It has not recurred
+in any other organ.
+
+**Pattern 6 has exactly one instance** (`lived_graph`).
+
+## Does a new freshness mechanism look justified yet?
+
+**Not on this evidence.** The census argues against a generic organ:
+
+1. Only 1 of 21 organs needs state closure. A global mechanism would be
+   built for a population of one.
+2. The pattern that actually caused harm (5) is a READER bug — a query
+   that says "newest N" and means "recent". It is fixed by bounding the
+   query, not by adding an organ.
+3. **The mechanism already exists and is proven in-tree.**
+   `interaction_preferences` implements exactly the lifecycle
+   `lived_graph` needs, and its renderer filters correctly.
+4. Freshness is per CLAIM, not per store — a store-level organ is the
+   wrong shape (one `lived_graph` table holds both classes).
+
+So the earned requirement stays narrow: **evidence-based state closure
+for relation edges, following the `interaction_preferences` pattern.**
+Still a requirement, not an implementation task.
+
+## Still open, by name
+
+- `lived_graph` state closure (10 CRITICAL edges) — earned requirement.
+- `audit_log.recent()` — latent pattern-5 instance, no caller today.
+- `scar_tissue` organic operation UNPROVEN (only backfills).
+- Retirement decisions for 6 legacy-unwired + 8 never-populated stores
+  — owner's call, deliberately not taken.
+- Four empty orphans are still in the backup manifest.
