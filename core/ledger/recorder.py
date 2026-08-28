@@ -92,6 +92,7 @@ __all__ = [
     "record_owner_message",
     "record_organ_event",
     "record_approval_decision",
+    "record_self_mod_dialog_step",
     "recorder_status",
 ]
 
@@ -247,6 +248,26 @@ def _canonical_db_path() -> str:
     from core.infra import paths as _paths
 
     return str(_paths.memory_dir() / "ledger.db")
+
+
+def _hash_prompt_material(material) -> str:
+    """Hash the EXACT material the model received.
+
+    Canonical JSON when the request is structured (a message list), the
+    raw string when a bare prompt was sent. The hash must answer "what
+    bytes/structure actually shaped this generation" — never our
+    reconstruction of them.
+    """
+    import hashlib
+    import json as _json
+
+    if isinstance(material, str):
+        payload = material.encode("utf-8")
+    else:
+        payload = _json.dumps(
+            material, sort_keys=True, ensure_ascii=False, default=str
+        ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _blank(value) -> bool:
@@ -749,6 +770,100 @@ def record_approval_decision(
         raw_text,
         surface=surface,
         taint_labels=["owner_utterance"],
+        kwargs=kwargs,
+        parent=parent,
+    )
+
+
+def record_self_mod_dialog_step(
+    *,
+    surface: str,
+    raw_text: str,
+    self_mod_dialog_id: int,
+    audit_verdict: dict,
+    model_id: str | None = None,
+    prompt_material: object | None = None,
+    raw_surface: str | None = None,
+    parent: RecordResult | None = None,
+    recorder=PRODUCTION,
+) -> RecordResult:
+    """Record ONE turn inside a Lane-3 self-modification dialog.
+
+    THE FOURTH PUBLIC METHOD — owner-ruled 2026-08-28, on the same
+    reasoning as ``record_approval_decision`` and with the same narrow
+    scope. The ratified schema names this kind for exactly this path
+    ("one turn within a Lane 3 self-modification dialog",
+    envelope-schema.md:153) and its contract fits where ``model_reply``
+    could not:
+
+      required : raw_text, audit_verdict, self_mod_dialog_id
+      forbidden: event_origin ONLY — ``model_id`` is PERMITTED here
+                 while ``approval_decision`` forbids it, a deliberate
+                 contrast in the ratified table.
+
+    **The turn kind describes WHAT THE EVENT WAS; the optional
+    provenance fields describe HOW THAT STEP WAS PRODUCED.** So one kind
+    honestly carries both branches of the dialog:
+
+    * model-generated clarification -> pass ``model_id`` AND the EXACT
+      ``prompt_material`` the model received. ``prompt_hash`` is
+      computed from those exact bytes/structure, so the hash answers
+      "what actually shaped this generation", never a reconstruction.
+    * canned CANCEL / DEFER / deterministic fallback -> pass neither.
+      The absence of model provenance IS the honest statement that no
+      model produced it.
+
+    ``soul_hash`` is NEVER set. Executed: this generation is not
+    soul-bound — its system prompt is a dialog-specific instruction and
+    the soul appears only as the dialog's SUBJECT. Hashing the global
+    soul to satisfy a mandatory field would claim material that never
+    entered the prompt. This kind does not require it, which is why it
+    fits.
+
+    ``evidence_envelope`` is NEVER set: the schema restricts it to
+    model_reply / daemon_cycle / peer_message_out (envelope-schema.md
+    :192). Its absence here is by design, not an omission.
+
+    NAMED RESIDUAL: this kind admits exactly one taint set,
+    ``{owner_utterance, self_generated}``, so a purely canned ack also
+    carries ``owner_utterance``. Honest for a model step (the dialog
+    context embeds the owner's reply); for a canned ack it is the
+    schema's claim about the dialog's joint authorship, not a claim
+    that the owner typed those bytes. Same reader obligation as
+    ``approval_decision``.
+    """
+    _require_recorder(recorder)
+    if not isinstance(self_mod_dialog_id, int) or isinstance(self_mod_dialog_id, bool):
+        raise TypeError(
+            "record_self_mod_dialog_step: self_mod_dialog_id must be an "
+            "int — the TEXT dialog id rides as typed debt inside "
+            "audit_verdict, never as a type lie"
+        )
+    if (model_id is None) != (prompt_material is None):
+        raise ValueError(
+            "record_self_mod_dialog_step: model_id and prompt_material "
+            "must be supplied together — a model_id without the exact "
+            "prompt is provenance without evidence, and a prompt "
+            "without a model_id claims a generation nobody made"
+        )
+    kwargs: dict = {
+        "audit_verdict": audit_verdict,
+        "self_mod_dialog_id": self_mod_dialog_id,
+    }
+    if raw_surface is not None:
+        kwargs["raw_surface"] = raw_surface
+    if model_id is not None:
+        if _blank(model_id):
+            raise ValueError(
+                "record_self_mod_dialog_step: model_id must be non-empty"
+            )
+        kwargs["model_id"] = model_id
+        kwargs["prompt_hash"] = _hash_prompt_material(prompt_material)
+    return recorder._record(
+        "self_mod_dialog_step",
+        raw_text,
+        surface=surface,
+        taint_labels=["owner_utterance", "self_generated"],
         kwargs=kwargs,
         parent=parent,
     )

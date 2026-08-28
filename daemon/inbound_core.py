@@ -204,6 +204,77 @@ def _content_light_open_cards_fact(open_cards: list[Any]) -> str | None:
     return f"CONVERSATIONAL CONSENT BODY FACT: {{'open_cards': {facts!r}}}"
 
 
+def _a3_record_dialog_step(*, surface, owner_text, reply_text, result) -> None:
+    """A3 final closure — ONE Lane-3 self-modification dialog step.
+
+    Split at the PROVENANCE boundary, never on ``DialogTurnResult.kind``
+    (that kind mixes model-generated clarifications with the canned
+    DEFER ack). The generation path exports how the text was produced;
+    this call site records it.
+
+    Both branches use the SAME ratified kind, ``self_mod_dialog_step``
+    — "one turn within a Lane 3 self-modification dialog" — because the
+    kind describes WHAT THE EVENT WAS while the optional model fields
+    describe HOW THAT STEP WAS PRODUCED. Model-generated steps carry
+    model_id + the exact prompt; canned steps carry neither, and that
+    absence is the honest statement.
+
+    NOT model_reply: that kind requires soul_hash, and this generation
+    is not soul-bound (its system prompt is a dialog instruction; the
+    soul appears only as the dialog's SUBJECT). Hashing the global soul
+    to satisfy a mandatory field would claim material that never
+    entered the prompt.
+
+    Half-exchange rule: separate try blocks, reply ships regardless,
+    and the seam dead-letters durably so a lost row is loud.
+    """
+    _owner_turn = None
+    try:
+        from core.ledger.recorder import record_owner_message
+
+        _owner_turn = record_owner_message(surface=surface, raw_text=owner_text)
+    except Exception:
+        logger.exception(
+            "A3 owner record failed on the self-mod dialog path; the "
+            "reply ships regardless"
+        )
+    try:
+        from core.ledger.recorder import record_self_mod_dialog_step
+        from skills.self_mod_dialog import last_turn_provenance
+
+        prov = last_turn_provenance()
+        dialog = getattr(result, "dialog", None)
+        raw_id = getattr(dialog, "dialog_id", None)
+        try:
+            dialog_id = int(raw_id)
+            text_debt = None
+        except (TypeError, ValueError):
+            # TEXT dialog id rides as typed debt inside audit_verdict,
+            # never as a type-lying integer (twenty-second round).
+            dialog_id = 0
+            text_debt = str(raw_id) if raw_id is not None else None
+        verdict = {
+            "origin": "model_generated" if prov.is_model_generated
+                      else "substrate_deterministic",
+            "dialog_kind": str(getattr(result, "kind", "") or ""),
+        }
+        if text_debt is not None:
+            verdict["self_mod_dialog_id_text_debt"] = text_debt
+        record_self_mod_dialog_step(
+            surface=surface,
+            raw_text=reply_text,
+            self_mod_dialog_id=dialog_id,
+            audit_verdict=verdict,
+            model_id=prov.model_id,
+            prompt_material=prov.prompt_material,
+            parent=_owner_turn,
+        )
+    except Exception:
+        logger.exception(
+            "A3 dialog-step record failed; the reply ships regardless"
+        )
+
+
 async def run_inbound_turn(
     *,
     daemon: Any,
@@ -610,9 +681,16 @@ async def run_inbound_turn(
                             dialog_reply,
                             surface=f"{owner_surface_label}_dialog",
                         )
-                        return r.text if r.rewritten else dialog_reply
+                        dialog_reply = r.text if r.rewritten else dialog_reply
                     except Exception:
-                        return dialog_reply
+                        pass
+                    _a3_record_dialog_step(
+                        surface=owner_surface_label,
+                        owner_text=text,
+                        reply_text=dialog_reply,
+                        result=result,
+                    )
+                    return dialog_reply
                 return None
 
     proposal_reply = await try_proposal_intent(

@@ -84,6 +84,7 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 
 import json
+import contextvars
 import os
 import re
 import secrets
@@ -1088,6 +1089,43 @@ Your job in this turn:
   explicitly says yes or when he confirms completion when you ask.""" + _DIALOG_ANTI_FABRICATION_RULE
 
 
+@dataclass(frozen=True)
+class DialogTurnProvenance:
+    """How ONE dialog step's text was produced.
+
+    Exported at the generation boundary because nothing downstream can
+    recover it: ``generate_response_turn`` previously returned
+    ``tuple[str, bool]``, which erased the difference between a model
+    generation and the deterministic fallback. ``kind=="clarified"``
+    cannot discriminate — the DEFER ack carries it too.
+
+    model_id/prompt_material are BOTH present or BOTH absent. Their
+    absence is the honest statement that no model produced the text.
+    prompt_material is the EXACT request the model received, never a
+    reconstruction.
+    """
+
+    model_id: "Optional[str]" = None
+    prompt_material: object = None
+
+    @property
+    def is_model_generated(self) -> bool:
+        return self.model_id is not None
+
+
+CANNED_PROVENANCE = DialogTurnProvenance()
+
+
+_LAST_TURN_PROVENANCE: "contextvars.ContextVar[DialogTurnProvenance]" = (
+    contextvars.ContextVar("maez_dialog_turn_provenance", default=CANNED_PROVENANCE)
+)
+
+
+def last_turn_provenance() -> DialogTurnProvenance:
+    """Provenance of the most recent generate_response_turn in this context."""
+    return _LAST_TURN_PROVENANCE.get()
+
+
 def generate_response_turn(
     *,
     dialog: SelfModDialog,
@@ -1134,24 +1172,37 @@ def generate_response_turn(
         if llm_fn is not None:
             result = llm_fn(context)
             if result and result.strip():
+                _LAST_TURN_PROVENANCE.set(DialogTurnProvenance(
+                    model_id=str(getattr(llm_fn, "model_id", "") or "injected_llm_fn"),
+                    prompt_material=context,
+                ))
                 return result.strip(), should_prompt
         else:
             from core import llm_client
             from core.routing.brain_gateway import with_purpose as _brain_purpose
 
             with _brain_purpose("owner_reply"):
+                _responder_model = (
+                    os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL")
+                    or _PRIMARY_MODEL
+                )
+                _sent_messages = [
+                    {"role": "system", "content": _RESPONSE_SYSTEM},
+                    {"role": "user", "content": context},
+                ]
                 resp = llm_client.chat(
-                    model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL")
-                          or _PRIMARY_MODEL,
-                    messages=[
-                        {"role": "system", "content": _RESPONSE_SYSTEM},
-                        {"role": "user", "content": context},
-                    ],
+                    model=_responder_model,
+                    messages=_sent_messages,
                     options={"temperature": 0.4, "num_predict": 400},
                     think=False,
                 )
             text = (resp.message.content or "").strip()
             if text:
+                # EXACT structure the model received, not a summary.
+                _LAST_TURN_PROVENANCE.set(DialogTurnProvenance(
+                    model_id=str(_responder_model),
+                    prompt_material=_sent_messages,
+                ))
                 return text, should_prompt
     except Exception:
         pass
@@ -1166,6 +1217,9 @@ def generate_response_turn(
         fallback = (
             "I've noted what you said. Keep going — I'm still listening."
         )
+    # Deterministic: NO model produced this. Absence of provenance is
+    # the honest statement, not a missing field.
+    _LAST_TURN_PROVENANCE.set(CANNED_PROVENANCE)
     return fallback, should_prompt
 
 
