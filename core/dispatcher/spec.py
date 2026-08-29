@@ -77,6 +77,15 @@ class SourceAvailability(StrEnum):
     EXECUTABLE_ABSENT = "EXECUTABLE_ABSENT"
     EXECUTABLE_UNKNOWN = "EXECUTABLE_UNKNOWN"
     RESERVED_UNAVAILABLE = "RESERVED_UNAVAILABLE"
+    # AMENDED 2026-08-28 (owner), on implementation evidence. The source
+    # is known to exist and is technically callable, but policy forbids
+    # consuming it until the required authorization/grant exists.
+    # GENERIC by design — it does not mean "Claude"; the paired
+    # limitation carries the reason. Added rather than overloading
+    # TRUST_SCOPE_RESTRICTED (a trust-scope fact) or PRIVACY_GATED (a
+    # content-sensitivity fact), and rather than smuggling cost into an
+    # action lane, which measures approval scrutiny only.
+    AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
     PRIVACY_GATED = "PRIVACY_GATED"
     TRUST_SCOPE_RESTRICTED = "TRUST_SCOPE_RESTRICTED"
     TIMED_OUT = "TIMED_OUT"
@@ -92,6 +101,11 @@ class AvailabilityLimitation(StrEnum):
     PRIVACY_GATED = "PRIVACY_GATED"
     FRESH_ATTEMPT_FAILED = "FRESH_ATTEMPT_FAILED"
     FETCH_BUDGET_EXHAUSTED = "FETCH_BUDGET_EXHAUSTED"
+    # Why THIS instance is gated: consuming the source spends a metered
+    # external resource and needs an owner grant first. Distinct from
+    # FETCH_BUDGET_EXHAUSTED, which is the state AFTER spend — quota and
+    # authorization are separate facts and must not be conflated.
+    PAID_SOURCE_AUTHORIZATION_REQUIRED = "PAID_SOURCE_AUTHORIZATION_REQUIRED"
     SOURCE_TIMEOUT = "SOURCE_TIMEOUT"
     SCOPE_UNION_UNAVAILABLE = "SCOPE_UNION_UNAVAILABLE"
     SCORING_LOW_CONFIDENCE = "SCORING_LOW_CONFIDENCE"
