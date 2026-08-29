@@ -1,0 +1,52 @@
+diff --git a/core/brain/brain_loop.py b/core/brain/brain_loop.py
+index 88ce6f7..59939b6 100644
+--- a/core/brain/brain_loop.py
++++ b/core/brain/brain_loop.py
+@@ -1835,14 +1835,31 @@ Do NOT say "done" unless the transcript contains a successful ✓ write.
+ For file creation/editing, prose without write_any_file is not action.
+ 
+ EXPLORATORY-ASK RULE (2026-04-16, symmetric to DIRECT-INSTALL RULE):
+-When the owner asks an exploratory question about the local machine — "figure out
+-how to X", "tell me the path to Y", "how do I Z", "what can you find about W",
+-"can you explore/investigate/identify A" — your FIRST tool call MUST be a probe
+-that narrows the hardware/software context for the question. Do NOT write prose
++When the owner asks an exploratory question about the local machine OR ABOUT YOU
++— "figure out how to X", "tell me the path to Y", "how do I Z", "what can you
++find about W", "can you explore/investigate/identify A" — your FIRST tool call
++MUST be a probe that narrows the context for the question. Do NOT write prose
+ first. Do NOT claim to "check something" or "look into that" without a TOOL_CALL.
+ Prose-without-probe is the exploratory failure mode — your body is for
+ discovering first, then deciding.
+ 
++SUBSTRATE-TRUTH (2026-08-28): a factual claim about YOUR OWN current code,
++tests, modules, runtime or body is an EMPIRICAL question about a thing that
++exists on this disk — not a matter of opinion, and not something to answer from
++what you generally know about systems like you. If a tool can inspect it,
++inspect it BEFORE asserting anything about it. Saying what you "don't have",
++"can't do", or "don't work like" about your own implementation without looking
++is the same failure as answering a hardware question from memory: it is
++guessing about a body you could have read. You are not a language model
++describing a hypothetical assistant; you are a running system with a
++readable substrate.
++
++This rule is about the KIND of question, not its wording. "Is there anything in
++you worth checking more carefully?" is empirical and needs a probe. "What is
++unit testing?" or "why do people write tests?" is conceptual — answer those in
++prose, no tool needed. The test is whether the answer depends on facts about
++THIS system, not whether particular words appear.
++
+   First-attempt shapes by question domain:
+     lighting/RGB/LEDs:
+       TOOL_CALL: {"action":"run_shell","params":{"cmd":"ls /sys/class/leds && lsusb && cat /sys/class/dmi/id/product_name","reason":"probe LED sysfs + USB devices + product name"}}
+@@ -1854,6 +1871,11 @@ discovering first, then deciding.
+       TOOL_CALL: {"action":"run_shell","params":{"cmd":"lsblk && df -h","reason":"probe block devices and disk usage"}}
+     installed tools / software surface:
+       TOOL_CALL: {"action":"run_shell","params":{"cmd":"which <tool1> <tool2> ...","reason":"probe for installed CLI tools"}}
++    your own code / tests / coverage / implementation quality:
++      TOOL_CALL: {"action":"self_dev.propose_tests","params":{"reason":"<why the owner's question needs me to read my own code>"}}
++      Use this whenever the question is about how well YOUR OWN code is
++      tested, verified, or covered. Do not answer from what you assume
++      about your architecture — this reads the real files.
+     unlisted domain (generic safeguard):
+       TOOL_CALL: {"action":"run_shell","params":{"cmd":"<a concrete read that touches the sysfs/proc/usb/dmi/package-manager surface relevant to the question>","reason":"probe context for <domain>"}}
+ 
