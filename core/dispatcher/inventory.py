@@ -199,9 +199,13 @@ class InventoryRegistry:
         from core.routing.claude_tier import PROXY_URL
 
         u = urlparse(PROXY_URL)
+        # A URL without an explicit port takes its scheme's default, not
+        # the bundled proxy's. https://proxy.example is :443, and probing
+        # :11438 there would report a healthy proxy as unreachable.
+        port = u.port or {"https": 443, "http": 80}.get(u.scheme) or 11438
         try:
             with socket.create_connection(
-                (u.hostname or "127.0.0.1", u.port or 11438), timeout=1.5
+                (u.hostname or "127.0.0.1", port), timeout=1.5
             ):
                 return True
         except socket.timeout:
@@ -222,13 +226,19 @@ class InventoryRegistry:
         except Exception:
             return None
         entry = b.get("claude") if isinstance(b, dict) else None
-        if not entry:
+        if not isinstance(entry, dict):
+            return None
+        # BOTH windows must be PRESENT and numeric. Defaulting a missing
+        # field to 0 turned "the proxy did not tell us" into "the budget
+        # is exhausted" — an incomplete answer read as a proven one, which
+        # is the same conflation this three-valued return exists to stop.
+        try:
+            hourly = entry["hourly_remaining"]
+            daily = entry["daily_remaining"]
+        except (KeyError, TypeError):
             return None
         try:
-            return (
-                int(entry.get("hourly_remaining", 0)) >= 1
-                and int(entry.get("daily_remaining", 0)) >= 1
-            )
+            return int(hourly) >= 1 and int(daily) >= 1
         except (TypeError, ValueError):
             return None
 

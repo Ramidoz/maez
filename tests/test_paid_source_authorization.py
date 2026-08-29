@@ -277,6 +277,92 @@ class TheStateMachine(unittest.TestCase):
         )
 
 
+class TheBudgetReadIsThreeValued(unittest.TestCase):
+    """Exhausted, affordable, and UNKNOWN are three different answers.
+
+    An incomplete budget record is not evidence of exhaustion. Defaulting
+    a missing window to 0 turned "the proxy did not say" into "there is
+    none left".
+    """
+
+    def _budget(self, payload):
+        import core.routing.claude_tier as ct
+
+        real = ct.budget
+        ct.budget = lambda *a, **k: payload
+        self.addCleanup(setattr, ct, "budget", real)
+        return InventoryRegistry()._paid_source_budget(
+            ExternalSource.FRONTIER_CONSULT
+        )
+
+    def test_both_windows_must_be_present_to_conclude_anything(self):
+        for partial in (
+            {"daily_remaining": 3},
+            {"hourly_remaining": 2},
+            {"hourly_cap": 120},
+            {},
+        ):
+            self.assertIsNone(
+                self._budget({"claude": partial}),
+                f"an INCOMPLETE record {partial} was read as proven "
+                "exhaustion",
+            )
+
+    def test_a_malformed_record_is_unknown_not_an_exception(self):
+        for junk in ("malformed", 7, [1, 2], None):
+            self.assertIsNone(
+                self._budget({"claude": junk}),
+                f"a malformed record {junk!r} was not reported unknown",
+            )
+
+    def test_either_window_at_zero_is_exhausted(self):
+        """ASYMMETRIC controls. Symmetric 0/0 and 9/9 alone cannot tell
+        `and` from `or` -- both pass either way."""
+        self.assertIs(
+            self._budget({"claude": {"hourly_remaining": 9, "daily_remaining": 0}}),
+            False,
+            "a spent DAILY window was reported affordable — both windows "
+            "must have room, not either",
+        )
+        self.assertIs(
+            self._budget({"claude": {"hourly_remaining": 0, "daily_remaining": 9}}),
+            False,
+            "a spent HOURLY window was reported affordable",
+        )
+
+    def test_both_windows_with_room_is_affordable(self):
+        self.assertIs(
+            self._budget({"claude": {"hourly_remaining": 9, "daily_remaining": 9}}),
+            True,
+        )
+
+    def test_a_scheme_default_port_is_used_when_none_is_explicit(self):
+        """https://proxy.example is :443, not the bundled proxy's port."""
+        import core.routing.claude_tier as ct
+
+        seen = []
+        real_sock = socket.create_connection
+        socket.create_connection = lambda addr, **k: seen.append(addr) or (_ for _ in ()).throw(ConnectionRefusedError())
+        real_url = ct.PROXY_URL
+        self.addCleanup(setattr, socket, "create_connection", real_sock)
+        self.addCleanup(setattr, ct, "PROXY_URL", real_url)
+
+        for url, expected in (
+            ("http://127.0.0.1:11438", 11438),
+            ("https://proxy.example", 443),
+            ("http://proxy.example", 80),
+        ):
+            ct.PROXY_URL = url
+            seen.clear()
+            InventoryRegistry()._paid_source_reachable(
+                ExternalSource.FRONTIER_CONSULT
+            )
+            self.assertEqual(
+                seen[0][1], expected,
+                f"{url} probed port {seen[0][1]}, not {expected}",
+            )
+
+
 class TheGrantLedger(unittest.TestCase):
     def test_a_grant_is_bound_to_source_caller_and_operation(self):
         ledger = GrantLedger()
