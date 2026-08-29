@@ -48,11 +48,12 @@ class FrontierReply:
 
     text: str
     source: ExternalSource
-    adapter: str
     model: str
     caller: str
     operation: str
     grant_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def consult(
@@ -94,12 +95,20 @@ def consult(
         timeout_s=timeout_s,
     )
 
+    # TierReply's real fields are `reply` and `model_used` -- there is
+    # no `text`, no `model`, and no `adapter` anywhere in the response.
+    # An earlier version of this function read all three invented names
+    # and its test mirrored the same fiction, so the provenance pin
+    # validated an invention rather than the wire shape. Read the real
+    # attributes directly so a rename breaks loudly instead of silently
+    # producing blank provenance.
     return FrontierReply(
-        text=getattr(reply, "text", "") or "",
+        text=reply.reply,
         source=ExternalSource.FRONTIER_CONSULT,
-        adapter=getattr(reply, "adapter", "") or "",
-        model=getattr(reply, "model", "") or (grant.model or model),
+        model=reply.model_used,
         caller=caller,
         operation=operation,
         grant_id=grant.grant_id,
+        input_tokens=reply.input_tokens,
+        output_tokens=reply.output_tokens,
     )

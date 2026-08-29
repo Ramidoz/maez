@@ -26,7 +26,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.dispatcher.spec import SourceLabel
 
@@ -46,6 +46,11 @@ class PaidSourceGrant:
     def __post_init__(self) -> None:
         if self.max_calls < 1:
             raise ValueError("a grant must permit at least one call")
+        if self.expires_at == float("inf") or self.expires_at != self.expires_at:
+            raise ValueError(
+                "a grant must expire at a finite time — an unbounded "
+                "authorization is a standing allowance, which this is not"
+            )
         if not str(self.caller).strip() or not str(self.operation).strip():
             raise ValueError(
                 "a grant must name its caller and operation — an unbound "
@@ -118,9 +123,14 @@ class GrantLedger:
             return g
 
     def remaining(self, grant_id: str) -> int:
+        """Calls still available. An EXPIRED grant has none.
+
+        Reporting unused calls on a grant that can no longer be consumed
+        would make the ledger disagree with itself.
+        """
         with self._lock:
             g = self._grants.get(grant_id)
-            if g is None:
+            if g is None or g.expires_at <= self._clock():
                 return 0
             return max(0, g.max_calls - self._used.get(grant_id, 0))
 

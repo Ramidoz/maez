@@ -120,78 +120,124 @@ class InventoryRegistry:
     def invalidate(self, cache_key: str) -> None:
         self._cache.pop(cache_key, None)
 
-    #: Set by the caller that intends to consume a paid source, so the
-    #: availability answer is about a NAMED operation rather than a
-    #: general willingness to spend.
-    paid_request_context: tuple[str, str] | None = None
-
-    def _paid_source_availability(self, source, now):
+    def _paid_source_availability(self, source, now, paid_context):
         """Availability of a paid/keyed source. Consumes ZERO quota.
 
         Reads only local grant state and the proxy's status/budget
         interface. Never issues a completion.
+
+        ``paid_context`` is passed per call, NOT held on the registry.
+        Instance state here was a real race: one request could install
+        its context, pause inside the network probe, and have another
+        request's authorized context answer on its behalf.
+
+        WITHOUT a context this reports RESERVED_UNAVAILABLE — exactly
+        what a generic turn saw before paid sources existed. That is the
+        owner's two-questions split made mechanical: ordinary cognition
+        asks "may I generically choose this source?" and the answer stays
+        no, with no probe and no leaked limitation. Only a named caller
+        asking "may I, specifically, consume this?" reaches the state
+        machine below.
         """
+        if not paid_context:
+            return (
+                SourceAvailability.RESERVED_UNAVAILABLE,
+                AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE,
+            )
+
         from core.dispatcher.paid_source_grant import GRANTS
 
-        # 1. Is the service reachable at all? Absent/error/timeout keep
-        #    their existing meanings — a down proxy is not an
+        # 1. Is the service reachable at all? A down proxy is not an
         #    authorization problem.
-        reachable, why = self._paid_source_reachable(source)
+        reachable = self._paid_source_reachable(source)
         if reachable is False:
             return (
                 SourceAvailability.EXECUTABLE_ABSENT,
                 AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
             )
         if reachable is None:
-            return (SourceAvailability.EXECUTABLE_UNKNOWN,
-                    AvailabilityLimitation.INVENTORY_UNKNOWN)
+            return (SourceAvailability.TIMED_OUT,
+                    AvailabilityLimitation.SOURCE_TIMEOUT)
 
         # 2. Authorization BEFORE quota. A missing grant is reported as
         #    authorization-required even if budget happens to be full.
-        ctx = self.paid_request_context
-        authorized = bool(ctx) and GRANTS.is_authorized(
-            source=source, caller=ctx[0], operation=ctx[1]
-        )
-        if not authorized:
+        caller, operation = paid_context
+        if not GRANTS.is_authorized(
+            source=source, caller=caller, operation=operation
+        ):
             return (
                 SourceAvailability.AUTHORIZATION_REQUIRED,
                 AvailabilityLimitation.PAID_SOURCE_AUTHORIZATION_REQUIRED,
             )
 
         # 3. Only once authorized does remaining quota matter.
-        if self._paid_source_budget_exhausted(source):
+        budget = self._paid_source_budget(source)
+        if budget is False:
             return (
                 SourceAvailability.EXECUTABLE_ABSENT,
                 AvailabilityLimitation.FETCH_BUDGET_EXHAUSTED,
             )
+        if budget is None:
+            # UNKNOWN IS NOT EXHAUSTED. can_afford() fails closed to
+            # False on any read error, so using it here would report an
+            # unreadable proxy as an exhausted budget — the exact
+            # conflation this ordering exists to prevent.
+            return (SourceAvailability.EXECUTABLE_UNKNOWN,
+                    AvailabilityLimitation.INVENTORY_UNKNOWN)
         return (SourceAvailability.EXECUTABLE_PRESENT, None)
 
     def _paid_source_reachable(self, source):
-        """True/False/None(unknown). Status probe only — no completion."""
+        """True(refusable) / False(refused) / None(timeout).
+
+        A raw accept proves something is listening, not that it is a
+        healthy proxy. So this only ever downgrades: it can say
+        "definitely not there", never "definitely good".
+        """
         import socket
+        from urllib.parse import urlparse
 
+        from core.routing.claude_tier import PROXY_URL
+
+        u = urlparse(PROXY_URL)
         try:
-            with socket.create_connection(("127.0.0.1", 11438), timeout=1.5):
-                return True, None
+            with socket.create_connection(
+                (u.hostname or "127.0.0.1", u.port or 11438), timeout=1.5
+            ):
+                return True
+        except socket.timeout:
+            return None
         except OSError:
-            return False, None
-        except Exception:
-            return None, None
+            return False
 
-    def _paid_source_budget_exhausted(self, source) -> bool:
-        """Budget via the proxy's own status interface. No completion."""
+    def _paid_source_budget(self, source):
+        """True(affordable) / False(exhausted) / None(unknown).
+
+        Uses the proxy's OWN budget interface — a GET against /budget,
+        not a completion. Zero quota consumed.
+        """
         try:
             from core.routing import claude_tier
 
-            # can_afford() is the proxy's OWN budget interface — a GET
-            # against /budget, not a completion. Zero quota consumed.
-            return not claude_tier.can_afford("claude", needed_calls=1)
+            b = claude_tier.budget()
         except Exception:
-            # Unknown budget is NOT exhaustion. Fail toward letting the
-            # authorized caller try; the proxy refuses on its own terms.
-            return False
+            return None
+        entry = b.get("claude") if isinstance(b, dict) else None
+        if not entry:
+            return None
+        try:
+            return (
+                int(entry.get("hourly_remaining", 0)) >= 1
+                and int(entry.get("daily_remaining", 0)) >= 1
+            )
+        except (TypeError, ValueError):
+            return None
 
-    def summarize(self, sources: Iterable[SourceLabel]) -> InventorySummary:
+    def summarize(
+        self,
+        sources: Iterable[SourceLabel],
+        *,
+        paid_context: tuple[str, str] | None = None,
+    ) -> InventorySummary:
         now = self._clock()
         source_availability: dict[SourceLabel, SourceAvailability] = {}
         limitations: list[AvailabilityLimitation] = []
@@ -214,7 +260,7 @@ class InventoryRegistry:
                 # issues a model completion — discovering whether a
                 # source is affordable must never cost a call.
                 availability, limitation = self._paid_source_availability(
-                    source, now
+                    source, now, paid_context
                 )
                 source_availability[source] = availability
                 if limitation is not None:
