@@ -2798,6 +2798,104 @@ def _open_s7_connection_from_held_store(
     return connection
 
 
+#: Closed vocabulary of reasons an external governance module may open a
+#: transaction against the S7 ceremony store. Naming the purpose is the
+#: point: the two lifetimes below are genuinely different, and a caller
+#: that cannot say which one it needs does not understand the store.
+S7_HELD_TRANSACTION_PURPOSES = frozenset({
+    #: Idempotent setup authority — create-if-missing plus contract check.
+    #: NEVER a request path. Takes BEGIN IMMEDIATE and verifies store
+    #: activation before touching schema.
+    "store_provisioning",
+    #: Spending an authorization artifact. The consume functions own
+    #: their own transaction and activation check, so this purpose yields
+    #: the bound connection without opening one.
+    "guarded_consume",
+})
+
+
+@contextmanager
+def s7_held_store_transaction(
+    *,
+    store_dir_fd: int,
+    purpose: str,
+    store_name: str = "ceremony.sqlite3",
+):
+    """The reviewed public seam onto the S7 ceremony store.
+
+    Owner-authorized 2026-08-28. Before this existed, four production
+    modules and two scripts each reached past the underscore into
+    ``_open_s7_connection_from_held_store`` and hand-rolled the same
+    twenty lines of descriptor bookkeeping. This is that pattern
+    promoted, with a contract — not the same helper with the underscore
+    filed off.
+
+    WHY A PATH-BASED API CANNOT SUBSTITUTE. The store must be reached
+    through descriptors the caller *already holds*, opened O_NOFOLLOW, so
+    that path resolution happens exactly once — before the posture checks
+    — and cannot be redirected afterwards. Any function taking a ``Path``
+    would re-resolve it and reopen the TOCTOU window these descriptors
+    exist to close. ``_require_verified_held_connection`` later refuses
+    if the descriptors change (st_dev, st_ino) identity. So the caller
+    keeps ``store_dir_fd``; this seam owns everything downstream of it.
+
+    CONTRACT
+      permitted caller/purpose
+        ``purpose`` must name a member of S7_HELD_TRANSACTION_PURPOSES.
+        ``store_provisioning`` is setup authority and never a request
+        path; ``guarded_consume`` spends an artifact.
+      transaction lifetime
+        Bounded by this context manager. For ``store_provisioning`` the
+        seam opens BEGIN IMMEDIATE, verifies store activation, and
+        commits on clean exit. For ``guarded_consume`` it yields the
+        bound connection and opens no transaction, because the consume
+        functions manage their own.
+      authority scope
+        Opens ONLY ``store_name`` beneath the caller's already-held
+        directory descriptor, O_NOFOLLOW, read-write. It NEVER creates
+        the store, never widens beyond that one file, and confers no
+        authority of its own: the connection is a channel, not a grant.
+      failure / rollback
+        Any exception rolls back and propagates — never a partial
+        commit, never a swallowed failure. The connection and the store
+        descriptor are closed on every path. ``store_dir_fd`` belongs to
+        the caller and is left open.
+    """
+    if purpose not in S7_HELD_TRANSACTION_PURPOSES:
+        raise ValueError(f"unknown S7 held-store purpose: {purpose!r}")
+
+    store_fd = os.open(
+        store_name,
+        os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=store_dir_fd,
+    )
+    connection = None
+    try:
+        connection = _open_s7_connection_from_held_store(
+            dir_fd=store_dir_fd, store_fd=store_fd
+        )
+        if purpose == "store_provisioning":
+            connection.execute("BEGIN IMMEDIATE")
+            _verify_held_store_activation(store_dir_fd, store_fd, connection)
+        yield connection
+        if purpose == "store_provisioning":
+            connection.commit()
+    except BaseException:
+        if connection is not None:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+        raise
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+        os.close(store_fd)
+
+
 def _require_verified_held_connection(
     connection: sqlite3.Connection,
 ) -> _S7HeldConnectionBinding:

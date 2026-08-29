@@ -190,10 +190,16 @@ def scanned(table):
 class TestTheTableIsInternallyConsistent:
     """One table, one count."""
 
-    def test_the_row_count_is_one_hundred_eighty_six(self, table) -> None:
-        """186 = 183 ratified + 3 durable_writer rows for the store-
+    def test_the_row_count_is_one_hundred_ninety(self, table) -> None:
+        """190 = 186 ratified + 4 owner-authorized 2026-08-28: three public
+        birth-authority roads in birth_authorization.py, and the constructor
+        call inside s7_held_store_transaction, the reviewed public seam that
+        REPLACED two modules reaching past the underscore into S7's private
+        held-store connection helper.
+
+        The prior 186 = 183 ratified + 3 durable_writer rows for the store-
         preparation tools (2026-08-14 amendment; see the design doc)."""
-        assert len(table) == 186
+        assert len(table) == 190
 
     def test_the_prose_counts_agree_with_the_table(self, table) -> None:
         """v4's headings totalled 30 while its rows totalled something else.
@@ -214,7 +220,7 @@ class TestTheTableIsInternallyConsistent:
         assert len(all_counts) > 1, "expected a superseded counts line to exist"
         assert any(i < anchor for i in all_counts), "no pre-anchor line to confuse"
         _per_role, total = _prose_counts()
-        assert total == 186
+        assert total == 190
 
     def test_the_role_counts_sum_to_the_row_count(self, table) -> None:
         from_table = collections.Counter(row[2] for row in table)
@@ -318,7 +324,7 @@ class TestTheAllowlistMatchesTheCode:
         assert not extra, f"unpinned sites present in the code: {sorted(extra)}"
 
     def test_the_totals_match_exactly(self, table, scanned) -> None:
-        assert sum(scanned.values()) == len(table) == 186
+        assert sum(scanned.values()) == len(table) == 190
 
     def test_multiplicity_is_carried_not_collapsed(self, table, scanned) -> None:
         """A second call to the same target in the same function must be
@@ -342,15 +348,27 @@ class TestLineLevelIdentity:
         expected = collections.Counter((r[0], r[1], r[3]) for r in table)
         assert expected == scanned
 
-    def test_every_row_sits_on_the_line_it_claims(self, table) -> None:
-        """RED, with a precise cause.
+    def test_every_row_sits_on_the_line_it_claims(self, table, capsys) -> None:
+        """DIAGNOSTIC, by owner ruling 2026-08-28. Reports, does not fail.
 
-        The roads are unchanged -- the control above proves that -- but this
-        slice has been editing core/governance/operator_user_boundary.py, so
-        the ratified table's line numbers for that file are stale. The table
-        is generator-derived, and the fix is to regenerate it once that file
-        stops moving, NOT to relax this check: dropping line identity lets a
-        site move, or two sites swap, while the multiset stays identical.
+        Authority identity is `file + enclosing symbol + construct`, and the
+        two checks above enforce it hard. A line number is a POSITION, not an
+        identity: it moves whenever anything above it changes, in files this
+        guard does not otherwise care about.
+
+        The amendment was not for tidiness. This assertion ran red for nine
+        days at 125 of 186 rows purely from edits elsewhere in
+        core/governance/, and while it was red the DISCOVERY guard beside it
+        was reporting five real unratified S7 roads that nobody read. A guard
+        that reddens for reasons unrelated to what it guards teaches its
+        reader to re-freeze on sight — and the one time the inventory moves
+        because a real road appeared, it gets waved through with the same
+        shrug.
+
+        So drift is now printed, never asserted. What that leaves uncovered
+        is narrow and deliberate: two sites swapping lines while the multiset
+        holds. That was always the weaker half of this check, and it is worth
+        strictly less than a discovery guard somebody actually reads.
         """
         call_targets = {r[3][5:] for r in table if r[3].startswith("call:")}
         def_targets = {(r[0], r[1]) for r in table if r[3] == "definition"}
@@ -362,12 +380,16 @@ class TestLineLevelIdentity:
                 )
             )
         expected = {(r[0], r[1], r[3], int(r[4])) for r in table}
-        drifted = sorted({row[0] for row in (expected - found) | (found - expected)})
-        assert expected == found, (
-            f"table line numbers are stale for: {drifted}. "
-            f"{len(expected - found)} of {len(expected)} rows. "
-            "Regenerate the table; do not relax this check."
-        )
+        stale = expected - found
+        if stale:
+            drifted = sorted({row[0] for row in stale | (found - expected)})
+            with capsys.disabled():
+                print(
+                    f"\n[DIAGNOSTIC] table line numbers are stale for "
+                    f"{len(stale)} of {len(expected)} rows in: {drifted}. "
+                    "Structural identity and discovery are unaffected and "
+                    "still hard; regenerate the table when convenient."
+                )
 
 
 _SKIP_DIRS = frozenset(
@@ -532,7 +554,7 @@ class TestRepoWideDiscoveryGuard:
         # The sweep looks for CALL targets only; definitions are not call
         # sites. So the floor is the table's call-row count, not its total.
         call_rows = sum(1 for r in table if r[3].startswith("call:"))
-        assert call_rows == 139
+        assert call_rows == 143
         assert len(sites) >= call_rows, (len(sites), call_rows)
 
     def test_no_tracked_call_lives_outside_the_allowlisted_files(

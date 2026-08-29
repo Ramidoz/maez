@@ -830,37 +830,31 @@ def mint_and_consume_birth_authorization(
     consume_now = now if now is not None else _now_z()
     store_path = store_root / "ceremony.sqlite3"
     dir_fd = None
-    store_fd = None
-    conn = None
     try:
         dir_fd = s7._open_directory_by_components(store_path.parent)
-        store_fd = os.open(
-            store_path.name,
-            os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
-            dir_fd=dir_fd,
-        )
-        conn = s7._open_s7_connection_from_held_store(
-            dir_fd=dir_fd, store_fd=store_fd
-        )
-        grant, _cb, committed = s7.consume_for_execution_with_committed_row(
-            conn,
-            artifact_id,
-            rendered=rendered,
-            action_params_hash=action_params_hash,
-            authority_context=authority_context,
-            precondition_hash=envelope.precondition_hash,
-            derived_work_class=BIRTH_WORK_CLASS,
-            derived_aggregation_group=rendered.derived_aggregation_group,
-            now=consume_now,
-        )
+        # The reviewed public seam under the `guarded_consume` purpose:
+        # it owns the store descriptor, the bound connection and their
+        # teardown, and opens NO transaction, because
+        # consume_for_execution_with_committed_row manages its own and
+        # verifies held-store activation itself. This used to reach past
+        # the underscore into S7's private connection helper.
+        with s7.s7_held_store_transaction(
+            store_dir_fd=dir_fd,
+            purpose="guarded_consume",
+            store_name=store_path.name,
+        ) as conn:
+            grant, _cb, committed = s7.consume_for_execution_with_committed_row(
+                conn,
+                artifact_id,
+                rendered=rendered,
+                action_params_hash=action_params_hash,
+                authority_context=authority_context,
+                precondition_hash=envelope.precondition_hash,
+                derived_work_class=BIRTH_WORK_CLASS,
+                derived_aggregation_group=rendered.derived_aggregation_group,
+                now=consume_now,
+            )
     finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
-        if store_fd is not None:
-            os.close(store_fd)
         if dir_fd is not None:
             os.close(dir_fd)
     if grant is None or committed is None:
