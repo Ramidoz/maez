@@ -16,7 +16,7 @@ DIRECT_CALLER_INVENTORY = {
     ("gui.py", 195),
     ("cli.py", 224),
     ("cli/maez_chat.py", 858),
-    ("core/actions/action_engine.py", 1575),
+    ("core/actions/action_engine.py", 1611),
     ("daemon/maez_daemon.py", 7407),
     ("daemon/maez_daemon.py", 7835),
     ("daemon/maez_daemon.py", 7959),

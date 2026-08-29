@@ -1717,6 +1717,20 @@ TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
    markdown — grep/find/cat will miss them. This tool returns the
    target_file, weakness description, diff, and state in one call.
    Example: {"proposal_id":25,"reason":"the owner asked what proposal #25 is"}
+10. self_dev.propose_tests {"module":"<optional path>","reason":"<why>"}
+   Look at your OWN code and find where your test coverage is genuinely
+   thin. This reads real source and real tests and returns: the module,
+   its public functions, which of them no test actually calls, excerpts
+   of how this repository writes tests, and other candidate modules it
+   ranked. It changes nothing — it writes no file and applies no patch.
+   Use this when the owner asks you to look into your own testing,
+   coverage, code quality, or whether some part of you needs more
+   checking. Omit "module" to let the scan choose where coverage is
+   thinnest; pass one to inspect a specific candidate.
+   If outside expertise would help shape the test, this asks the source
+   boundary for a bounded external consultation, which opens an owner
+   approval card. It never spends anything on its own.
+   Example: {"reason":"the owner asked whether one of my modules needs another test"}
 
 COVENANT (these refuse themselves — don't try):
 - No killing/stopping llama-server or maez.service (your own brain and heart).
@@ -2320,6 +2334,8 @@ def run_brain_loop(
         'query_system', 'read_file', 'search_files', 'web_search', 'fetch_url',
         'convert_currency', 'quote_stock',
         'lookup_proposal',
+        # Self-development (D1 seam 2) — non-mutating evidence gathering.
+        'self_dev.propose_tests',
         # Legacy aliases — delegate to run_shell / write_any_file internally
         'run_readonly_command', 'run_safe_command',
         'write_file', 'append_to_file', 'git_commit',

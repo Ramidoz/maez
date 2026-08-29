@@ -328,6 +328,13 @@ ACTION_TIERS = {
     'web_search': 0, 'fetch_url': 0, 'convert_currency': 0, 'quote_stock': 0,
     'read_file': 0, 'search_files': 0, 'query_system': 0,
     'lookup_proposal': 0,
+    # Self-development evidence gathering (D1 seam 2). Lane 0 because the
+    # action MUTATES NOTHING — it reads repository material and may open an
+    # owner authorization card. Deliberately NOT Lane 2: a later frontier
+    # consultation can cost quota, but cost lives at the SOURCE boundary,
+    # never in an action lane. Deliberately NOT in _READ_ONLY_ACTIONS: that
+    # S7 invocation-gate list means something narrower than "non-mutating".
+    'self_dev.propose_tests': 0,
     # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
     'promote_to_core_memory': 0, 'write_soul_note': 0,
     'update_baseline': 0, 'edit_soul_section': 0,
@@ -972,6 +979,8 @@ class ActionEngine:
                 method = self._do_capability_acquire
             elif action == "integration.review_plan":
                 method = self._do_integration_review_plan
+            elif action == "self_dev.propose_tests":
+                method = self._do_self_dev_propose_tests
             else:
                 method = getattr(self, f"_do_{action}", None)
             if not method:
@@ -1486,6 +1495,33 @@ class ActionEngine:
                 trust_tier="lived",
             )
         return f"Baseline stored as core memory: {core_id}"
+
+    def _do_self_dev_propose_tests(self, module: str = "", reason: str = "",
+                                   **_ignored) -> str:
+        """Inspect real repository material for thin test coverage.
+
+        Reads only. Writes nothing, applies nothing, proposes no patch.
+        When outside expertise would help, this asks the SOURCE boundary
+        for FRONTIER_CONSULT, which reports authorization-required and
+        opens an owner card. It never spends quota itself.
+        """
+        from core.self_dev.propose_tests import gather
+        from core.self_dev.consultation import request_frontier_help
+
+        ev = gather(module or None)
+        outcome = request_frontier_help(evidence=ev, reason=reason)
+        lines = [
+            f"INSPECTED {ev.module}",
+            f"  public functions : {', '.join(ev.public_functions)}",
+            f"  no test calls    : {', '.join(ev.uncovered_functions)}",
+            f"  tests naming it  : {len(ev.existing_test_files)} file(s)",
+            f"  evidence refs    : {len(ev.refs)} (path+lines+sha256)",
+            "  other candidates : "
+            + ", ".join(c["module"] for c in ev.candidates_considered[1:4]),
+            "",
+            outcome,
+        ]
+        return "\n".join(lines)
 
     def read_file(self, path: str, reasoning: str) -> ActionResult:
         """Tier 0: Read any file under /home/rohit."""
