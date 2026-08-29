@@ -1184,11 +1184,40 @@ def _run_dispatcher_pipeline(
         )
 
         if _al_shadow() or _al_on():
+            # Phase-2 amendment (2026-08-29): the receipt now shows every
+            # contributing signal, because the old one could not
+            # distinguish "no action here" from "this detector cannot see
+            # actions" — eight receipts all read intent=none while the
+            # floor had never once fired on a real turn.
+            #
+            # SHADOW ONLY. _floor_intent below is unchanged, so routing is
+            # byte-identical; the semantic verdict is measured, not used.
+            _sem_verdict, _sem_veto, _sem_margin = "UNAVAILABLE", "NONE", 0.0
+            try:
+                from core.dispatcher.action_opportunity import classify as _ao
+
+                _v = _ao(user_text)
+                _sem_verdict = _v.verdict.value
+                _sem_veto = _v.veto_reason.value
+                _sem_margin = _v.semantic_margin
+            except Exception as _ao_err:  # never break a turn to measure it
+                logger.debug("action opportunity shadow skipped: %s", _ao_err)
+            _combined = (
+                "explicit_request"
+                if (_floor_intent == "explicit_request"
+                    or _sem_verdict == "ACTION_OPPORTUNITY")
+                else _floor_intent
+            )
             logger.info(
-                "action_lane_shadow intent=%s would_run_jarvis=%s "
-                "detector_floor=syntactic_v1 surface=%s",
+                "action_lane_shadow syntactic=%s semantic=%s veto_reason=%s "
+                "semantic_margin=%.3f combined_intent=%s would_run_jarvis=%s "
+                "detector=syntactic_v1+semantic_v1 surface=%s",
                 _floor_intent,
-                _floor_intent == "explicit_request" and _al_on(),
+                _sem_verdict,
+                _sem_veto,
+                _sem_margin,
+                _combined,
+                _combined == "explicit_request" and _al_on(),
                 surface,
             )
     except Exception:
