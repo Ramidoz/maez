@@ -58,6 +58,47 @@ WORK_CLASSES = frozenset({
     # that exists. Deliberately NOT covenant two-tap, by owner-referred
     # ruling: gestation is the cooling-off.
     "birth_activation",
+    # Owner-authorized amendment (2026-08-28, D1 seam 2). Non-mutating
+    # consumption of a scarce/metered external resource controlled by the
+    # bonded owner, where use requires explicit bounded owner
+    # authorization. First instance: FRONTIER_CONSULT spending Claude
+    # subscription quota.
+    #
+    # Deliberately NOT in GUARDED_WORK_CLASSES: consuming a metered
+    # resource is not remaking Maez, so it does not warrant the S7.3
+    # WebAuthn ceremony. NOT-GUARDED DOES NOT MEAN UNAPPROVED — the
+    # ceremony for this class is the authenticated owner card whose
+    # resolution mints a bounded, durable, atomically consumable grant.
+    #
+    # Deliberately NOT in _NON_GUARDED_DIRECT_ACTIONS: that list is
+    # routine, unpaid, read-only custody. Spending the owner's quota is
+    # not routine custody.
+    #
+    # Deliberately NOT in VOICE_SEAT_WORK_CLASSES: this consultation does
+    # not remake Maez, so it does not convene Maez's self-modification
+    # voice ceremony.
+    "metered_external_resource_use",
+})
+
+#: The ONE action that can derive metered_external_resource_use. Kept
+#: action-exact and content-blind, in the same shape as birth_activation:
+#: params must not be able to redirect any other action into this class.
+METERED_CONSUMPTION_ACTION = "source.consume_metered"
+
+#: Operations permitted to request metered external consumption. Frozen
+#: and reviewed.
+#:
+#: Membership here is NOT authority and NOT approval. It asserts exactly
+#: one fact — that the operation itself mutates nothing — so that fact is
+#: mechanical rather than caller-asserted. Authority still comes only
+#: from an owner-resolved card.
+#:
+#: This is deliberately a separate registry from
+#: _NON_GUARDED_DIRECT_ACTIONS: an operation may be non-mutating without
+#: being routine custody, and must not become directly ungated by being
+#: named here.
+NON_MUTATING_METERED_OPERATIONS = frozenset({
+    "self_dev.propose_tests",
 })
 
 AUTH_METHODS = frozenset({
@@ -943,6 +984,46 @@ def validate_action_literal(action: object) -> str:
     return action
 
 
+def _derives_metered_external_resource_use(action: str, params: dict) -> bool:
+    """Prove — never assume — that this is metered external consumption.
+
+    Three facts must ALL hold, and every one is checked against trusted
+    material rather than a caller's word:
+
+      1. the action is exactly METERED_CONSUMPTION_ACTION;
+      2. the named source is a real external source that the SOURCE
+         POLICY marks as paid/metered — not a source the caller merely
+         says is paid;
+      3. the requesting operation is in the frozen non-mutating registry.
+
+    If any fact cannot be proven the caller gets nothing from this
+    function and derivation falls through to fail closed. A request that
+    is *almost* a metered consultation is not one.
+    """
+    if action != METERED_CONSUMPTION_ACTION:
+        return False
+
+    operation = params.get("operation")
+    if operation not in NON_MUTATING_METERED_OPERATIONS:
+        return False
+
+    raw_source = params.get("source")
+    if not isinstance(raw_source, str):
+        return False
+    try:
+        from core.dispatcher.inventory import PAID_SOURCES
+        from core.dispatcher.spec import ExternalSource
+
+        source = ExternalSource(raw_source)
+    except Exception:
+        # Unknown source, or the source vocabulary is unavailable. Either
+        # way the class is unproven.
+        return False
+    # The SOURCE POLICY decides what is metered. A caller cannot make a
+    # free source paid, nor a paid one free, by naming it differently.
+    return source in PAID_SOURCES
+
+
 def derive_work_class(
     *,
     action: str,
@@ -987,6 +1068,12 @@ def derive_work_class(
         return "covenant_touching_change"
     if _touches_self_mod_substrate(material):
         return "self_modification"
+    # AFTER the substrate checks on purpose: if a consumption envelope
+    # somehow carries covenant or self-mod material, the stronger class
+    # wins. A consultation must never launder a mutation into a weaker
+    # class. Unproven requests fall through and fail closed below.
+    if _derives_metered_external_resource_use(action, params):
+        return "metered_external_resource_use"
     if action == "run_shell":
         cmd = str(params.get("cmd") or "")
         if not cmd.strip():

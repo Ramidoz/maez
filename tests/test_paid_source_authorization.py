@@ -20,41 +20,28 @@ from __future__ import annotations
 
 import socket
 import sqlite3
-import threading
-import time
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
-from core.dispatcher.frontier_consult import FrontierReply, consult
+from core.decision.pending_cards import PendingCardStore
+from core.dispatcher import frontier_grant as fg
 from core.dispatcher.inventory import (
     PAID_SOURCES,
     RESERVED_SOURCES,
     InventoryRegistry,
 )
-from core.dispatcher.paid_source_grant import GrantLedger, PaidSourceGrant
 from core.dispatcher.spec import (
     AvailabilityLimitation,
     ExternalSource,
     SourceAvailability,
 )
-from core.routing.claude_tier import TierReply
 
 _CALLER = "self_dev.propose_tests"
 _OP = "d1-witness"
 
 
-def _reply() -> TierReply:
-    """A REAL TierReply. Binding the test to the production dataclass is
-    the point: an earlier version used a hand-written fake that mirrored
-    field names the wire never had, so the provenance pin validated an
-    invention. If these fields are renamed, this breaks loudly."""
-    return TierReply(
-        reply="candidate test code",
-        model_used="claude-sonnet-x",
-        input_tokens=11,
-        output_tokens=22,
-        raw={},
-    )
 
 
 def _proxy_call_count() -> int:
@@ -132,17 +119,34 @@ class OrdinaryCognitionIsUnaffected(unittest.TestCase):
 
 
 class TheStateMachine(unittest.TestCase):
-    def setUp(self):
-        self.ledger = GrantLedger()
-        import core.dispatcher.paid_source_grant as psg
+    """paid_context is an authorization CARD ID.
 
-        self._orig, psg.GRANTS = psg.GRANTS, self.ledger
-        self.addCleanup(setattr, psg, "GRANTS", self._orig)
+    Authority comes from an owner-resolved card, never from a caller
+    naming itself, so these exercise the real card store.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(dir="/var/tmp", prefix="d1_state_")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.store = PendingCardStore(Path(self.dir) / "cards.db")
+        import core.decision.pending_cards as pc
+
+        real = pc.PendingCardStore
+        pc.PendingCardStore = lambda *a, **k: (
+            self.store if not a and not k else real(*a, **k)
+        )
+        self.addCleanup(setattr, pc, "PendingCardStore", real)
+        self.card_id = "no-such-card"
 
     def _grant(self):
-        self.ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER, operation=_OP
+        card = fg.request_authorization(
+            source=ExternalSource.FRONTIER_CONSULT,
+            operation="self_dev.propose_tests", purpose={"q": 1},
+            plain_english="Consult the frontier model.", store=self.store,
         )
+        self.store.approve(card.request_id, user_id="rohit", via="text_reply",
+                           current_state_fields=card.params)
+        self.card_id = card.request_id
 
     def _reachable(self):
         real = socket.create_connection
@@ -169,16 +173,19 @@ class TheStateMachine(unittest.TestCase):
         ct.budget = fake
         self.addCleanup(setattr, ct, "budget", real)
 
-    def _state(self, inv=None, ctx=(_CALLER, _OP)):
+    def _state(self, inv=None, ctx=None):
         inv = inv or InventoryRegistry()
-        r = inv.summarize([ExternalSource.FRONTIER_CONSULT], paid_context=ctx)
+        r = inv.summarize([ExternalSource.FRONTIER_CONSULT],
+                          paid_context=ctx or self.card_id)
         return (
             r.source_availability[ExternalSource.FRONTIER_CONSULT],
             list(r.availability_limitations),
         )
 
-    def test_named_caller_without_a_grant_gets_authorization_required(self):
-        """REPORTING only. Enforcement is pinned in TheSpendGate."""
+    def test_a_request_without_an_approved_card_needs_authorization(self):
+        """REPORTING only. Enforcement is pinned in
+        tests/test_metered_external_resource_use.py — a report is not a
+        gate."""
         state, lims = self._state()
         self.assertEqual(state, SourceAvailability.AUTHORIZATION_REQUIRED)
         self.assertIn(
@@ -266,6 +273,19 @@ class TheStateMachine(unittest.TestCase):
         self._with_budget({"claude": {"hourly_remaining": 9, "daily_remaining": 9}})
         state, _ = self._state()
         self.assertEqual(state, SourceAvailability.EXECUTABLE_PRESENT)
+
+    def test_the_authorization_read_never_consumes_the_card(self):
+        """Availability inspection must not spend the authorization it is
+        inspecting."""
+        self._grant()
+        self._reachable()
+        self._with_budget({"claude": {"hourly_remaining": 9, "daily_remaining": 9}})
+        for _ in range(5):
+            self._state()
+        self.assertEqual(
+            self.store.get(self.card_id).status, "approved",
+            "inspecting availability transitioned the card",
+        )
 
     def test_context_is_per_call_not_registry_state(self):
         """Instance state here was a real race: one request could install
@@ -363,193 +383,6 @@ class TheBudgetReadIsThreeValued(unittest.TestCase):
             )
 
 
-class TheGrantLedger(unittest.TestCase):
-    def test_a_grant_is_bound_to_source_caller_and_operation(self):
-        ledger = GrantLedger()
-        ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER, operation=_OP
-        )
-        for kw in (
-            {"source": ExternalSource.WEB_SEARCH, "caller": _CALLER, "operation": _OP},
-            {"source": ExternalSource.FRONTIER_CONSULT, "caller": "x", "operation": _OP},
-            {"source": ExternalSource.FRONTIER_CONSULT, "caller": _CALLER, "operation": "x"},
-        ):
-            self.assertFalse(
-                ledger.is_authorized(**kw), f"a grant leaked across {kw}"
-            )
-
-    def test_a_grant_for_another_source_cannot_fund_frontier(self):
-        """Drop the source predicate and every same-source test still
-        passes -- this is the one that catches it."""
-        ledger = GrantLedger()
-        ledger.grant(
-            source=ExternalSource.WEB_SEARCH, caller=_CALLER, operation=_OP
-        )
-        self.assertFalse(
-            ledger.is_authorized(
-                source=ExternalSource.FRONTIER_CONSULT,
-                caller=_CALLER, operation=_OP,
-            ),
-            "a WEB_SEARCH grant funded a FRONTIER_CONSULT consultation",
-        )
-        with self.assertRaises(PermissionError):
-            ledger.consume(
-                source=ExternalSource.FRONTIER_CONSULT,
-                caller=_CALLER, operation=_OP,
-            )
-
-    def test_an_unbound_or_unbounded_grant_cannot_be_constructed(self):
-        base = dict(
-            grant_id="x", source=ExternalSource.FRONTIER_CONSULT,
-            caller=_CALLER, operation=_OP, max_calls=1, expires_at=9e9,
-        )
-        for bad in ({"caller": ""}, {"operation": "  "}, {"max_calls": 0},
-                    {"expires_at": float("inf")}):
-            with self.assertRaises(ValueError, msg=f"accepted {bad}"):
-                PaidSourceGrant(**{**base, **bad})
-
-    def test_remaining_reports_zero_for_an_expired_grant(self):
-        clock = [1000.0]
-        ledger = GrantLedger(clock=lambda: clock[0])
-        g = ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER,
-            operation=_OP, max_calls=3, ttl_s=60.0,
-        )
-        self.assertEqual(ledger.remaining(g.grant_id), 3)
-        clock[0] += 61.0
-        self.assertEqual(
-            ledger.remaining(g.grant_id), 0,
-            "an EXPIRED grant still advertised unused calls — the ledger "
-            "disagreed with itself",
-        )
-
-    def test_concurrent_consumers_cannot_overspend_one_grant(self):
-        ledger = GrantLedger()
-        ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER,
-            operation=_OP, max_calls=1,
-        )
-        wins, barrier = [], threading.Barrier(8)
-
-        # Widen the critical section so an unlocked ledger ACTUALLY
-        # interleaves. Without this the GIL hides the race and the test
-        # passes even with the lock removed.
-        real_live = GrantLedger._live_grant
-
-        def slow_live(self, *a, **k):
-            out = real_live(self, *a, **k)
-            time.sleep(0.02)
-            return out
-
-        GrantLedger._live_grant = slow_live
-        self.addCleanup(setattr, GrantLedger, "_live_grant", real_live)
-
-        def race():
-            barrier.wait()
-            try:
-                ledger.consume(
-                    source=ExternalSource.FRONTIER_CONSULT,
-                    caller=_CALLER, operation=_OP,
-                )
-                wins.append(1)
-            except PermissionError:
-                pass
-
-        ts = [threading.Thread(target=race) for _ in range(8)]
-        [t.start() for t in ts]
-        [t.join() for t in ts]
-        self.assertEqual(
-            len(wins), 1, f"{len(wins)} threads each spent a one-shot grant"
-        )
-
-    def test_the_process_local_limit_is_documented_not_hidden(self):
-        """Grants do not cross processes. A fork after granting lets each
-        child consume the same one-shot grant. That is a real limit and
-        must stay stated rather than implied."""
-        import core.dispatcher.paid_source_grant as psg
-
-        self.assertIn("process-local", (psg.__doc__ or "").lower() + (
-            psg.GrantLedger.__doc__ or "").lower())
-
-
-class TheSpendGate(unittest.TestCase):
-    """The report says AUTHORIZATION_REQUIRED; this proves it BITES."""
-
-    def setUp(self):
-        self.ledger = GrantLedger()
-        self.calls = []
-        import core.routing.claude_tier as ct
-
-        real = ct.call
-        ct.call = lambda **kw: (self.calls.append(kw), _reply())[1]
-        self.addCleanup(setattr, ct, "call", real)
-
-    def test_no_grant_raises_and_issues_no_call(self):
-        before = _proxy_call_count()
-        with self.assertRaises(PermissionError):
-            consult(prompt="x", caller=_CALLER, operation=_OP, ledger=self.ledger)
-        self.assertEqual(
-            self.calls, [],
-            "the frontier source was contacted WITHOUT a grant — the "
-            "authorization report was advisory, not enforced",
-        )
-        self.assertEqual(before, _proxy_call_count())
-
-    def test_a_grant_permits_exactly_one_call_then_closes(self):
-        self.ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER,
-            operation=_OP, max_calls=1,
-        )
-        reply = consult(
-            prompt="x", caller=_CALLER, operation=_OP, ledger=self.ledger
-        )
-        self.assertIsInstance(reply, FrontierReply)
-        self.assertEqual(len(self.calls), 1)
-        with self.assertRaises(PermissionError):
-            consult(prompt="x", caller=_CALLER, operation=_OP, ledger=self.ledger)
-        self.assertEqual(
-            len(self.calls), 1, "a one-shot grant funded a SECOND frontier call"
-        )
-
-    def test_the_gate_is_bound_to_caller_and_operation(self):
-        self.ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER, operation=_OP
-        )
-        for kw in ({"caller": "other.caller", "operation": _OP},
-                   {"caller": _CALLER, "operation": "other-op"}):
-            with self.assertRaises(PermissionError):
-                consult(prompt="x", ledger=self.ledger, **kw)
-        self.assertEqual(self.calls, [])
-
-    def test_an_expired_grant_does_not_spend(self):
-        clock = [1000.0]
-        ledger = GrantLedger(clock=lambda: clock[0])
-        ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER,
-            operation=_OP, ttl_s=60.0,
-        )
-        clock[0] += 61.0
-        with self.assertRaises(PermissionError):
-            consult(prompt="x", caller=_CALLER, operation=_OP, ledger=ledger)
-        self.assertEqual(self.calls, [], "an EXPIRED grant funded a call")
-
-    def test_the_reply_retains_real_model_and_caller_provenance(self):
-        self.ledger.grant(
-            source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER, operation=_OP
-        )
-        r = consult(prompt="x", caller=_CALLER, operation=_OP, ledger=self.ledger)
-        self.assertEqual(r.source, ExternalSource.FRONTIER_CONSULT)
-        self.assertEqual(r.text, "candidate test code")
-        self.assertEqual(
-            r.model, "claude-sonnet-x",
-            "provenance must carry the model the proxy ACTUALLY used",
-        )
-        self.assertEqual(r.caller, _CALLER)
-        self.assertEqual(r.operation, _OP)
-        self.assertTrue(r.grant_id, "the reply must name the grant that paid")
-        self.assertEqual((r.input_tokens, r.output_tokens), (11, 22))
-
-
 class TheConversationalBranchStaysClosed(unittest.TestCase):
     """Un-reserving the SOURCE must not open the DISPATCHER BRANCH.
 
@@ -608,28 +441,15 @@ class TheBuilderPathStaysSeparate(unittest.TestCase):
 class TheZeroQuotaInvariant(unittest.TestCase):
     def test_availability_probing_consumes_no_frontier_quota(self):
         before = _proxy_call_count()
-        ledger = GrantLedger()
-        import core.dispatcher.paid_source_grant as psg
-
-        orig, psg.GRANTS = psg.GRANTS, ledger
-        try:
-            ledger.grant(
-                source=ExternalSource.FRONTIER_CONSULT, caller=_CALLER,
-                operation=_OP, max_calls=99,
-            )
-            inv = InventoryRegistry()
-            for _ in range(5):
-                inv.summarize([ExternalSource.FRONTIER_CONSULT])
-                inv.summarize(
-                    [ExternalSource.FRONTIER_CONSULT],
-                    paid_context=(_CALLER, _OP),
-                )
-        finally:
-            psg.GRANTS = orig
+        inv = InventoryRegistry()
+        for _ in range(5):
+            inv.summarize([ExternalSource.FRONTIER_CONSULT])
+            inv.summarize([ExternalSource.FRONTIER_CONSULT],
+                          paid_context="no-such-card")
         self.assertEqual(
             before, _proxy_call_count(),
             "availability probing issued a model completion — discovering "
-            "affordability must be free, granted or not",
+            "affordability must be free",
         )
 
 

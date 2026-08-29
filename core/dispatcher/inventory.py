@@ -145,8 +145,6 @@ class InventoryRegistry:
                 AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE,
             )
 
-        from core.dispatcher.paid_source_grant import GRANTS
-
         # 1. Is the service reachable at all? A down proxy is not an
         #    authorization problem.
         reachable = self._paid_source_reachable(source)
@@ -161,10 +159,13 @@ class InventoryRegistry:
 
         # 2. Authorization BEFORE quota. A missing grant is reported as
         #    authorization-required even if budget happens to be full.
-        caller, operation = paid_context
-        if not GRANTS.is_authorized(
-            source=source, caller=caller, operation=operation
-        ):
+        #
+        #    ``paid_context`` is an authorization CARD ID. Authority comes
+        #    from an owner-resolved card, never from a caller naming
+        #    itself, so this reads the card store. The read is
+        #    NON-CONSUMING: it never transitions the card, so asking
+        #    whether a source is available cannot spend the answer.
+        if not self._paid_source_authorized(source, paid_context):
             return (
                 SourceAvailability.AUTHORIZATION_REQUIRED,
                 AvailabilityLimitation.PAID_SOURCE_AUTHORIZATION_REQUIRED,
@@ -185,6 +186,29 @@ class InventoryRegistry:
             return (SourceAvailability.EXECUTABLE_UNKNOWN,
                     AvailabilityLimitation.INVENTORY_UNKNOWN)
         return (SourceAvailability.EXECUTABLE_PRESENT, None)
+
+    def _paid_source_authorized(self, source, card_id) -> bool:
+        """Is there a live owner-approved card for this source? READ ONLY.
+
+        Never transitions the card. Availability inspection must not
+        consume the authorization it is inspecting.
+        """
+        import time
+
+        try:
+            from core.decision.pending_cards import CardStatus, PendingCardStore
+
+            card = PendingCardStore().get(str(card_id))
+        except Exception:
+            return False
+        if card is None or card.status != CardStatus.APPROVED.value:
+            return False
+        if not card.resolved_by_user_id:
+            return False
+        env = card.params or {}
+        if env.get("source") != getattr(source, "value", source):
+            return False
+        return float(env.get("expires_at") or 0) > time.time()
 
     def _paid_source_reachable(self, source):
         """True(refusable) / False(refused) / None(timeout).
@@ -246,7 +270,7 @@ class InventoryRegistry:
         self,
         sources: Iterable[SourceLabel],
         *,
-        paid_context: tuple[str, str] | None = None,
+        paid_context: str | None = None,
     ) -> InventorySummary:
         now = self._clock()
         source_availability: dict[SourceLabel, SourceAvailability] = {}

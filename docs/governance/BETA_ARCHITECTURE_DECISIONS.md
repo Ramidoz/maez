@@ -2862,10 +2862,49 @@ flag and optional dependency posture, not by missing packages.
   `founder_compat_projection` exists only for founder Track-A routine migration
   surfaces.
 - **Trusted work-class derivation.** `routine_custody`,
-  `destructive_user_action`, `self_modification`, `covenant_touching_change`,
-  `capability_acquisition`, `autonomy_lowering_or_protection_reducing`,
-  `emergency_proxy_or_incapacity`, and `undeterminable_work_class` form the
-  closed class set. Caller class is display input, not authority.
+  `destructive_user_action`, `founder_credential_management`,
+  `self_modification`, `covenant_touching_change`, `capability_acquisition`,
+  `autonomy_lowering_or_protection_reducing`, `emergency_proxy_or_incapacity`,
+  `undeterminable_work_class`, `birth_activation`, and
+  `metered_external_resource_use` form the closed class set. Caller class is
+  display input, not authority.
+- **Metered external resource use** (owner-authorized amendment 2026-08-28,
+  D1 seam 2). Non-mutating consumption of a scarce/metered external resource
+  controlled by the bonded owner, where use requires explicit bounded owner
+  authorization. First instance: `FRONTIER_CONSULT` spending Claude
+  subscription quota.
+
+  It is bonded-user authorized and exact-request/bounded-card gated. It is
+  **not** S7.3 WebAuthn-guarded, **not** routine/direct custody, and **not** a
+  member of `_NON_GUARDED_DIRECT_ACTIONS`. *Not WebAuthn-guarded does not mean
+  unapproved*: the ceremony for this class is the authenticated owner card
+  whose resolution mints a bounded, durable, atomically consumable grant. For
+  D1 that grant is one-shot; standing allowances are not authorized.
+
+  Three things stay separate and must not be collapsed again — the ACTION
+  (what Maez is doing), the SOURCE (where knowledge comes from), and the WORK
+  CLASS (what human permission consuming that source requires). So
+  `self_dev.propose_tests` is **not** classified as
+  `metered_external_resource_use`; that action remains non-mutating. The class
+  is derived only where the action reaches the source-consumption boundary and
+  requests `FRONTIER_CONSULT`.
+
+  Derivation is mechanical and fails closed. It requires all of: the exact
+  action `source.consume_metered`; a source the *source policy* marks paid, not
+  one the caller says is paid; and an operation in the frozen
+  `NON_MUTATING_METERED_OPERATIONS` registry. Anything unproven stays
+  `undeterminable_work_class`. The branch sits after the covenant and self-mod
+  substrate checks so a stronger class always wins.
+
+  Scope boundaries: using an already-provisioned consultant under a bounded
+  grant is this class; installing or enabling a new provider, tool, plugin or
+  network capability remains `capability_acquisition`; changing Maez's
+  code/config as a *result* of the consultation remains `self_modification` or
+  stronger. A consultation never launders the weaker class into a later
+  mutation — each subsequent act is reclassified independently.
+
+  `VOICE_SEAT_WORK_CLASSES` is deliberately NOT widened: this consultation does
+  not remake Maez and does not convene Maez's self-modification voice ceremony.
 - **Guarded work fails closed.** Destructive user actions, self-modification,
   covenant-touching change, capability acquisition, protection lowering,
   `PENDING_DIALOG`, and undeterminable work require a valid execution grant or
